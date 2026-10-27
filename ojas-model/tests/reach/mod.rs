@@ -190,6 +190,7 @@ pub fn call<B: Backend + ?Sized>(b: &B, name: &str) -> Option<Result<(), OjasErr
         "residual_add_backward" => b.residual_add_backward(&t, &t, &t).map(|_| ()),
         "layer_norm_forward" => b.layer_norm_forward(&t, &t, &t, 1e-6).map(|_| ()),
         "channel_layer_norm_forward" => b.channel_layer_norm_forward(&t, &t, &t, 1e-6).map(|_| ()),
+        "group_norm_forward" => b.group_norm_forward(&t, &t, &t, 1, 1e-5).map(|_| ()),
         "gelu_erf_forward" => b.gelu_erf_forward(&t).map(|_| ()),
         "relu_forward" => b.relu_forward(&t).map(|_| ()),
         "linear_bias_forward" => b.linear_bias_forward(&t, &t, &t).map(|_| ()),

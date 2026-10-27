@@ -1153,6 +1153,23 @@ impl<B: Backend> Backend for Autocast<B> {
         Ok(self.keep_f32(out))
     }
 
+    /// A reduction like LayerNorm: the statistics stay `f32` and the output
+    /// is not rounded to the compute dtype.
+    fn group_norm_forward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        groups: usize,
+        eps: f32,
+    ) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self
+            .inner
+            .group_norm_forward(input, weight, bias, groups, eps)?;
+        Ok(self.keep_f32(out))
+    }
+
     /// Pointwise, like SiLU: an output computed from a bf16-tagged input
     /// is rounded and tagged; one from an untagged input is left alone.
     fn gelu_erf_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {

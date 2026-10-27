@@ -1408,6 +1408,27 @@ pub trait Backend {
         ))
     }
 
+    /// GroupNorm over `input` `[N, C, H, W]`, torch's `nn.GroupNorm`: the `C`
+    /// channels split into `groups` runs of `C / groups`, and each run of
+    /// every image is normalized over its channels and all `H * W`
+    /// positions with the biased variance, `(x - mean) / sqrt(var + eps)`,
+    /// then channel `c` is scaled and shifted by `weight[c]` and `bias[c]`
+    /// (both `[C]`). `groups == C` is instance norm and `groups == 1`
+    /// normalizes the whole image. `eps` must be finite and above 0.
+    /// [`crate::group_norm_forward_dims`] validates. The default refuses
+    /// with [`OjasError::Unsupported`].
+    fn group_norm_forward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        groups: usize,
+        eps: f32,
+    ) -> Result<Tensor, OjasError> {
+        let _ = (input, weight, bias, groups, eps);
+        Err(unsupported_inference(self.id(), "group_norm_forward"))
+    }
+
     /// The exact GELU `x * Phi(x) = 0.5 * x * (1 + erf(x / sqrt(2)))`, torch's
     /// `F.gelu(x, approximate="none")`, not the tanh approximation. On the
     /// CPU it is [`crate::gelu_erf_exact`], the same bits on every platform.
@@ -1994,6 +2015,7 @@ macro_rules! with_backend_methods {
             op fn residual_add_backward(&self, x: &$crate::Tensor, y: &$crate::Tensor, grad_output: &$crate::Tensor) -> Result<($crate::Tensor, $crate::Tensor), $crate::OjasError>;
             op fn layer_norm_forward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor, eps: f32) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn channel_layer_norm_forward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor, eps: f32) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn group_norm_forward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor, groups: usize, eps: f32) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn gelu_erf_forward(&self, input: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn relu_forward(&self, input: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn linear_bias_forward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
@@ -2799,6 +2821,7 @@ pub(crate) mod tests {
             op(backend.residual_add_backward(&t, &t, &t)),
             op(backend.layer_norm_forward(&t, &t, &t, 1e-6)),
             op(backend.channel_layer_norm_forward(&t, &t, &t, 1e-6)),
+            op(backend.group_norm_forward(&t, &t, &t, 1, 1e-5)),
             op(backend.gelu_erf_forward(&t)),
             op(backend.relu_forward(&t)),
             op(backend.linear_bias_forward(&t, &t, &t)),
@@ -2878,6 +2901,7 @@ pub(crate) mod tests {
             "residual_add_backward",
             "layer_norm_forward",
             "channel_layer_norm_forward",
+            "group_norm_forward",
             "gelu_erf_forward",
             "relu_forward",
             "linear_bias_forward",

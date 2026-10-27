@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use ojas_core::{
     broadcast_add_forward_dims, broadcast_mul_forward_dims, channel_layer_norm_forward_dims,
-    gelu_erf_forward_dims, layer_norm_forward_dims, linear_bias_forward_dims, relu_forward_dims,
-    scale_forward_dims, softmax_forward_dims,
+    gelu_erf_forward_dims, group_norm_forward_dims, layer_norm_forward_dims,
+    linear_bias_forward_dims, relu_forward_dims, scale_forward_dims, softmax_forward_dims,
 };
 use ojas_core::{
     causal_conv1d_silu_backward_dims, causal_conv1d_silu_forward_dims, clip_scale,
@@ -35,8 +35,8 @@ use ojas_core::{
 use crate::attn::general::{self, Extras, Geom};
 use crate::attn::{causal_sdpa_backward, causal_sdpa_forward, Dims as SdpaKernelDims};
 use crate::encoder_ops::{
-    add_row_bias, broadcast_zip, channel_layer_norm_forward, gelu_erf_forward, layer_norm_forward,
-    relu_forward, scale_forward, softmax_forward,
+    add_row_bias, broadcast_zip, channel_layer_norm_forward, gelu_erf_forward, group_norm_forward,
+    layer_norm_forward, relu_forward, scale_forward, softmax_forward,
 };
 use crate::gdn::{self, GradsOut, Operands as GdnOperands};
 use crate::gemm::whole_call;
@@ -1279,6 +1279,30 @@ impl Backend for CpuBackend {
         let dims = channel_layer_norm_forward_dims(input, weight, bias, eps)?;
         let [x, w, b] = f32_operands(OP, self.exec(), [input, weight, bias])?;
         channel_layer_norm_forward(
+            OP,
+            &self.budget,
+            self.exec(),
+            x,
+            w,
+            b,
+            dims,
+            eps,
+            input.shape(),
+        )
+    }
+
+    fn group_norm_forward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        groups: usize,
+        eps: f32,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "group_norm_forward";
+        let dims = group_norm_forward_dims(input, weight, bias, groups, eps)?;
+        let [x, w, b] = f32_operands(OP, self.exec(), [input, weight, bias])?;
+        group_norm_forward(
             OP,
             &self.budget,
             self.exec(),

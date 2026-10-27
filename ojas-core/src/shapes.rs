@@ -68,6 +68,7 @@ const SCALE_GRAD: &str = "scale_grad";
 const PERMUTE: &str = "permute";
 const LAYER_NORM_FORWARD: &str = "layer_norm_forward";
 const CHANNEL_LAYER_NORM_FORWARD: &str = "channel_layer_norm_forward";
+const GROUP_NORM_FORWARD: &str = "group_norm_forward";
 const GELU_ERF_FORWARD: &str = "gelu_erf_forward";
 const RELU_FORWARD: &str = "relu_forward";
 const LINEAR_BIAS_FORWARD: &str = "linear_bias_forward";
@@ -122,6 +123,18 @@ pub struct ChannelNormDims {
     pub batch: usize,
     pub channels: usize,
     /// Product of the axes after the channel axis; 1 when there are none.
+    pub spatial: usize,
+}
+
+/// Dimensions of a GroupNorm over `[batch, channels, height * width]`: each
+/// of the `batch * groups` rows is `channels / groups` consecutive channels
+/// and every position, contiguous in memory, and is normalized as one set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GroupNormDims {
+    pub batch: usize,
+    pub channels: usize,
+    pub groups: usize,
+    /// `height * width`.
     pub spatial: usize,
 }
 
@@ -1409,6 +1422,61 @@ pub fn channel_layer_norm_forward_dims(
         batch: shape[0],
         channels,
         spatial: shape[2..].iter().product(),
+    })
+}
+
+/// [`crate::Backend::group_norm_forward`]: `input` `[N, C, H, W]`, `weight`
+/// and `bias` `[C]`, all `F32`. Refused in this order, after the per-operand
+/// rules: a rank other than 4, `groups` of 0 ([`OjasError::OutOfRange`]), a
+/// `C` that `groups` does not divide, a `weight` or `bias` that is not `[C]`,
+/// then `eps`: non-finite is [`OjasError::NonFinite`] and one that is not
+/// above 0 is [`OjasError::OutOfRange`] (a constant group has variance 0, so
+/// `eps` is what keeps its reciprocal deviation finite).
+pub fn group_norm_forward_dims(
+    input: &Tensor,
+    weight: &Tensor,
+    bias: &Tensor,
+    groups: usize,
+    eps: f32,
+) -> Result<GroupNormDims, OjasError> {
+    const OP: &str = GROUP_NORM_FORWARD;
+    f32_operands(OP, &[input, weight, bias])?;
+    let shape = input.shape();
+    let &[batch, channels, height, width] = shape else {
+        return Err(refuse(
+            OP,
+            format!("input rank {} is not 4 ([N, C, H, W])", shape.len()),
+        ));
+    };
+    if groups == 0 {
+        return Err(too_large(OP, "groups 0 is not in 1..=channels"));
+    }
+    if !channels.is_multiple_of(groups) {
+        return Err(refuse(
+            OP,
+            format!("{channels} channels are not divisible into {groups} groups"),
+        ));
+    }
+    for (name, t) in [("weight", weight), ("bias", bias)] {
+        if t.shape() != [channels] {
+            return Err(refuse(
+                OP,
+                format!("{name} shape {:?} is not [{channels}]", t.shape()),
+            ));
+        }
+    }
+    if !eps.is_finite() {
+        return Err(OjasError::NonFinite { op: OP });
+    }
+    if eps <= 0.0 {
+        return Err(too_large(OP, format!("eps {eps} is not above 0")));
+    }
+    f32_product(OP, shape)?;
+    Ok(GroupNormDims {
+        batch,
+        channels,
+        groups,
+        spatial: height * width,
     })
 }
 
@@ -4062,6 +4130,88 @@ mod tests {
         shape_err(relu_forward_dims(&f(&[0, 3])), op, "empty tensor");
         let big = broadcast(DType::F32, &[1 << 40, 1 << 40]);
         range_err(relu_forward_dims(&big), op, "shape product");
+    }
+
+    #[test]
+    fn group_norm_dims_split_channels_into_groups() {
+        let op = "group_norm_forward";
+        let (w, b) = (f(&[6]), f(&[6]));
+        let x = f(&[2, 6, 4, 5]);
+        let d = group_norm_forward_dims(&x, &w, &b, 3, 1e-5).unwrap();
+        assert_eq!(
+            d,
+            GroupNormDims {
+                batch: 2,
+                channels: 6,
+                groups: 3,
+                spatial: 20
+            }
+        );
+        // Both ends of 1..=channels are legal.
+        assert_eq!(
+            group_norm_forward_dims(&x, &w, &b, 1, 1e-5).unwrap().groups,
+            1
+        );
+        assert_eq!(
+            group_norm_forward_dims(&x, &w, &b, 6, 1e-5).unwrap().groups,
+            6
+        );
+        for rank in [&[6][..], &[2, 6], &[2, 6, 4], &[2, 6, 4, 5, 1]] {
+            shape_err(
+                group_norm_forward_dims(&f(rank), &w, &b, 3, 1e-5),
+                op,
+                "is not 4",
+            );
+        }
+        range_err(group_norm_forward_dims(&x, &w, &b, 0, 1e-5), op, "groups 0");
+        for groups in [4, 5, 7, 12] {
+            shape_err(
+                group_norm_forward_dims(&x, &w, &b, groups, 1e-5),
+                op,
+                "divisible",
+            );
+        }
+        shape_err(
+            group_norm_forward_dims(&x, &f(&[5]), &b, 3, 1e-5),
+            op,
+            "weight shape",
+        );
+        shape_err(
+            group_norm_forward_dims(&x, &w, &f(&[6, 1]), 3, 1e-5),
+            op,
+            "bias shape",
+        );
+        for eps in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert!(matches!(
+                group_norm_forward_dims(&x, &w, &b, 3, eps),
+                Err(OjasError::NonFinite {
+                    op: "group_norm_forward"
+                })
+            ));
+        }
+        for eps in [0.0, -0.0, -1e-5, f32::MIN] {
+            range_err(group_norm_forward_dims(&x, &w, &b, 3, eps), op, "eps");
+        }
+        // Operand rules come first: dtype, then an empty extent.
+        dtype_err(
+            group_norm_forward_dims(&u(&[2, 6, 4, 5]), &w, &b, 3, 1e-5),
+            op,
+            DType::F32,
+            DType::U32,
+        );
+        for dead in [&[0, 6, 4, 5][..], &[2, 6, 0, 5], &[2, 6, 4, 0]] {
+            shape_err(
+                group_norm_forward_dims(&f(dead), &w, &b, 3, 1e-5),
+                op,
+                "empty tensor",
+            );
+        }
+        let big = broadcast(DType::F32, &[1 << 20, 6, 1 << 22, 1 << 22]);
+        range_err(
+            group_norm_forward_dims(&big, &w, &b, 3, 1e-5),
+            op,
+            "shape product",
+        );
     }
 
     #[test]
