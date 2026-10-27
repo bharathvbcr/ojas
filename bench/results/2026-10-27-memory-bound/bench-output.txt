@@ -1,0 +1,270 @@
+# run 1 (first job, attempt 1 of 1; verdict clean). No streaming-reference arm: it was added afterwards, see rules.md.
+# load_start 3.83 4.08 4.74
+shape	arm	bytes	min_ms	p10_ms	median_ms	p90_ms	gb_per_s	tflops	gap_ms	spread_ms	pair
+vit fc1 [5184,1024]x[4736,1024]	bias add	196430336	0.919	0.928	0.963	1.040	204.1	52.24	0.008	0.123	ok
+vit fc1 [5184,1024]x[4736,1024]	bias add'	196430336	0.877	0.904	0.955	1.028	205.7	52.66	0.008	0.123	ok
+vit fc1 [5184,1024]x[4736,1024]	fill (write floor)	98205696	0.767	0.776	0.821	0.841	119.7	61.28	0.003	0.071	ok
+vit fc1 [5184,1024]x[4736,1024]	fill (write floor)'	98205696	0.770	0.777	0.818	0.848	120.0	61.46	0.003	0.071	ok
+vit fc1 [5184,1024]x[4736,1024]	linear f32 (control)	138838016	7.794	7.825	7.925	8.026	17.5	6.34	0.018	0.200	ok
+vit fc1 [5184,1024]x[4736,1024]	linear f32 (control)'	138838016	7.844	7.879	7.943	8.067	17.5	6.33	0.018	0.200	ok
+vit fc1 [5184,1024]x[4736,1024]	linear bf16 lane (control)	138838016	2.565	2.572	2.626	2.705	52.9	19.15	0.037	0.138	ok
+vit fc1 [5184,1024]x[4736,1024]	linear bf16 lane (control)'	138838016	2.590	2.613	2.663	2.751	52.1	18.88	0.037	0.138	ok
+vit fc2 [5184,4736]x[1024,4736]	bias add	42471424	0.317	0.323	0.356	0.371	119.5	141.42	0.001	0.048	ok
+vit fc2 [5184,4736]x[1024,4736]	bias add'	42471424	0.305	0.338	0.354	0.375	119.9	142.00	0.001	0.048	ok
+vit fc2 [5184,4736]x[1024,4736]	fill (write floor)	21233664	0.287	0.290	0.327	0.350	64.8	153.55	0.005	0.060	ok
+vit fc2 [5184,4736]x[1024,4736]	fill (write floor)'	21233664	0.282	0.297	0.322	0.346	65.9	155.99	0.005	0.060	ok
+vit fc2 [5184,4736]x[1024,4736]	linear f32 (control)	138838016	7.323	7.326	7.480	7.673	18.6	6.72	0.050	0.347	ok
+vit fc2 [5184,4736]x[1024,4736]	linear f32 (control)'	138838016	7.298	7.345	7.429	7.525	18.7	6.77	0.050	0.347	ok
+vit fc2 [5184,4736]x[1024,4736]	linear bf16 lane (control)	138838016	3.073	3.089	3.123	3.205	44.5	16.10	0.009	0.116	ok
+vit fc2 [5184,4736]x[1024,4736]	linear bf16 lane (control)'	138838016	3.084	3.089	3.132	3.164	44.3	16.05	0.009	0.116	ok
+vit qkv [5184,1024]x[3072,1024]	bias add	127414272	0.630	0.637	0.690	0.718	184.7	47.29	0.015	0.081	ok
+vit qkv [5184,1024]x[3072,1024]	bias add'	127414272	0.627	0.636	0.675	0.702	188.8	48.33	0.015	0.081	ok
+vit qkv [5184,1024]x[3072,1024]	fill (write floor)	63700992	0.553	0.558	0.593	0.609	107.5	55.02	0.004	0.051	ok
+vit qkv [5184,1024]x[3072,1024]	fill (write floor)'	63700992	0.557	0.569	0.596	0.617	106.8	54.68	0.004	0.051	ok
+vit qkv [5184,1024]x[3072,1024]	linear f32 (control)	97517568	5.140	5.160	5.215	5.334	18.7	6.25	0.021	0.174	ok
+vit qkv [5184,1024]x[3072,1024]	linear f32 (control)'	97517568	5.139	5.166	5.237	5.311	18.6	6.23	0.021	0.174	ok
+vit qkv [5184,1024]x[3072,1024]	linear bf16 lane (control)	97517568	1.829	1.836	1.865	1.888	52.3	17.49	0.014	0.060	ok
+vit qkv [5184,1024]x[3072,1024]	linear bf16 lane (control)'	97517568	1.851	1.859	1.879	1.919	51.9	17.35	0.014	0.060	ok
+vit proj [5184,1024]x[1024,1024]	bias add	42471424	0.305	0.313	0.336	0.360	126.4	32.34	0.007	0.084	ok
+vit proj [5184,1024]x[1024,1024]	bias add'	42471424	0.301	0.306	0.329	0.390	128.9	33.01	0.007	0.084	ok
+vit proj [5184,1024]x[1024,1024]	fill (write floor)	21233664	0.280	0.283	0.303	0.329	70.2	35.92	0.003	0.046	ok
+vit proj [5184,1024]x[1024,1024]	fill (write floor)'	21233664	0.286	0.288	0.306	0.331	69.4	35.55	0.003	0.046	ok
+vit proj [5184,1024]x[1024,1024]	linear f32 (control)	46661632	1.887	1.895	1.927	1.960	24.2	5.64	0.009	0.072	ok
+vit proj [5184,1024]x[1024,1024]	linear f32 (control)'	46661632	1.878	1.881	1.918	1.954	24.3	5.67	0.009	0.072	ok
+vit proj [5184,1024]x[1024,1024]	linear bf16 lane (control)	46661632	0.854	0.866	0.884	0.938	52.8	12.30	0.002	0.072	ok
+vit proj [5184,1024]x[1024,1024]	linear bf16 lane (control)'	46661632	0.863	0.874	0.886	0.942	52.7	12.27	0.002	0.072	ok
+window proj [9*576,1024]x[1024,1024]	bias add	42471424	0.296	0.313	0.340	0.374	124.9	31.98	0.012	0.061	ok
+window proj [9*576,1024]x[1024,1024]	bias add'	42471424	0.303	0.306	0.328	0.362	129.5	33.15	0.012	0.061	ok
+window proj [9*576,1024]x[1024,1024]	fill (write floor)	21233664	0.287	0.289	0.315	0.332	67.5	34.54	0.006	0.057	ok
+window proj [9*576,1024]x[1024,1024]	fill (write floor)'	21233664	0.282	0.288	0.309	0.346	68.8	35.20	0.006	0.057	ok
+window proj [9*576,1024]x[1024,1024]	linear f32 (control)	46661632	1.873	1.888	1.924	1.995	24.3	5.65	0.007	0.107	ok
+window proj [9*576,1024]x[1024,1024]	linear f32 (control)'	46661632	1.881	1.886	1.931	1.973	24.2	5.63	0.007	0.107	ok
+window proj [9*576,1024]x[1024,1024]	linear bf16 lane (control)	46661632	0.867	0.869	0.888	0.904	52.5	12.24	0.003	0.042	ok
+window proj [9*576,1024]x[1024,1024]	linear bf16 lane (control)'	46661632	0.870	0.875	0.886	0.917	52.7	12.28	0.003	0.042	ok
+256 [5184,256]x[256,256]	bias add	10617856	0.167	0.170	0.178	0.197	59.6	3.81	0.008	0.029	ok
+256 [5184,256]x[256,256]	bias add'	10617856	0.171	0.173	0.186	0.202	57.1	3.66	0.008	0.029	ok
+256 [5184,256]x[256,256]	fill (write floor)	5308416	0.165	0.172	0.177	0.200	29.9	3.83	0.005	0.037	ok
+256 [5184,256]x[256,256]	fill (write floor)'	5308416	0.172	0.175	0.182	0.212	29.2	3.73	0.005	0.037	ok
+256 [5184,256]x[256,256]	linear f32 (control)	10878976	0.288	0.292	0.303	0.322	35.8	2.24	0.001	0.030	ok
+256 [5184,256]x[256,256]	linear f32 (control)'	10878976	0.294	0.298	0.305	0.322	35.7	2.23	0.001	0.030	ok
+256 [5184,256]x[256,256]	linear bf16 lane (control)	10878976	0.225	0.230	0.247	0.264	44.0	2.75	0.001	0.034	ok
+256 [5184,256]x[256,256]	linear bf16 lane (control)'	10878976	0.236	0.239	0.249	0.268	43.8	2.73	0.001	0.034	ok
+256 [10400,256]x[256,256]	bias add	21300224	0.205	0.207	0.216	0.244	98.8	6.32	0.001	0.037	ok
+256 [10400,256]x[256,256]	bias add'	21300224	0.202	0.205	0.217	0.230	98.3	6.29	0.001	0.037	ok
+256 [10400,256]x[256,256]	fill (write floor)	10649600	0.198	0.213	0.219	0.249	48.7	6.24	0.002	0.036	ok
+256 [10400,256]x[256,256]	fill (write floor)'	10649600	0.206	0.209	0.216	0.238	49.3	6.31	0.002	0.036	ok
+256 [10400,256]x[256,256]	linear f32 (control)	21561344	0.455	0.467	0.489	0.511	44.1	2.79	0.007	0.044	ok
+256 [10400,256]x[256,256]	linear f32 (control)'	21561344	0.466	0.468	0.482	0.492	44.7	2.83	0.007	0.044	ok
+256 [10400,256]x[256,256]	linear bf16 lane (control)	21561344	0.343	0.347	0.363	0.391	59.5	3.76	0.003	0.044	ok
+256 [10400,256]x[256,256]	linear bf16 lane (control)'	21561344	0.342	0.348	0.359	0.383	60.0	3.79	0.003	0.044	ok
+256 up [5184,256]x[2048,256]	bias add	84942848	0.467	0.472	0.490	0.523	173.5	11.10	0.005	0.053	ok
+256 up [5184,256]x[2048,256]	bias add'	84942848	0.453	0.463	0.495	0.517	171.7	10.99	0.005	0.053	ok
+256 up [5184,256]x[2048,256]	fill (write floor)	42467328	0.423	0.425	0.432	0.459	98.2	12.57	0.015	0.043	ok
+256 up [5184,256]x[2048,256]	fill (write floor)'	42467328	0.418	0.424	0.448	0.467	94.8	12.14	0.015	0.043	ok
+256 up [5184,256]x[2048,256]	linear f32 (control)	49872896	1.352	1.360	1.381	1.428	36.1	3.94	0.011	0.079	ok
+256 up [5184,256]x[2048,256]	linear f32 (control)'	49872896	1.356	1.365	1.392	1.444	35.8	3.91	0.011	0.079	ok
+256 up [5184,256]x[2048,256]	linear bf16 lane (control)	49872896	0.633	0.637	0.661	0.691	75.5	8.23	0.008	0.054	ok
+256 up [5184,256]x[2048,256]	linear bf16 lane (control)'	49872896	0.635	0.644	0.669	0.697	74.6	8.13	0.008	0.054	ok
+256 down [5184,2048]x[256,2048]	bias add	10617856	0.177	0.178	0.186	0.216	57.1	29.26	0.010	0.046	ok
+256 down [5184,2048]x[256,2048]	bias add'	10617856	0.178	0.183	0.195	0.229	54.3	27.81	0.010	0.046	ok
+256 down [5184,2048]x[256,2048]	fill (write floor)	5308416	0.177	0.180	0.204	0.232	26.1	26.70	0.004	0.051	ok
+256 down [5184,2048]x[256,2048]	fill (write floor)'	5308416	0.181	0.183	0.200	0.218	26.5	27.17	0.004	0.051	ok
+256 down [5184,2048]x[256,2048]	linear f32 (control)	49872896	1.103	1.117	1.135	1.176	44.0	4.79	0.008	0.060	ok
+256 down [5184,2048]x[256,2048]	linear f32 (control)'	49872896	1.112	1.119	1.143	1.179	43.6	4.76	0.008	0.060	ok
+256 down [5184,2048]x[256,2048]	linear bf16 lane (control)	49872896	0.826	0.841	0.869	0.946	57.4	6.25	0.006	0.105	ok
+256 down [5184,2048]x[256,2048]	linear bf16 lane (control)'	49872896	0.830	0.838	0.863	0.917	57.8	6.30	0.006	0.105	ok
+permute [9, 576, 16, 64] by [0, 2, 1, 3] (backbone.rs:613 windowed q/k/v to [B,H,T,D])	permute	42467328	0.445	0.446	0.463	0.500	91.8	-	0.004	0.054	ok
+permute [9, 576, 16, 64] by [0, 2, 1, 3] (backbone.rs:613 windowed q/k/v to [B,H,T,D])	permute'	42467328	0.434	0.451	0.459	0.484	92.5	-	0.004	0.054	ok
+permute [9, 16, 576, 64] by [0, 2, 1, 3] (backbone.rs:616 windowed attention out)	permute	42467328	0.447	0.448	0.461	0.495	92.1	-	0.001	0.047	ok
+permute [9, 16, 576, 64] by [0, 2, 1, 3] (backbone.rs:616 windowed attention out)	permute'	42467328	0.445	0.450	0.460	0.488	92.4	-	0.001	0.047	ok
+permute [1, 5184, 16, 64] by [0, 2, 1, 3] (backbone.rs:613 global q/k/v)	permute	42467328	0.436	0.439	0.456	0.488	93.0	-	0.001	0.049	ok
+permute [1, 5184, 16, 64] by [0, 2, 1, 3] (backbone.rs:613 global q/k/v)	permute'	42467328	0.439	0.442	0.456	0.473	93.2	-	0.001	0.049	ok
+permute [1, 16, 5184, 64] by [0, 2, 1, 3] (backbone.rs:616 global attention out)	permute	42467328	0.445	0.451	0.465	0.483	91.4	-	0.005	0.039	ok
+permute [1, 16, 5184, 64] by [0, 2, 1, 3] (backbone.rs:616 global attention out)	permute'	42467328	0.440	0.446	0.459	0.486	92.5	-	0.005	0.039	ok
+permute [1, 3, 24, 3, 24, 1024] by [0, 1, 3, 2, 4, 5] (spatial.rs:635 window_partition (backbone.rs:604))	permute	42467328	0.537	0.538	0.546	0.578	77.7	-	0.005	0.040	ok
+permute [1, 3, 24, 3, 24, 1024] by [0, 1, 3, 2, 4, 5] (spatial.rs:635 window_partition (backbone.rs:604))	permute'	42467328	0.536	0.543	0.551	0.576	77.0	-	0.005	0.040	ok
+permute [1, 3, 3, 24, 24, 1024] by [0, 1, 3, 2, 4, 5] (spatial.rs:674 window_merge (backbone.rs:621))	permute	42467328	0.543	0.544	0.550	0.568	77.3	-	0.001	0.036	ok
+permute [1, 3, 3, 24, 24, 1024] by [0, 1, 3, 2, 4, 5] (spatial.rs:674 window_merge (backbone.rs:621))	permute'	42467328	0.533	0.540	0.549	0.577	77.4	-	0.001	0.036	ok
+permute [1, 1024, 72, 72] by [0, 2, 3, 1] (backbone.rs:507 patch embed to NHWC)	permute	42467328	0.437	0.451	0.462	0.484	91.8	-	0.003	0.055	ok
+permute [1, 1024, 72, 72] by [0, 2, 3, 1] (backbone.rs:507 patch embed to NHWC)	permute'	42467328	0.438	0.444	0.466	0.499	91.2	-	0.003	0.055	ok
+permute [1, 72, 72, 1024] by [0, 3, 1, 2] (backbone.rs:635 neck input to NCHW)	permute	42467328	0.465	0.473	0.500	0.557	84.9	-	0.001	0.084	ok
+permute [1, 72, 72, 1024] by [0, 3, 1, 2] (backbone.rs:635 neck input to NCHW)	permute'	42467328	0.471	0.480	0.499	0.534	85.0	-	0.001	0.084	ok
+permute [1, 256, 72, 72] by [0, 2, 3, 1] (memory_encoder.rs:107 NHWC)	permute	10616832	0.202	0.204	0.214	0.240	49.7	-	0.005	0.035	ok
+permute [1, 256, 72, 72] by [0, 2, 3, 1] (memory_encoder.rs:107 NHWC)	permute'	10616832	0.205	0.207	0.218	0.238	48.6	-	0.005	0.035	ok
+permute [1, 72, 72, 256] by [0, 3, 1, 2] (memory_encoder.rs:110 NCHW)	permute	10616832	0.201	0.203	0.211	0.231	50.4	-	0.001	0.036	ok
+permute [1, 72, 72, 256] by [0, 3, 1, 2] (memory_encoder.rs:110 NCHW)	permute'	10616832	0.199	0.203	0.210	0.239	50.5	-	0.001	0.036	ok
+permute [1, 256, 5184] by [0, 2, 1] (detector.rs:280, interactive.rs:86, mask_decoder.rs:164 NCHW to tokens)	permute	10616832	0.186	0.191	0.204	0.243	51.9	-	0.001	0.051	ok
+permute [1, 256, 5184] by [0, 2, 1] (detector.rs:280, interactive.rs:86, mask_decoder.rs:164 NCHW to tokens)	permute'	10616832	0.193	0.194	0.203	0.233	52.2	-	0.001	0.051	ok
+permute [1, 5184, 256] by [0, 2, 1] (detector.rs:361, mask_decoder.rs:172 tokens to NCHW)	permute	10616832	0.188	0.192	0.197	0.235	53.8	-	0.004	0.073	ok
+permute [1, 5184, 256] by [0, 2, 1] (detector.rs:361, mask_decoder.rs:172 tokens to NCHW)	permute'	10616832	0.185	0.191	0.201	0.264	52.8	-	0.004	0.073	ok
+permute [256, 82944] by [1, 0] (detector.rs:372 instance masks [D, 288*288] to [82944, 256])	permute	169869312	1.372	1.392	1.419	1.447	119.7	-	0.020	0.065	ok
+permute [256, 82944] by [1, 0] (detector.rs:372 instance masks [D, 288*288] to [82944, 256])	permute'	169869312	1.367	1.376	1.399	1.441	121.4	-	0.020	0.065	ok
+permute [32, 82944] by [1, 0] (mask_decoder.rs:199 upscaled masks to [n, 32])	permute	21233664	0.255	0.256	0.264	0.285	80.5	-	0.001	0.035	ok
+permute [32, 82944] by [1, 0] (mask_decoder.rs:199 upscaled masks to [n, 32])	permute'	21233664	0.251	0.256	0.262	0.291	80.9	-	0.001	0.035	ok
+permute [1, 5184, 8, 32] by [0, 2, 1, 3] (layers.rs:116 attention heads, D32)	permute	10616832	0.202	0.204	0.210	0.234	50.5	-	0.000	0.030	ok
+permute [1, 5184, 8, 32] by [0, 2, 1, 3] (layers.rs:116 attention heads, D32)	permute'	10616832	0.198	0.202	0.210	0.233	50.6	-	0.000	0.030	ok
+permute [1, 8, 5184, 32] by [0, 2, 1, 3] (layers.rs:122 attention out, D32)	permute	10616832	0.189	0.197	0.203	0.243	52.3	-	0.003	0.045	ok
+permute [1, 8, 5184, 32] by [0, 2, 1, 3] (layers.rs:122 attention out, D32)	permute'	10616832	0.194	0.196	0.206	0.231	51.7	-	0.003	0.045	ok
+permute [1, 10400, 8, 32] by [0, 2, 1, 3] (layers.rs:116 memory keys/values, D32)	permute	21299200	0.259	0.264	0.272	0.302	78.2	-	0.004	0.098	ok
+permute [1, 10400, 8, 32] by [0, 2, 1, 3] (layers.rs:116 memory keys/values, D32)	permute'	21299200	0.267	0.268	0.277	0.365	77.0	-	0.004	0.098	ok
+permute [1, 8, 201, 32] by [0, 2, 1, 3] (layers.rs:122 detector queries out)	permute	411648	0.131	0.135	0.145	0.163	2.8	-	0.002	0.035	ok
+permute [1, 8, 201, 32] by [0, 2, 1, 3] (layers.rs:122 detector queries out)	permute'	411648	0.129	0.137	0.143	0.172	2.9	-	0.002	0.035	ok
+permute [1, 32, 16, 64] by [0, 2, 1, 3] (text.rs:129 text heads)	permute	262144	0.136	0.139	0.144	0.188	1.8	-	0.001	0.048	ok
+permute [1, 32, 16, 64] by [0, 2, 1, 3] (text.rs:129 text heads)	permute'	262144	0.138	0.139	0.143	0.165	1.8	-	0.001	0.048	ok
+# load_end 3.83 4.08 4.74
+# noisy_pairs 0
+# verdict clean
+# run 2 (second job, attempt 1 of 1; verdict clean). Same arms plus a relu streaming reference beside each permute.
+# load_start 4.18 4.10 4.71
+shape	arm	bytes	min_ms	p10_ms	median_ms	p90_ms	gb_per_s	tflops	gap_ms	spread_ms	pair
+vit fc1 [5184,1024]x[4736,1024]	bias add	196430336	0.909	0.916	0.966	1.113	203.3	52.04	0.009	0.197	ok
+vit fc1 [5184,1024]x[4736,1024]	bias add'	196430336	0.938	0.943	0.975	1.028	201.4	51.55	0.009	0.197	ok
+vit fc1 [5184,1024]x[4736,1024]	fill (write floor)	98205696	0.765	0.767	0.816	0.837	120.3	61.59	0.001	0.070	ok
+vit fc1 [5184,1024]x[4736,1024]	fill (write floor)'	98205696	0.796	0.800	0.816	0.843	120.4	61.66	0.001	0.070	ok
+vit fc1 [5184,1024]x[4736,1024]	linear f32 (control)	138838016	7.845	7.894	7.980	8.072	17.4	6.30	0.003	0.187	ok
+vit fc1 [5184,1024]x[4736,1024]	linear f32 (control)'	138838016	7.870	7.887	7.977	8.074	17.4	6.30	0.003	0.187	ok
+vit fc1 [5184,1024]x[4736,1024]	linear bf16 lane (control)	138838016	2.588	2.620	2.664	2.757	52.1	18.87	0.007	0.136	ok
+vit fc1 [5184,1024]x[4736,1024]	linear bf16 lane (control)'	138838016	2.614	2.639	2.671	2.718	52.0	18.82	0.007	0.136	ok
+vit fc2 [5184,4736]x[1024,4736]	bias add	42471424	0.310	0.315	0.347	0.392	122.6	145.09	0.007	0.077	ok
+vit fc2 [5184,4736]x[1024,4736]	bias add'	42471424	0.328	0.335	0.354	0.368	120.0	142.09	0.007	0.077	ok
+vit fc2 [5184,4736]x[1024,4736]	fill (write floor)	21233664	0.280	0.284	0.318	0.346	66.7	158.01	0.003	0.062	ok
+vit fc2 [5184,4736]x[1024,4736]	fill (write floor)'	21233664	0.290	0.296	0.321	0.345	66.2	156.74	0.003	0.062	ok
+vit fc2 [5184,4736]x[1024,4736]	linear f32 (control)	138838016	7.376	7.380	7.492	7.640	18.5	6.71	0.019	0.479	ok
+vit fc2 [5184,4736]x[1024,4736]	linear f32 (control)'	138838016	7.329	7.394	7.473	7.873	18.6	6.73	0.019	0.479	ok
+vit fc2 [5184,4736]x[1024,4736]	linear bf16 lane (control)	138838016	3.081	3.107	3.138	3.196	44.2	16.02	0.016	0.089	ok
+vit fc2 [5184,4736]x[1024,4736]	linear bf16 lane (control)'	138838016	3.082	3.088	3.122	3.176	44.5	16.10	0.016	0.089	ok
+vit qkv [5184,1024]x[3072,1024]	bias add	127414272	0.639	0.644	0.672	0.711	189.5	48.50	0.015	0.067	ok
+vit qkv [5184,1024]x[3072,1024]	bias add'	127414272	0.647	0.649	0.687	0.710	185.4	47.46	0.015	0.067	ok
+vit qkv [5184,1024]x[3072,1024]	fill (write floor)	63700992	0.547	0.558	0.579	0.609	110.1	56.35	0.013	0.052	ok
+vit qkv [5184,1024]x[3072,1024]	fill (write floor)'	63700992	0.556	0.561	0.591	0.613	107.7	55.15	0.013	0.052	ok
+vit qkv [5184,1024]x[3072,1024]	linear f32 (control)	97517568	5.131	5.189	5.246	5.370	18.6	6.22	0.013	0.181	ok
+vit qkv [5184,1024]x[3072,1024]	linear f32 (control)'	97517568	5.110	5.162	5.233	5.331	18.6	6.23	0.013	0.181	ok
+vit qkv [5184,1024]x[3072,1024]	linear bf16 lane (control)	97517568	1.824	1.855	1.880	1.933	51.9	17.35	0.008	0.078	ok
+vit qkv [5184,1024]x[3072,1024]	linear bf16 lane (control)'	97517568	1.842	1.876	1.888	1.912	51.7	17.28	0.008	0.078	ok
+vit proj [5184,1024]x[1024,1024]	bias add	42471424	0.300	0.304	0.332	0.357	128.1	32.78	0.008	0.058	ok
+vit proj [5184,1024]x[1024,1024]	bias add'	42471424	0.279	0.298	0.324	0.356	131.3	33.61	0.008	0.058	ok
+vit proj [5184,1024]x[1024,1024]	fill (write floor)	21233664	0.276	0.281	0.296	0.313	71.7	36.72	0.004	0.043	ok
+vit proj [5184,1024]x[1024,1024]	fill (write floor)'	21233664	0.276	0.280	0.300	0.323	70.7	36.21	0.004	0.043	ok
+vit proj [5184,1024]x[1024,1024]	linear f32 (control)	46661632	1.862	1.872	1.904	1.953	24.5	5.71	0.003	0.101	ok
+vit proj [5184,1024]x[1024,1024]	linear f32 (control)'	46661632	1.863	1.866	1.907	1.967	24.5	5.70	0.003	0.101	ok
+vit proj [5184,1024]x[1024,1024]	linear bf16 lane (control)	46661632	0.841	0.849	0.868	0.897	53.8	12.52	0.006	0.051	ok
+vit proj [5184,1024]x[1024,1024]	linear bf16 lane (control)'	46661632	0.831	0.855	0.874	0.907	53.4	12.45	0.006	0.051	ok
+window proj [9*576,1024]x[1024,1024]	bias add	42471424	0.310	0.312	0.332	0.356	127.9	32.75	0.013	0.090	ok
+window proj [9*576,1024]x[1024,1024]	bias add'	42471424	0.290	0.295	0.319	0.385	133.2	34.08	0.013	0.090	ok
+window proj [9*576,1024]x[1024,1024]	fill (write floor)	21233664	0.269	0.283	0.294	0.323	72.1	36.94	0.003	0.040	ok
+window proj [9*576,1024]x[1024,1024]	fill (write floor)'	21233664	0.271	0.280	0.291	0.308	72.9	37.34	0.003	0.040	ok
+window proj [9*576,1024]x[1024,1024]	linear f32 (control)	46661632	1.867	1.870	1.907	1.932	24.5	5.70	0.008	0.146	ok
+window proj [9*576,1024]x[1024,1024]	linear f32 (control)'	46661632	1.866	1.870	1.915	2.017	24.4	5.68	0.008	0.146	ok
+window proj [9*576,1024]x[1024,1024]	linear bf16 lane (control)	46661632	0.839	0.850	0.872	0.927	53.5	12.47	0.002	0.077	ok
+window proj [9*576,1024]x[1024,1024]	linear bf16 lane (control)'	46661632	0.847	0.850	0.874	0.903	53.4	12.44	0.002	0.077	ok
+256 [5184,256]x[256,256]	bias add	10617856	0.165	0.167	0.189	0.198	56.1	3.59	0.004	0.031	ok
+256 [5184,256]x[256,256]	bias add'	10617856	0.153	0.167	0.185	0.195	57.5	3.68	0.004	0.031	ok
+256 [5184,256]x[256,256]	fill (write floor)	5308416	0.166	0.167	0.178	0.197	29.7	3.81	0.002	0.030	ok
+256 [5184,256]x[256,256]	fill (write floor)'	5308416	0.164	0.167	0.176	0.197	30.1	3.86	0.002	0.030	ok
+256 [5184,256]x[256,256]	linear f32 (control)	10878976	0.282	0.287	0.308	0.316	35.3	2.21	0.005	0.029	ok
+256 [5184,256]x[256,256]	linear f32 (control)'	10878976	0.292	0.295	0.313	0.321	34.7	2.17	0.005	0.029	ok
+256 [5184,256]x[256,256]	linear bf16 lane (control)	10878976	0.226	0.229	0.245	0.265	44.3	2.77	0.009	0.036	ok
+256 [5184,256]x[256,256]	linear bf16 lane (control)'	10878976	0.228	0.238	0.255	0.269	42.7	2.67	0.009	0.036	ok
+256 [10400,256]x[256,256]	bias add	21300224	0.212	0.217	0.237	0.246	90.0	5.76	0.003	0.029	ok
+256 [10400,256]x[256,256]	bias add'	21300224	0.201	0.217	0.233	0.246	91.3	5.84	0.003	0.029	ok
+256 [10400,256]x[256,256]	fill (write floor)	10649600	0.209	0.214	0.234	0.244	45.5	5.83	0.004	0.034	ok
+256 [10400,256]x[256,256]	fill (write floor)'	10649600	0.204	0.217	0.238	0.251	44.7	5.73	0.004	0.034	ok
+256 [10400,256]x[256,256]	linear f32 (control)	21561344	0.462	0.477	0.497	0.509	43.4	2.74	0.007	0.036	ok
+256 [10400,256]x[256,256]	linear f32 (control)'	21561344	0.473	0.475	0.490	0.511	44.0	2.78	0.007	0.036	ok
+256 [10400,256]x[256,256]	linear bf16 lane (control)	21561344	0.342	0.354	0.366	0.384	58.9	3.72	0.007	0.033	ok
+256 [10400,256]x[256,256]	linear bf16 lane (control)'	21561344	0.343	0.348	0.373	0.381	57.8	3.65	0.007	0.033	ok
+256 up [5184,256]x[2048,256]	bias add	84942848	0.454	0.462	0.493	0.523	172.2	11.02	0.001	0.083	ok
+256 up [5184,256]x[2048,256]	bias add'	84942848	0.443	0.446	0.495	0.529	171.7	10.99	0.001	0.083	ok
+256 up [5184,256]x[2048,256]	fill (write floor)	42467328	0.413	0.419	0.445	0.455	95.5	12.22	0.008	0.036	ok
+256 up [5184,256]x[2048,256]	fill (write floor)'	42467328	0.419	0.423	0.437	0.456	97.1	12.43	0.008	0.036	ok
+256 up [5184,256]x[2048,256]	linear f32 (control)	49872896	1.348	1.349	1.378	1.427	36.2	3.94	0.004	0.078	ok
+256 up [5184,256]x[2048,256]	linear f32 (control)'	49872896	1.349	1.352	1.381	1.402	36.1	3.93	0.004	0.078	ok
+256 up [5184,256]x[2048,256]	linear bf16 lane (control)	49872896	0.606	0.621	0.648	0.670	77.0	8.39	0.003	0.049	ok
+256 up [5184,256]x[2048,256]	linear bf16 lane (control)'	49872896	0.618	0.631	0.651	0.671	76.6	8.35	0.003	0.049	ok
+256 down [5184,2048]x[256,2048]	bias add	10617856	0.171	0.178	0.199	0.213	53.4	27.33	0.002	0.042	ok
+256 down [5184,2048]x[256,2048]	bias add'	10617856	0.171	0.180	0.197	0.222	54.0	27.63	0.002	0.042	ok
+256 down [5184,2048]x[256,2048]	fill (write floor)	5308416	0.170	0.176	0.200	0.226	26.6	27.24	0.002	0.067	ok
+256 down [5184,2048]x[256,2048]	fill (write floor)'	5308416	0.173	0.181	0.202	0.249	26.3	26.93	0.002	0.067	ok
+256 down [5184,2048]x[256,2048]	linear f32 (control)	49872896	1.098	1.106	1.129	1.198	44.2	4.81	0.011	0.091	ok
+256 down [5184,2048]x[256,2048]	linear f32 (control)'	49872896	1.111	1.117	1.140	1.153	43.7	4.77	0.011	0.091	ok
+256 down [5184,2048]x[256,2048]	linear bf16 lane (control)	49872896	0.814	0.836	0.857	0.878	58.2	6.34	0.009	0.043	ok
+256 down [5184,2048]x[256,2048]	linear bf16 lane (control)'	49872896	0.823	0.825	0.848	0.867	58.8	6.41	0.009	0.043	ok
+permute [9, 576, 16, 64] by [0, 2, 1, 3] (backbone.rs:613 windowed q/k/v to [B,H,T,D])	permute	42467328	0.443	0.449	0.472	0.502	90.0	-	0.005	0.053	ok
+permute [9, 576, 16, 64] by [0, 2, 1, 3] (backbone.rs:613 windowed q/k/v to [B,H,T,D])	permute'	42467328	0.447	0.451	0.467	0.484	90.9	-	0.005	0.053	ok
+permute [9, 576, 16, 64] by [0, 2, 1, 3] (backbone.rs:613 windowed q/k/v to [B,H,T,D])	relu (streaming reference)	42467328	0.306	0.307	0.319	0.347	133.3	-	0.004	0.040	ok
+permute [9, 576, 16, 64] by [0, 2, 1, 3] (backbone.rs:613 windowed q/k/v to [B,H,T,D])	relu (streaming reference)'	42467328	0.299	0.309	0.322	0.336	131.8	-	0.004	0.040	ok
+permute [9, 16, 576, 64] by [0, 2, 1, 3] (backbone.rs:616 windowed attention out)	permute	42467328	0.446	0.454	0.467	0.500	91.0	-	0.015	0.046	ok
+permute [9, 16, 576, 64] by [0, 2, 1, 3] (backbone.rs:616 windowed attention out)	permute'	42467328	0.446	0.452	0.482	0.494	88.1	-	0.015	0.046	ok
+permute [9, 16, 576, 64] by [0, 2, 1, 3] (backbone.rs:616 windowed attention out)	relu (streaming reference)	42467328	0.302	0.309	0.330	0.350	128.9	-	0.007	0.079	ok
+permute [9, 16, 576, 64] by [0, 2, 1, 3] (backbone.rs:616 windowed attention out)	relu (streaming reference)'	42467328	0.301	0.309	0.336	0.388	126.3	-	0.007	0.079	ok
+permute [1, 5184, 16, 64] by [0, 2, 1, 3] (backbone.rs:613 global q/k/v)	permute	42467328	0.430	0.442	0.454	0.489	93.6	-	0.004	0.046	ok
+permute [1, 5184, 16, 64] by [0, 2, 1, 3] (backbone.rs:613 global q/k/v)	permute'	42467328	0.438	0.443	0.450	0.473	94.4	-	0.004	0.046	ok
+permute [1, 5184, 16, 64] by [0, 2, 1, 3] (backbone.rs:613 global q/k/v)	relu (streaming reference)	42467328	0.298	0.301	0.311	0.330	136.7	-	0.003	0.038	ok
+permute [1, 5184, 16, 64] by [0, 2, 1, 3] (backbone.rs:613 global q/k/v)	relu (streaming reference)'	42467328	0.296	0.297	0.308	0.335	138.0	-	0.003	0.038	ok
+permute [1, 16, 5184, 64] by [0, 2, 1, 3] (backbone.rs:616 global attention out)	permute	42467328	0.445	0.449	0.464	0.484	91.6	-	0.001	0.038	ok
+permute [1, 16, 5184, 64] by [0, 2, 1, 3] (backbone.rs:616 global attention out)	permute'	42467328	0.443	0.445	0.465	0.484	91.4	-	0.001	0.038	ok
+permute [1, 16, 5184, 64] by [0, 2, 1, 3] (backbone.rs:616 global attention out)	relu (streaming reference)	42467328	0.296	0.302	0.324	0.340	131.0	-	0.010	0.038	ok
+permute [1, 16, 5184, 64] by [0, 2, 1, 3] (backbone.rs:616 global attention out)	relu (streaming reference)'	42467328	0.299	0.303	0.314	0.335	135.1	-	0.010	0.038	ok
+permute [1, 3, 24, 3, 24, 1024] by [0, 1, 3, 2, 4, 5] (spatial.rs:635 window_partition (backbone.rs:604))	permute	42467328	0.531	0.537	0.550	0.603	77.3	-	0.002	0.066	ok
+permute [1, 3, 24, 3, 24, 1024] by [0, 1, 3, 2, 4, 5] (spatial.rs:635 window_partition (backbone.rs:604))	permute'	42467328	0.534	0.535	0.548	0.574	77.6	-	0.002	0.066	ok
+permute [1, 3, 24, 3, 24, 1024] by [0, 1, 3, 2, 4, 5] (spatial.rs:635 window_partition (backbone.rs:604))	relu (streaming reference)	42467328	0.293	0.298	0.319	0.332	133.1	-	0.008	0.034	ok
+permute [1, 3, 24, 3, 24, 1024] by [0, 1, 3, 2, 4, 5] (spatial.rs:635 window_partition (backbone.rs:604))	relu (streaming reference)'	42467328	0.289	0.297	0.311	0.330	136.6	-	0.008	0.034	ok
+permute [1, 3, 3, 24, 24, 1024] by [0, 1, 3, 2, 4, 5] (spatial.rs:674 window_merge (backbone.rs:621))	permute	42467328	0.530	0.533	0.549	0.584	77.4	-	0.004	0.051	ok
+permute [1, 3, 3, 24, 24, 1024] by [0, 1, 3, 2, 4, 5] (spatial.rs:674 window_merge (backbone.rs:621))	permute'	42467328	0.527	0.536	0.545	0.569	77.9	-	0.004	0.051	ok
+permute [1, 3, 3, 24, 24, 1024] by [0, 1, 3, 2, 4, 5] (spatial.rs:674 window_merge (backbone.rs:621))	relu (streaming reference)	42467328	0.295	0.299	0.311	0.339	136.6	-	0.001	0.039	ok
+permute [1, 3, 3, 24, 24, 1024] by [0, 1, 3, 2, 4, 5] (spatial.rs:674 window_merge (backbone.rs:621))	relu (streaming reference)'	42467328	0.292	0.297	0.310	0.332	136.8	-	0.001	0.039	ok
+permute [1, 1024, 72, 72] by [0, 2, 3, 1] (backbone.rs:507 patch embed to NHWC)	permute	42467328	0.442	0.449	0.456	0.470	93.1	-	0.001	0.038	ok
+permute [1, 1024, 72, 72] by [0, 2, 3, 1] (backbone.rs:507 patch embed to NHWC)	permute'	42467328	0.448	0.449	0.457	0.488	92.8	-	0.001	0.038	ok
+permute [1, 1024, 72, 72] by [0, 2, 3, 1] (backbone.rs:507 patch embed to NHWC)	relu (streaming reference)	42467328	0.296	0.298	0.310	0.331	136.8	-	0.012	0.033	ok
+permute [1, 1024, 72, 72] by [0, 2, 3, 1] (backbone.rs:507 patch embed to NHWC)	relu (streaming reference)'	42467328	0.292	0.293	0.298	0.323	142.3	-	0.012	0.033	ok
+permute [1, 72, 72, 1024] by [0, 3, 1, 2] (backbone.rs:635 neck input to NCHW)	permute	42467328	0.467	0.470	0.487	0.507	87.2	-	0.000	0.049	ok
+permute [1, 72, 72, 1024] by [0, 3, 1, 2] (backbone.rs:635 neck input to NCHW)	permute'	42467328	0.465	0.472	0.487	0.522	87.2	-	0.000	0.049	ok
+permute [1, 72, 72, 1024] by [0, 3, 1, 2] (backbone.rs:635 neck input to NCHW)	relu (streaming reference)	42467328	0.296	0.301	0.323	0.341	131.5	-	0.006	0.049	ok
+permute [1, 72, 72, 1024] by [0, 3, 1, 2] (backbone.rs:635 neck input to NCHW)	relu (streaming reference)'	42467328	0.290	0.303	0.317	0.352	133.9	-	0.006	0.049	ok
+permute [1, 256, 72, 72] by [0, 2, 3, 1] (memory_encoder.rs:107 NHWC)	permute	10616832	0.193	0.200	0.220	0.228	48.2	-	0.001	0.028	ok
+permute [1, 256, 72, 72] by [0, 2, 3, 1] (memory_encoder.rs:107 NHWC)	permute'	10616832	0.197	0.202	0.221	0.230	47.9	-	0.001	0.028	ok
+permute [1, 256, 72, 72] by [0, 2, 3, 1] (memory_encoder.rs:107 NHWC)	relu (streaming reference)	10616832	0.161	0.169	0.185	0.206	57.4	-	0.006	0.037	ok
+permute [1, 256, 72, 72] by [0, 2, 3, 1] (memory_encoder.rs:107 NHWC)	relu (streaming reference)'	10616832	0.161	0.168	0.191	0.200	55.7	-	0.006	0.037	ok
+permute [1, 72, 72, 256] by [0, 3, 1, 2] (memory_encoder.rs:110 NCHW)	permute	10616832	0.189	0.193	0.203	0.249	52.4	-	0.007	0.056	ok
+permute [1, 72, 72, 256] by [0, 3, 1, 2] (memory_encoder.rs:110 NCHW)	permute'	10616832	0.194	0.195	0.210	0.223	50.5	-	0.007	0.056	ok
+permute [1, 72, 72, 256] by [0, 3, 1, 2] (memory_encoder.rs:110 NCHW)	relu (streaming reference)	10616832	0.162	0.164	0.180	0.194	58.9	-	0.010	0.038	ok
+permute [1, 72, 72, 256] by [0, 3, 1, 2] (memory_encoder.rs:110 NCHW)	relu (streaming reference)'	10616832	0.160	0.164	0.171	0.202	62.2	-	0.010	0.038	ok
+permute [1, 256, 5184] by [0, 2, 1] (detector.rs:280, interactive.rs:86, mask_decoder.rs:164 NCHW to tokens)	permute	10616832	0.177	0.183	0.200	0.217	53.0	-	0.004	0.034	ok
+permute [1, 256, 5184] by [0, 2, 1] (detector.rs:280, interactive.rs:86, mask_decoder.rs:164 NCHW to tokens)	permute'	10616832	0.171	0.185	0.196	0.219	54.2	-	0.004	0.034	ok
+permute [1, 256, 5184] by [0, 2, 1] (detector.rs:280, interactive.rs:86, mask_decoder.rs:164 NCHW to tokens)	relu (streaming reference)	10616832	0.155	0.155	0.171	0.197	62.0	-	0.003	0.042	ok
+permute [1, 256, 5184] by [0, 2, 1] (detector.rs:280, interactive.rs:86, mask_decoder.rs:164 NCHW to tokens)	relu (streaming reference)'	10616832	0.155	0.159	0.169	0.185	62.9	-	0.003	0.042	ok
+permute [1, 5184, 256] by [0, 2, 1] (detector.rs:361, mask_decoder.rs:172 tokens to NCHW)	permute	10616832	0.170	0.175	0.193	0.221	55.1	-	0.001	0.046	ok
+permute [1, 5184, 256] by [0, 2, 1] (detector.rs:361, mask_decoder.rs:172 tokens to NCHW)	permute'	10616832	0.175	0.177	0.192	0.210	55.3	-	0.001	0.046	ok
+permute [1, 5184, 256] by [0, 2, 1] (detector.rs:361, mask_decoder.rs:172 tokens to NCHW)	relu (streaming reference)	10616832	0.152	0.161	0.175	0.207	60.6	-	0.006	0.046	ok
+permute [1, 5184, 256] by [0, 2, 1] (detector.rs:361, mask_decoder.rs:172 tokens to NCHW)	relu (streaming reference)'	10616832	0.154	0.156	0.170	0.195	62.6	-	0.006	0.046	ok
+permute [256, 82944] by [1, 0] (detector.rs:372 instance masks [D, 288*288] to [82944, 256])	permute	169869312	1.350	1.352	1.374	1.418	123.6	-	0.007	0.085	ok
+permute [256, 82944] by [1, 0] (detector.rs:372 instance masks [D, 288*288] to [82944, 256])	permute'	169869312	1.338	1.350	1.381	1.435	123.0	-	0.007	0.085	ok
+permute [256, 82944] by [1, 0] (detector.rs:372 instance masks [D, 288*288] to [82944, 256])	relu (streaming reference)	169869312	0.765	0.773	0.789	0.864	215.4	-	0.002	0.091	ok
+permute [256, 82944] by [1, 0] (detector.rs:372 instance masks [D, 288*288] to [82944, 256])	relu (streaming reference)'	169869312	0.763	0.769	0.791	0.808	214.8	-	0.002	0.091	ok
+permute [32, 82944] by [1, 0] (mask_decoder.rs:199 upscaled masks to [n, 32])	permute	21233664	0.246	0.249	0.260	0.281	81.5	-	0.010	0.032	ok
+permute [32, 82944] by [1, 0] (mask_decoder.rs:199 upscaled masks to [n, 32])	permute'	21233664	0.244	0.255	0.271	0.285	78.4	-	0.010	0.032	ok
+permute [32, 82944] by [1, 0] (mask_decoder.rs:199 upscaled masks to [n, 32])	relu (streaming reference)	21233664	0.204	0.208	0.221	0.235	96.3	-	0.002	0.027	ok
+permute [32, 82944] by [1, 0] (mask_decoder.rs:199 upscaled masks to [n, 32])	relu (streaming reference)'	21233664	0.206	0.211	0.223	0.235	95.4	-	0.002	0.027	ok
+permute [1, 5184, 8, 32] by [0, 2, 1, 3] (layers.rs:116 attention heads, D32)	permute	10616832	0.191	0.201	0.226	0.232	47.0	-	0.002	0.035	ok
+permute [1, 5184, 8, 32] by [0, 2, 1, 3] (layers.rs:116 attention heads, D32)	permute'	10616832	0.194	0.202	0.224	0.237	47.4	-	0.002	0.035	ok
+permute [1, 5184, 8, 32] by [0, 2, 1, 3] (layers.rs:116 attention heads, D32)	relu (streaming reference)	10616832	0.167	0.175	0.187	0.200	56.9	-	0.006	0.039	ok
+permute [1, 5184, 8, 32] by [0, 2, 1, 3] (layers.rs:116 attention heads, D32)	relu (streaming reference)'	10616832	0.165	0.167	0.181	0.206	58.6	-	0.006	0.039	ok
+permute [1, 8, 5184, 32] by [0, 2, 1, 3] (layers.rs:122 attention out, D32)	permute	10616832	0.193	0.199	0.218	0.235	48.6	-	0.005	0.036	ok
+permute [1, 8, 5184, 32] by [0, 2, 1, 3] (layers.rs:122 attention out, D32)	permute'	10616832	0.195	0.197	0.213	0.229	49.9	-	0.005	0.036	ok
+permute [1, 8, 5184, 32] by [0, 2, 1, 3] (layers.rs:122 attention out, D32)	relu (streaming reference)	10616832	0.162	0.174	0.186	0.269	57.0	-	0.005	0.095	ok
+permute [1, 8, 5184, 32] by [0, 2, 1, 3] (layers.rs:122 attention out, D32)	relu (streaming reference)'	10616832	0.161	0.171	0.181	0.200	58.5	-	0.005	0.095	ok
+permute [1, 10400, 8, 32] by [0, 2, 1, 3] (layers.rs:116 memory keys/values, D32)	permute	21299200	0.263	0.271	0.280	0.309	76.1	-	0.007	0.044	ok
+permute [1, 10400, 8, 32] by [0, 2, 1, 3] (layers.rs:116 memory keys/values, D32)	permute'	21299200	0.263	0.264	0.287	0.309	74.2	-	0.007	0.044	ok
+permute [1, 10400, 8, 32] by [0, 2, 1, 3] (layers.rs:116 memory keys/values, D32)	relu (streaming reference)	21299200	0.203	0.204	0.212	0.238	100.7	-	0.002	0.035	ok
+permute [1, 10400, 8, 32] by [0, 2, 1, 3] (layers.rs:116 memory keys/values, D32)	relu (streaming reference)'	21299200	0.203	0.208	0.214	0.234	99.6	-	0.002	0.035	ok
+permute [1, 8, 201, 32] by [0, 2, 1, 3] (layers.rs:122 detector queries out)	permute	411648	0.121	0.135	0.149	0.159	2.8	-	0.004	0.028	ok
+permute [1, 8, 201, 32] by [0, 2, 1, 3] (layers.rs:122 detector queries out)	permute'	411648	0.116	0.132	0.145	0.161	2.8	-	0.004	0.028	ok
+permute [1, 8, 201, 32] by [0, 2, 1, 3] (layers.rs:122 detector queries out)	relu (streaming reference)	411648	0.119	0.129	0.145	0.158	2.8	-	0.001	0.029	ok
+permute [1, 8, 201, 32] by [0, 2, 1, 3] (layers.rs:122 detector queries out)	relu (streaming reference)'	411648	0.122	0.125	0.144	0.148	2.9	-	0.001	0.029	ok
+permute [1, 32, 16, 64] by [0, 2, 1, 3] (text.rs:129 text heads)	permute	262144	0.114	0.115	0.125	0.136	2.1	-	0.004	0.025	ok
+permute [1, 32, 16, 64] by [0, 2, 1, 3] (text.rs:129 text heads)	permute'	262144	0.115	0.117	0.129	0.142	2.0	-	0.004	0.025	ok
+permute [1, 32, 16, 64] by [0, 2, 1, 3] (text.rs:129 text heads)	relu (streaming reference)	262144	0.118	0.119	0.126	0.133	2.1	-	0.000	0.017	ok
+permute [1, 32, 16, 64] by [0, 2, 1, 3] (text.rs:129 text heads)	relu (streaming reference)'	262144	0.118	0.121	0.126	0.138	2.1	-	0.000	0.017	ok
+# load_end 4.01 4.07 4.69
+# noisy_pairs 0
+# verdict clean
