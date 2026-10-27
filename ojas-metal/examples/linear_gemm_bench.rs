@@ -311,10 +311,7 @@ mod bench {
             // im2col matrix with 8 output channels (its GEMM is a thin read of
             // the matrix), the thin GEMM alone, the write floor of the matrix
             // and of the output, and the product's transpose.
-            let w8 = up(&host(
-                &values(8 * k, 8, 0.05),
-                &[8, ch, c.kernel, c.kernel],
-            ));
+            let w8 = up(&host(&values(8 * k, 8, 0.05), &[8, ch, c.kernel, c.kernel]));
             let w8_2 = up(&host(&values(8 * k, 8, 0.05), &[8, k]));
             let prod = up(&host(&values(m * c.out, 9, 1.0), &[m, c.out]));
             let arms: Vec<Arm<'_>> = vec![

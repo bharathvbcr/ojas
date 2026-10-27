@@ -1,0 +1,29 @@
+shape	arm	min_ms	p10_ms	median_ms	p90_ms	median_tflops
+neck 3x3 p1 [1,256,288,288]	probe conv2d o=8 (im2col + thin GEMM)	12.723	12.757	12.824	12.896	7.63
+neck 3x3 p1 [1,256,288,288]	probe GEMM o=8 (thin read of the matrix)	6.582	6.645	6.701	6.856	14.60
+neck 3x3 p1 [1,256,288,288]	probe fill [m,k] (write floor of the matrix)	4.873	4.880	4.907	4.950	19.94
+neck 3x3 p1 [1,256,288,288]	probe fill [m,o] (write floor of the output)	0.705	0.731	0.754	0.775	129.73
+neck 3x3 p1 [1,256,288,288]	probe permute [m,o] -> [o,m]	3.363	3.380	3.404	3.481	28.75
+neck 3x3 p1 [1,256,288,288]	conv2d f32 (im2col + GEMM + layout)	25.207	25.262	25.340	25.484	3.86
+neck 3x3 p1 [1,256,288,288]	GEMM alone f32 (the conv's [m,k]x[n,k])	16.670	16.754	16.932	17.135	5.78
+neck 3x3 p1 [1,256,144,144]	probe conv2d o=8 (im2col + thin GEMM)	3.475	3.485	3.506	3.582	6.98
+neck 3x3 p1 [1,256,144,144]	probe GEMM o=8 (thin read of the matrix)	1.824	1.846	1.868	1.907	13.09
+neck 3x3 p1 [1,256,144,144]	probe fill [m,k] (write floor of the matrix)	1.340	1.344	1.369	1.384	17.86
+neck 3x3 p1 [1,256,144,144]	probe fill [m,o] (write floor of the output)	0.300	0.309	0.329	0.339	74.43
+neck 3x3 p1 [1,256,144,144]	probe permute [m,o] -> [o,m]	0.570	0.574	0.596	0.620	41.02
+neck 3x3 p1 [1,256,144,144]	conv2d f32 (im2col + GEMM + layout)	6.064	6.087	6.136	6.226	3.99
+neck 3x3 p1 [1,256,144,144]	GEMM alone f32 (the conv's [m,k]x[n,k])	4.269	4.282	4.312	4.401	5.67
+neck 3x3 p1 [1,256,72,72]	probe conv2d o=8 (im2col + thin GEMM)	1.023	1.037	1.064	1.119	5.75
+neck 3x3 p1 [1,256,72,72]	probe GEMM o=8 (thin read of the matrix)	0.566	0.569	0.596	0.607	10.26
+neck 3x3 p1 [1,256,72,72]	probe fill [m,k] (write floor of the matrix)	0.459	0.461	0.468	0.494	13.06
+neck 3x3 p1 [1,256,72,72]	probe fill [m,o] (write floor of the output)	0.188	0.197	0.203	0.236	30.08
+neck 3x3 p1 [1,256,72,72]	probe permute [m,o] -> [o,m]	0.224	0.230	0.247	0.267	24.78
+neck 3x3 p1 [1,256,72,72]	conv2d f32 (im2col + GEMM + layout)	1.664	1.671	1.702	1.747	3.59
+neck 3x3 p1 [1,256,72,72]	GEMM alone f32 (the conv's [m,k]x[n,k])	1.273	1.277	1.296	1.357	4.72
+patch embed [1,3,1008,1008] k14 s14	probe conv2d o=8 (im2col + thin GEMM)	0.424	0.440	0.456	0.472	13.68
+patch embed [1,3,1008,1008] k14 s14	probe GEMM o=8 (thin read of the matrix)	0.262	0.268	0.285	0.321	21.89
+patch embed [1,3,1008,1008] k14 s14	probe fill [m,k] (write floor of the matrix)	0.223	0.226	0.233	0.261	26.80
+patch embed [1,3,1008,1008] k14 s14	probe fill [m,o] (write floor of the output)	0.282	0.287	0.295	0.313	21.18
+patch embed [1,3,1008,1008] k14 s14	probe permute [m,o] -> [o,m]	0.502	0.508	0.521	0.550	11.97
+patch embed [1,3,1008,1008] k14 s14	conv2d f32 (im2col + GEMM + layout)	1.648	1.664	1.702	1.728	3.67
+patch embed [1,3,1008,1008] k14 s14	GEMM alone f32 (the conv's [m,k]x[n,k])	1.287	1.292	1.313	1.358	4.75
