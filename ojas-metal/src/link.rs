@@ -356,13 +356,17 @@ pub(crate) struct AttnGeom {
     pub has_lens: bool,
 }
 
-/// One bidirectional self-attention launch on tessl's `encoder_attn`:
-/// `q`, `k`, `v` are `[batch, heads, seq, d]`, every key visible.
+/// One bidirectional attention launch on tessl's `encoder_attn`: `k` and `v`
+/// are `[batch, heads, seq, d]`, every key visible, and `q` is `[batch,
+/// heads, q_len, d]` with `q_len <= seq`. A shorter `q` is zero-padded to
+/// `seq` rows, attends like any other, and only its first `q_len` output
+/// rows are kept.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct EncAttnGeom {
     pub batch: u32,
     pub heads: u32,
     pub seq: u32,
+    pub q_len: u32,
     pub d: u32,
 }
 
@@ -648,9 +652,10 @@ pub(crate) enum Cmd {
         bias: Option<Arg>,
         geom: ConvGeom,
     },
-    /// Bidirectional self-attention without a bias, key lengths or window
-    /// on tessl's tiled `encoder_attn` (head dim 32 or 64): permutes in, attends,
-    /// permutes out. Replies with the output alone; `op` names a fault.
+    /// Bidirectional attention without a bias, key lengths or window on
+    /// tessl's tiled `encoder_attn` (head dim 32 or 64), `q_len <= seq`:
+    /// permutes in (padding a shorter Q), attends, permutes out. Replies
+    /// with the output alone; `op` names a fault.
     EncoderAttn {
         op: &'static str,
         q: Arg,

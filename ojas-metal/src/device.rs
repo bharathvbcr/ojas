@@ -200,6 +200,7 @@ const KERNELS: &[&str] = &[
     "ojas_conv_nchw",
     "ojas_bilinear",
     "ojas_dwconv",
+    "ojas_pad_q",
     "ojas_convt_nchw",
     "ojas_attn_bwd_dq_d256",
     "ojas_attn_bwd_dkv_d256",
@@ -1799,13 +1800,14 @@ impl Worker {
         Ok(self.keep(vec![y]))
     }
 
-    /// `ojas_permute` of `xv` into `y`: output axis `a` has extent
-    /// `oshape[a]` and reads the input at `istride[a]`.
+    /// `ojas_permute` into `y`, one thread per element of `y`: output axis
+    /// `a` has extent `oshape[a]` and reads `xv` at `istride[a]`. `y` may be
+    /// smaller than `xv` (a slice of it).
     fn permute_into(&self, xv: &V, y: &V, rank: u32, oshape: &[u32], istride: &[u32]) -> Res<()> {
-        let n = u32_of(xv.n)?;
+        let n = u32_of(y.n)?;
         let shape_bytes: Vec<u8> = oshape.iter().flat_map(|v| v.to_ne_bytes()).collect();
         let stride_bytes: Vec<u8> = istride.iter().flat_map(|v| v.to_ne_bytes()).collect();
-        self.k1("ojas_permute", xv.n, |b| {
+        self.k1("ojas_permute", y.n, |b| {
             bind(b, xv, 0);
             bind(b, y, 1);
             set_u32(b, n, 2);
@@ -2652,7 +2654,7 @@ impl Worker {
         Ok(self.keep(vec![y]))
     }
 
-    /// Bidirectional self-attention on tessl's `embedgemma2::encoder_attn`
+    /// Bidirectional attention on tessl's `embedgemma2::encoder_attn`
     /// (the tiled TensorOps kernel at head dim 32 or 64), which wants
     /// `[batch, seq, heads, d]`: each operand is permuted in, the output is
     /// permuted back. tessl scales `q . k` by `scale` (here `sdpa_scale(d)`,
@@ -2662,32 +2664,48 @@ impl Worker {
     /// here; the output of a non-finite input is flagged under `op`.
     fn encoder_attn(&mut self, op: &'static str, args: [Arg; 3], g: EncAttnGeom) -> Res<Reply> {
         let [qv, kv, vv] = self.wholes(args)?;
-        let n = (g.batch as usize)
-            .checked_mul(g.heads as usize)
-            .and_then(|n| n.checked_mul(g.seq as usize))
-            .and_then(|n| n.checked_mul(g.d as usize))
-            .ok_or_else(|| metal_err(format!("{op}: attention extent overflows")))?;
-        if [&qv, &kv, &vv].iter().any(|v| v.n != n) {
+        let elems = |rows: u32| {
+            (g.batch as usize)
+                .checked_mul(g.heads as usize)
+                .and_then(|n| n.checked_mul(rows as usize))
+                .and_then(|n| n.checked_mul(g.d as usize))
+                .ok_or_else(|| metal_err(format!("{op}: attention extent overflows")))
+        };
+        let (nq, nk) = (elems(g.q_len)?, elems(g.seq)?);
+        if g.q_len == 0 || g.q_len > g.seq || qv.n != nq || kv.n != nk || vv.n != nk {
             return Err(metal_err(format!(
-                "{op}: buffers do not hold [{}, {}, {}, {}]",
-                g.batch, g.heads, g.seq, g.d
+                "{op}: buffers do not hold q [{}, {}, {}, {}] over k and v [.., {}, ..]",
+                g.batch, g.heads, g.q_len, g.d, g.seq
             )));
         }
-        u32_of(n)?;
+        u32_of(nk)?;
         let scale = sdpa_scale(g.d)?;
-        let (b, h, t, d) = (g.batch, g.heads, g.seq, g.d);
+        let (b, h, t, tq, d) = (g.batch, g.heads, g.seq, g.q_len, g.d);
         // [B, H, T, D] -> [B, T, H, D] reads the input at (H T D, D, T D, 1);
-        // back reads [B, T, H, D] at (T H D, D, H D, 1).
+        // back reads the first Tq rows of [B, T, H, D] at (T H D, D, H D, 1).
         let to_bthd = ([b, t, h, d], [h * t * d, d, t * d, 1]);
-        let to_bhtd = ([b, h, t, d], [t * h * d, d, h * d, 1]);
-        let (qt, kt, vt) = (self.fresh(n)?, self.fresh(n)?, self.fresh(n)?);
-        let (o, y) = (self.fresh(n)?, self.fresh(n)?);
+        let to_bhtd = ([b, h, tq, d], [t * h * d, d, h * d, 1]);
+        let (qt, kt, vt) = (self.fresh(nk)?, self.fresh(nk)?, self.fresh(nk)?);
+        let (o, y) = (self.fresh(nk)?, self.fresh(nq)?);
         let lens = self.fresh_from(&vec![t; b as usize])?;
         let st = self.status(op)?;
         for v in [&qv, &kv, &vv] {
             self.check(&st, v, ST_IN)?;
         }
-        for (src, dst) in [(&qv, &qt), (&kv, &kt), (&vv, &vt)] {
+        if tq == t {
+            self.permute_into(&qv, &qt, 4, &to_bthd.0, &to_bthd.1)?;
+        } else {
+            self.k1("ojas_pad_q", nk, |bd| {
+                bind(bd, &qv, 0);
+                bind(bd, &qt, 1);
+                set_u32(bd, nk as u32, 2);
+                set_u32(bd, h, 3);
+                set_u32(bd, tq, 4);
+                set_u32(bd, t, 5);
+                set_u32(bd, d, 6);
+            })?;
+        }
+        for (src, dst) in [(&kv, &kt), (&vv, &vt)] {
             self.permute_into(src, dst, 4, &to_bthd.0, &to_bthd.1)?;
         }
         encoder_attn(

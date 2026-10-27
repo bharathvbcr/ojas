@@ -191,7 +191,17 @@ fn the_route_is_taken_for_plain_self_attention_and_for_nothing_else() {
 
     let bias = up(&m, &rand(&[1, 2, 64, 64], 4, 1.0));
     let lens = up(&m, &host_u32(&[64], &[1]));
+    // Tq < Tk is routed (Q is padded), Tq > Tk and a Tk past 8 Tq are not.
     let q_short = up(&m, &rand(&[1, 2, 17, 64], 5, 1.0));
+    let q_long = up(&m, &rand(&[1, 2, 80, 64], 5, 1.0));
+    let q_tiny = up(&m, &rand(&[1, 2, 4, 64], 5, 1.0));
+    let routed_cross = dispatches_of(&m, &q_short, &dk, &dv, AttentionOpts::default());
+    if m.has_tensorops() {
+        assert!(
+            routed_cross > general,
+            "Tq 17 over Tk 64 routes: {routed_cross} vs general {general}"
+        );
+    }
     let (q128, k128, v128) = (
         up(&m, &rand(&[1, 2, 64, 128], 6, 1.0)),
         up(&m, &rand(&[1, 2, 64, 128], 7, 1.0)),
@@ -257,8 +267,12 @@ fn the_route_is_taken_for_plain_self_attention_and_for_nothing_else() {
             ),
         ),
         (
-            "Tq != Tk",
-            dispatches_of(&m, &q_short, &dk, &dv, AttentionOpts::default()),
+            "Tq > Tk",
+            dispatches_of(&m, &q_long, &dk, &dv, AttentionOpts::default()),
+        ),
+        (
+            "Tk more than 8x Tq",
+            dispatches_of(&m, &q_tiny, &dk, &dv, AttentionOpts::default()),
         ),
         (
             "head dim 128",
@@ -460,6 +474,148 @@ fn budget_fallback(d: usize) {
             routed > general,
             "routed {routed} dispatches vs general {general}"
         );
+    }
+}
+
+/// Cross-attention (`Tq < Tk`) routes by zero-padding Q to `Tk` rows and
+/// keeping the first `Tq` output rows. Parity with the CPU on small shapes
+/// and on one head of the memory encoder's `[5184] x [5200, 10400]`, at both
+/// routed head dims.
+#[test]
+fn routed_cross_attention_matches_cpu() {
+    let (m, c) = (metal(), cpu());
+    for d in [32usize, 64] {
+        for (b, h, tq, tk) in [
+            (2usize, 3usize, 17usize, 40usize),
+            (1, 4, 33, 64),
+            (2, 2, 100, 101),
+            (1, 1, 5184, 5200),
+            (1, 1, 5184, 10400),
+        ] {
+            let q = rand(&[b, h, tq, d], 200 + d as u64, 1.0);
+            let k = rand(&[b, h, tk, d], 201 + d as u64, 1.0);
+            let v = rand(&[b, h, tk, d], 202 + d as u64, 1.0);
+            let want = ok(
+                "cpu",
+                c.attention_forward(&q, &k, &v, AttentionOpts::default()),
+            );
+            let (dq, dk, dv) = (up(&m, &q), up(&m, &k), up(&m, &v));
+            let got = ok(
+                "metal",
+                m.attention_forward(&dq, &dk, &dv, AttentionOpts::default()),
+            );
+            ok("sync", m.sync());
+            same_tensor(
+                &format!("[{b},{h},{tq}x{tk},{d}]"),
+                &got,
+                &want,
+                tol(tk),
+                1e-4,
+            );
+        }
+    }
+}
+
+/// The memory encoder's cross-attention at its real shapes, 8 heads of 32,
+/// against the general kernel (`attention_forward_saving` never routes), and
+/// the route taken: more dispatches than the general kernel.
+#[test]
+fn routed_cross_attention_matches_the_general_kernel_at_the_memory_shapes() {
+    let m = metal();
+    for tk in [5200usize, 10400] {
+        let q = rand(&[1, 8, 5184, 32], 210, 1.0);
+        let k = rand(&[1, 8, tk, 32], 211, 1.0);
+        let v = rand(&[1, 8, tk, 32], 212, 1.0);
+        let (dq, dk, dv) = (up(&m, &q), up(&m, &k), up(&m, &v));
+        let (want, _lse) = ok(
+            "general",
+            m.attention_forward_saving(&dq, &dk, &dv, AttentionOpts::default()),
+        );
+        let got = ok(
+            "routed",
+            m.attention_forward(&dq, &dk, &dv, AttentionOpts::default()),
+        );
+        ok("sync", m.sync());
+        let want_host = ok("down", want.to_host(&ojas_core::Budget::new(8 * GIB)));
+        same_tensor(&format!("5184x{tk}"), &got, &want_host, tol(tk), 1e-4);
+    }
+}
+
+/// The padded route holds Q, K, V and the `Tk`-row output beside the
+/// result, so it asks for more than the general kernel; a budget that holds
+/// only the general kernel's output and log-sum-exp runs the general kernel.
+#[test]
+fn a_cross_attention_budget_without_room_for_the_padded_scratch_runs_the_general_kernel() {
+    let (b, h, tq, tk, d) = (1usize, 2usize, 200usize, 400usize, 32usize);
+    let (nq, nk) = (b * h * tq * d, b * h * tk * d);
+    let q = rand(&[b, h, tq, d], 220, 1.0);
+    let k = rand(&[b, h, tk, d], 221, 1.0);
+    let v = rand(&[b, h, tk, d], 222, 1.0);
+    let want = ok(
+        "cpu",
+        cpu().attention_forward(&q, &k, &v, AttentionOpts::default()),
+    );
+    let room = ((nq + 2 * nk + nq + b * h * tq) * 4 + 1024) as u64;
+    let tight = MetalBackend::new(ojas_core::Budget::new(room))
+        .unwrap_or_else(|e| panic!("Metal device unavailable: {e:?}"));
+    let (dq, dk, dv) = (up(&tight, &q), up(&tight, &k), up(&tight, &v));
+    let baseline = ok("live", tight.budget().live_bytes());
+    let general = dispatches_of(&tight, &dq, &dk, &dv, AttentionOpts::default());
+    let saving_before = tight.dispatches();
+    drop(ok(
+        "saving",
+        tight.attention_forward_saving(&dq, &dk, &dv, AttentionOpts::default()),
+    ));
+    ok("sync", tight.sync());
+    assert_eq!(general, tight.dispatches() - saving_before);
+    let got = ok(
+        "tight cross",
+        tight.attention_forward(&dq, &dk, &dv, AttentionOpts::default()),
+    );
+    ok("sync", tight.sync());
+    same_tensor("tight cross", &got, &want, tol(tk), 1e-4);
+    drop(got);
+    assert_eq!(ok("live", tight.budget().live_bytes()), baseline);
+}
+
+/// Wall clock of the padded route against the general kernel for the memory
+/// cross-attention, `q [1, 8, 5184, 32]` over `k, v [1, 8, m, 32]`:
+/// minimum of 3 after 1 warm-up. Run with `--ignored --nocapture`.
+#[test]
+#[ignore = "timing, not a correctness check"]
+fn cross_attention_padded_route_against_general_wall_clock() {
+    let m = metal();
+    let q = up(&m, &rand(&[1, 8, 5184, 32], 1, 1.0));
+    for tk in [5200usize, 10400, 36544] {
+        let (k, v) = (
+            up(&m, &rand(&[1, 8, tk, 32], 2, 1.0)),
+            up(&m, &rand(&[1, 8, tk, 32], 3, 1.0)),
+        );
+        let time = |routed: bool| {
+            let mut best = f64::MAX;
+            for i in 0..4 {
+                ok("sync", m.sync());
+                let start = Instant::now();
+                if routed {
+                    drop(ok(
+                        "routed",
+                        m.attention_forward(&q, &k, &v, AttentionOpts::default()),
+                    ));
+                } else {
+                    drop(ok(
+                        "general",
+                        m.attention_forward_saving(&q, &k, &v, AttentionOpts::default()),
+                    ));
+                }
+                ok("sync", m.sync());
+                if i >= 1 {
+                    best = best.min(start.elapsed().as_secs_f64() * 1e3);
+                }
+            }
+            best
+        };
+        let (general, routed) = (time(false), time(true));
+        eprintln!("CROSS_ATTENTION m={tk}: general {general:.1} ms, padded route {routed:.1} ms");
     }
 }
 

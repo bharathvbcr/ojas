@@ -1841,6 +1841,27 @@ kernel void ojas_conv_nchw(
     y[i] = has_bias != 0u ? v + bias[o] : v;
 }
 
+/// Q of a cross-attention for tessl's `encoder_attn`, which takes equal query
+/// and key lengths: x `[B, H, Tq, D]` to y `[B, Tk, H, D]` with rows `t >= Tq`
+/// zero. One thread per element of y; values move as bits.
+kernel void ojas_pad_q(
+    device const float *x [[buffer(0)]],
+    device float *y [[buffer(1)]],
+    constant uint &total [[buffer(2)]],
+    constant uint &h [[buffer(3)]],
+    constant uint &tq [[buffer(4)]],
+    constant uint &tk [[buffer(5)]],
+    constant uint &d [[buffer(6)]],
+    uint i [[thread_position_in_grid]])
+{
+    if (i >= total) return;
+    const uint di = i % d;
+    const uint hi = (i / d) % h;
+    const uint t = (i / (d * h)) % tk;
+    const uint b = i / (d * h * tk);
+    y[i] = t < tq ? x[(((ulong)b * h + hi) * tq + t) * d + di] : 0.0f;
+}
+
 /// Depthwise convolution (`groups == c == o`, one filter per channel), one
 /// thread per output element: the taps in ascending `(i, j)` order, a tap on
 /// padding skipped, the bias added last, so every value is the CPU's bit for

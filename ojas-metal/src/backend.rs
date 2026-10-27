@@ -623,10 +623,12 @@ impl MetalBackend {
         }
     }
 
-    /// Self-attention of validated `dims` on tessl's tiled `encoder_attn`
-    /// ([`routes_to_encoder_attn`] says which calls). Scratch: the permuted
-    /// Q, K, V and the kernel's output, one length per batch row, and a copy
-    /// of each operand that is a view.
+    /// Attention of validated `dims` on tessl's tiled `encoder_attn`
+    /// ([`routes_to_encoder_attn`] says which calls). tessl takes equal query
+    /// and key lengths, so a shorter Q (`Tq < Tk`) is zero-padded to `Tk`
+    /// rows and only the first `Tq` output rows are kept. Scratch: the
+    /// permuted (and padded) Q, K, V and the kernel's `Tk`-row output, one
+    /// length per batch row, and a copy of each operand that is a view.
     ///
     /// `None` when the budget has room for the output but not for that
     /// scratch: the caller runs the general kernel, which needs only the
@@ -643,14 +645,16 @@ impl MetalBackend {
         let geom = EncAttnGeom {
             batch: u32_dim(op, dims.batch)?,
             heads: u32_dim(op, dims.heads)?,
-            seq: u32_dim(op, dims.q_len)?,
+            seq: u32_dim(op, dims.kv_len)?,
+            q_len: u32_dim(op, dims.q_len)?,
             d: u32_dim(op, dims.head_dim)?,
         };
         let n = product(op, &[dims.batch, dims.heads, dims.q_len, dims.head_dim])?;
-        u32_dim(op, n)?;
+        let n_kv = product(op, &[dims.batch, dims.heads, dims.kv_len, dims.head_dim])?;
+        u32_dim(op, n_kv)?;
         let scratch = plus(
             op,
-            plus(op, product(op, &[4, n])?, dims.batch)?,
+            plus(op, product(op, &[4, n_kv])?, dims.batch)?,
             copied_elems(op, ReadAs::Whole, &[qa, ka, va])?,
         )?;
         let cmd = Cmd::EncoderAttn {
@@ -1099,12 +1103,19 @@ fn conv_geom(op: &'static str, d: &Conv2dDims) -> Res<ConvGeom> {
 /// beyond these (256, 512) have no measurement here.
 const ENCODER_ATTN_HEAD_DIMS: [usize; 2] = [32, 64];
 
+/// The longest `Tk / Tq` a cross-attention is routed at. The route pads Q to
+/// `Tk` rows, so it computes `Tk^2` scores where the general kernel computes
+/// `Tq * Tk`; the tiled kernel's throughput is roughly 40x the scalar
+/// kernel's, so it wins up to a ratio of the order of 10 and loses beyond.
+const ENCODER_ATTN_MAX_PAD_RATIO: usize = 8;
+
 /// Whether `attention_forward` runs on tessl's tiled `encoder_attn` rather
-/// than `ojas_attn_gen_fwd`: bidirectional self-attention over equal head
-/// counts with no bias, key lengths or window, at one of [`ENCODER_ATTN_HEAD_DIMS`],
-/// on a device with TensorOps, with one head's plane addressable in `i32`
-/// as tessl's matrix-unit views require and the whole tensor within the
-/// kernels' 32-bit element indexing (the permutes index it in `u32`).
+/// than `ojas_attn_gen_fwd`: bidirectional attention over equal head counts
+/// with no bias, key lengths or window, at one of [`ENCODER_ATTN_HEAD_DIMS`],
+/// with `Tq <= Tk <= ENCODER_ATTN_MAX_PAD_RATIO * Tq` (a shorter Q is padded),
+/// on a device with TensorOps, with one head's `Tk`-row plane addressable in
+/// `i32` as tessl's matrix-unit views require and the padded tensor within
+/// the kernels' 32-bit element indexing (the permutes index it in `u32`).
 /// Everything else keeps the general kernel, which refuses what it cannot
 /// run. A budget that holds the output but not the routed path's scratch
 /// also runs the general kernel ([`MetalBackend::encoder_attn_forward`]).
@@ -1112,22 +1123,27 @@ const ENCODER_ATTN_HEAD_DIMS: [usize; 2] = [32, 64];
 /// log-sum-exp.
 fn routes_to_encoder_attn(dims: &AttentionDims, tensorops: bool) -> bool {
     let plane = dims
-        .q_len
+        .kv_len
         .checked_mul(dims.heads)
         .and_then(|p| p.checked_mul(dims.head_dim))
         .is_some_and(|p| i32::try_from(p).is_ok());
     let elements = plane
-        .then(|| dims.batch.checked_mul(dims.q_len))
+        .then(|| dims.batch.checked_mul(dims.kv_len))
         .flatten()
         .and_then(|bt| bt.checked_mul(dims.heads))
         .and_then(|bth| bth.checked_mul(dims.head_dim))
         .is_some_and(|n| u32::try_from(n).is_ok());
+    let padded_ok = dims.q_len <= dims.kv_len
+        && dims
+            .q_len
+            .checked_mul(ENCODER_ATTN_MAX_PAD_RATIO)
+            .is_some_and(|reach| dims.kv_len <= reach);
     tensorops
         && !dims.causal
         && dims.window.is_none()
         && dims.bias.is_none()
         && !dims.key_lens
-        && dims.q_len == dims.kv_len
+        && padded_ok
         && dims.heads == dims.kv_heads
         && ENCODER_ATTN_HEAD_DIMS.contains(&dims.head_dim)
         && plane
@@ -1899,10 +1915,11 @@ impl Backend for MetalBackend {
     /// a malformed call under its own name, as the CPU backend does, and a
     /// non-finite operand faults under `attention_forward`.
     ///
-    /// Not bit-identical to the saving form for unmasked self-attention at
-    /// head dim 32 or 64 on a TensorOps device (`routes_to_encoder_attn`): that
-    /// call runs tessl's tiled `encoder_attn`, 26x faster at `[1, 16, 5184,
-    /// 64]` (22.8 ms against 606 ms), whose sums add in another order. The
+    /// Not bit-identical to the saving form for unmasked attention at head
+    /// dim 32 or 64 on a TensorOps device, self- or cross-attention with
+    /// `Tq <= Tk <= 8 Tq` (`routes_to_encoder_attn`): that call runs tessl's
+    /// tiled `encoder_attn`, 26x faster at `[1, 16, 5184, 64]` (22.8 ms
+    /// against 606 ms), whose sums add in another order. The
     /// two forms agree within the forward tolerance (1.5e-7 measured at the
     /// SAM shapes); every other call is bit-identical to the saving form.
     fn attention_forward(
@@ -4256,6 +4273,31 @@ mod tests {
             ),
             "head dim 32 routes"
         );
+        // Cross-attention pads Q: the memory encoder's lengths route, up to a
+        // Tk of 8 Tq.
+        for kv_len in [5200usize, 10400, 36544] {
+            assert!(
+                routes_to_encoder_attn(
+                    &AttentionDims {
+                        head_dim: 32,
+                        heads: 8,
+                        kv_heads: 8,
+                        kv_len,
+                        ..base
+                    },
+                    true
+                ),
+                "Tq 5184 over Tk {kv_len} routes"
+            );
+        }
+        assert!(routes_to_encoder_attn(
+            &AttentionDims {
+                q_len: 64,
+                kv_len: 512,
+                ..base
+            },
+            true
+        ));
         assert!(!routes_to_encoder_attn(&base, false), "no TensorOps");
         let bias = ojas_core::AttentionBias {
             batch: 1,
@@ -4291,7 +4333,15 @@ mod tests {
                     ..base
                 },
             ),
-            ("Tq != Tk", AttentionDims { kv_len: 77, ..base }),
+            ("Tq > Tk", AttentionDims { kv_len: 77, ..base }),
+            (
+                "Tk more than 8x Tq",
+                AttentionDims {
+                    q_len: 64,
+                    kv_len: 513,
+                    ..base
+                },
+            ),
             (
                 "grouped heads",
                 AttentionDims {

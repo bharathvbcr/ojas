@@ -168,14 +168,16 @@ fn down_host(t: &Tensor) -> Tensor {
 }
 
 /// Whether `attention_forward` takes tessl's `encoder_attn` for this case:
-/// plain self-attention at head dim 32 or 64 on a device with TensorOps.
+/// plain attention at head dim 32 or 64, `Tq <= Tk <= 8 Tq`, on a device with
+/// TensorOps.
 fn routes_to_encoder_attn(m: &MetalBackend, c: &Case) -> bool {
     m.has_tensorops()
         && !c.causal
         && c.window.is_none()
         && c.bias.is_none()
         && c.lens.is_none()
-        && c.tq == c.tk
+        && c.tq <= c.tk
+        && c.tk <= 8 * c.tq
         && c.h == c.hkv
         && (c.d == 32 || c.d == 64)
 }
