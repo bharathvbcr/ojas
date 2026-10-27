@@ -5,7 +5,8 @@
 //!
 //! `cargo run -p ojas-metal --release --example attention_flash_bench [warmups] [runs] [only]`
 //!
-//! Defaults 5 and 25; `only` is a substring of a row name. Arms:
+//! Defaults 5 and 25; `only` is a substring of a row name. Arms of the gate,
+//! bias and head-dim-16 rows:
 //! - `flash` (head dim 32 with no bias: the rows the route covers) or
 //!   `dispatcher` (the bias and head-dim-16 rows, which stay split-K):
 //!   `attention_forward_saving`, the dispatcher's kernel;
@@ -13,6 +14,11 @@
 //! - `pad-q`: `attention_forward_padq`, tessl's `encoder_attn` over Q padded
 //!   to `Tk` rows, with the pad ratio bound lifted (where no bias, key lengths
 //!   or head dim 16 rule it out).
+//!
+//! The `sweep tq=.. m=..` rows (rules.md addendum 2) time `flash (forced)`
+//! (`attention_forward_saving_flash`), `split-K` and the `dispatcher` for Tq in
+//! 1 to 2048 over Tk 5184 and 15584, and the last `# floor rule` line derives
+//! `FLASH_MIN_GROUPS` from them by the rule.
 //!
 //! Every arm of a row runs twice per round (A, then A'), odd rounds in reverse
 //! order. Rows give p10, median and p90 of the A pass in ms, the A' median,
@@ -50,6 +56,11 @@ mod bench {
         (15584, 46.836),
         (36320, 281.832),
     ];
+    /// The least factor by which the dispatcher's call on a flash row must
+    /// beat the same call forced onto the scalar kernel for the flash kernel
+    /// to count as observed (the frame profile has the scalar kernel at 429 ms
+    /// for m = 10400 against about 25 ms for the TensorOps route).
+    const FLASH_VS_SCALAR_FLOOR: f64 = 3.0;
     /// The gate's per-call bounds (ms) at m = 15584 and 36320.
     const GATES_MS: [(usize, f64); 2] = [(15584, 20.0), (36320, 45.0)];
 
@@ -81,7 +92,7 @@ mod bench {
     }
 
     struct Row {
-        name: &'static str,
+        name: String,
         h: usize,
         tq: usize,
         tk: usize,
@@ -90,80 +101,119 @@ mod bench {
         padq: bool,
         /// Whether this row is a crossover row (paired-win counts printed).
         cross: bool,
+        /// Whether this is a short-Q sweep row (flash forced against split-K
+        /// and the dispatcher; sets `FLASH_MIN_GROUPS` by the rules).
+        sweep: bool,
     }
 
-    const ROWS: &[Row] = &[
-        Row {
-            name: "memory cross m=5200",
+    /// The sweep's query lengths and key lengths (rules.md, addendum 2).
+    const SWEEP_TQ: [usize; 8] = [1, 8, 32, 64, 201, 512, 1024, 2048];
+    const SWEEP_TK: [usize; 2] = [5184, 15584];
+
+    fn rows() -> Vec<Row> {
+        let gate = |name: &str, tk: usize, cross: bool| Row {
+            name: name.to_string(),
             h: 8,
             tq: 5184,
-            tk: 5200,
+            tk,
             d: 32,
             bias: false,
             padq: true,
-            cross: true,
-        },
-        Row {
-            name: "memory cross m=10400",
-            h: 8,
-            tq: 5184,
-            tk: 10400,
-            d: 32,
-            bias: false,
-            padq: true,
-            cross: true,
-        },
-        Row {
-            name: "memory cross m=10624",
-            h: 8,
-            tq: 5184,
-            tk: 10624,
-            d: 32,
-            bias: false,
-            padq: true,
-            cross: true,
-        },
-        Row {
-            name: "memory cross m=15584",
-            h: 8,
-            tq: 5184,
-            tk: 15584,
-            d: 32,
-            bias: false,
-            padq: true,
-            cross: true,
-        },
-        Row {
-            name: "memory cross m=36320",
-            h: 8,
-            tq: 5184,
-            tk: 36320,
-            d: 32,
-            bias: false,
-            padq: true,
-            cross: false,
-        },
-        Row {
-            name: "detector bias [1,8,201,32]x5184",
-            h: 8,
-            tq: 201,
-            tk: 5184,
-            d: 32,
-            bias: true,
-            padq: false,
-            cross: false,
-        },
-        Row {
-            name: "decoder D16 [1,8,80,16]x5184",
-            h: 8,
-            tq: 80,
-            tk: 5184,
-            d: 16,
-            bias: false,
-            padq: false,
-            cross: false,
-        },
-    ];
+            cross,
+            sweep: false,
+        };
+        let mut rows = vec![
+            gate("memory cross m=5200", 5200, true),
+            gate("memory cross m=10400", 10400, true),
+            gate("memory cross m=10624", 10624, true),
+            gate("memory cross m=15584", 15584, true),
+            gate("memory cross m=36320", 36320, false),
+            Row {
+                name: "detector bias [1,8,201,32]x5184".to_string(),
+                h: 8,
+                tq: 201,
+                tk: 5184,
+                d: 32,
+                bias: true,
+                padq: false,
+                cross: false,
+                sweep: false,
+            },
+            Row {
+                name: "decoder D16 [1,8,80,16]x5184".to_string(),
+                h: 8,
+                tq: 80,
+                tk: 5184,
+                d: 16,
+                bias: false,
+                padq: false,
+                cross: false,
+                sweep: false,
+            },
+        ];
+        for &tk in &SWEEP_TK {
+            for &tq in &SWEEP_TQ {
+                rows.push(Row {
+                    name: format!("sweep tq={tq} m={tk}"),
+                    h: 8,
+                    tq,
+                    tk,
+                    d: 32,
+                    bias: false,
+                    padq: false,
+                    cross: false,
+                    sweep: true,
+                });
+            }
+        }
+        rows
+    }
+
+    /// Threadgroups the flash kernel launches: 32 query rows of each plane.
+    fn flash_groups(b: usize, h: usize, tq: usize) -> u64 {
+        (tq.div_ceil(32) * b * h) as u64
+    }
+
+    /// The attention kernels one call encoded, by pipeline name.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct Ran {
+        flash: u64,
+        scalar: u64,
+        part: u64,
+        combine: u64,
+    }
+
+    impl Ran {
+        const FLASH: Ran = Ran {
+            flash: 1,
+            scalar: 0,
+            part: 0,
+            combine: 0,
+        };
+        const SCALAR: Ran = Ran {
+            flash: 0,
+            scalar: 1,
+            part: 0,
+            combine: 0,
+        };
+        const SPLITK: Ran = Ran {
+            flash: 0,
+            scalar: 0,
+            part: 1,
+            combine: 1,
+        };
+    }
+
+    fn snapshot(m: &MetalBackend) -> Ran {
+        Ran {
+            flash: m.kernel_dispatches("ojas_attn_fwd_d32"),
+            scalar: m.kernel_dispatches("ojas_attn_gen_fwd"),
+            part: m.kernel_dispatches("ojas_xattn_part_d32")
+                + m.kernel_dispatches("ojas_xattn_part_d16"),
+            combine: m.kernel_dispatches("ojas_xattn_combine_d32")
+                + m.kernel_dispatches("ojas_xattn_combine_d16"),
+        }
+    }
 
     type Arm<'a> = (&'static str, Box<dyn Fn() + 'a>);
 
@@ -319,7 +369,11 @@ mod bench {
             }
         }
 
-        for (ri, r) in ROWS
+        let table = rows();
+        // (flash groups, tk, flash won) of every sweep row timed.
+        let mut sweep_results: Vec<(u64, usize, bool)> = Vec::new();
+        let sweep_rows = table.iter().filter(|r| r.sweep).count();
+        for (ri, r) in table
             .iter()
             .enumerate()
             .filter(|(_, r)| r.name.contains(&only))
@@ -343,8 +397,11 @@ mod bench {
                 key_lens: None,
             };
 
-            // The rows the flash route covers (head dim 32, no bias).
+            // The rows the flash route covers (head dim 32, no bias), and
+            // whether the dispatcher takes them (threadgroup floor).
             let flash_row = !r.bias && d == 32;
+            let groups = flash_groups(b, h, tq);
+            let dispatcher_flash = flash_row && groups >= MetalBackend::flash_min_groups();
             // Correctness and dispatch counts before any timing.
             let (s2, s2_lse) = metal
                 .attention_forward_saving(&q, &k, &v, opts())
@@ -405,6 +462,39 @@ mod bench {
                     }
                 }
             }
+            if r.sweep {
+                let (fl, fl_lse) = metal
+                    .attention_forward_saving_flash(&q, &k, &v, opts())
+                    .expect("forced flash");
+                metal.sync().expect("sync");
+                let flv = fl
+                    .to_host(&budget)
+                    .expect("host")
+                    .to_f32_vec()
+                    .expect("f32");
+                let fll = fl_lse
+                    .to_host(&budget)
+                    .expect("host")
+                    .to_f32_vec()
+                    .expect("f32");
+                let (fo, fl_l) = (max_abs(&flv, &skv), max_abs(&fll, &skl));
+                note.push_str(&format!(
+                    " forced-flash-vs-splitK out {fo:.2e} lse {fl_l:.2e}"
+                ));
+                if fo > 1e-5 || fl_l > 1e-4 {
+                    println!("# CORRECTNESS FAIL {}: {note}", r.name);
+                    failed = true;
+                }
+                for (what, got, w) in [("output", &flv, &s2v), ("lse", &fll, &s2l)] {
+                    if let Err(e) = cpu_agrees(got, w, tk) {
+                        println!(
+                            "# CORRECTNESS FAIL {} forced flash vs dispatcher {what}: {e}",
+                            r.name
+                        );
+                        failed = true;
+                    }
+                }
+            }
             if r.padq {
                 let pq = metal
                     .attention_forward_padq(&q, &k, &v, opts())
@@ -450,62 +540,145 @@ mod bench {
                     failed = true;
                 }
             }
-            let count = |which: &str| {
-                metal.sync().expect("sync");
-                let fresh = (
-                    up(&host(&qd, &[b, h, tq, d])),
-                    up(&host(&kd, &[b, h, tk, d])),
-                    up(&host(&vd, &[b, h, tk, d])),
-                );
-                let fresh_bias = bd.as_ref().map(|x| up(&host(x, &[b, h, tq, tk])));
-                let o = AttentionOpts {
-                    causal: false,
-                    window: None,
-                    bias: fresh_bias.as_ref(),
-                    key_lens: None,
+            // Dispatch counts and the kernels encoded, observed on fresh
+            // uploads: `kernel_dispatches` by pipeline name, not the planner.
+            let count =
+                |which: &str| -> (u64, Ran) {
+                    metal.sync().expect("sync");
+                    let fresh = (
+                        up(&host(&qd, &[b, h, tq, d])),
+                        up(&host(&kd, &[b, h, tk, d])),
+                        up(&host(&vd, &[b, h, tk, d])),
+                    );
+                    let fresh_bias = bd.as_ref().map(|x| up(&host(x, &[b, h, tq, tk])));
+                    let o = AttentionOpts {
+                        causal: false,
+                        window: None,
+                        bias: fresh_bias.as_ref(),
+                        key_lens: None,
+                    };
+                    metal.sync().expect("sync");
+                    let (before, kernels) = (metal.dispatches(), snapshot(&metal));
+                    let out =
+                        match which {
+                            "splitk" => metal
+                                .attention_forward_saving_splitk(&fresh.0, &fresh.1, &fresh.2, o),
+                            "scalar" => metal
+                                .attention_forward_saving_scalar(&fresh.0, &fresh.1, &fresh.2, o),
+                            "flash" => metal
+                                .attention_forward_saving_flash(&fresh.0, &fresh.1, &fresh.2, o),
+                            _ => metal.attention_forward_saving(&fresh.0, &fresh.1, &fresh.2, o),
+                        }
+                        .expect("count");
+                    metal.sync().expect("sync");
+                    drop(out);
+                    let now = snapshot(&metal);
+                    (
+                        metal.dispatches() - before,
+                        Ran {
+                            flash: now.flash - kernels.flash,
+                            scalar: now.scalar - kernels.scalar,
+                            part: now.part - kernels.part,
+                            combine: now.combine - kernels.combine,
+                        },
+                    )
                 };
-                metal.sync().expect("sync");
-                let before = metal.dispatches();
-                let out = match which {
-                    "splitk" => {
-                        metal.attention_forward_saving_splitk(&fresh.0, &fresh.1, &fresh.2, o)
-                    }
-                    "scalar" => {
-                        metal.attention_forward_saving_scalar(&fresh.0, &fresh.1, &fresh.2, o)
-                    }
-                    _ => metal.attention_forward_saving(&fresh.0, &fresh.1, &fresh.2, o),
-                }
-                .expect("count");
-                metal.sync().expect("sync");
-                drop(out);
-                metal.dispatches() - before
-            };
-            let (n_auto, n_splitk, n_scalar) = (count("auto"), count("splitk"), count("scalar"));
+            let ((n_auto, k_auto), (n_splitk, k_splitk), (n_scalar, k_scalar)) =
+                (count("auto"), count("splitk"), count("scalar"));
             note.push_str(&format!(
-                " dispatches dispatcher {n_auto} split-K {n_splitk} scalar {n_scalar}"
+                " dispatches dispatcher {n_auto} split-K {n_splitk} scalar {n_scalar}; kernels dispatcher {k_auto:?} split-K {k_splitk:?} scalar {k_scalar:?}"
             ));
-            let dispatch_ok = if flash_row {
-                n_auto == n_scalar && n_splitk == n_scalar + 1
-            } else {
-                n_auto == n_splitk
-            };
+            let mut dispatch_ok = k_auto
+                == if dispatcher_flash {
+                    Ran::FLASH
+                } else {
+                    Ran::SPLITK
+                }
+                && k_splitk == Ran::SPLITK
+                && k_scalar == Ran::SCALAR
+                && n_splitk == n_scalar + 1
+                && (n_auto == if dispatcher_flash { n_scalar } else { n_splitk });
+            if flash_row {
+                let (n_flash, k_flash) = count("flash");
+                note.push_str(&format!(" forced flash {n_flash} {k_flash:?}"));
+                dispatch_ok &= k_flash == Ran::FLASH && n_flash == n_scalar;
+            }
             if !dispatch_ok {
                 println!("# DISPATCH FAIL {}: {note}", r.name);
                 failed = true;
             }
+            // The kernel counts above are the observation of which kernel ran;
+            // time is a second, independent observable on the gate rows: the
+            // dispatcher's call against the same call forced onto the scalar
+            // kernel, on these inputs, best of three after a warm-up. Scalar is
+            // many times slower than the TensorOps kernel at these shapes (the
+            // frame profile has it at 429 ms for m = 10400), so a ratio under
+            // the floor means the dispatcher did not run the flash kernel.
+            if dispatcher_flash && !r.sweep {
+                let time_call = |scalar: bool| -> f64 {
+                    let mut best = f64::INFINITY;
+                    for round in 0..4 {
+                        metal.sync().expect("sync");
+                        let start = Instant::now();
+                        let out = if scalar {
+                            metal.attention_forward_saving_scalar(&q, &k, &v, opts())
+                        } else {
+                            metal.attention_forward_saving(&q, &k, &v, opts())
+                        }
+                        .expect("observable");
+                        metal.sync().expect("sync");
+                        let ms = start.elapsed().as_secs_f64() * 1e3;
+                        drop(out);
+                        if round > 0 {
+                            best = best.min(ms);
+                        }
+                    }
+                    best
+                };
+                let (ms_auto, ms_scalar) = (time_call(false), time_call(true));
+                let ratio = ms_scalar / ms_auto;
+                let confirmed = ratio >= FLASH_VS_SCALAR_FLOOR;
+                println!(
+                    "# observable {} | the flash kernel ran if the dispatcher's call is at least {FLASH_VS_SCALAR_FLOOR}x faster than the same call forced onto the scalar kernel: dispatcher {ms_auto:.2} ms, forced scalar {ms_scalar:.2} ms, ratio {ratio:.1}x -> {}",
+                    r.name,
+                    if confirmed { "confirmed" } else { "NOT CONFIRMED" }
+                );
+                if !confirmed {
+                    println!("# DISPATCH FAIL {}: flash kernel not observed", r.name);
+                    failed = true;
+                }
+                note.push_str(&format!(" flash-vs-scalar time ratio {ratio:.1}x"));
+            }
             drop((s2, sk, s2_lse, sk_lse));
 
             let mut arms: Vec<Arm<'_>> = vec![
-                (
-                    if flash_row { "flash" } else { "dispatcher" },
-                    Box::new(|| {
-                        drop(
-                            metal
-                                .attention_forward_saving(&q, &k, &v, opts())
-                                .expect("s2"),
-                        )
-                    }),
-                ),
+                if r.sweep {
+                    (
+                        "flash (forced)",
+                        Box::new(|| {
+                            drop(
+                                metal
+                                    .attention_forward_saving_flash(&q, &k, &v, opts())
+                                    .expect("flash"),
+                            )
+                        }),
+                    )
+                } else {
+                    (
+                        if dispatcher_flash {
+                            "flash"
+                        } else {
+                            "dispatcher"
+                        },
+                        Box::new(|| {
+                            drop(
+                                metal
+                                    .attention_forward_saving(&q, &k, &v, opts())
+                                    .expect("s2"),
+                            )
+                        }),
+                    )
+                },
                 (
                     "split-K",
                     Box::new(|| {
@@ -517,6 +690,18 @@ mod bench {
                     }),
                 ),
             ];
+            if r.sweep {
+                arms.push((
+                    "dispatcher",
+                    Box::new(|| {
+                        drop(
+                            metal
+                                .attention_forward_saving(&q, &k, &v, opts())
+                                .expect("s2"),
+                        )
+                    }),
+                ));
+            }
             if r.padq {
                 arms.push((
                     "pad-q",
@@ -531,13 +716,39 @@ mod bench {
             }
             let samples = run_arms(&metal, &arms, warmups, runs);
             let flops = 4.0 * (h * tq * tk * d) as f64;
-            let (stats, noisy) = report(r.name, &arms, &samples, |ms| {
+            let (stats, noisy) = report(&r.name, &arms, &samples, |ms| {
                 format!(
                     "{:.2} TFLOP/s on the useful work",
                     flops / (ms * 1e-3) / 1e12
                 )
             });
             noisy_total += noisy;
+            if r.sweep {
+                // flash wins when below split-K by more than the larger
+                // p90 - p10 spread of the two (a tie goes to split-K); the
+                // dispatcher is held to split-K's time where it routes there
+                // (same kernel) and to the best of the two where it routes
+                // to flash.
+                let (fl, sk_, dp) = (stats[0], stats[1], stats[2]);
+                let bar = (fl.2 - fl.1).max(sk_.2 - sk_.1);
+                let won = sk_.0 - fl.0 > bar;
+                let dbar = (dp.2 - dp.1).max(sk_.2 - sk_.1);
+                println!(
+                    "# sweep {} | groups {groups} | flash - splitK = {:.3} ms (noise bar {bar:.3}): flash {} | dispatcher routed {} | dispatcher - splitK = {:.3} ms (noise bar {dbar:.3}) {}",
+                    r.name,
+                    fl.0 - sk_.0,
+                    if won { "WINS" } else { "does not win" },
+                    if dispatcher_flash { "flash" } else { "split-K" },
+                    dp.0 - sk_.0,
+                    if !dispatcher_flash && dp.0 - sk_.0 > dbar {
+                        "REGRESSION"
+                    } else {
+                        "no regression"
+                    }
+                );
+                sweep_results.push((groups, tk, won));
+                continue;
+            }
             let (s2m, skm) = (stats[0], stats[1]);
             let noise_sk = (s2m.2 - s2m.1).max(skm.2 - skm.1);
             println!(
@@ -600,6 +811,28 @@ mod bench {
             }
         }
 
+        if sweep_results.len() == sweep_rows {
+            // rules.md addendum 2: the smallest sweep group count g such that
+            // flash wins every row of both Tk with at least g groups; 513 if
+            // no sweep row qualifies.
+            let mut counts: Vec<u64> = sweep_results.iter().map(|r| r.0).collect();
+            counts.sort_unstable();
+            counts.dedup();
+            let floor = counts
+                .iter()
+                .copied()
+                .find(|&g| sweep_results.iter().filter(|r| r.0 >= g).all(|r| r.2))
+                .unwrap_or(513);
+            println!(
+                "# floor rule | FLASH_MIN_GROUPS = {floor} by the sweep (current constant {}); valid only if the run's verdict is clean",
+                MetalBackend::flash_min_groups()
+            );
+        } else if !sweep_results.is_empty() {
+            println!(
+                "# floor rule | not computed: {} of {sweep_rows} sweep rows timed",
+                sweep_results.len()
+            );
+        }
         let end_load = load();
         println!(
             "# load_end {:.2} {:.2} {:.2}",

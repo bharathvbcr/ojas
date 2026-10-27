@@ -52,9 +52,36 @@ const WAIT_KINDS: usize = 9;
 pub(crate) struct Waits {
     by: [AtomicU64; WAIT_KINDS],
     dispatches: AtomicU64,
+    /// Dispatches encoded by pipeline name: what ran, as opposed to what a
+    /// planner says would. Telemetry for tests and benches.
+    kernels: std::sync::Mutex<std::collections::HashMap<String, u64>>,
 }
 
 impl Waits {
+    /// One dispatch of kernel `name` was encoded.
+    pub(crate) fn note_kernel(&self, name: &str) {
+        let mut kernels = self
+            .kernels
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match kernels.get_mut(name) {
+            Some(n) => *n += 1,
+            None => {
+                kernels.insert(name.to_string(), 1);
+            }
+        }
+    }
+
+    /// Dispatches of kernel `name` encoded so far.
+    pub(crate) fn kernel_count(&self, name: &str) -> u64 {
+        self.kernels
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(name)
+            .copied()
+            .unwrap_or(0)
+    }
+
     pub(crate) fn count(&self, why: Wait) {
         self.by[why as usize].fetch_add(1, Ordering::Relaxed);
     }
@@ -1049,6 +1076,11 @@ impl Link {
     /// Compute dispatches the device thread has encoded so far.
     pub(crate) fn dispatches(&self) -> u64 {
         self.waits.dispatches()
+    }
+
+    /// Dispatches of the kernel named `name` the device thread has encoded.
+    pub(crate) fn kernel_dispatches(&self, name: &str) -> u64 {
+        self.waits.kernel_count(name)
     }
 
     /// Run `cmd` on the device thread and wait for its result.

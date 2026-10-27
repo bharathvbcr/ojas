@@ -1102,11 +1102,13 @@ impl Worker {
 
     fn k1(&self, name: &str, n: usize, f: impl FnOnce(&mut Binder<'_>)) -> Res<()> {
         let p = self.rt.pipeline(name).map_err(metal_err)?;
+        self.waits.note_kernel(name);
         dispatch::dispatch_1d(&self.rt, &p, n, f).map_err(metal_err)
     }
 
     fn k2(&self, name: &str, nx: usize, ny: usize, f: impl FnOnce(&mut Binder<'_>)) -> Res<()> {
         let p = self.rt.pipeline(name).map_err(metal_err)?;
+        self.waits.note_kernel(name);
         dispatch::dispatch_2d(&self.rt, &p, nx, ny, f).map_err(metal_err)
     }
 
@@ -1119,6 +1121,7 @@ impl Worker {
         f: impl FnOnce(&mut Binder<'_>),
     ) -> Res<()> {
         let p = self.rt.pipeline(name).map_err(metal_err)?;
+        self.waits.note_kernel(name);
         dispatch::dispatch_2d_tg(&self.rt, &p, gx, gy, threads, f).map_err(metal_err)
     }
 

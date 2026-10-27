@@ -301,6 +301,25 @@ impl MetalBackend {
         self.link.dispatches()
     }
 
+    /// The fewest threadgroups (32 query rows of a plane each) a head dim 32
+    /// call with no bias or key lengths must launch for the dispatcher to run
+    /// it on the flash kernel (`FLASH_MIN_GROUPS`); fewer stays on split-K.
+    /// The routing test pins both sides of it. Not a stable API.
+    #[doc(hidden)]
+    pub fn flash_min_groups() -> u64 {
+        FLASH_MIN_GROUPS
+    }
+
+    /// Dispatches of the kernel (pipeline) named `name` this backend's device
+    /// thread has encoded since it opened, shared by every clone: what ran,
+    /// where a planner query such as `attention_saving_kernel` says what would.
+    /// Counted when the kernel is encoded, so read it after `sync`. Telemetry
+    /// for tests and benches, not a stable API.
+    #[doc(hidden)]
+    pub fn kernel_dispatches(&self, name: &str) -> u64 {
+        self.link.kernel_dispatches(name)
+    }
+
     /// [`Backend::permute`] on the generic one-thread-per-element kernel
     /// whatever the pattern planner would pick: the reference arm of the
     /// pattern tests and the permute bench. Not a stable API.
@@ -323,6 +342,22 @@ impl MetalBackend {
         opts: AttentionOpts<'_>,
     ) -> Result<(Tensor, Tensor), OjasError> {
         self.saving_with(q, k, v, opts, AttnKernel::SplitK)
+    }
+
+    /// [`Backend::attention_forward_saving`] on the TensorOps flash kernel
+    /// wherever it covers the call, below the threadgroup floor the
+    /// dispatcher keeps (`FLASH_MIN_GROUPS`) as well: how the bench measures
+    /// short-Q calls against split-K. A call the kernel does not cover runs
+    /// as the dispatcher would run it. Not a stable API.
+    #[doc(hidden)]
+    pub fn attention_forward_saving_flash(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        opts: AttentionOpts<'_>,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        self.saving_with(q, k, v, opts, AttnKernel::Flash)
     }
 
     /// [`Backend::attention_forward_saving`] on the scalar `ojas_attn_gen_fwd`
@@ -839,9 +874,10 @@ impl MetalBackend {
 
     /// General attention forward after its validator: the output and the
     /// `[B, H, Tq]` row log-sum-exp. A call [`flash_cross_route`] admits (head
-    /// dim 32, non-causal, no window, bias or key lengths, on a TensorOps
-    /// device) runs the TensorOps flash kernel `ojas_attn_fwd_d32`, one
-    /// dispatch and no scratch. Any other non-causal, unwindowed call at head
+    /// dim 32, non-causal, no window, bias or key lengths, at least
+    /// [`FLASH_MIN_GROUPS`] threadgroups, on a TensorOps device) runs the
+    /// TensorOps flash kernel `ojas_attn_fwd_d32`, one dispatch and no
+    /// scratch. Any other non-causal, unwindowed call at head
     /// dim 16 or 32 runs the split-K tiled kernels and is charged their
     /// partial results (`splits * B * H * Tq * (D + 2)` values) as scratch;
     /// when the budget cannot hold them it runs the scalar
@@ -887,7 +923,12 @@ impl MetalBackend {
         };
         // The TensorOps flash kernel where it covers the call: no scratch,
         // so no budget fallback.
-        if kernel == AttnKernel::Auto && self.link.has_tensorops() && flash_cross_route(&geom) {
+        let flash = match kernel {
+            AttnKernel::Auto => flash_cross_route(&geom),
+            AttnKernel::Flash => flash_cross_covers(&geom),
+            AttnKernel::SplitK | AttnKernel::Scalar => false,
+        };
+        if flash && self.link.has_tensorops() {
             return self
                 .outputs(
                     op,
@@ -1507,6 +1548,10 @@ enum AttnKernel {
     /// The dispatcher's choice: the TensorOps flash kernel where
     /// [`flash_cross_route`] admits the call, else split-K, else scalar.
     Auto,
+    /// The flash kernel wherever it covers the call ([`flash_cross_covers`]),
+    /// whatever its threadgroup count: how the bench measures it below
+    /// [`FLASH_MIN_GROUPS`]. A call it does not cover runs as `Auto` does.
+    Flash,
     /// Split-K tiles (and the scalar kernel where they cannot run).
     SplitK,
     /// The scalar `ojas_attn_gen_fwd`, the oracle of the others.
@@ -1520,12 +1565,32 @@ enum AttnKernel {
 /// lengths, head dim 16).
 const FLASH_CROSS_HEAD_DIMS: [u32; 1] = [32];
 
-/// Whether `g` is a call the TensorOps flash kernel takes: its head dim is in
+/// Query rows of one flash threadgroup (`ATT_BQ` in the Metal source).
+const FLASH_ROWS_PER_GROUP: u32 = 32;
+
+/// The fewest threadgroups a call must launch for the flash route to take it.
+/// A flash threadgroup owns 32 query rows of a plane and walks every key
+/// block of its KV plane alone, so a short Q over a long K (one row of 8
+/// planes is 8 threadgroups each walking 81 blocks) leaves most of the GPU
+/// idle, where split-K cuts the keys into ranges to launch about
+/// [`XATTN_TARGET_GROUPS`]. Until the short-Q rows of
+/// `bench/results/2026-10-27-attention-mpp` set it by measurement (the
+/// smallest group count from which flash is not slower than split-K, ties to
+/// split-K), it is split-K's own target.
+const FLASH_MIN_GROUPS: u64 = XATTN_TARGET_GROUPS;
+
+/// Threadgroups the flash kernel launches for `g`: 32 query rows of each of
+/// the `bh` planes per group.
+fn flash_groups(g: &AttnGeom) -> u64 {
+    u64::from(g.q_len.div_ceil(FLASH_ROWS_PER_GROUP)) * u64::from(g.bh)
+}
+
+/// Whether the flash kernel can run `g` at all: its head dim is in
 /// [`FLASH_CROSS_HEAD_DIMS`], it is non-causal and unwindowed, has neither a
 /// bias nor key lengths, has queries and keys, and a head's query and key
 /// planes are addressable in `i32` as the matrix-unit views require.
 /// Grouped-query heads are covered (the kernel reads KV plane `bh / rep`).
-fn flash_cross_route(g: &AttnGeom) -> bool {
+fn flash_cross_covers(g: &AttnGeom) -> bool {
     let plane = |t: u32| u64::from(t) * u64::from(g.d) <= i32::MAX as u64;
     FLASH_CROSS_HEAD_DIMS.contains(&g.d)
         && !g.causal
@@ -1536,6 +1601,13 @@ fn flash_cross_route(g: &AttnGeom) -> bool {
         && g.kv_len > 0
         && plane(g.q_len)
         && plane(g.kv_len)
+}
+
+/// Whether the dispatcher takes the flash route for `g`: the kernel covers it
+/// ([`flash_cross_covers`]) and it launches at least [`FLASH_MIN_GROUPS`]
+/// threadgroups; a shorter Q stays on split-K.
+fn flash_cross_route(g: &AttnGeom) -> bool {
+    flash_cross_covers(g) && flash_groups(g) >= FLASH_MIN_GROUPS
 }
 
 /// `(splits, per_split)` of the split-K tiled kernel for `g`, or `None` when
@@ -2242,10 +2314,14 @@ impl Backend for MetalBackend {
     /// ms against 606 ms), whose sums add in another order. The two forms
     /// agree within the forward tolerance (1.5e-7 measured at the SAM
     /// shapes). Every other call runs the same kernel as the saving form and
-    /// is bit-identical to it, with one caveat: which kernel a head dim 16 or
-    /// 32 call runs, the split-K tiled one or the scalar one, depends on the
-    /// budget (the tiled one needs room for its partials), and the two agree
-    /// to rounding, not bit for bit.
+    /// is bit-identical to it, with one caveat: which kernel a split-K call
+    /// (head dim 16, or head dim 32 with a bias or key lengths, or too few
+    /// threadgroups for the flash route) runs, the split-K tiled one or the
+    /// scalar one, depends on the budget (the tiled one needs room for its
+    /// partials), and the two agree to rounding, not bit for bit. A head dim
+    /// 32 call with no bias or key lengths and enough threadgroups
+    /// (`flash_cross_route`) runs the TensorOps flash kernel, which needs no
+    /// scratch: its bits do not depend on the budget.
     fn attention_forward(
         &self,
         q: &Tensor,
@@ -2266,13 +2342,17 @@ impl Backend for MetalBackend {
             .map(|(output, _)| output)
     }
 
-    /// Bidirectional and cross attention, a bias and key lengths: the split-K
-    /// tiled kernels (`ojas_xattn_part_dD`) for a non-causal call at head dim
-    /// 16 or 32, the scalar `ojas_attn_gen_fwd` for causal, windowed and other
-    /// head dims, or when the budget cannot hold the tiled partials (so the
-    /// bits of a head dim 16 or 32 call can depend on the budget; the values
-    /// agree to rounding). There is no backward on Metal yet:
-    /// `attention_backward` is `Unsupported`, as the default says.
+    /// Bidirectional and cross attention, a bias and key lengths. On a
+    /// TensorOps device a head dim 32 call with no bias, no key lengths and at
+    /// least `FLASH_MIN_GROUPS` threadgroups (`flash_cross_route`) runs the
+    /// flash kernel (`ojas_attn_fwd_d32` with `cross`): one kernel, no
+    /// scratch, so its bits do not depend on the budget. Any other non-causal
+    /// call at head dim 16 or 32 runs the split-K tiled kernels
+    /// (`ojas_xattn_part_dD`); the scalar `ojas_attn_gen_fwd` runs causal,
+    /// windowed and other head dims, and a split-K call when the budget
+    /// cannot hold the tiled partials (so the bits of such a call can depend
+    /// on the budget; the values agree to rounding). There is no backward on
+    /// Metal yet: `attention_backward` is `Unsupported`, as the default says.
     fn attention_forward_saving(
         &self,
         q: &Tensor,
