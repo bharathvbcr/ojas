@@ -383,6 +383,9 @@ mod bench {
             }
             let numel: usize = p.shape.iter().product();
             let x = up(&host(&values(numel, 4, 1.0), p.shape));
+            // The identity permute runs the same scan and a copy with no index
+            // arithmetic to speak of: the floor of a permute call.
+            let identity: Vec<usize> = (0..p.shape.len()).collect();
             // `relu` is the streaming reference: one read and one write of the
             // same bytes with no index arithmetic.
             let arms: Vec<Arm<'_>> = vec![
@@ -390,6 +393,16 @@ mod bench {
                     "permute".to_string(),
                     8 * numel as u64,
                     Box::new(|| drop(metal.permute(&x, p.dims).expect("permute"))),
+                ),
+                (
+                    "permute identity (copy floor)".to_string(),
+                    8 * numel as u64,
+                    Box::new(|| drop(metal.permute(&x, &identity).expect("identity"))),
+                ),
+                (
+                    "permute (generic kernel)".to_string(),
+                    8 * numel as u64,
+                    Box::new(|| drop(metal.permute_generic(&x, p.dims).expect("generic"))),
                 ),
                 (
                     "relu (streaming reference)".to_string(),

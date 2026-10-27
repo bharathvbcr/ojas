@@ -507,12 +507,14 @@ pub(crate) enum Cmd {
     },
     /// Contiguous copy with axes reordered. `oshape` is the output shape and
     /// `istride[a]` the input stride (elements) of the axis output axis `a`
-    /// came from; entries past `rank` are 1 and 0.
+    /// came from; entries past `rank` are 1 and 0. `generic` forces
+    /// `ojas_permute` over the kernel the pattern planner would pick.
     Permute {
         x: Arg,
         rank: u32,
         oshape: [u32; MAX_PERMUTE_RANK],
         istride: [u32; MAX_PERMUTE_RANK],
+        generic: bool,
     },
     /// `LayerNorm(x) * w + b` over `rows` rows of `dim`, tessl's
     /// `bert::layer_norm`. `eps` is finite and positive.
