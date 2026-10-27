@@ -49,3 +49,7 @@ required-features = ["metal"]
 [[example]]
 name = "frame_ops_bench"
 required-features = ["metal"]
+
+[[example]]
+name = "alloc_bench"
+required-features = ["metal"]
