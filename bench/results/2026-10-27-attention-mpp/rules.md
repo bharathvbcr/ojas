@@ -23,3 +23,25 @@ If the check passes, (b) is built (this section is the plan Fable approved; its 
 - Other conditions: a demo steady state of F <= 2 means (a); a reprofile that shows cross-attention inflated in-frame means re-measure.
 
 What would refute the check's pass: the causal arm's median at T = 15584 under 4.3 TFLOP/s in every clean attempt.
+
+Wave 5 addendum, committed before the rerun (job a-at3q) produces data. It is Fable's text from scratchpad/fable-wave5.md ("Wave 5 addendum (2026-10-27, after a-at3k)"), verbatim, with the coordinator's four-point restatement after it. The first run (a-at3k, `bench-output.txt`) had no clean attempt: the load was 6.3 to 16.7.
+
+> **No clean read is not a kill.** A clean rerun (load <= 6.0 both ends, control in window, pairs ok) decides. If the cap expires, this pre-stated stand-in decides:
+>
+> rate = r x E_q; r = min over attempts of (encoder_attn median / causal median) x (T+1)/2T at T = 15584; E_q = 4*8*T^2*32 / 46.836 ms = 5.31 TFLOP/s (stage2 attempt 2, pad-q m = 15584, load 3.9-5.8, control 6.33). Kill if < 4.3.
+>
+> Valid: pad-q and Tq = Tk run the same `encoder_attn` after one pad or permute kernel (device.rs:3118-3146, verified); r held at 0.915, 0.926, 0.915, 0.931 across loads 6.3-16.7, no trend. fc1 in window did not certify the arms (attention 16-34% slow against quiet).
+>
+> Today: 0.915 x 5.31 = 4.86 (inferred). A kill needs r < 0.81.
+>
+> Proxy: keep T = 15584. The 20% fall is load: p10 rates at both T agree within 5% per attempt (attempt 2: 4.32 both). Intrinsic fall is quiet pad-q 5.31 -> 4.79; the 36320 stand-in, 0.916 x 4.79 = 4.39, also passes. The thin margin is the 45 ms gate (192.8 GFLOP at 4.4-4.8 is 40-44 ms), which reads the real shape. Without a clean window the gate uses the same substitution: (new / pad-q, interleaved) x 46.84 or 281.8 ms.
+
+The coordinator's restatement of what applies:
+
+1. A clean rerun decides if one arrives (load <= 6.0 at both ends, control in window, pairs ok). An unrun check is not (a).
+2. If the 3-hour cap expires with no clean window, the pre-stated stand-in decides: rate = r x E_q, r = min over attempts of (encoder_attn median / causal median) x (T+1)/2T at T = 15584, E_q = 4 x 8 x T^2 x 32 / 46.836 ms = 5.31 TFLOP/s. The anchor is stage 2 attempt 2, pad-q at m = 15584, `bench/results/2026-10-27-attention-stage2/bench-output.txt:70`. Kill if < 4.3. Today's attempts give 0.915 x 5.31 = 4.86 (inferred); a kill needs r < 0.81.
+3. T = 15584 stays as the proxy. At 36320 the quiet pad-q anchor is 281.8 ms (4.79 TFLOP/s), and the stand-in is 0.916 x 4.79 = 4.39. The thin margin is the 45 ms gate itself.
+4. The same substitution extends to the Oct 30 gate if no clean window appears: (new kernel / pad-q, interleaved) x 46.84 ms at m = 15584, or x 281.8 ms at m = 36320.
+5. The report shows the pad-q arm against its quiet anchor beside fc1, because an fc1 control in band did not certify the attention arms in the first run (they were 16 to 34% slow against quiet). Here the `encoder_attn (Tq = Tk)` arm is that comparison: its rate at T = 15584 against the quiet 5.31 TFLOP/s.
+
+A note on the arithmetic of r in the example's units. The ratio r multiplies two rates measured in the same attempt: encoder_attn's effective rate (all T^2 pairs) over the causal arm's (the T(T+1)/2 visible pairs) is (causal median / encoder median) x 2T/(T+1); r as the addendum writes it, (encoder median / causal median) x (T+1)/2T, is the causal kernel's useful-flop rate over encoder_attn's, i.e. the quantity the committed bench-output.txt shows as 0.90 to 0.93. The stand-in is that ratio times E_q.
