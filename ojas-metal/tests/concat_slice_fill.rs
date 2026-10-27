@@ -356,3 +356,53 @@ fn dispatch_counts_are_a_kernel_per_concat_input_a_scan_and_kernel_per_slice_and
     });
     assert_eq!((c3, c1, s, f), (3, 1, 2, 1));
 }
+
+/// A filled U32 tensor is a device-made buffer whose values the host knows:
+/// every one is `value`. It must feed an embedding and a cross-entropy as ids
+/// (it used to carry no ids and be refused as "no host copy"), with the
+/// CPU's results, and the CPU's refusal for a value out of range.
+#[test]
+fn a_filled_u32_tensor_feeds_an_embedding_and_a_cross_entropy_as_ids() {
+    let (m, c) = (metal(), cpu());
+    let table = rand(&[8, 5], 390, 1.0);
+    let dtable = up(&m, &table);
+    for value in [0.0f32, 3.0, 7.0] {
+        let want_ids = ok("cpu fill", c.fill(&[2, 3], DType::U32, value));
+        let ids = ok("metal fill", m.fill(&[2, 3], DType::U32, value));
+        let want = ok("cpu embedding", c.embedding_forward(&table, &want_ids));
+        let got = ok("metal embedding", m.embedding_forward(&dtable, &ids));
+        ok("sync", m.sync());
+        same_bits(&format!("embedding of ids {value}"), &got, &want);
+    }
+    let logits = rand(&[4, 5], 391, 2.0);
+    let dlogits = up(&m, &logits);
+    let want_t = ok("cpu fill", c.fill(&[4], DType::U32, 2.0));
+    let targets = ok("metal fill", m.fill(&[4], DType::U32, 2.0));
+    let want = ok(
+        "cpu ce",
+        c.cross_entropy_mean_forward(&logits, &want_t, None),
+    );
+    let got = ok(
+        "metal ce",
+        m.cross_entropy_mean_forward(&dlogits, &targets, None),
+    );
+    ok("sync", m.sync());
+    let (g, w) = (down(&got), ok("cpu loss", want.to_f32_vec()));
+    close("cross entropy of filled targets", &g, &w, 1e-6, 1e-5);
+    // Out of range: refused as the CPU refuses it, by the id bound.
+    for value in [8.0f32, 4_294_967_040.0] {
+        let want_ids = ok("cpu fill", c.fill(&[2], DType::U32, value));
+        let ids = ok("metal fill", m.fill(&[2], DType::U32, value));
+        let cpu_err = c
+            .embedding_forward(&table, &want_ids)
+            .expect_err("cpu refuses");
+        let metal_err = m
+            .embedding_forward(&dtable, &ids)
+            .expect_err("metal refuses");
+        assert_eq!(
+            std::mem::discriminant(&metal_err),
+            std::mem::discriminant(&cpu_err),
+            "ids {value}: {metal_err:?} vs {cpu_err:?}"
+        );
+    }
+}

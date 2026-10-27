@@ -2610,6 +2610,11 @@ impl Backend for MetalBackend {
             Reply::Bufs(mut v) if v.len() == 1 => v.remove(0),
             other => return Err(metal_err(format!("{OP}: device returned {other:?}"))),
         };
+        // A filled U32 tensor can feed an embedding or a cross-entropy as ids:
+        // every value is `word`, so all are below `word + 1`. `fill_dims`
+        // takes an integer a f32 holds in `0..2^32`, at most 4294967040, so
+        // the bound cannot overflow.
+        let ids = (dtype == DType::U32).then_some(Ids::Below(word + 1));
         let buf: Arc<dyn DeviceBuffer> = Arc::new(MetalBuffer {
             id: nb.id,
             len: nb.bytes,
