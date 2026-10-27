@@ -1001,8 +1001,18 @@ pub fn conv_transpose2d<B: Backend + ?Sized>(
     )
 }
 
-/// Every LayerNorm with weights the fixture records: `ln_pre` at eps 1e-5
-/// (torch's default) and `norm1` and `norm2` of blocks 0 and 7 at 1e-6.
+/// The epsilon of every LayerNorm in the ViT trunk, `ln_pre` and the blocks'
+/// `norm1` and `norm2` alike: upstream builds the trunk with
+/// `norm_layer="LayerNorm"`, which `vitdet.py` turns into
+/// `partial(nn.LayerNorm, eps=1e-5)` (`sam3/model/vitdet.py:868-869`) and hands
+/// to every `Block` (`:907`, used at `:703` and `:726`) and to `ln_pre`
+/// (`:947`). With the real weights, eps 1e-5 fits all four block norms to
+/// 1e-6 absolute and 1e-4 relative; 1e-6 is off by 1e-5 absolute and 2e-3
+/// relative (`blocks.0.norm1`).
+pub const VIT_LN_EPS: f32 = 1e-5;
+
+/// Every LayerNorm with weights the fixture records: `ln_pre` and `norm1` and
+/// `norm2` of blocks 0 and 7, all at [`VIT_LN_EPS`].
 pub fn layer_norm_rows<B: Backend + ?Sized>(
     backend: &B,
     acts: &Fixture<'_>,
@@ -1015,7 +1025,7 @@ pub fn layer_norm_rows<B: Backend + ?Sized>(
         "trunk.ln_pre",
         "trunk.ln_pre.out.in",
         "trunk.ln_pre.out",
-        1e-5,
+        VIT_LN_EPS,
     )?];
     for block in ["trunk.blocks.0", "trunk.blocks.7"] {
         for norm in ["norm1", "norm2"] {
@@ -1026,7 +1036,7 @@ pub fn layer_norm_rows<B: Backend + ?Sized>(
                 &format!("{block}.{norm}"),
                 &format!("{block}.{norm}.in"),
                 &format!("{block}.{norm}"),
-                1e-6,
+                VIT_LN_EPS,
             )?);
         }
     }

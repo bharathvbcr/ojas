@@ -22,7 +22,7 @@ use ojas_metal::MetalBackend;
 use ojas_oracle::sam_fixtures::{
     attention, axial_tables, conv2d_rows, conv_transpose2d_rows, gelu, layer_norm_affine_recovered,
     layer_norm_rows, linear_bias_rows, rope_interleaved, skipped_ops, weighted_ops, Fixture,
-    OpReport, ENV_FIXTURES, ENV_WEIGHTS,
+    OpReport, ENV_FIXTURES, ENV_WEIGHTS, VIT_LN_EPS,
 };
 
 fn fixture() -> Fixture<'static> {
@@ -137,7 +137,7 @@ fn layer_norm_rows_match_torch_with_the_affine_part_recovered() {
         &fx,
         "trunk.ln_pre.out.in",
         "trunk.ln_pre.out",
-        1e-5,
+        VIT_LN_EPS,
     )
     .unwrap()];
     for block in ["trunk.blocks.0", "trunk.blocks.7"] {
@@ -148,7 +148,7 @@ fn layer_norm_rows_match_torch_with_the_affine_part_recovered() {
                     &fx,
                     &format!("{block}.{norm}.in"),
                     &format!("{block}.{norm}"),
-                    1e-6,
+                    VIT_LN_EPS,
                 )
                 .unwrap(),
             );
