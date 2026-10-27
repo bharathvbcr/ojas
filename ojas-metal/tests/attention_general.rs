@@ -115,24 +115,56 @@ fn check(m: &MetalBackend, c: &Case, seed: u64) {
         &tag,
         cpu.attention_forward_saving(&host.q, &host.k, &host.v, host.opts(c)),
     );
+    ok("sync", m.sync());
+    let before = m.dispatches();
     let (got, got_lse) = ok(
         &tag,
         m.attention_forward_saving(&dev.q, &dev.k, &dev.v, dev.opts(c)),
     );
+    ok("sync", m.sync());
+    let saving_dispatches = m.dispatches() - before;
     same_tensor(&format!("{tag} output"), &got, &want, tol(c.tk), 1e-4);
     same_tensor(&format!("{tag} lse"), &got_lse, &want_lse, tol(c.tk), 1e-4);
-    // The inference form is the saving form's output: bit for bit on the
-    // general kernel, and within the forward tolerance where it routes to
-    // tessl's `encoder_attn` (see `attention_routing.rs`).
+    // Fresh uploads, so no scan of the first call's operands is skipped.
+    let dev = host.up(m);
+    let before = m.dispatches();
     let plain = ok(
         &tag,
         m.attention_forward(&dev.q, &dev.k, &dev.v, dev.opts(c)),
     );
+    ok("sync", m.sync());
+    let plain_dispatches = m.dispatches() - before;
+    // The inference form is the saving form's output, bit for bit on the
+    // general kernel. Unmasked self-attention at head dim 64 on a TensorOps
+    // device is the exception: `attention_forward` runs tessl's tiled
+    // `encoder_attn` (26x faster at [1, 16, 5184, 64]), whose sums are in
+    // another order, so the two forms agree to the forward tolerance (they
+    // measured 1.5e-7 apart) and no closer.
     if routes_to_encoder_attn(m, c) {
+        assert!(
+            plain_dispatches > saving_dispatches,
+            "{tag}: routed {plain_dispatches} dispatches vs the general kernel's {saving_dispatches}"
+        );
         same_tensor(&format!("{tag} routed"), &plain, &want, tol(c.tk), 1e-4);
+        same_tensor(
+            &format!("{tag} routed vs saving"),
+            &plain,
+            &down_host(&got),
+            tol(c.tk),
+            1e-4,
+        );
     } else {
+        assert_eq!(
+            plain_dispatches, saving_dispatches,
+            "{tag}: a form that does not route dispatches as the saving form does"
+        );
         assert_eq!(down(&plain), down(&got), "{tag}: forward forms differ");
     }
+}
+
+/// A device tensor's values as a host tensor, for [`same_tensor`].
+fn down_host(t: &Tensor) -> Tensor {
+    ok("to host", t.to_host(&ojas_core::Budget::new(8 * GIB)))
 }
 
 /// Whether `attention_forward` takes tessl's `encoder_attn` for this case:

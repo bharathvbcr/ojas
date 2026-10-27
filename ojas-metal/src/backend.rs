@@ -1850,7 +1850,15 @@ impl Backend for MetalBackend {
     }
 
     /// The inference form of [`Self::attention_forward_saving`]: it refuses
-    /// a malformed call under its own name, as the CPU backend does.
+    /// a malformed call under its own name, as the CPU backend does, and a
+    /// non-finite operand faults under `attention_forward`.
+    ///
+    /// Not bit-identical to the saving form for unmasked self-attention at
+    /// head dim 64 on a TensorOps device (`routes_to_encoder_attn`): that
+    /// call runs tessl's tiled `encoder_attn`, 26x faster at `[1, 16, 5184,
+    /// 64]` (22.8 ms against 606 ms), whose sums add in another order. The
+    /// two forms agree within the forward tolerance (1.5e-7 measured at the
+    /// SAM shapes); every other call is bit-identical to the saving form.
     fn attention_forward(
         &self,
         q: &Tensor,
