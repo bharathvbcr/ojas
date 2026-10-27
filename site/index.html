@@ -647,7 +647,7 @@
         <a href="#roadmap" class="glass-card rounded-2xl p-5 block border border-brand-500/30 hover:border-brand-400/60 transition">
           <p class="text-[11px] font-mono uppercase tracking-widest text-brand-300 mb-2">Next</p>
           <h3 class="text-white font-semibold mb-2">Roadmap</h3>
-          <p class="text-xs text-slate-300 leading-relaxed">The model and trainer have landed. Next: a recorded full-size run, the measured GPU gaps, then bf16 and CUDA.</p>
+          <p class="text-xs text-slate-300 leading-relaxed">The model and trainer have landed. Next: a recorded full-size run, the measured GPU gaps, then bf16 accumulation and CUDA.</p>
         </a>
         <a href="#guide" class="glass-card rounded-2xl p-5 block hover:border-brand-500/40 transition">
           <p class="text-[11px] font-mono uppercase tracking-widest text-brand-300 mb-2">Reference</p>
@@ -1243,7 +1243,7 @@ cd go &amp;&amp; PKG_CONFIG_PATH="$PWD" go test -a -tags gusset_pkgconfig -count
               <div class="glass-card rounded-2xl p-5">
                 <h4 class="text-white font-semibold mb-2">Tensors &amp; dtypes</h4>
                 <ul class="text-xs text-slate-300 space-y-1.5 leading-relaxed">
-                  <li>DTypes <span class="font-mono">F32</span>, <span class="font-mono">Bf16</span>, <span class="font-mono">F16</span>, <span class="font-mono">U32</span>. Compute is f32 on every backend.</li>
+                  <li>DTypes <span class="font-mono">F32</span>, <span class="font-mono">Bf16</span>, <span class="font-mono">F16</span>, <span class="font-mono">U32</span>. Every backend accumulates in f32; linear and attention also take <span class="font-mono">Bf16</span> operands.</li>
                   <li>Zero-copy <span class="font-mono">narrow</span> and <span class="font-mono">view</span>; <span class="font-mono">permute</span> up to rank 8.</li>
                   <li>Shape, stride and byte math is <span class="font-mono">checked_mul</span>/<span class="font-mono">checked_add</span>.</li>
                 </ul>

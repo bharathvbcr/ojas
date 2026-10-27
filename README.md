@@ -37,7 +37,7 @@ ojas pairs a compile-time safe Rust engine with an in-process Go API via `gusset
 - `ojas-qwen35` (macOS only) runs a Qwen3.5 whole training step through tessl's Metal kernels. It is a provider, not a `Backend`.
 
 **What does not run yet:**
-- bf16 compute: every backend computes in `f32`.
+- bf16 accumulation: every backend sums in `f32`. bf16 exists as an optional autocast region and as `Bf16` operands to linear and attention.
 - A CUDA or HIP `Backend`: `ojas-cuda` and `ojas-hip` are probes.
 - Everything else on the ranked gap list below.
 
@@ -165,7 +165,7 @@ flowchart TD
 ### 1. General-Purpose Tensor Engine (`ojas-core`)
 * **Zero-Copy Views:** Tensor representations track an explicit `byte_offset`. Sub-views created via `.narrow()` adjust byte offsets without memory re-allocation or buffer copying.
 * **Strict Memory Budgets:** Memory consumption is governed by an explicit `Budget`. When an allocation exceeds limits, `try_reserve()` returns `OjasError::CapacityExceeded` immediately rather than swapping or resizing.
-* **Type System:** `DType` tags `F32`, `Bf16`, `F16` and `U32`. Every backend computes in `F32` (token ids in `U32`). The matmul-class ops (linear and causal SDPA, forward and backward) also take `Bf16` operands on backends whose `bf16_operands()` is true (CPU, Metal and wgpu), widened exactly into `f32` accumulation; on the CPU and Metal so does the tied table (the embedding gather and backward, and the fused cross-entropy's weight), read in place without an `f32` copy of the table. Every other op refuses non-`F32` dtypes (`docs/dtype-policy.md`). `ojas-io` decodes BF16/F16 safetensors to `f32` and encodes back with round-to-nearest-even.
+* **Type System:** `DType` tags `F32`, `Bf16`, `F16` and `U32`. Every backend accumulates in `F32` (token ids in `U32`). The matmul-class ops (linear and causal SDPA, forward and backward) also take `Bf16` operands on backends whose `bf16_operands()` is true (CPU, Metal and wgpu), widened exactly into `f32` accumulation; on the CPU and Metal so does the tied table (the embedding gather and backward, and the fused cross-entropy's weight), read in place without an `f32` copy of the table. Every other op refuses non-`F32` dtypes (`docs/dtype-policy.md`). `ojas-io` decodes BF16/F16 safetensors to `f32` and encodes back with round-to-nearest-even.
 * **Device Tensors:** `Tensor::from_device` wraps a backend's buffer. `to_host` copies it back and is counted by `device_readbacks()`. `device_buffer_mut` requires sole ownership of the storage. The default `Backend::upload` returns `Unsupported` for a host tensor on a non-CPU backend; there is no CPU fallback.
 
 ```mermaid
@@ -261,7 +261,7 @@ flowchart TD
     end
 
     subgraph DualOptimizers["Dual Optimizers"]
-        Muon["Muon NS5 Optimizer\n- 5th-order Newton-Schulz polynomial in f32\n(nanolab runs it in bf16)\n- Nesterov momentum (0.99)\n- Zeropower orthogonalization"]
+        Muon["Muon NS5 Optimizer\n- 5th-order Newton-Schulz polynomial in f32\n(bf16 by config; nanolab runs it in bf16)\n- Nesterov momentum (0.99)\n- Zeropower orthogonalization"]
         AdamW["AdamW Optimizer\n- PyTorch single-tensor order (decay first)\n- eps = 1e-8 outside square root\n- Cosine learning rate scheduling"]
     end
 
