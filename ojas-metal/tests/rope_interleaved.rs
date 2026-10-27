@@ -13,12 +13,6 @@ use ojas_core::{
     Budget, Tensor,
 };
 
-/// The kernel forms each product pair exactly as the CPU does
-/// (`-ffp-contract=off`), so parity is bitwise; the bound only keeps a
-/// future compiler change from turning into a spurious failure.
-const ATOL: f32 = 1e-6;
-const RTOL: f32 = 1e-6;
-
 fn axial(head_dim: usize, h: usize, w: usize, scale: f32) -> (Tensor, Tensor) {
     ok(
         "axial tables",
@@ -32,10 +26,10 @@ fn check(m: &ojas_metal::MetalBackend, what: &str, x: &Tensor, cos: &Tensor, sin
     let (dx, dc, ds) = (up(m, x), up(m, cos), up(m, sin));
     let want = ok("cpu fwd", c.rope_interleaved_forward(x, cos, sin));
     let got = ok("metal fwd", m.rope_interleaved_forward(&dx, &dc, &ds));
-    same_tensor(&format!("{what} forward"), &got, &want, ATOL, RTOL);
+    same_bits(&format!("{what} forward"), &got, &want);
     let want = ok("cpu bwd", c.rope_interleaved_backward(x, cos, sin));
     let got = ok("metal bwd", m.rope_interleaved_backward(&dx, &dc, &ds));
-    same_tensor(&format!("{what} backward"), &got, &want, ATOL, RTOL);
+    same_bits(&format!("{what} backward"), &got, &want);
     ok("sync", m.sync());
 }
 
@@ -96,7 +90,7 @@ fn offset_device_views_give_the_cpu_answer() {
         ),
     );
     ok("sync", m.sync());
-    same_tensor("views", &got, &want, ATOL, RTOL);
+    same_bits("views", &got, &want);
 }
 
 #[test]

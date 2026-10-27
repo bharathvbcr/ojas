@@ -2531,8 +2531,9 @@ impl Worker {
         Ok(self.keep(vec![y]))
     }
 
-    /// Bilinear resample on `ojas_bilinear`; the kernel checks its input and
-    /// output itself.
+    /// Bilinear resample on `ojas_bilinear`. The whole input is scanned
+    /// (as the CPU refuses a non-finite value wherever it sits, including a
+    /// pixel no output samples), the kernel checks the output.
     fn bilinear(&mut self, x: Arg, g: BilinearGeom) -> Res<Reply> {
         const OP: &str = "interpolate_bilinear_forward";
         let xv = self.view(x)?;
@@ -2552,6 +2553,7 @@ impl Worker {
         let out_u = u32_of(out_n)?;
         let y = self.fresh(out_n)?;
         let st = self.status(OP)?;
+        self.check(&st, &xv, ST_IN)?;
         self.k1("ojas_bilinear", out_n, |b| {
             bind(b, &xv, 0);
             bind(b, &y, 1);

@@ -14,11 +14,6 @@ use common::*;
 use ojas_core::{interpolate_bilinear_forward_dims, Backend, Tensor};
 use ojas_metal::MetalBackend;
 
-/// Bitwise in practice (`-ffp-contract=off`, the CPU's expressions); the
-/// bound only keeps a compiler change from becoming a spurious failure.
-const ATOL: f32 = 1e-6;
-const RTOL: f32 = 1e-6;
-
 fn check(m: &MetalBackend, what: &str, x: &Tensor, out: [usize; 2]) {
     let c = cpu();
     let dx = up(m, x);
@@ -27,7 +22,7 @@ fn check(m: &MetalBackend, what: &str, x: &Tensor, out: [usize; 2]) {
         let want = ok("cpu", c.interpolate_bilinear_forward(x, out, align));
         let got = ok("metal", m.interpolate_bilinear_forward(&dx, out, align));
         ok("sync", m.sync());
-        same_tensor(&tag, &got, &want, ATOL, RTOL);
+        same_bits(&tag, &got, &want);
     }
 }
 
@@ -108,7 +103,7 @@ fn offset_device_views_give_the_cpu_answer() {
             m.interpolate_bilinear_forward(&offset_view(&m, &x, 3, 21), [11, 9], align),
         );
         ok("sync", m.sync());
-        same_tensor(&format!("views align {align}"), &got, &want, ATOL, RTOL);
+        same_bits(&format!("views align {align}"), &got, &want);
     }
 }
 
@@ -189,4 +184,40 @@ fn only_the_output_is_charged() {
     let y = ok("tight", tight.interpolate_bilinear_forward(&dx, out, false));
     ok("sync", tight.sync());
     assert_eq!(y.shape(), [1, 1, 128, 96]);
+}
+
+/// A 4x downscale with `align_corners` false samples rows and columns
+/// `4o + 1` and `4o + 2` only: pixel (0, 0) and the last row and column are
+/// never read. The CPU refuses a non-finite value wherever it sits, so Metal
+/// must fault on one in a pixel no output samples (and on one that is).
+#[test]
+fn a_non_finite_pixel_no_output_samples_is_still_a_fault() {
+    let (m, c) = (metal(), cpu());
+    let (h, w, out) = (64usize, 64usize, [16usize, 16usize]);
+    // (row, column) of the planted value; the first three are unsampled.
+    for (row, col) in [(0usize, 0usize), (63, 63), (0, 17), (5, 5)] {
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let mut data = values(2 * h * w, 70, 1.0);
+            data[(h + row) * w + col] = bad; // channel 1
+            let x = host(&data, &[1, 2, h, w]);
+            let cpu_result = c.interpolate_bilinear_forward(&x, out, false);
+            assert!(
+                matches!(
+                    cpu_result,
+                    Err(ojas_core::OjasError::NonFinite {
+                        op: "interpolate_bilinear_forward"
+                    })
+                ),
+                "the CPU refuses {bad} at ({row}, {col}): {cpu_result:?}"
+            );
+            let dx = up(&m, &x);
+            let r = m.interpolate_bilinear_forward(&dx, out, false);
+            deferred(
+                &m,
+                &format!("{bad} at ({row}, {col})"),
+                r,
+                "interpolate_bilinear_forward",
+            );
+        }
+    }
 }

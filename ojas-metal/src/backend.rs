@@ -627,12 +627,18 @@ impl MetalBackend {
     /// ([`routes_to_encoder_attn`] says which calls). Scratch: the permuted
     /// Q, K, V and the kernel's output, one length per batch row, and a copy
     /// of each operand that is a view.
+    ///
+    /// `None` when the budget has room for the output but not for that
+    /// scratch: the caller runs the general kernel, which needs only the
+    /// output and the log-sum-exp. Nothing has been charged or enqueued
+    /// then: a refused reservation takes no room, the output's reservation
+    /// is released as it drops, and the device has not been called.
     fn encoder_attn_forward(
         &self,
         op: &'static str,
         dims: &AttentionDims,
         [q, k, v]: [&Tensor; 3],
-    ) -> Res<Tensor> {
+    ) -> Res<Option<Tensor>> {
         let (qa, ka, va) = (self.f32(op, q)?, self.f32(op, k)?, self.f32(op, v)?);
         let geom = EncAttnGeom {
             batch: u32_dim(op, dims.batch)?,
@@ -654,7 +660,16 @@ impl MetalBackend {
             v: va,
             geom,
         };
-        self.one(op, q.shape(), scratch, cmd)
+        let output = self.reserve(op, n)?;
+        let _scratch = match self.reserve(op, scratch) {
+            Ok(held) => held,
+            Err(OjasError::CapacityExceeded { .. }) => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let mut out = self.call_wrap(op, &[q.shape()], vec![output], cmd)?;
+        out.pop()
+            .map(Some)
+            .ok_or_else(|| metal_err(format!("{op}: no output")))
     }
 
     /// General attention forward after its validator: the output and the
@@ -1086,15 +1101,25 @@ const ENCODER_ATTN_HEAD_DIM: usize = 64;
 /// than `ojas_attn_gen_fwd`: bidirectional self-attention over equal head
 /// counts with no bias, key lengths or window, at [`ENCODER_ATTN_HEAD_DIM`],
 /// on a device with TensorOps, with one head's plane addressable in `i32`
-/// as tessl's matrix-unit views require. Everything else keeps the general
-/// kernel. `attention_forward_saving` never routes: `encoder_attn` returns
-/// no log-sum-exp.
+/// as tessl's matrix-unit views require and the whole tensor within the
+/// kernels' 32-bit element indexing (the permutes index it in `u32`).
+/// Everything else keeps the general kernel, which refuses what it cannot
+/// run. A budget that holds the output but not the routed path's scratch
+/// also runs the general kernel ([`MetalBackend::encoder_attn_forward`]).
+/// `attention_forward_saving` never routes: `encoder_attn` returns no
+/// log-sum-exp.
 fn routes_to_encoder_attn(dims: &AttentionDims, tensorops: bool) -> bool {
     let plane = dims
         .q_len
         .checked_mul(dims.heads)
         .and_then(|p| p.checked_mul(dims.head_dim))
         .is_some_and(|p| i32::try_from(p).is_ok());
+    let elements = plane
+        .then(|| dims.batch.checked_mul(dims.q_len))
+        .flatten()
+        .and_then(|bt| bt.checked_mul(dims.heads))
+        .and_then(|bth| bth.checked_mul(dims.head_dim))
+        .is_some_and(|n| u32::try_from(n).is_ok());
     tensorops
         && !dims.causal
         && dims.window.is_none()
@@ -1104,6 +1129,7 @@ fn routes_to_encoder_attn(dims: &AttentionDims, tensorops: bool) -> bool {
         && dims.heads == dims.kv_heads
         && dims.head_dim == ENCODER_ATTN_HEAD_DIM
         && plane
+        && elements
 }
 
 /// The attention kernels' geometry of validated `dims`, with Metal's
@@ -1888,7 +1914,9 @@ impl Backend for MetalBackend {
         let dims = attention_forward_dims(q, k, v, &opts)?;
         let (q, k, v) = (self.widened(q)?, self.widened(k)?, self.widened(v)?);
         if routes_to_encoder_attn(&dims, self.link.has_tensorops()) {
-            return self.encoder_attn_forward(OP, &dims, [&q, &k, &v]);
+            if let Some(output) = self.encoder_attn_forward(OP, &dims, [&q, &k, &v])? {
+                return Ok(output);
+            }
         }
         let bias = opts.bias.map(|b| self.widened(b)).transpose()?;
         self.attn_forward(OP, &dims, [&q, &k, &v], bias.as_ref(), opts.key_lens)
@@ -4285,6 +4313,15 @@ mod tests {
                     kv_len: 1 << 20,
                     heads: 64,
                     kv_heads: 64,
+                    ..base
+                },
+            ),
+            (
+                // Each head's plane fits i32, the whole tensor (5.4e9
+                // elements) does not fit u32 indexing.
+                "more than u32 elements",
+                AttentionDims {
+                    batch: 1024,
                     ..base
                 },
             ),
