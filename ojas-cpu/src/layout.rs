@@ -1,12 +1,13 @@
-//! Axis permutation: values move, nothing is computed.
+//! Axis permutation, concatenation and slicing along an axis, and a constant
+//! fill: values move or are written, nothing is computed.
 
-use ojas_core::{permute_dims, Budget, OjasError, Scratch, Tensor};
+use ojas_core::{permute_dims, Budget, ConcatDims, DType, OjasError, Scratch, SliceDims, Tensor};
 #[cfg(target_os = "macos")]
 use ojas_core::{BackendId, Numerics};
 
 use crate::pool::{scoped, Exec};
 
-use crate::validate::{all_finite, nonfinite, shape};
+use crate::validate::{all_finite, check_f32s, f32_checked, nonfinite, product, shape};
 
 /// Output floats below this stay on the calling thread.
 ///
@@ -106,6 +107,122 @@ pub(crate) fn permute(
     let mut out = Scratch::try_alloc(src.len(), budget)?;
     gather.write(exec, src, out.as_mut_slice())?;
     Tensor::from_scratch(out, &out_shape)
+}
+
+/// `torch.cat(inputs, axis)` of host f32 tensors. Each input is read in
+/// place as `[outer, axis_len_i, inner]`; for every outer index the inputs'
+/// rows are appended in order, so each output value is written once, by a
+/// copy. The output is the only charge. Bits are the inputs' bits.
+///
+/// `dims` comes from [`ojas_core::concat_dims`], which refused the shapes
+/// first. Then a device tensor or a strided view, and a NaN or infinity in
+/// any input, as every other CPU op refuses one.
+pub(crate) fn concat(
+    op: &'static str,
+    budget: &Budget,
+    exec: Exec<'_>,
+    inputs: &[&Tensor],
+    dims: ConcatDims,
+) -> Result<Tensor, OjasError> {
+    let srcs = check_f32s(op, exec, inputs)?;
+    let ConcatDims {
+        outer,
+        inner,
+        axis_lens,
+        out_shape,
+    } = dims;
+    if srcs.len() != axis_lens.len() {
+        return Err(shape(op, "concat input count does not match its dims"));
+    }
+    for (src, &len) in srcs.iter().zip(&axis_lens) {
+        if src.len() != product(op, &[outer, len, inner])? {
+            return Err(shape(op, "concat data length does not match shape"));
+        }
+    }
+    let out_len = product(op, &out_shape)?;
+    let mut out = Scratch::<f32>::try_alloc(out_len, budget)?;
+    let dst = out.as_mut_slice();
+    let mut at = 0usize;
+    for o in 0..outer {
+        for (src, &len) in srcs.iter().zip(&axis_lens) {
+            let run = len * inner;
+            dst[at..at + run].copy_from_slice(&src[o * run..(o + 1) * run]);
+            at += run;
+        }
+    }
+    debug_assert_eq!(at, out_len);
+    Tensor::from_scratch(out, &out_shape)
+}
+
+/// `input.narrow(axis, start, len).contiguous()` of a host f32 tensor: for
+/// every outer index one contiguous run of `len * inner` values. `dims`
+/// comes from [`ojas_core::slice_dims`]. Refused after it as
+/// [`concat`] refuses its inputs.
+pub(crate) fn slice(
+    op: &'static str,
+    budget: &Budget,
+    exec: Exec<'_>,
+    input: &Tensor,
+    dims: SliceDims,
+) -> Result<Tensor, OjasError> {
+    let src = f32_checked(op, exec, input)?;
+    let SliceDims {
+        outer,
+        inner,
+        axis_len,
+        start,
+        len,
+        out_shape,
+    } = dims;
+    let stride = product(op, &[axis_len, inner])?;
+    let run = product(op, &[len, inner])?;
+    let head = product(op, &[start, inner])?;
+    if src.len() != product(op, &[outer, stride])? || start.saturating_add(len) > axis_len {
+        return Err(shape(op, "slice data length does not match shape"));
+    }
+    let mut out = Scratch::<f32>::try_alloc(product(op, &out_shape)?, budget)?;
+    for (o, dst) in out.as_mut_slice().chunks_exact_mut(run).enumerate() {
+        let from = o * stride + head;
+        dst.copy_from_slice(&src[from..from + run]);
+    }
+    Tensor::from_scratch(out, &out_shape)
+}
+
+/// A tensor of `shape` and `dtype` with every element `value`. `dtype` and
+/// `value` come from [`ojas_core::fill_dims`], which refused a value the
+/// dtype cannot hold exactly: an `F32` fill stores `value`'s bits, a `U32`
+/// fill its integer, a `Bf16` fill the high half of its bits (the low half is
+/// clear). The output is the only charge, and nothing is read.
+pub(crate) fn fill(
+    op: &'static str,
+    budget: &Budget,
+    shape: &[usize],
+    dtype: DType,
+    value: f32,
+) -> Result<Tensor, OjasError> {
+    let n = product(op, shape)?;
+    match dtype {
+        DType::F32 => {
+            let mut out = Scratch::<f32>::try_alloc(n, budget)?;
+            out.as_mut_slice().fill(value);
+            Tensor::from_scratch(out, shape)
+        }
+        DType::U32 => {
+            let mut out = Scratch::<u32>::try_alloc(n, budget)?;
+            out.as_mut_slice().fill(value as u32);
+            Tensor::from_scratch(out, shape)
+        }
+        DType::Bf16 => {
+            let mut out = Tensor::zeros(shape, DType::Bf16, budget)?;
+            out.bf16_slice_mut()?.fill((value.to_bits() >> 16) as u16);
+            Ok(out)
+        }
+        got => Err(OjasError::Dtype {
+            op,
+            expected: DType::F32,
+            got,
+        }),
+    }
 }
 
 /// How to move `src` into an output-ordered buffer.

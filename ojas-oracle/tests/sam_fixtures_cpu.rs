@@ -7,6 +7,16 @@
 //!   cargo test -p ojas-oracle --test sam_fixtures_cpu -- --ignored --nocapture
 //! ```
 //!
+//! The GroupNorm test reads a different file, named by
+//! `OJAS_SAM_GROUPNORM_FIXTURES` (`.../SpikeTrack/fixtures/groupnorm/
+//! pixel_decoder.safetensors`, 212 MB); run it in release:
+//!
+//! ```text
+//! OJAS_SAM_GROUPNORM_FIXTURES=.../groupnorm/pixel_decoder.safetensors \
+//!   cargo test --release -p ojas-oracle --test sam_fixtures_cpu \
+//!   group_norm -- --ignored --nocapture
+//! ```
+//!
 //! With the variable unset an ignored test FAILS: an unrun check must never
 //! report the same result as a passing one. Each test prints its rows as a
 //! Markdown table.
@@ -14,8 +24,8 @@
 use ojas_core::{Budget, Numerics};
 use ojas_cpu::CpuBackend;
 use ojas_oracle::sam_fixtures::{
-    attention, axial_tables, gelu, layer_norm_affine_recovered, rope_interleaved, skipped_ops,
-    Fixture, OpReport, ENV_FIXTURES,
+    attention, axial_tables, gelu, group_norm, layer_norm_affine_recovered, rope_interleaved,
+    skipped_ops, Fixture, OpReport, ENV_FIXTURES, ENV_GROUPNORM_FIXTURES,
 };
 
 fn fixture() -> Fixture<'static> {
@@ -153,4 +163,27 @@ fn the_ops_the_fixture_cannot_check_are_recorded() {
         !skipped.is_empty(),
         "the fixture now holds weights: add the weight-bearing ops"
     );
+}
+
+#[test]
+#[ignore = "needs OJAS_SAM_GROUPNORM_FIXTURES (SpikeTrack groupnorm fixture)"]
+fn group_norm_matches_torch_at_both_pixel_decoder_sizes() {
+    let fx = Fixture::from_env_var(ENV_GROUPNORM_FIXTURES)
+        .unwrap_or_else(|e| panic!("{ENV_GROUPNORM_FIXTURES}: {e}"))
+        .unwrap_or_else(|| panic!("{ENV_GROUPNORM_FIXTURES} is not set: this test cannot run"));
+    // The values the fixture's header must record, asserted rather than
+    // taken from it silently: `group_norm` refuses a header that differs.
+    let (groups, eps) = ojas_oracle::sam_fixtures::group_norm_header(&fx).unwrap();
+    assert_eq!((groups, eps), (8, 1e-5));
+    let be = cpu();
+    let rows: Vec<OpReport> = ["gn0", "gn1"]
+        .iter()
+        .map(|prefix| {
+            let started = std::time::Instant::now();
+            let row = group_norm(&be, &fx, prefix, groups, eps).unwrap();
+            println!("{prefix}: {:?}", started.elapsed());
+            row
+        })
+        .collect();
+    show(&rows);
 }

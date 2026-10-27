@@ -1408,6 +1408,27 @@ pub trait Backend {
         ))
     }
 
+    /// GroupNorm over `input` `[N, C, H, W]`, torch's `nn.GroupNorm`: the `C`
+    /// channels split into `groups` runs of `C / groups`, and each run of
+    /// every image is normalized over its channels and all `H * W`
+    /// positions with the biased variance, `(x - mean) / sqrt(var + eps)`,
+    /// then channel `c` is scaled and shifted by `weight[c]` and `bias[c]`
+    /// (both `[C]`). `groups == C` is instance norm and `groups == 1`
+    /// normalizes the whole image. `eps` must be finite and above 0.
+    /// [`crate::group_norm_forward_dims`] validates. The default refuses
+    /// with [`OjasError::Unsupported`].
+    fn group_norm_forward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        groups: usize,
+        eps: f32,
+    ) -> Result<Tensor, OjasError> {
+        let _ = (input, weight, bias, groups, eps);
+        Err(unsupported_inference(self.id(), "group_norm_forward"))
+    }
+
     /// The exact GELU `x * Phi(x) = 0.5 * x * (1 + erf(x / sqrt(2)))`, torch's
     /// `F.gelu(x, approximate="none")`, not the tanh approximation. On the
     /// CPU it is [`crate::gelu_erf_exact`], the same bits on every platform.
@@ -1425,6 +1446,47 @@ pub trait Backend {
     fn relu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
         let _ = input;
         Err(unsupported_inference(self.id(), "relu_forward"))
+    }
+
+    /// Join `inputs` along `axis`, torch's `torch.cat(inputs, axis)`: every
+    /// input has the first one's shape except on `axis`, and the output's
+    /// extent there is their sum. Values move without arithmetic, so an
+    /// output's bits are the inputs' bits; as for [`Self::permute`], a
+    /// non-finite input is [`OjasError::NonFinite`], not passed through. The
+    /// output stays on this backend. [`crate::concat_dims`] validates. The
+    /// default refuses with [`OjasError::Unsupported`].
+    fn concat(&self, inputs: &[&Tensor], axis: usize) -> Result<Tensor, OjasError> {
+        let _ = (inputs, axis);
+        Err(unsupported_inference(self.id(), "concat"))
+    }
+
+    /// The rows `start..start + len` of `input` along `axis`, torch's
+    /// `input.narrow(axis, start, len).contiguous()`: a copy, `len` at least
+    /// 1 and `start + len` within the axis. Values move without arithmetic,
+    /// as for [`Self::concat`]. [`crate::slice_dims`] validates. The default
+    /// refuses with [`OjasError::Unsupported`].
+    fn slice(
+        &self,
+        input: &Tensor,
+        axis: usize,
+        start: usize,
+        len: usize,
+    ) -> Result<Tensor, OjasError> {
+        let _ = (input, axis, start, len);
+        Err(unsupported_inference(self.id(), "slice"))
+    }
+
+    /// A new tensor of `shape` and `dtype` with every element `value`, torch's
+    /// `torch.full(shape, value, dtype=dtype)`, made on this backend: no host
+    /// buffer is uploaded. `F32` stores `value`'s bits; `Bf16` takes only a
+    /// value a bf16 holds exactly and `U32` only an integer in `0..2^32`, and
+    /// anything else is [`OjasError::OutOfRange`], never rounded; a NaN or an
+    /// infinity is [`OjasError::NonFinite`], as no op takes or stores one.
+    /// The output is the only charge. [`crate::fill_dims`] validates. The
+    /// default refuses with [`OjasError::Unsupported`].
+    fn fill(&self, shape: &[usize], dtype: DType, value: f32) -> Result<Tensor, OjasError> {
+        let _ = (shape, dtype, value);
+        Err(unsupported_inference(self.id(), "fill"))
     }
 
     /// `y = x @ W^T + b` for `x` `[..., in]`, `W` `[out, in]` and an `F32`
@@ -1994,8 +2056,12 @@ macro_rules! with_backend_methods {
             op fn residual_add_backward(&self, x: &$crate::Tensor, y: &$crate::Tensor, grad_output: &$crate::Tensor) -> Result<($crate::Tensor, $crate::Tensor), $crate::OjasError>;
             op fn layer_norm_forward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor, eps: f32) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn channel_layer_norm_forward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor, eps: f32) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn group_norm_forward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor, groups: usize, eps: f32) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn gelu_erf_forward(&self, input: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn relu_forward(&self, input: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn concat(&self, inputs: &[&$crate::Tensor], axis: usize) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn slice(&self, input: &$crate::Tensor, axis: usize, start: usize, len: usize) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn fill(&self, shape: &[usize], dtype: $crate::DType, value: f32) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn linear_bias_forward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn broadcast_add_forward(&self, a: &$crate::Tensor, b: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn broadcast_mul_forward(&self, a: &$crate::Tensor, b: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
@@ -2799,8 +2865,12 @@ pub(crate) mod tests {
             op(backend.residual_add_backward(&t, &t, &t)),
             op(backend.layer_norm_forward(&t, &t, &t, 1e-6)),
             op(backend.channel_layer_norm_forward(&t, &t, &t, 1e-6)),
+            op(backend.group_norm_forward(&t, &t, &t, 1, 1e-5)),
             op(backend.gelu_erf_forward(&t)),
             op(backend.relu_forward(&t)),
+            op(backend.concat(&[&t, &t], 0)),
+            op(backend.slice(&t, 0, 0, 1)),
+            op(backend.fill(&[1], DType::F32, 0.0)),
             op(backend.linear_bias_forward(&t, &t, &t)),
             op(backend.broadcast_add_forward(&t, &t)),
             op(backend.broadcast_mul_forward(&t, &t)),
@@ -2878,8 +2948,12 @@ pub(crate) mod tests {
             "residual_add_backward",
             "layer_norm_forward",
             "channel_layer_norm_forward",
+            "group_norm_forward",
             "gelu_erf_forward",
             "relu_forward",
+            "concat",
+            "slice",
+            "fill",
             "linear_bias_forward",
             "broadcast_add_forward",
             "broadcast_mul_forward",
