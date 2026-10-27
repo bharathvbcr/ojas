@@ -8,6 +8,9 @@
 //!   cargo test -p ojas-metal --test sam_fixtures_metal -- --ignored --nocapture --test-threads=1
 //! ```
 //!
+//! The weight-bearing ops also need the converted SAM 3.1 checkpoint named
+//! by `OJAS_SAM_WEIGHTS` (see `ojas-oracle/tests/sam_fixtures_cpu.rs`).
+//!
 //! With the variable unset an ignored test FAILS: an unrun check must never
 //! report the same result as a passing one. Each test prints its rows as a
 //! Markdown table.
@@ -17,8 +20,10 @@
 use ojas_core::Budget;
 use ojas_metal::MetalBackend;
 use ojas_oracle::sam_fixtures::{
-    attention, axial_tables, gelu, group_norm, group_norm_header, layer_norm_affine_recovered,
-    rope_interleaved, skipped_ops, Fixture, OpReport, ENV_FIXTURES, ENV_GROUPNORM_FIXTURES,
+    attention, axial_tables, conv2d_rows, conv_transpose2d_rows, gelu, group_norm,
+    group_norm_header, layer_norm_affine_recovered, layer_norm_rows, linear_bias_rows,
+    rope_interleaved, skipped_ops, weighted_ops, Fixture, OpReport, ENV_FIXTURES,
+    ENV_GROUPNORM_FIXTURES, ENV_WEIGHTS, VIT_LN_EPS,
 };
 
 fn fixture() -> Fixture<'static> {
@@ -27,6 +32,14 @@ fn fixture() -> Fixture<'static> {
         .unwrap_or_else(|| panic!("{ENV_FIXTURES} is not set: this test cannot run"))
 }
 
+fn weights() -> Fixture<'static> {
+    Fixture::from_env_var(ENV_WEIGHTS)
+        .unwrap_or_else(|e| panic!("{ENV_WEIGHTS}: {e}"))
+        .unwrap_or_else(|| panic!("{ENV_WEIGHTS} is not set: this test cannot run"))
+}
+
+/// 8 GiB. The largest call is the neck's 3x3 convolution at 288x288, whose
+/// im2col matrix is 764 MB beside its 85 MB input and output.
 fn metal() -> MetalBackend {
     MetalBackend::new(Budget::new(1 << 33))
         .unwrap_or_else(|e| panic!("Metal device unavailable: {e:?}"))
@@ -125,7 +138,7 @@ fn layer_norm_rows_match_torch_with_the_affine_part_recovered() {
         &fx,
         "trunk.ln_pre.out.in",
         "trunk.ln_pre.out",
-        1e-5,
+        VIT_LN_EPS,
     )
     .unwrap()];
     for block in ["trunk.blocks.0", "trunk.blocks.7"] {
@@ -136,7 +149,7 @@ fn layer_norm_rows_match_torch_with_the_affine_part_recovered() {
                     &fx,
                     &format!("{block}.{norm}.in"),
                     &format!("{block}.{norm}"),
-                    1e-6,
+                    VIT_LN_EPS,
                 )
                 .unwrap(),
             );
@@ -150,13 +163,64 @@ fn layer_norm_rows_match_torch_with_the_affine_part_recovered() {
 fn the_ops_the_fixture_cannot_check_are_recorded() {
     let fx = fixture();
     let skipped = skipped_ops(&fx);
-    for s in &skipped {
-        println!("SKIPPED {}: {} ({})", s.op, s.tensors, s.reason);
-    }
     assert!(
         !skipped.is_empty(),
         "the fixture now holds weights: add the weight-bearing ops"
     );
+    let Some(w) =
+        Fixture::from_env_var(ENV_WEIGHTS).unwrap_or_else(|e| panic!("{ENV_WEIGHTS}: {e}"))
+    else {
+        for s in &skipped {
+            println!("SKIPPED {}: {} ({})", s.op, s.tensors, s.reason);
+        }
+        return;
+    };
+    let checked = weighted_ops(&w).unwrap();
+    for s in &skipped {
+        match checked.iter().find(|c| c.op == s.op) {
+            Some(c) => println!(
+                "WEIGHTS PRESENT {}: {} (from {ENV_WEIGHTS}); compared by the test {}, not by this one",
+                c.op, c.tensors, c.compared_by
+            ),
+            None => panic!(
+                "SKIPPED {}: {}: the weights file does not cover it",
+                s.op, s.tensors
+            ),
+        }
+    }
+    assert_eq!(
+        checked.len(),
+        skipped.len(),
+        "an op checked but never skipped"
+    );
+}
+
+#[test]
+#[ignore = "needs OJAS_SAM_FIXTURES and OJAS_SAM_WEIGHTS"]
+fn layer_norm_with_the_true_affine_matches_torch() {
+    let (fx, w, be) = (fixture(), weights(), metal());
+    show(&layer_norm_rows(&be, &fx, &w).unwrap());
+}
+
+#[test]
+#[ignore = "needs OJAS_SAM_FIXTURES and OJAS_SAM_WEIGHTS"]
+fn linear_bias_matches_torch() {
+    let (fx, w, be) = (fixture(), weights(), metal());
+    show(&linear_bias_rows(&be, &fx, &w).unwrap());
+}
+
+#[test]
+#[ignore = "needs OJAS_SAM_FIXTURES and OJAS_SAM_WEIGHTS"]
+fn conv2d_matches_torch() {
+    let (fx, w, be) = (fixture(), weights(), metal());
+    show(&conv2d_rows(&be, &fx, &w).unwrap());
+}
+
+#[test]
+#[ignore = "needs OJAS_SAM_FIXTURES and OJAS_SAM_WEIGHTS"]
+fn conv_transpose2d_matches_torch() {
+    let (fx, w, be) = (fixture(), weights(), metal());
+    show(&conv_transpose2d_rows(&be, &fx, &w).unwrap());
 }
 
 #[test]
