@@ -11,17 +11,6 @@ mod common;
 use common::*;
 use ojas_core::{relu_forward_dims, Autocast, Backend, Tensor};
 
-fn bits(v: &[f32]) -> Vec<u32> {
-    v.iter().map(|x| x.to_bits()).collect()
-}
-
-fn same_bits(what: &str, got: &Tensor, want: &Tensor) {
-    assert_eq!(got.shape(), want.shape(), "{what}: shape");
-    let (got, want) = (down(got), ok(what, want.to_f32_vec()));
-    assert_eq!(bits(&got), bits(&want), "{what}");
-    eprintln!("MAXERR {what}: 0e0 (bitwise)");
-}
-
 #[test]
 fn detector_ffn_shapes_match_cpu_bitwise() {
     let (m, c) = (metal(), cpu());

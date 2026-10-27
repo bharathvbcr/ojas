@@ -129,6 +129,27 @@ pub fn same_tensor(what: &str, got: &Tensor, want: &Tensor, atol: f32, rtol: f32
     close(what, &got, &want, atol, rtol);
 }
 
+/// The bit patterns of `v`, for exact comparisons.
+pub fn bits(v: &[f32]) -> Vec<u32> {
+    v.iter().map(|x| x.to_bits()).collect()
+}
+
+/// [`same_tensor`] with no tolerance: every output bit equals the
+/// reference's (a `-0.0` is not a `0.0`, a NaN payload must match). For the
+/// ops whose kernels form each value with the CPU's operations in the CPU's
+/// order.
+pub fn same_bits(what: &str, got: &Tensor, want: &Tensor) {
+    assert_eq!(got.shape(), want.shape(), "{what}: shape");
+    assert_eq!(
+        got.device(),
+        Some(ojas_core::BackendId::Metal),
+        "{what}: residency"
+    );
+    let (got, want) = (down(got), ok(what, want.to_f32_vec()));
+    assert_eq!(bits(&got), bits(&want), "{what}: not bit-identical");
+    eprintln!("MAXERR {what}: 0e0 (bitwise)");
+}
+
 /// A device-detected fault under the deferred-fault contract
 /// (`docs/metal-deferred-faults.md` §6): the op returns `Ok`, the next
 /// `sync` reports `NonFinite` naming `op`, and the sync after that is `Ok`.

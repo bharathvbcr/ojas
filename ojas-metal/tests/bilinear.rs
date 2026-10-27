@@ -14,11 +14,6 @@ use common::*;
 use ojas_core::{interpolate_bilinear_forward_dims, Backend, Tensor};
 use ojas_metal::MetalBackend;
 
-/// Bitwise in practice (`-ffp-contract=off`, the CPU's expressions); the
-/// bound only keeps a compiler change from becoming a spurious failure.
-const ATOL: f32 = 1e-6;
-const RTOL: f32 = 1e-6;
-
 fn check(m: &MetalBackend, what: &str, x: &Tensor, out: [usize; 2]) {
     let c = cpu();
     let dx = up(m, x);
@@ -27,7 +22,7 @@ fn check(m: &MetalBackend, what: &str, x: &Tensor, out: [usize; 2]) {
         let want = ok("cpu", c.interpolate_bilinear_forward(x, out, align));
         let got = ok("metal", m.interpolate_bilinear_forward(&dx, out, align));
         ok("sync", m.sync());
-        same_tensor(&tag, &got, &want, ATOL, RTOL);
+        same_bits(&tag, &got, &want);
     }
 }
 
@@ -108,7 +103,7 @@ fn offset_device_views_give_the_cpu_answer() {
             m.interpolate_bilinear_forward(&offset_view(&m, &x, 3, 21), [11, 9], align),
         );
         ok("sync", m.sync());
-        same_tensor(&format!("views align {align}"), &got, &want, ATOL, RTOL);
+        same_bits(&format!("views align {align}"), &got, &want);
     }
 }
 

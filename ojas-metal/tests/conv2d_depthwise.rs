@@ -14,10 +14,9 @@ use common::*;
 use ojas_core::{conv2d_forward_dims, Backend, Conv2dParams, OjasError, Tensor};
 use ojas_metal::MetalBackend;
 
-/// Bitwise in practice (`-ffp-contract=off`, the CPU's tap order); the bound
-/// only keeps a compiler change from becoming a spurious failure.
-const ATOL: f32 = 1e-6;
-const RTOL: f32 = 1e-6;
+/// Bound for the one case that is not on the direct kernel (see `check`).
+const GEMM_ATOL: f32 = 1e-6;
+const GEMM_RTOL: f32 = 1e-6;
 
 fn depthwise(c: usize, stride: [usize; 2], padding: [usize; 2]) -> Conv2dParams {
     Conv2dParams {
@@ -51,7 +50,13 @@ fn check(
         m.conv2d_forward(&up(m, &x), &up(m, &w), dev_bias.as_ref(), p),
     );
     ok("sync", m.sync());
-    same_tensor(what, &got, &want, ATOL, RTOL);
+    if c > 1 {
+        same_bits(what, &got, &want);
+    } else {
+        // One channel is `groups == 1`: the im2col GEMM path, which sums in
+        // another order than the CPU's direct loop, so not bitwise.
+        same_tensor(what, &got, &want, GEMM_ATOL, GEMM_RTOL);
+    }
 }
 
 #[test]
@@ -191,7 +196,7 @@ fn offset_device_views_give_the_cpu_answer() {
         ),
     );
     ok("sync", m.sync());
-    same_tensor("views", &got, &want, ATOL, RTOL);
+    same_bits("views", &got, &want);
 }
 
 #[test]
