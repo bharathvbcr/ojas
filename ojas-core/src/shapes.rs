@@ -1588,10 +1588,11 @@ pub fn concat_dims(inputs: &[&Tensor], axis: usize) -> Result<ConcatDims, OjasEr
     })
 }
 
-/// [`crate::Backend::fill`]: a `shape` with no zero extent whose element and
-/// byte counts fit `usize` ([`OjasError::OutOfRange`]; rank 0 is one
-/// element), a `dtype` of `F32`, `Bf16` or `U32` (`F16` is a
-/// [`OjasError::Dtype`] naming `F32`), and then the value, which must be
+/// [`crate::Backend::fill`]: refused in this order. A `shape` with a zero
+/// extent is [`OjasError::Shape`] (rank 0 is one element); then a `dtype` of
+/// `F16` is a [`OjasError::Dtype`] naming `F32` (`F32`, `Bf16` and `U32` are
+/// accepted); then element and byte counts that overflow `usize` are
+/// [`OjasError::OutOfRange`]; and then the value, which must be
 /// finite ([`OjasError::NonFinite`], as no op takes or stores a NaN or an
 /// infinity) and exactly representable in `dtype`: any finite `f32` for
 /// `F32`; one a bf16 holds bit for bit for `Bf16`; an integer in `0..2^32`
@@ -1599,15 +1600,15 @@ pub fn concat_dims(inputs: &[&Tensor], axis: usize) -> Result<ConcatDims, OjasEr
 /// rounded or truncated. Returns the element count.
 pub fn fill_dims(shape: &[usize], dtype: DType, value: f32) -> Result<usize, OjasError> {
     const OP: &str = FILL;
+    if shape.contains(&0) {
+        return Err(refuse(OP, "empty tensor"));
+    }
     if dtype == DType::F16 {
         return Err(OjasError::Dtype {
             op: OP,
             expected: DType::F32,
             got: dtype,
         });
-    }
-    if shape.contains(&0) {
-        return Err(refuse(OP, "empty tensor"));
     }
     let n = sized_product(OP, shape, dtype.size())?;
     if !value.is_finite() {
@@ -4511,6 +4512,12 @@ mod tests {
             }
         }
         dtype_err(fill_dims(&[2], DType::F16, 1.0), op, DType::F32, DType::F16);
+        // A zero extent is a shape error whatever the dtype, F16 included,
+        // and before an F16 fill's own refusal.
+        for dtype in [DType::F32, DType::Bf16, DType::U32, DType::F16] {
+            shape_err(fill_dims(&[2, 0], dtype, 1.0), op, "empty tensor");
+            shape_err(fill_dims(&[0], dtype, f32::NAN), op, "empty tensor");
+        }
         // Shape rules come first: a NaN in an empty fill reports the shape.
         shape_err(fill_dims(&[2, 0], DType::F32, f32::NAN), op, "empty tensor");
         shape_err(fill_dims(&[0], DType::U32, 0.5), op, "empty tensor");

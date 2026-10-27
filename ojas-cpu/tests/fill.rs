@@ -185,6 +185,8 @@ fn shapes_dtypes_and_budgets_are_refused_with_the_neighbours_variants() {
     // Two-byte elements: a bf16 fill of 2^62 elements has a byte count that
     // fits, so it reaches the allocator and the budget.
     assert_capacity(cpu.fill(&[1 << 62], DType::Bf16, 1.0));
+    // A zero extent is a shape error for every dtype, F16 included.
+    assert_shape(cpu.fill(&[2, 0], DType::F16, 1.0));
     // F16 has no host storage here.
     match cpu.fill(&[2], DType::F16, 1.0) {
         Err(OjasError::Dtype { op, expected, got }) => {
