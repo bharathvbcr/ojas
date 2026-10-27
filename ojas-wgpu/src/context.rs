@@ -5,7 +5,8 @@
 //! [`WgpuContext::sync`]. A [`Job`] collects the dispatches, clears and copies
 //! of one op and records them into the shared encoder only when the whole op
 //! validated, so a refused op leaves nothing behind. The encoder is submitted
-//! every [`FLUSH_AT`] dispatches and at every read.
+//! every [`FLUSH_AT`] dispatches, at every read, and once when a scratch
+//! reservation cannot fit beside scratch an earlier call still holds.
 //!
 //! Kernels that produce a non-finite value OR their op's bit into a 64-bit
 //! op mask held in two device words ([`FAULT_OPS`] ops) and keep going; the
@@ -54,6 +55,13 @@ use crate::{gpu_error, hal_backends, info_of};
 
 /// Dispatches recorded before the encoder is submitted without a read.
 pub const FLUSH_AT: usize = 64;
+
+/// Pending scratch bytes that submit the recorder beside [`FLUSH_AT`].
+/// `u64::MAX` leaves the common path alone: a call the budget cannot carry
+/// beside scratch already held still submits and retries once. Lower it
+/// through [`WgpuContext::set_scratch_flush_at`] to submit earlier. The
+/// [`FLUSH_AT`] sweep itself stays on ft-2c183b71.
+pub const SCRATCH_FLUSH_AT: u64 = u64::MAX;
 
 /// Bytes of one dispatch's parameter words: sixteen `u32`.
 const PARAM_BYTES: u64 = 64;
@@ -317,6 +325,10 @@ pub(crate) struct Scratch {
 struct Recorder {
     encoder: Option<wgpu::CommandEncoder>,
     scratch: Vec<Scratch>,
+    /// Bytes in `scratch`. One call's figure is what
+    /// [`ojas_core::Backend::optimizer_scratch_bytes`] bounds; a later call
+    /// that cannot reserve beside this submits and retries once.
+    scratch_bytes: u64,
     dispatches: usize,
     /// Host copy of the parameter ring's slots for the open encoder, written
     /// to the device just before it is submitted.
@@ -330,6 +342,13 @@ impl Recorder {
     /// ring. The caller has checked that a slot is free.
     fn slot(&mut self, words: &[u32; 16], stride: u64) -> u32 {
         put_slot(&mut self.params, &mut self.slots, words, stride)
+    }
+
+    fn note_scratch(&mut self) {
+        self.scratch_bytes = self
+            .scratch
+            .iter()
+            .fold(0u64, |n, s| n.saturating_add(s.bytes));
     }
 }
 
@@ -513,6 +532,9 @@ pub(crate) struct Inner {
     /// Dispatches recorded before a submit without a read: [`FLUSH_AT`]
     /// unless a benchmark changed it ([`WgpuContext::set_flush_at`]).
     flush_at: AtomicUsize,
+    /// Pending scratch bytes that force a submit beside [`FLUSH_AT`].
+    /// [`SCRATCH_FLUSH_AT`] (`u64::MAX`) leaves that to a budget refusal.
+    scratch_flush_at: AtomicU64,
     /// Live fault words, written by kernels: 0 and 1 the op mask (ops 0..31,
     /// then 32..63), 2 the first op + 1.
     fault: wgpu::Buffer,
@@ -760,6 +782,7 @@ impl WgpuContext {
                 binds: Mutex::new(BindCache::default()),
                 staging: Mutex::new(StagingCache::default()),
                 flush_at: AtomicUsize::new(FLUSH_AT),
+                scratch_flush_at: AtomicU64::new(SCRATCH_FLUSH_AT),
                 fault,
                 held,
                 hold: Mutex::new(None),
@@ -838,6 +861,14 @@ impl WgpuContext {
         self.inner
             .flush_at
             .store(dispatches.max(1), Ordering::Relaxed);
+    }
+
+    /// Pending scratch bytes that submit the recorder beside [`FLUSH_AT`].
+    /// [`SCRATCH_FLUSH_AT`] disables the threshold; a budget refusal still
+    /// submits. The [`FLUSH_AT`] sweep stays on ft-2c183b71.
+    #[doc(hidden)]
+    pub fn set_scratch_flush_at(&self, bytes: u64) {
+        self.inner.scratch_flush_at.store(bytes, Ordering::Relaxed);
     }
 
     /// One more operand compacted into scratch for want of an aligned
@@ -990,10 +1021,14 @@ impl WgpuContext {
             .counters
             .alloc_retries
             .fetch_add(1, Ordering::Relaxed);
+        // Scratch stays out of the pool until its commands are submitted, so
+        // a trim alone cannot free it. Submit that work first (one shot),
+        // then drop the pool, then give the device the same bounded wait.
+        let submitted = self.flush_pending_scratch();
         self.trim_pool();
         // Its own result is not this call's: the retry below reports.
         let _settled = self.inner.device.poll(wgpu::PollType::Wait {
-            submission_index: None,
+            submission_index: submitted,
             timeout: Some(std::time::Duration::from_secs(5)),
         });
         self.create_scoped(desc).map_err(|again| {
@@ -1418,22 +1453,52 @@ impl WgpuContext {
     }
 
     fn submit_locked(&self, rec: &mut Recorder) -> Option<wgpu::SubmissionIndex> {
-        let encoder = rec.encoder.take()?;
-        if rec.slots > 0 {
-            // Ordered after every earlier submission and before this one.
-            let used = rec.slots * self.inner.param_stride as usize;
-            self.inner
-                .queue()
-                .write_buffer(&self.inner.params, 0, &rec.params[..used]);
-            rec.slots = 0;
+        let encoder = rec.encoder.take();
+        let index = if let Some(encoder) = encoder {
+            if rec.slots > 0 {
+                // Ordered after every earlier submission and before this one.
+                let used = rec.slots * self.inner.param_stride as usize;
+                self.inner
+                    .queue()
+                    .write_buffer(&self.inner.params, 0, &rec.params[..used]);
+                rec.slots = 0;
+            }
+            let index = self.inner.queue().submit(std::iter::once(encoder.finish()));
+            self.inner.counters.submits.fetch_add(1, Ordering::Relaxed);
+            rec.dispatches = 0;
+            Some(index)
+        } else {
+            // No encoder: still release scratch. A ring flush can submit the
+            // commands that use a job's buffers before `commit` moves those
+            // buffers onto the recorder, and returning here used to leave
+            // the charge held until some later submit.
+            None
+        };
+        if !rec.scratch.is_empty() {
+            for s in rec.scratch.drain(..) {
+                self.give_back(s.buf, s.bytes);
+            }
+            rec.scratch_bytes = 0;
         }
-        let index = self.inner.queue().submit(std::iter::once(encoder.finish()));
-        self.inner.counters.submits.fetch_add(1, Ordering::Relaxed);
-        rec.dispatches = 0;
-        for s in rec.scratch.drain(..) {
-            self.give_back(s.buf, s.bytes);
+        index
+    }
+
+    /// True when an earlier call's scratch is still charged. The vec is the
+    /// source of truth; `scratch_bytes` only feeds the flush threshold.
+    fn recorder_holds_scratch(&self) -> bool {
+        !lock(&self.inner.rec).scratch.is_empty()
+    }
+
+    /// Submit the recorder when it holds scratch, so the charge drops and
+    /// the buffers return to the pool. Does not wait: the next submission
+    /// is ordered after this one. One call, no retry loop.
+    fn flush_pending_scratch(&self) -> Option<wgpu::SubmissionIndex> {
+        let mut rec = lock(&self.inner.rec);
+        if rec.scratch.is_empty() {
+            rec.scratch_bytes = 0;
+            return None;
         }
-        Some(index)
+        self.submit_locked(&mut rec)
     }
 
     fn wait(&self, index: wgpu::SubmissionIndex) -> Result<(), OjasError> {
@@ -1918,10 +1983,38 @@ impl Job<'_> {
     /// take and overwrite it. A value the host reads back in a later
     /// submission must live in a buffer the caller holds (a tensor from the
     /// backend's `out`), not in scratch.
+    ///
+    /// [`ojas_core::Backend::optimizer_scratch_bytes`] is an upper bound on
+    /// what one call reserves. Scratch from an earlier call stays charged
+    /// until that call is submitted, so a budget sized to the operands plus
+    /// one call's figure can refuse a later call. That refusal, and only
+    /// that one, submits the recorder and retries the reservation once. A
+    /// second refusal is the error. The failing call has not committed, so
+    /// its parameter is unchanged.
     pub fn scratch(&mut self, bytes: u64) -> Result<wgpu::Buffer, OjasError> {
+        match self.reserve_scratch(bytes) {
+            Ok(buf) => Ok(buf),
+            Err(err) => {
+                let tight = matches!(err, OjasError::CapacityExceeded { .. });
+                if !tight || !self.ctx.recorder_holds_scratch() {
+                    return Err(err);
+                }
+                self.ctx.flush_pending_scratch();
+                self.reserve_scratch(bytes)
+            }
+        }
+    }
+
+    fn reserve_scratch(&mut self, bytes: u64) -> Result<wgpu::Buffer, OjasError> {
         self.ctx.check_bytes(bytes, self.budget)?;
         let charge = self.budget.try_reserve(bytes)?;
-        let buf = self.ctx.alloc(bytes)?;
+        let buf = match self.ctx.alloc(bytes) {
+            Ok(buf) => buf,
+            Err(err) => {
+                drop(charge);
+                return Err(err);
+            }
+        };
         self.scratch.push(Scratch {
             buf: buf.clone(),
             bytes,
@@ -2022,12 +2115,15 @@ impl Job<'_> {
             }
         }
         rec.scratch.extend(self.scratch);
+        rec.note_scratch();
         rec.dispatches += dispatched;
         ctx.inner
             .counters
             .dispatches
             .fetch_add(dispatched as u64, Ordering::Relaxed);
-        if rec.dispatches >= ctx.inner.flush_at.load(Ordering::Relaxed) {
+        let scratch_at = ctx.inner.scratch_flush_at.load(Ordering::Relaxed);
+        let scratch_full = rec.scratch_bytes > 0 && rec.scratch_bytes >= scratch_at;
+        if rec.dispatches >= ctx.inner.flush_at.load(Ordering::Relaxed) || scratch_full {
             ctx.submit_locked(&mut rec);
         }
         Ok(())

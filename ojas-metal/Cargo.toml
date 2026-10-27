@@ -19,7 +19,7 @@ ojas-device = { path = "../ojas-device" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Sibling checkout: ojas and tessl sit side by side.
-tessl = { path = "../../tessl", optional = true }
+tessl = { path = "/Users/bharath/Code/research/tessl", optional = true }
 
 [dev-dependencies]
 ojas-cpu = { path = "../ojas-cpu" }

@@ -14,7 +14,7 @@ name = "gusset"
 crate-type = ["staticlib"]
 
 [dependencies]
-gusset = { package = "gusset", path = "../../../devtools/gusset/crates/gusset" }
+gusset = { package = "gusset", path = "/Users/bharath/Code/devtools/gusset/crates/gusset" }
 ojas-capi = { path = "../ojas-capi" }
 
 [dev-dependencies]

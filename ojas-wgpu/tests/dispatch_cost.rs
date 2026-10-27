@@ -396,18 +396,23 @@ fn a_nan_in_a_late_slot_group_is_found_and_scales_nothing() {
 /// A call the budget cannot carry beside the pending scratch submits it and
 /// goes on; the submit count rises with the bytes. Before: the third call
 /// returned `CapacityExceeded`.
+///
+/// The output is charged in `out` before either widen, and every output is
+/// kept. The cap is the operands, all eight outputs, and exactly one call's
+/// widened scratch. A second call's scratch does not fit beside that, so
+/// the widen refusal submits and retries. An extra `widen / 4` used to let
+/// two scratches stay resident, and the next `out` then failed with the
+/// recorder still full (`call 4 of 8`) because `out` is not scratch and
+/// does not submit.
 #[test]
-#[ignore = "BREAK: fails on current code until ft-81e49280 lands (wgpu scratch held until submit stacks across ops)"]
 fn pending_scratch_that_outgrows_the_budget_triggers_a_submit() {
     use ojas_core::{Budget, DType};
     let (rows, k, n) = (256usize, 1024usize, 1024usize);
     const CALLS: usize = 8;
     let widen = ((rows * k + n * k) * 4) as u64;
     let out = (rows * n * 4) as u64;
-    // Bf16 operands, every output kept, and room for one call's widened
-    // scratch and a little over: two calls' scratch does not fit.
     let operands = ((rows * k + n * k) * 2) as u64;
-    let cap = operands + CALLS as u64 * out + widen + widen / 4;
+    let cap = operands + CALLS as u64 * out + widen;
     let g = ojas_wgpu::WgpuBackend::open(Budget::new(cap)).expect("wgpu adapter");
     let bits = |seed: u64, shape: &[usize]| {
         let v = data(seed, shape.iter().product());

@@ -307,7 +307,6 @@ fn adamw_step_copies_no_state() {
 /// updated its parameter. Before: the third call returned `CapacityExceeded`
 /// with parameters 1 and 2 already updated in place.
 #[test]
-#[ignore = "BREAK: fails on current code until ft-81e49280 lands (wgpu scratch held until submit stacks across ops)"]
 fn consecutive_muon_steps_stay_inside_one_steps_scratch() {
     use ojas_core::{MuonNs5Config, OptimizerKind};
     let (rows, cols) = (2048usize, 6144usize);
@@ -341,4 +340,152 @@ fn consecutive_muon_steps_stay_inside_one_steps_scratch() {
     eprintln!("three muon steps: {submits} submits");
     assert!(submits >= 2, "scratch was never released: {submits}");
     g.sync().unwrap();
+}
+
+/// One step that cannot reserve its own scratch is refused once. The
+/// recorder holds nothing, so the refusal must not submit and try again.
+/// The parameter is still the uploaded value.
+#[test]
+fn a_step_whose_own_scratch_cannot_fit_leaves_the_parameter() {
+    use ojas_core::{MuonNs5Config, OptimizerKind};
+    let shape = [32usize, 32];
+    let bytes = (32 * 32 * 4) as u64;
+    let probe = fresh();
+    let scratch = probe
+        .optimizer_scratch_bytes(OptimizerKind::MuonNs5, 32, 32)
+        .unwrap()
+        .unwrap();
+    drop(probe);
+    assert!(scratch > 64, "scratch {scratch} is too small to refuse");
+    let cap = 3 * bytes + 64;
+    assert!(cap < 3 * bytes + scratch);
+    let g = WgpuBackend::open(Budget::new(cap)).expect("wgpu adapter");
+    let uploaded = host(1, &shape);
+    let before = uploaded.to_f32_vec().unwrap();
+    let mut param = g.upload(&uploaded).unwrap();
+    let grad = g.upload(&host(2, &shape)).unwrap();
+    let zeros = Tensor::zeros(&shape, ojas_core::DType::F32, host_budget()).unwrap();
+    let mut mom = g.upload(&zeros).unwrap();
+    let submits = g.context().stats().submits;
+    match g.muon_ns5_step(
+        &mut param,
+        &grad,
+        &mut mom,
+        MuonNs5Config::nanolab_default(),
+    ) {
+        Err(OjasError::CapacityExceeded { .. }) => {}
+        other => panic!("one hopeless step: {other:?}"),
+    }
+    assert_eq!(
+        g.context().stats().submits,
+        submits,
+        "a step that cannot fit must not submit in a loop"
+    );
+    // The three tensors fill the cap. Drop the ones the step did not write
+    // so the readback of `param` can reserve its host copy.
+    drop(grad);
+    drop(mom);
+    assert_eq!(g.download(&param).unwrap().to_f32_vec().unwrap(), before);
+}
+
+/// Eight in-place steps under a one-step scratch budget, on two backends
+/// with the same seeds. A buffer handed back at submit and reused by the
+/// next step has to keep queue order: the parameters match bit for bit.
+#[test]
+fn eight_tight_steps_match_across_two_backends() {
+    use ojas_core::{MuonNs5Config, OptimizerKind};
+    let shape = [32usize, 64];
+    let n = shape[0] * shape[1];
+    let bytes = (n * 4) as u64;
+    let probe = fresh();
+    let scratch = probe
+        .optimizer_scratch_bytes(OptimizerKind::MuonNs5, shape[0], shape[1])
+        .unwrap()
+        .unwrap();
+    drop(probe);
+    let cap = (3 * bytes + scratch) * 11 / 10;
+    let cfg = MuonNs5Config::nanolab_default();
+    let mut finals = Vec::new();
+    for _ in 0..2 {
+        let g = WgpuBackend::open(Budget::new(cap)).expect("wgpu adapter");
+        let mut param = g.upload(&host(7, &shape)).unwrap();
+        let grad = g.upload(&host(8, &shape)).unwrap();
+        let zeros = Tensor::zeros(&shape, ojas_core::DType::F32, host_budget()).unwrap();
+        let mut mom = g.upload(&zeros).unwrap();
+        for i in 0..8 {
+            g.muon_ns5_step(&mut param, &grad, &mut mom, cfg)
+                .unwrap_or_else(|e| panic!("step {i}: {e}"));
+        }
+        g.sync().unwrap();
+        finals.push(g.download(&param).unwrap().to_f32_vec().unwrap());
+    }
+    assert_eq!(finals[0], finals[1]);
+}
+
+/// The tight budget submits and reuses pooled scratch between steps. A
+/// roomy budget that waits after every step is the reference: queue-order
+/// reuse has to land on the same parameter bits. Two tight backends can
+/// agree with each other and both be wrong.
+#[test]
+fn eight_tight_steps_match_a_synced_roomy_run() {
+    use ojas_core::{Budget, MuonNs5Config, OptimizerKind};
+    let shape = [32usize, 64];
+    let n = shape[0] * shape[1];
+    let bytes = (n * 4) as u64;
+    let probe = fresh();
+    let scratch = probe
+        .optimizer_scratch_bytes(OptimizerKind::MuonNs5, shape[0], shape[1])
+        .unwrap()
+        .unwrap();
+    drop(probe);
+    let cfg = MuonNs5Config::nanolab_default();
+    let mut finals = Vec::new();
+    for (cap, wait) in [((3 * bytes + scratch) * 11 / 10, false), (1 << 30, true)] {
+        let g = WgpuBackend::open(Budget::new(cap)).expect("wgpu adapter");
+        let mut param = g.upload(&host(7, &shape)).unwrap();
+        let grad = g.upload(&host(8, &shape)).unwrap();
+        let zeros = Tensor::zeros(&shape, ojas_core::DType::F32, host_budget()).unwrap();
+        let mut mom = g.upload(&zeros).unwrap();
+        for i in 0..8 {
+            g.muon_ns5_step(&mut param, &grad, &mut mom, cfg)
+                .unwrap_or_else(|e| panic!("step {i} cap {cap}: {e}"));
+            if wait {
+                g.sync().unwrap();
+            }
+        }
+        g.sync().unwrap();
+        finals.push(g.download(&param).unwrap().to_f32_vec().unwrap());
+    }
+    assert_eq!(finals[0], finals[1]);
+}
+
+/// A scratch-byte threshold of 1 submits inside the step, before
+/// [`ojas_wgpu::FLUSH_AT`] dispatches would.
+#[test]
+fn scratch_flush_at_submits_before_the_dispatch_cap() {
+    use ojas_core::MuonNs5Config;
+    let g = fresh();
+    g.context().set_flush_at(10_000);
+    g.context().set_scratch_flush_at(1);
+    let shape = [32usize, 32];
+    let mut param = g.upload(&host(3, &shape)).unwrap();
+    let grad = g.upload(&host(4, &shape)).unwrap();
+    let zeros = Tensor::zeros(&shape, ojas_core::DType::F32, host_budget()).unwrap();
+    let mut mom = g.upload(&zeros).unwrap();
+    let before = g.context().stats();
+    g.muon_ns5_step(
+        &mut param,
+        &grad,
+        &mut mom,
+        MuonNs5Config::nanolab_default(),
+    )
+    .unwrap();
+    let after = g.context().stats();
+    let submits = after.submits - before.submits;
+    let dispatches = after.dispatches - before.dispatches;
+    assert!(submits >= 1, "threshold did not submit: {submits}");
+    assert!(
+        dispatches < ojas_wgpu::FLUSH_AT as u64,
+        "dispatch count {dispatches} would have flushed on its own"
+    );
 }
