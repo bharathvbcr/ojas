@@ -130,7 +130,7 @@ Each row is an op of the `Backend` trait (`ojas-core/src/backend.rs`). The Metal
 | **Accumulate Grad** | In-place add (finite check) | In-place / buffer | WGSL `accumulate` | `f32` | Accumulate step gradients into parameter gradient buffers |
 | **KV Cache Write** | Slice copy at timestep | Slice copy | WGSL `kv_cache` | `f32` | Write key/value token slices into time-major decode KV cache |
 | **AdamW** | Single-tensor torch order | `ojas_adamw_check` then `ojas_adamw_apply` (no copies) | WGSL `adam_check` then `adam_apply` (no copies) | `f32` | Decay first; f64 bias correction; $\varepsilon$ outside sqrt. A non-finite step writes nothing |
-| **Muon NS5** | 5-step Newton-Schulz | Newton-Schulz on tessl GEMM | WGSL GEMM | `f32`, or `bf16` on CPU and Metal (nanolab: bf16) | $aX + b(XX^T)X + c(XX^T)^2X$ |
+| **Muon NS5** | 5-step Newton-Schulz | Newton-Schulz on tessl GEMM | WGSL GEMM | `f32`, or `bf16` on CPU, Metal and wgpu (nanolab: bf16) | $aX + b(XX^T)X + c(XX^T)^2X$ |
 
 > [!WARNING]
 > `MetalBackend` and `WgpuBackend` attention refuse $d_{\text{head}} > 256$ with `OjasError::UnsupportedHeadDim` (`METAL_MAX_HEAD_DIM`, and `ATTENTION_MAX_HEAD_DIM` in `ojas-kernels/src/geometry.rs` for wgpu). The tiny Metal training step in `ojas-metal/src/gpu.rs` runs tessl `flash_attn_rows` and refuses above 64. Nothing is truncated. Causal SDPA accepts grouped-query head counts.

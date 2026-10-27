@@ -348,7 +348,7 @@
     HiddenMat --&gt; Muon
     OneD --&gt; AdamW</pre></figure>
 <ul>
-<li><strong>Matrices ($\text{rank} \ge 2$):</strong> Optimized via <strong>Muon NS5</strong> (Nesterov momentum, quintic Newton-Schulz iterate in <code>f32</code> in ojas across CPU, Metal and wgpu; nanolab baseline runs <code>bf16</code>).
+<li><strong>Matrices ($\text{rank} \ge 2$):</strong> Optimized via <strong>Muon NS5</strong> (Nesterov momentum, quintic Newton-Schulz iterate in <code>f32</code> by default in ojas, or <code>bf16</code> with <code>Ns5Precision::Bf16</code>, on CPU, Metal and wgpu; nanolab baseline runs <code>bf16</code>).
 </li>
 <li><strong>Vectors &amp; Embeddings ($\text{rank} &lt; 2$):</strong> Optimized via <strong>AdamW</strong> (PyTorch single-tensor order, decay first, $\varepsilon=10^{-8}$ outside square root).
 </li>

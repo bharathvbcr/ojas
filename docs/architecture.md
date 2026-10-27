@@ -258,7 +258,7 @@ flowchart TD
     OneD --> AdamW
 ```
 
-* **Matrices ($\text{rank} \ge 2$):** Optimized via **Muon NS5** (Nesterov momentum, quintic Newton-Schulz iterate in `f32` in ojas across CPU, Metal and wgpu; nanolab baseline runs `bf16`).
+* **Matrices ($\text{rank} \ge 2$):** Optimized via **Muon NS5** (Nesterov momentum, quintic Newton-Schulz iterate in `f32` by default in ojas, or `bf16` with `Ns5Precision::Bf16`, on CPU, Metal and wgpu; nanolab baseline runs `bf16`).
 * **Vectors & Embeddings ($\text{rank} < 2$):** Optimized via **AdamW** (PyTorch single-tensor order, decay first, $\varepsilon=10^{-8}$ outside square root).
 
 ---

@@ -647,7 +647,7 @@
         <a href="#roadmap" class="glass-card rounded-2xl p-5 block border border-brand-500/30 hover:border-brand-400/60 transition">
           <p class="text-[11px] font-mono uppercase tracking-widest text-brand-300 mb-2">Next</p>
           <h3 class="text-white font-semibold mb-2">Roadmap</h3>
-          <p class="text-xs text-slate-300 leading-relaxed">The model and trainer have landed. Next: a recorded full-size run, the measured GPU gaps, then bf16 and CUDA.</p>
+          <p class="text-xs text-slate-300 leading-relaxed">The model and trainer have landed. Next: a recorded full-size run, the measured GPU gaps, then bf16 accumulation and CUDA.</p>
         </a>
         <a href="#guide" class="glass-card rounded-2xl p-5 block hover:border-brand-500/40 transition">
           <p class="text-[11px] font-mono uppercase tracking-widest text-brand-300 mb-2">Reference</p>
@@ -736,7 +736,7 @@
           <h3 class="text-white font-semibold mb-3">Not yet</h3>
           <ul class="space-y-2 text-sm text-slate-300">
             <li class="flex gap-2"><span class="text-amber-400 shrink-0" aria-hidden="true">–</span>A recorded full-size (124M) training run, or GPU throughput that matches PyTorch. <a href="#doc-status" class="text-brand-300 hover:text-white underline underline-offset-2">See status</a>.</li>
-            <li class="flex gap-2"><span class="text-amber-400 shrink-0" aria-hidden="true">–</span>Large models and mixed precision: compute is f32 on every backend, and there is no bf16 path or activation checkpointing yet.</li>
+            <li class="flex gap-2"><span class="text-amber-400 shrink-0" aria-hidden="true">–</span>Large models and mixed precision: every backend accumulates in f32. bf16 exists as an optional autocast region and as <span class="font-mono">Bf16</span> operands to linear and attention, not as bf16 accumulation. Activation checkpointing exists per block (<span class="font-mono">ActivationCheckpoint::Blocks</span>, off by default).</li>
             <li class="flex gap-2"><span class="text-amber-400 shrink-0" aria-hidden="true">–</span>NVIDIA or AMD GPUs: CUDA and HIP are probes that are not backends.</li>
             <li class="flex gap-2"><span class="text-amber-400 shrink-0" aria-hidden="true">–</span>Automatic adaptation. The probe and plan are advice a caller applies; there is no router that picks a device or batch size for you yet.</li>
           </ul>
@@ -1079,8 +1079,8 @@
           <p class="text-[11px] font-mono uppercase tracking-widest text-slate-400">Later</p>
           <h2 class="text-2xl font-bold text-white mt-1 mb-3">Breadth</h2>
           <ul class="space-y-2 text-sm text-slate-300">
-            <li class="flex gap-2"><span class="text-slate-500 shrink-0">·</span><span>bf16 compute. Weights can be stored as BF16 and F16. Every backend computes in f32.</span></li>
-            <li class="flex gap-2"><span class="text-slate-500 shrink-0">·</span><span>Activation checkpointing, GELU, and ReLU². The activation that runs today is SiLU. Training v1 refuses grouped-query attention; nanolab's default is multi-head.</span></li>
+            <li class="flex gap-2"><span class="text-slate-500 shrink-0">·</span><span>bf16 accumulation. Weights can be stored as BF16 and F16, linear and attention take <span class="font-mono">Bf16</span> operands, and an optional autocast region rounds to bf16; every backend still accumulates in f32.</span></li>
+            <li class="flex gap-2"><span class="text-slate-500 shrink-0">·</span><span>Backward for GELU and ReLU, and ReLU². SiLU and sigmoid run forward and backward and have <span class="font-mono">Tape</span> ops. Erf-GELU and ReLU run forward only, on CPU and Metal. ReLU², tanh and tanh-GELU exist on no backend. Training v1 refuses grouped-query attention; nanolab's default is multi-head.</span></li>
             <li class="flex gap-2"><span class="text-slate-500 shrink-0">·</span><span>CUDA and HIP as backends. Each is a probe behind a feature and returns <span class="font-mono">NotCompiled</span> when the feature is off.</span></li>
             <li class="flex gap-2"><span class="text-slate-500 shrink-0">·</span><span>A tokenizer check past the twenty reference strings against tiktoken.</span></li>
           </ul>
@@ -1243,7 +1243,7 @@ cd go &amp;&amp; PKG_CONFIG_PATH="$PWD" go test -a -tags gusset_pkgconfig -count
               <div class="glass-card rounded-2xl p-5">
                 <h4 class="text-white font-semibold mb-2">Tensors &amp; dtypes</h4>
                 <ul class="text-xs text-slate-300 space-y-1.5 leading-relaxed">
-                  <li>DTypes <span class="font-mono">F32</span>, <span class="font-mono">Bf16</span>, <span class="font-mono">F16</span>, <span class="font-mono">U32</span>. Compute is f32 on every backend.</li>
+                  <li>DTypes <span class="font-mono">F32</span>, <span class="font-mono">Bf16</span>, <span class="font-mono">F16</span>, <span class="font-mono">U32</span>. Every backend accumulates in f32; linear and attention also take <span class="font-mono">Bf16</span> operands.</li>
                   <li>Zero-copy <span class="font-mono">narrow</span> and <span class="font-mono">view</span>; <span class="font-mono">permute</span> up to rank 8.</li>
                   <li>Shape, stride and byte math is <span class="font-mono">checked_mul</span>/<span class="font-mono">checked_add</span>.</li>
                 </ul>
@@ -1410,13 +1410,14 @@ cd go &amp;&amp; PKG_CONFIG_PATH="$PWD" go test -a -tags gusset_pkgconfig -count
                   <li class="flex gap-2"><span class="ok shrink-0" aria-hidden="true">✓</span>The Go boundary: device selection, panic poisoning, typed errors, a process-wide memory ceiling, close and reset.</li>
                   <li class="flex gap-2"><span class="ok shrink-0" aria-hidden="true">✓</span>Metal and wgpu report a device fault at the next sync, naming the first op that faulted.</li>
                   <li class="flex gap-2"><span class="ok shrink-0" aria-hidden="true">✓</span>A tiny training step on the CPU, compared with PyTorch 2.13, and a device-resident one on Metal.</li>
+                  <li class="flex gap-2"><span class="ok shrink-0" aria-hidden="true">✓</span>Activation checkpointing per block (<span class="font-mono">ActivationCheckpoint::Blocks</span>): the same gradient bits as without it, and a step past 2048 tokens that fits a budget the plain step refuses.</li>
                 </ul>
               </div>
               <div class="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-5">
                 <h4 class="text-white font-semibold mb-3">Not built, or not yet measured</h4>
                 <ul class="space-y-2 text-xs text-slate-300 leading-relaxed">
                   <li class="flex gap-2"><span class="text-amber-400 shrink-0" aria-hidden="true">–</span>A recorded full 124M nanolab training run. CI trains the tiny spec; <span class="font-mono">docs/status.md</span> records no larger run.</li>
-                  <li class="flex gap-2"><span class="text-amber-400 shrink-0" aria-hidden="true">–</span>bf16 compute, activation checkpointing, and GELU or ReLU² activations. Every backend computes in f32; SiLU is the activation that runs.</li>
+                  <li class="flex gap-2"><span class="text-amber-400 shrink-0" aria-hidden="true">–</span>bf16 accumulation, backward for GELU and ReLU, and ReLU². Every backend accumulates in f32 (bf16 is an optional autocast region and <span class="font-mono">Bf16</span> operands); SiLU and sigmoid run forward and backward, and erf-GELU and ReLU run forward only.</li>
                   <li class="flex gap-2"><span class="text-amber-400 shrink-0" aria-hidden="true">–</span>Running on NVIDIA or AMD hardware. CUDA is one affine kernel and HIP a copy probe, neither a backend. Builds off macOS are inferred, not run, and gusset refuses Windows.</li>
                   <li class="flex gap-2"><span class="text-amber-400 shrink-0" aria-hidden="true">–</span>The Qwen3.5 step as a backend. <span class="font-mono">ojas-qwen35</span> is a Metal-only provider over tessl, empty off macOS. Its GPU parity tests are ignored by default; when a session ran seven of them, six passed and the real-model test (<span class="font-mono">gpu_real_2b</span>) faulted at its gradient read-back.</li>
                 </ul>
