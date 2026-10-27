@@ -1,0 +1,134 @@
+/Users/bharath/Code/research/Lappi-decision/tools/mac_heavy.sh: line 448: /Users/bharath/Code/research/Lappi-decision/build/mac-heavy.lock.d/owner: No such file or directory
+mac_heavy: 2026-10-27T07:05:34Z '78-c3-bench' waiting 0s for the lock; holder: unknown
+mac_heavy: 2026-10-27T07:05:54Z '78-c3-bench' holds the lock (waited 20s; load 7.48, 1048 processes); running: cargo run --release -p ojas-metal --example attention_spiketrack_bench --manifest-path /Users/bharath/Code/research/ojas-78c/Cargo.toml -- 25 /Users/bharath/Code/research/ojas-78c/bench/results/2026-10-27-tiled-vs-padq xover
+    Finished `release` profile [optimized] target(s) in 1.21s
+     Running `target-78c/release/examples/attention_spiketrack_bench 25 /Users/bharath/Code/research/ojas-78c/bench/results/2026-10-27-tiled-vs-padq xover`
+device: Apple M5 Pro
+tessl runtime: tensorops true
+tessl kernel picked at D=32: Tiled
+start: GPU 12%, load 7.36 8.10 21.69
+25 reps of two passes over the arms after 5 warm-ups of each; rows ["x5200", "x10400", "x10624", "x15616"]
+yardstick dispatches (first call, repeat): scalar (6, 6), tiled (7, 7), pad-q (9, 9)
+
+## gate x5200: q [1,8,5184,32], k and v [1,8,5200,32]
+dispatches (first call, repeat): tiled (7, 7) (yardstick (7, 7)), pad-q (9, 9) (yardstick (9, 9))
+tiled vs pad-q, whole output: max abs diff 3.949e-7 (bound 1e-5), max abs 0.1401, non-finite 0
+
+| comparison | max abs diff | max abs ref | max abs diff / max abs ref | worst suite ratio | verdict |
+|---|---:|---:|---:|---:|---|
+| tiled vs CPU Exact, plane 0 | 3.688e-7 | 0.1215 | 3.035e-6 | 0.000 | pass |
+| pad-q vs CPU Exact, plane 0 | 4.470e-7 | 0.1215 | 3.679e-6 | 0.000 | pass |
+| tiled vs CPU Exact, plane 7 | 7.004e-7 | 0.1401 | 4.998e-6 | 0.000 | pass |
+| pad-q vs CPU Exact, plane 7 | 5.960e-7 | 0.1401 | 4.254e-6 | 0.000 | pass |
+
+## gate x10400: q [1,8,5184,32], k and v [1,8,10400,32]
+dispatches (first call, repeat): tiled (7, 7) (yardstick (7, 7)), pad-q (9, 9) (yardstick (9, 9))
+tiled vs pad-q, whole output: max abs diff 4.210e-7 (bound 1e-5), max abs 0.0886, non-finite 0
+
+| comparison | max abs diff | max abs ref | max abs diff / max abs ref | worst suite ratio | verdict |
+|---|---:|---:|---:|---:|---|
+| tiled vs CPU Exact, plane 0 | 3.614e-7 | 0.0857 | 4.218e-6 | 0.000 | pass |
+| pad-q vs CPU Exact, plane 0 | 4.135e-7 | 0.0857 | 4.827e-6 | 0.000 | pass |
+| tiled vs CPU Exact, plane 7 | 4.545e-7 | 0.0794 | 5.724e-6 | 0.000 | pass |
+| pad-q vs CPU Exact, plane 7 | 5.513e-7 | 0.0794 | 6.944e-6 | 0.000 | pass |
+
+## gate x10624: q [1,8,5184,32], k and v [1,8,10624,32]
+dispatches (first call, repeat): tiled (7, 7) (yardstick (7, 7)), pad-q (9, 9) (yardstick (9, 9))
+tiled vs pad-q, whole output: max abs diff 4.843e-7 (bound 1e-5), max abs 0.0910, non-finite 0
+
+| comparison | max abs diff | max abs ref | max abs diff / max abs ref | worst suite ratio | verdict |
+|---|---:|---:|---:|---:|---|
+| tiled vs CPU Exact, plane 0 | 3.949e-7 | 0.0821 | 4.810e-6 | 0.000 | pass |
+| pad-q vs CPU Exact, plane 0 | 4.321e-7 | 0.0821 | 5.264e-6 | 0.000 | pass |
+| tiled vs CPU Exact, plane 7 | 7.227e-7 | 0.0766 | 9.430e-6 | 0.000 | pass |
+| pad-q vs CPU Exact, plane 7 | 8.196e-7 | 0.0766 | 1.069e-5 | 0.000 | pass |
+
+## gate x15616: q [1,8,5184,32], k and v [1,8,15616,32]
+dispatches (first call, repeat): tiled (7, 7) (yardstick (7, 7)), pad-q (9, 9) (yardstick (9, 9))
+tiled vs pad-q, whole output: max abs diff 4.657e-7 (bound 1e-5), max abs 0.0763, non-finite 0
+
+| comparison | max abs diff | max abs ref | max abs diff / max abs ref | worst suite ratio | verdict |
+|---|---:|---:|---:|---:|---|
+| tiled vs CPU Exact, plane 0 | 3.427e-7 | 0.0688 | 4.984e-6 | 0.000 | pass |
+| pad-q vs CPU Exact, plane 0 | 3.986e-7 | 0.0688 | 5.797e-6 | 0.000 | pass |
+| tiled vs CPU Exact, plane 7 | 5.290e-7 | 0.0763 | 6.936e-6 | 0.000 | pass |
+| pad-q vs CPU Exact, plane 7 | 3.949e-7 | 0.0763 | 5.177e-6 | 0.000 | pass |
+
+## x5200: memory cross-attention m = 5200, ratio 1.0031
+
+| arm | n | min ms | median | p10 | p90 | max | p90 - p10 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| tiled (attention_forward_saving) | 25 | 11.729 | 11.886 | 11.763 | 12.410 | 12.648 | 0.647 |
+| tiled (attention_forward_saving) (repeat) | 25 | 11.771 | 11.882 | 11.784 | 12.513 | 13.089 | 0.729 |
+| tiled (attention_forward_saving) pooled | 50 | 11.729 | 11.886 | 11.775 | 12.410 | 13.089 | 0.635 |
+| pad-q (attention_forward) | 25 | 5.622 | 5.728 | 5.630 | 5.810 | 5.877 | 0.180 |
+| pad-q (attention_forward) (repeat) | 25 | 5.632 | 5.694 | 5.640 | 5.787 | 5.806 | 0.146 |
+| pad-q (attention_forward) pooled | 50 | 5.622 | 5.700 | 5.638 | 5.801 | 5.877 | 0.162 |
+
+median margin (pad-q - tiled) -6.186 ms; noise 0.635 ms (larger pooled p90 - p10); A-vs-A' median gap 0.034 ms (larger of the two arms); tiled faster in 0/50 paired samples, pad-q in 50/50
+winner beyond noise: pad-q (primary, bar = noise); pad-q (secondary, bar = A-vs-A' gap)
+contention: start GPU 94%, load 7.36 8.10 21.69; end GPU 96%, load 7.25 8.07 21.60
+
+## x10400: memory cross-attention m = 10400, ratio 2.0062
+
+| arm | n | min ms | median | p10 | p90 | max | p90 - p10 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| tiled (attention_forward_saving) | 25 | 23.180 | 23.534 | 23.300 | 24.122 | 24.808 | 0.822 |
+| tiled (attention_forward_saving) (repeat) | 25 | 23.149 | 23.625 | 23.258 | 24.516 | 24.902 | 1.258 |
+| tiled (attention_forward_saving) pooled | 50 | 23.149 | 23.583 | 23.289 | 24.167 | 24.902 | 0.878 |
+| pad-q (attention_forward) | 25 | 20.939 | 21.198 | 20.992 | 21.509 | 21.689 | 0.517 |
+| pad-q (attention_forward) (repeat) | 25 | 21.112 | 21.446 | 21.224 | 21.608 | 21.815 | 0.384 |
+| pad-q (attention_forward) pooled | 50 | 20.939 | 21.314 | 21.034 | 21.599 | 21.815 | 0.564 |
+
+median margin (pad-q - tiled) -2.270 ms; noise 0.878 ms (larger pooled p90 - p10); A-vs-A' median gap 0.248 ms (larger of the two arms); tiled faster in 0/50 paired samples, pad-q in 50/50
+winner beyond noise: pad-q (primary, bar = noise); pad-q (secondary, bar = A-vs-A' gap)
+contention: start GPU 0%, load 7.25 8.07 21.60; end GPU 98%, load 7.25 8.07 21.60
+
+## x10624: memory cross-attention m = 10624, ratio 2.0494
+
+| arm | n | min ms | median | p10 | p90 | max | p90 - p10 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| tiled (attention_forward_saving) | 25 | 23.601 | 23.988 | 23.716 | 24.743 | 25.722 | 1.028 |
+| tiled (attention_forward_saving) (repeat) | 25 | 23.590 | 24.144 | 23.755 | 24.645 | 25.352 | 0.890 |
+| tiled (attention_forward_saving) pooled | 50 | 23.590 | 24.032 | 23.721 | 24.645 | 25.722 | 0.924 |
+| pad-q (attention_forward) | 25 | 21.843 | 22.115 | 21.918 | 22.570 | 23.313 | 0.652 |
+| pad-q (attention_forward) (repeat) | 25 | 21.819 | 22.146 | 21.927 | 22.584 | 22.714 | 0.657 |
+| pad-q (attention_forward) pooled | 50 | 21.819 | 22.144 | 21.920 | 22.570 | 23.313 | 0.650 |
+
+median margin (pad-q - tiled) -1.888 ms; noise 0.924 ms (larger pooled p90 - p10); A-vs-A' median gap 0.156 ms (larger of the two arms); tiled faster in 0/50 paired samples, pad-q in 50/50
+winner beyond noise: pad-q (primary, bar = noise); pad-q (secondary, bar = A-vs-A' gap)
+contention: start GPU 0%, load 7.25 8.07 21.60; end GPU 99%, load 7.23 8.05 21.51
+
+## x15616: memory cross-attention m = 15616, ratio 3.0123
+
+| arm | n | min ms | median | p10 | p90 | max | p90 - p10 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| tiled (attention_forward_saving) | 25 | 34.881 | 35.261 | 35.103 | 36.122 | 37.037 | 1.019 |
+| tiled (attention_forward_saving) (repeat) | 25 | 34.769 | 35.260 | 34.980 | 35.978 | 36.394 | 0.997 |
+| tiled (attention_forward_saving) pooled | 50 | 34.769 | 35.261 | 35.082 | 36.043 | 37.037 | 0.961 |
+| pad-q (attention_forward) | 25 | 47.392 | 47.715 | 47.398 | 48.201 | 48.581 | 0.803 |
+| pad-q (attention_forward) (repeat) | 25 | 47.061 | 47.715 | 47.242 | 48.281 | 48.845 | 1.039 |
+| pad-q (attention_forward) pooled | 50 | 47.061 | 47.715 | 47.398 | 48.238 | 48.845 | 0.840 |
+
+median margin (pad-q - tiled) 12.454 ms; noise 0.961 ms (larger pooled p90 - p10); A-vs-A' median gap 0.001 ms (larger of the two arms); tiled faster in 50/50 paired samples, pad-q in 0/50
+winner beyond noise: tiled (primary, bar = noise); tiled (secondary, bar = A-vs-A' gap)
+contention: start GPU 0%, load 7.23 8.05 21.51; end GPU 99%, load 7.23 8.05 21.51
+
+## verdict table
+| m | ratio | tiled median ms | pad-q median ms | noise ms | A-vs-A' gap ms | winner (primary) | winner (secondary) | dispatches tiled / pad-q (first, repeat) |
+|---:|---:|---:|---:|---:|---:|---|---|---|
+| 5200 | 1.0031 | 11.886 | 5.700 | 0.635 | 0.034 | pad-q | pad-q | (7, 7) / (9, 9) |
+| 10400 | 2.0062 | 23.583 | 21.314 | 0.878 | 0.248 | pad-q | pad-q | (7, 7) / (9, 9) |
+| 10624 | 2.0494 | 24.032 | 22.144 | 0.924 | 0.156 | pad-q | pad-q | (7, 7) / (9, 9) |
+| 15616 | 3.0123 | 35.261 | 47.715 | 0.961 | 0.001 | tiled | tiled | (7, 7) / (9, 9) |
+
+R1: pad-q wins beyond noise up to m = 10624 (ratio 2.0494); tiled wins beyond noise from m = 15616 (ratio 3.0123); the ties between them: 
+R1 routing bound (pad-q only where it beat tiled beyond noise; ties favour tiled): ratio 2.0494, below tiled's first win 3.0123
+crossover point estimate (zero of the piecewise-linear raw-median margin, inferred): At(2.176167355212402)
+R2: crossover ratio 2.1762 is inside [2.05, 2.5]: Fable's chosen range 2.25-2.5 STANDS; gap to the range ends: -0.0738 from 2.25, -0.3238 from 2.5; the bracket is (m = 10624 (ratio 2.0494), m = 15616 (ratio 3.0123)]
+R3: not triggered
+R4: not triggered at m = 5200 (winner pad-q, raw margin -6.186 ms)
+tie-break: ties favour tiled (7 dispatches against pad-q's 9); scratch is not measured here, see summary.md
+
+end: GPU 0%, load 7.23 8.05 21.51
+mac_heavy: 2026-10-27T07:06:11Z '78-c3-bench' finished with exit 0
