@@ -17,7 +17,7 @@ mod common;
 use std::time::Instant;
 
 use common::*;
-use ojas_core::{AttentionOpts, Backend, Tensor};
+use ojas_core::{AttentionOpts, Backend, OjasError, Tensor};
 use ojas_metal::MetalBackend;
 
 fn tol(tk: usize) -> f32 {
@@ -191,15 +191,16 @@ fn the_route_is_taken_for_plain_self_attention_and_for_nothing_else() {
 
     let bias = up(&m, &rand(&[1, 2, 64, 64], 4, 1.0));
     let lens = up(&m, &host_u32(&[64], &[1]));
-    // Tq < Tk is routed (Q is padded), Tq > Tk and a Tk past 8 Tq are not.
-    let q_short = up(&m, &rand(&[1, 2, 17, 64], 5, 1.0));
+    // Tq < Tk is routed up to Tk = 2.25 Tq (Q is padded); Tq > Tk and a Tk past
+    // the bound are not.
+    let q_short = up(&m, &rand(&[1, 2, 40, 64], 5, 1.0));
     let q_long = up(&m, &rand(&[1, 2, 80, 64], 5, 1.0));
     let q_tiny = up(&m, &rand(&[1, 2, 4, 64], 5, 1.0));
     let routed_cross = dispatches_of(&m, &q_short, &dk, &dv, AttentionOpts::default());
     if m.has_tensorops() {
         assert!(
             routed_cross > general,
-            "Tq 17 over Tk 64 routes: {routed_cross} vs general {general}"
+            "Tq 40 over Tk 64 routes: {routed_cross} vs general {general}"
         );
     }
     let (q128, k128, v128) = (
@@ -271,7 +272,7 @@ fn the_route_is_taken_for_plain_self_attention_and_for_nothing_else() {
             dispatches_of(&m, &q_long, &dk, &dv, AttentionOpts::default()),
         ),
         (
-            "Tk more than 8x Tq",
+            "Tk past the pad bound",
             dispatches_of(&m, &q_tiny, &dk, &dv, AttentionOpts::default()),
         ),
         (
@@ -565,100 +566,161 @@ fn routed_cross_attention_matches_the_general_kernel_at_the_memory_shapes() {
     }
 }
 
-/// The ratio bound: at `Tk = 8 Tq` the call routes, one key more and it does
-/// not, and both agree with the CPU. Routing is read off the dispatches of
-/// the call against the saving form (never routed) of the same shape.
-#[test]
-fn the_pad_ratio_boundary_routes_at_8_and_not_at_8_plus_one_key() {
-    let (m, c) = (metal(), cpu());
-    for d in [32usize, 64] {
-        for (tq, tk, routes) in [
-            (4usize, 32usize, true),
-            (4, 33, false),
-            (9, 72, true),
-            (9, 73, false),
-        ] {
-            let q = rand(&[1, 2, tq, d], 230 + d as u64, 1.0);
-            let k = rand(&[1, 2, tk, d], 231 + d as u64, 1.0);
-            let v = rand(&[1, 2, tk, d], 232 + d as u64, 1.0);
-            let want = ok(
-                "cpu",
-                c.attention_forward(&q, &k, &v, AttentionOpts::default()),
-            );
-            let (dq, dk, dv) = (up(&m, &q), up(&m, &k), up(&m, &v));
-            ok("sync", m.sync());
-            let before = m.dispatches();
-            let got = ok(
-                "metal",
-                m.attention_forward(&dq, &dk, &dv, AttentionOpts::default()),
-            );
-            ok("sync", m.sync());
-            let plain = m.dispatches() - before;
-            let before = m.dispatches();
-            drop(ok(
-                "scalar",
-                m.attention_forward_saving(&dq, &dk, &dv, AttentionOpts::default()),
-            ));
-            ok("sync", m.sync());
-            let scalar = m.dispatches() - before;
-            if m.has_tensorops() {
-                assert_eq!(
-                    plain > scalar,
-                    routes,
-                    "D{d} Tq {tq} Tk {tk}: {plain} dispatches, scalar kernel {scalar}"
-                );
-            }
-            same_tensor(&format!("D{d} {tq}x{tk}"), &got, &want, tol(tk), 1e-4);
-        }
+fn opts<'a>(causal: bool, bias: Option<&'a Tensor>, lens: Option<&'a Tensor>) -> AttentionOpts<'a> {
+    AttentionOpts {
+        causal,
+        window: None,
+        bias,
+        key_lens: lens,
     }
 }
 
-/// An empty call (zero query and key rows, or an empty query over keys) must
-/// not route: the padded route has no rows to run, and the worker refuses it.
-/// The inference form does what the general kernel does, and agrees with the
-/// CPU's empty output where it returns one. A device tensor cannot be empty
-/// by upload, so the operands are zero-row views of a real buffer.
+/// One dispatcher per shape class, pinned on both sides of each bound.
+/// `Tk / Tq <= 2.25` at head dim 32 or 64 with no bias or lengths takes the
+/// pad route; beyond it, and at any ratio with a bias, key lengths or head
+/// dim 16, the inference form takes the split-K tiled kernel at head dim 16
+/// and 32 (one dispatch more than the scalar kernel) and the scalar kernel at
+/// head dim 64. Which one ran is read off the dispatches of the call against
+/// the same call made `causal` (always scalar) and against the saving form
+/// (never routed), and every call is checked against the CPU.
 #[test]
-fn empty_calls_return_empty_outputs_as_the_cpu_does() {
+fn the_pad_ratio_bound_and_the_tiled_kernel_split_the_shape_classes() {
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum Ran {
+        Pad,
+        Tiled,
+        Scalar,
+    }
     let (m, c) = (metal(), cpu());
+    // (head dim, Tq, Tk, bias, lens, expected). 2.25 Tq is exactly 9 for Tq 4.
+    let cases = [
+        (32usize, 4usize, 9usize, false, false, Ran::Pad),
+        (32, 4, 10, false, false, Ran::Tiled),
+        (64, 4, 9, false, false, Ran::Pad),
+        (64, 4, 10, false, false, Ran::Scalar),
+        (32, 8, 18, false, false, Ran::Pad),
+        (32, 8, 19, false, false, Ran::Tiled),
+        (32, 40, 64, false, false, Ran::Pad),
+        (32, 40, 64, true, false, Ran::Tiled),
+        (32, 40, 64, false, true, Ran::Tiled),
+        (16, 40, 64, false, false, Ran::Tiled),
+        (16, 40, 64, true, false, Ran::Tiled),
+        (64, 40, 64, true, false, Ran::Scalar),
+    ];
+    for (i, (d, tq, tk, with_bias, with_lens, expected)) in cases.into_iter().enumerate() {
+        let tag = format!("D{d} {tq}x{tk} bias {with_bias} lens {with_lens}");
+        let seed = 230 + 5 * i as u64;
+        let q = rand(&[2, 2, tq, d], seed, 1.0);
+        let k = rand(&[2, 2, tk, d], seed + 1, 1.0);
+        let v = rand(&[2, 2, tk, d], seed + 2, 1.0);
+        let bias = with_bias.then(|| rand(&[2, 1, tq, tk], seed + 3, 1.0));
+        let lens = with_lens.then(|| host_u32(&[tk as u32, (tk / 2) as u32], &[2]));
+        let want = ok(
+            "cpu",
+            c.attention_forward(&q, &k, &v, opts(false, bias.as_ref(), lens.as_ref())),
+        );
+        let (dq, dk, dv) = (up(&m, &q), up(&m, &k), up(&m, &v));
+        let dbias = bias.as_ref().map(|t| up(&m, t));
+        let dlens = lens.as_ref().map(|t| up(&m, t));
+        let count = |f: &dyn Fn()| {
+            ok("sync", m.sync());
+            let before = m.dispatches();
+            f();
+            ok("sync", m.sync());
+            m.dispatches() - before
+        };
+        let plain = count(&|| {
+            drop(ok(
+                "inference",
+                m.attention_forward(&dq, &dk, &dv, opts(false, dbias.as_ref(), dlens.as_ref())),
+            ));
+        });
+        let out = ok(
+            "inference",
+            m.attention_forward(&dq, &dk, &dv, opts(false, dbias.as_ref(), dlens.as_ref())),
+        );
+        let scalar = count(&|| {
+            drop(ok(
+                "scalar",
+                m.attention_forward_saving(
+                    &dq,
+                    &dk,
+                    &dv,
+                    opts(true, dbias.as_ref(), dlens.as_ref()),
+                ),
+            ));
+        });
+        let saving = count(&|| {
+            drop(ok(
+                "saving",
+                m.attention_forward_saving(
+                    &dq,
+                    &dk,
+                    &dv,
+                    opts(false, dbias.as_ref(), dlens.as_ref()),
+                ),
+            ));
+        });
+        if m.has_tensorops() {
+            let ran = if plain == scalar {
+                Ran::Scalar
+            } else if plain == scalar + 1 {
+                Ran::Tiled
+            } else {
+                Ran::Pad
+            };
+            assert_eq!(
+                ran, expected,
+                "{tag}: {plain} dispatches; scalar {scalar}, saving form {saving}"
+            );
+            // The saving form never routes: tiled at head dim 16 and 32,
+            // scalar at 64.
+            assert_eq!(saving, if d == 64 { scalar } else { scalar + 1 }, "{tag}");
+        }
+        same_tensor(&tag, &out, &want, tol(tk), 1e-4);
+    }
+}
+
+/// Metal refuses every empty operand before it routes (backend.rs `arg`:
+/// "empty tensor", `OjasError::Shape` under the called op), where the CPU
+/// returns an empty output; the difference is tracked on a card and not
+/// changed here. A device tensor cannot be empty by upload, so the operands
+/// are zero-row views of a real buffer. Both forms refuse alike, at both
+/// routed head dims, whichever operand is empty.
+#[test]
+fn empty_operands_are_refused_with_a_shape_error_before_routing() {
+    let m = metal();
     for d in [32usize, 64] {
         let base = up(&m, &rand(&[1, 2, 4, d], 240, 1.0));
         // Row-major strides of [1, 2, 0, d].
-        let empty = base.view(&[1, 2, 0, d], &[0, 0, d, 1], 0);
-        let empty = ok("view", empty);
+        let empty = ok("view", base.view(&[1, 2, 0, d], &[0, 0, d, 1], 0));
         let real = up(&m, &rand(&[1, 2, 64, d], 241, 1.0));
-        let host_empty = host(&[], &[1, 2, 0, d]);
-        let host_real = rand(&[1, 2, 64, d], 241, 1.0);
-        // Tq = Tk = 0, then Tq = 0 over 64 keys.
-        let cases = [
-            ("0x0", &empty, &empty, &empty, &host_empty, &host_empty),
-            ("0x64", &empty, &real, &real, &host_empty, &host_real),
-        ];
-        for (what, q, k, v, hq, hk) in cases {
-            // The inference form must do what the general kernel does with
-            // the same operands (it must not route), and what it does must
-            // not contradict the CPU's empty output.
-            let got = m
-                .attention_forward(q, k, v, AttentionOpts::default())
-                .map(|t| t.shape().to_vec());
-            let general = m
-                .attention_forward_saving(q, k, v, AttentionOpts::default())
-                .map(|(t, _)| t.shape().to_vec());
-            match (&got, &general) {
-                (Ok(a), Ok(b)) => assert_eq!(a, b, "D{d} {what}"),
-                (Err(a), Err(b)) => assert_eq!(
-                    std::mem::discriminant(a),
-                    std::mem::discriminant(b),
-                    "D{d} {what}: {a:?} vs {b:?}"
+        for (what, q, k, v) in [
+            ("0x0", &empty, &empty, &empty),
+            ("0x64", &empty, &real, &real),
+        ] {
+            let inference = m.attention_forward(q, k, v, AttentionOpts::default());
+            assert!(
+                matches!(
+                    inference,
+                    Err(OjasError::Shape {
+                        op: "attention_forward",
+                        ..
+                    })
                 ),
-                other => panic!("D{d} {what}: the two forms disagree: {other:?}"),
-            }
-            if let (Ok(shape), Ok(want)) = (
-                &got,
-                c.attention_forward(hq, hk, hk, AttentionOpts::default()),
-            ) {
-                assert_eq!(shape.as_slice(), want.shape(), "D{d} {what} vs the CPU");
-            }
+                "D{d} {what}: {inference:?}"
+            );
+            let saving = m.attention_forward_saving(q, k, v, AttentionOpts::default());
+            assert!(
+                matches!(
+                    saving,
+                    Err(OjasError::Shape {
+                        op: "attention_forward_saving",
+                        ..
+                    })
+                ),
+                "D{d} {what} (saving): {saving:?}"
+            );
             ok("sync", m.sync());
         }
     }

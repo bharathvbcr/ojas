@@ -2324,10 +2324,14 @@ impl Worker {
             )));
         }
         let tiled = g.splits > 0;
-        if tiled && (g.causal || g.window != 0 || !matches!(g.d, 16 | 32) || g.per_split == 0) {
+        // The ranges must cover every key, or some would be dropped silently.
+        let covers = u64::from(g.splits) * u64::from(g.per_split) >= u64::from(g.kv_len);
+        if tiled
+            && (g.causal || g.window != 0 || !matches!(g.d, 16 | 32) || g.per_split == 0 || !covers)
+        {
             return Err(metal_err(format!(
-                "{op}: the split-K kernel runs non-causal head dim 16 or 32, not causal {} window {} d {}",
-                g.causal, g.window, g.d
+                "{op}: the split-K kernel runs non-causal head dim 16 or 32 over ranges that cover every key, not causal {} window {} d {} splits {} x {} for {} keys",
+                g.causal, g.window, g.d, g.splits, g.per_split, g.kv_len
             )));
         }
         let o = self.fresh(qv.n)?;

@@ -677,8 +677,12 @@ impl MetalBackend {
     }
 
     /// General attention forward after its validator: the output and the
-    /// `[B, H, Tq]` row log-sum-exp. Nothing beyond the two outputs is
-    /// charged; grouped-query heads read their KV head in place.
+    /// `[B, H, Tq]` row log-sum-exp. A non-causal, unwindowed call at head dim
+    /// 16 or 32 runs the split-K tiled kernels and is charged their partial
+    /// results (`splits * B * H * Tq * (D + 2)` values) as scratch; when the
+    /// budget cannot hold them it runs the scalar `ojas_attn_gen_fwd`, which
+    /// is charged nothing beyond the two outputs, as is every other call.
+    /// Grouped-query heads read their KV head in place.
     fn attn_forward(
         &self,
         op: &'static str,
@@ -1128,19 +1132,29 @@ fn conv_geom(op: &'static str, d: &Conv2dDims) -> Res<ConvGeom> {
 /// beyond these (256, 512) have no measurement here.
 const ENCODER_ATTN_HEAD_DIMS: [usize; 2] = [32, 64];
 
-/// The longest `Tk / Tq` a cross-attention is routed at. The route pads Q to
-/// `Tk` rows, so it computes `Tk^2` scores where the general kernel computes
-/// `Tq * Tk`; the tiled kernel's throughput is roughly 40x the scalar
-/// kernel's, so it wins up to a ratio of the order of 10 and loses beyond.
-const ENCODER_ATTN_MAX_PAD_RATIO: usize = 8;
+/// The longest `Tk / Tq` a cross-attention is routed to `encoder_attn` at;
+/// beyond it the split-K tiled kernel (`ojas_xattn_part_dD`) runs it.
+///
+/// The pad route pads Q to `Tk` rows, so it computes `Tk^2` scores where the
+/// tiled kernel computes `Tq * Tk`: pad-q wins while the waste is small and
+/// loses as `Tk / Tq` grows. Measured interleaved at q `[1, 8, 5184, 32]`
+/// (`bench/results/2026-10-27-tiled-vs-padq/summary.md`, Lane C3, 50 paired
+/// samples each): pad-q wins at ratios 1.003, 2.006 and 2.049 (m 5200, 10400,
+/// 10624) and tiled wins at 3.012 (m 15616); a two-parameter fit puts the
+/// crossover near 2.23. SpikeTrack's ratio is `F + P * 16 / 5184` for F frames
+/// of memory and P prompt tokens, so F = 2 spans 2.003 to 2.049 and F = 3
+/// starts at 3.0: any bound in that gap routes every SAM shape the same way,
+/// and 2.25 is the fit's neighbour. It is exact in binary, so the comparison
+/// has no rounding at the bound. Rerun that bench whenever either kernel
+/// changes, and delete the loser once one kernel wins at every m.
+const ENCODER_ATTN_MAX_PAD_RATIO: f64 = 2.25;
 
 /// Whether `attention_forward` runs on tessl's tiled `encoder_attn` rather
 /// than `ojas_attn_gen_fwd`: bidirectional attention over equal head counts
 /// with no bias, key lengths or window, at one of [`ENCODER_ATTN_HEAD_DIMS`],
 /// with `0 < Tq <= Tk <= ENCODER_ATTN_MAX_PAD_RATIO * Tq` (a shorter Q is
-/// padded; an empty call takes the general kernel, which returns an empty
-/// output),
-/// on a device with TensorOps, with one head's `Tk`-row plane addressable in
+/// padded; Metal refuses an empty operand before routing, so the `Tq > 0` term
+/// is defensive), on a device with TensorOps, with one head's `Tk`-row plane addressable in
 /// `i32` as tessl's matrix-unit views require and the padded tensor within
 /// the kernels' 32-bit element indexing (the permutes index it in `u32`).
 /// Everything else keeps the general kernel, which refuses what it cannot
@@ -1162,10 +1176,7 @@ fn routes_to_encoder_attn(dims: &AttentionDims, tensorops: bool) -> bool {
         .is_some_and(|n| u32::try_from(n).is_ok());
     let padded_ok = dims.q_len > 0
         && dims.q_len <= dims.kv_len
-        && dims
-            .q_len
-            .checked_mul(ENCODER_ATTN_MAX_PAD_RATIO)
-            .is_some_and(|reach| dims.kv_len <= reach);
+        && dims.kv_len as f64 <= ENCODER_ATTN_MAX_PAD_RATIO * dims.q_len as f64;
     tensorops
         && !dims.causal
         && dims.window.is_none()
@@ -1976,11 +1987,15 @@ impl Backend for MetalBackend {
     ///
     /// Not bit-identical to the saving form for unmasked attention at head
     /// dim 32 or 64 on a TensorOps device, self- or cross-attention with
-    /// `Tq <= Tk <= 8 Tq` (`routes_to_encoder_attn`): that call runs tessl's
-    /// tiled `encoder_attn`, 26x faster at `[1, 16, 5184, 64]` (22.8 ms
-    /// against 606 ms), whose sums add in another order. The
-    /// two forms agree within the forward tolerance (1.5e-7 measured at the
-    /// SAM shapes); every other call is bit-identical to the saving form.
+    /// `0 < Tq <= Tk <= 2.25 Tq` (`routes_to_encoder_attn`): that call runs
+    /// tessl's tiled `encoder_attn`, 26x faster at `[1, 16, 5184, 64]` (22.8
+    /// ms against 606 ms), whose sums add in another order. The two forms
+    /// agree within the forward tolerance (1.5e-7 measured at the SAM
+    /// shapes). Every other call runs the same kernel as the saving form and
+    /// is bit-identical to it, with one caveat: which kernel a head dim 16 or
+    /// 32 call runs, the split-K tiled one or the scalar one, depends on the
+    /// budget (the tiled one needs room for its partials), and the two agree
+    /// to rounding, not bit for bit.
     fn attention_forward(
         &self,
         q: &Tensor,
@@ -2001,8 +2016,12 @@ impl Backend for MetalBackend {
             .map(|(output, _)| output)
     }
 
-    /// Bidirectional and cross attention, a bias and key lengths on the
-    /// scalar `ojas_attn_gen_fwd`. There is no backward on Metal yet:
+    /// Bidirectional and cross attention, a bias and key lengths: the split-K
+    /// tiled kernels (`ojas_xattn_part_dD`) for a non-causal call at head dim
+    /// 16 or 32, the scalar `ojas_attn_gen_fwd` for causal, windowed and other
+    /// head dims, or when the budget cannot hold the tiled partials (so the
+    /// bits of a head dim 16 or 32 call can depend on the budget; the values
+    /// agree to rounding). There is no backward on Metal yet:
     /// `attention_backward` is `Unsupported`, as the default says.
     fn attention_forward_saving(
         &self,
@@ -4332,9 +4351,10 @@ mod tests {
             ),
             "head dim 32 routes"
         );
-        // Cross-attention pads Q: the memory encoder's lengths route, up to a
-        // Tk of 8 Tq.
-        for kv_len in [5200usize, 10400, 36544] {
+        // Cross-attention pads Q: the memory encoder's one-frame and
+        // two-frame lengths route (F = 2 spans ratios 2.003 to 2.049), up to a
+        // Tk of 2.25 Tq; three frames (F = 3, ratio 3.01) do not.
+        for kv_len in [5200usize, 10400, 10624] {
             assert!(
                 routes_to_encoder_attn(
                     &AttentionDims {
@@ -4349,14 +4369,21 @@ mod tests {
                 "Tq 5184 over Tk {kv_len} routes"
             );
         }
-        assert!(routes_to_encoder_attn(
-            &AttentionDims {
-                q_len: 64,
-                kv_len: 512,
-                ..base
-            },
-            true
-        ));
+        // The bound itself (2.25 Tq) routes; one key more does not.
+        for (kv_len, routes) in [(144usize, true), (145, false)] {
+            assert_eq!(
+                routes_to_encoder_attn(
+                    &AttentionDims {
+                        q_len: 64,
+                        kv_len,
+                        ..base
+                    },
+                    true
+                ),
+                routes,
+                "Tq 64 over Tk {kv_len}"
+            );
+        }
         assert!(!routes_to_encoder_attn(&base, false), "no TensorOps");
         let bias = ojas_core::AttentionBias {
             batch: 1,
@@ -4413,10 +4440,20 @@ mod tests {
                 },
             ),
             (
-                "Tk more than 8x Tq",
+                "Tk past the pad bound (ratio 2.5)",
                 AttentionDims {
                     q_len: 64,
-                    kv_len: 513,
+                    kv_len: 160,
+                    ..base
+                },
+            ),
+            (
+                "three memory frames (ratio 3.01)",
+                AttentionDims {
+                    head_dim: 32,
+                    heads: 8,
+                    kv_heads: 8,
+                    kv_len: 15616,
                     ..base
                 },
             ),
@@ -4474,5 +4511,70 @@ mod tests {
                 "{what} must keep the general kernel"
             );
         }
+    }
+
+    /// Every key range of the split-K kernel is a whole number of tiles, none
+    /// is empty, and together they cover `Tk`: `attn_gen` refuses a launch
+    /// whose ranges would drop keys, and this is the only producer of one.
+    #[test]
+    fn the_split_ranges_cover_every_key_with_none_empty() {
+        for d in [16u32, 32] {
+            for bh in [1u32, 2, 16, 64, 1000] {
+                for q_len in [1u32, 4, 127, 128, 129, 201, 5184] {
+                    for kv_len in [1u32, 63, 64, 65, 128, 1000, 4096, 5184, 20000, 36544] {
+                        let g = AttnGeom {
+                            bh,
+                            heads: 1,
+                            rep: 1,
+                            q_len,
+                            kv_len,
+                            d,
+                            causal: false,
+                            window: 0,
+                            bias: None,
+                            has_lens: false,
+                            splits: 0,
+                            per_split: 0,
+                        };
+                        let (splits, per_split) = xattn_splits(&g).expect("tiled");
+                        let at = format!("bh {bh} Tq {q_len} Tk {kv_len} d {d}");
+                        assert!((1..=XATTN_MAX_SPLITS).contains(&splits), "{at}: {splits}");
+                        assert_eq!(per_split % XATTN_TILE, 0, "{at}");
+                        assert!(
+                            u64::from(splits) * u64::from(per_split) >= u64::from(kv_len),
+                            "{at}: the ranges drop keys"
+                        );
+                        assert!(
+                            u64::from(splits - 1) * u64::from(per_split) < u64::from(kv_len),
+                            "{at}: the last range is empty"
+                        );
+                    }
+                }
+            }
+        }
+        let causal = AttnGeom {
+            bh: 1,
+            heads: 1,
+            rep: 1,
+            q_len: 8,
+            kv_len: 8,
+            d: 32,
+            causal: true,
+            window: 0,
+            bias: None,
+            has_lens: false,
+            splits: 0,
+            per_split: 0,
+        };
+        assert!(xattn_splits(&causal).is_none(), "causal stays scalar");
+        assert!(
+            xattn_splits(&AttnGeom {
+                causal: false,
+                d: 64,
+                ..causal
+            })
+            .is_none(),
+            "head dim 64 stays scalar"
+        );
     }
 }
