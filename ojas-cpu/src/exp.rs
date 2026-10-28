@@ -88,29 +88,15 @@ pub(crate) fn exp2_affine(xs: &mut [f32], mul: f32, add: f32) -> f32 {
 /// of [`exp2_affine`]. `x_i - shift` is one f32 subtraction, as the scalar
 /// path forms it. Nothing is stored. `skip` contributes 0 and is not
 /// exponentiated (the target class of an excluded-sum cross-entropy).
-///
-/// Only the chunk that holds `skip` takes the lane-by-lane branch; every other
-/// chunk runs the branch-free loop, so a `skip` of `None` (plain softmax) and
-/// the chunks away from the target vectorize as they did before `skip`
-/// existed. A per-element `index == skip` test made these loops 2 to 4 times
-/// slower (measured, `ce_softmax_ab` against 2318ccb). The lane each element
-/// adds into and the order of the sum are the same either way.
 pub(crate) fn exp_sub_sum(row: &[f32], shift: f32, skip: Option<usize>) -> f32 {
     let (chunks, rest) = row.as_chunks::<LANES>();
     let mut acc = [0.0f32; LANES];
-    let skip_chunk = skip.map(|s| s / LANES);
     for (chunk_i, chunk) in chunks.iter().enumerate() {
-        if Some(chunk_i) == skip_chunk {
-            let skipped = skip.unwrap_or(0) % LANES;
-            for (lane, (a, word)) in acc.iter_mut().zip(chunk).enumerate() {
-                if lane != skipped {
-                    *a += exp(*word - shift);
-                }
+        for (lane, (a, word)) in acc.iter_mut().zip(chunk).enumerate() {
+            if Some(chunk_i * LANES + lane) == skip {
+                continue;
             }
-        } else {
-            for (a, word) in acc.iter_mut().zip(chunk) {
-                *a += exp(*word - shift);
-            }
+            *a += exp(*word - shift);
         }
     }
     let mut total = fold(&acc);
@@ -126,30 +112,19 @@ pub(crate) fn exp_sub_sum(row: &[f32], shift: f32, skip: Option<usize>) -> f32 {
 
 /// [`exp_sub_sum`] that also stores each `e^(x_i - shift)` in `out`. `out`
 /// is as long as `row`. A skipped index is stored as 0 and left out of the sum.
-/// The skip is confined to its own chunk as in [`exp_sub_sum`].
 pub(crate) fn exp_sub_store(row: &[f32], shift: f32, out: &mut [f32], skip: Option<usize>) -> f32 {
     let (chunks, rest) = row.as_chunks::<LANES>();
     let (out_chunks, out_rest) = out.as_chunks_mut::<LANES>();
     let mut acc = [0.0f32; LANES];
-    let skip_chunk = skip.map(|s| s / LANES);
     for (chunk_i, (chunk, dst)) in chunks.iter().zip(out_chunks).enumerate() {
-        if Some(chunk_i) == skip_chunk {
-            let skipped = skip.unwrap_or(0) % LANES;
-            for (lane, ((a, word), slot)) in acc.iter_mut().zip(chunk).zip(dst.iter_mut()).enumerate() {
-                if lane == skipped {
-                    *slot = 0.0;
-                    continue;
-                }
-                let e = exp(*word - shift);
-                *a += e;
-                *slot = e;
+        for (lane, ((a, word), slot)) in acc.iter_mut().zip(chunk).zip(dst.iter_mut()).enumerate() {
+            if Some(chunk_i * LANES + lane) == skip {
+                *slot = 0.0;
+                continue;
             }
-        } else {
-            for ((a, word), slot) in acc.iter_mut().zip(chunk).zip(dst.iter_mut()) {
-                let e = exp(*word - shift);
-                *a += e;
-                *slot = e;
-            }
+            let e = exp(*word - shift);
+            *a += e;
+            *slot = e;
         }
     }
     let mut total = fold(&acc);
