@@ -90,6 +90,107 @@ pub fn log_sum_exp_exact(max: f32, sum: f32) -> f32 {
     (f64::from(max) + ln_wide(f64::from(sum))) as f32
 }
 
+/// `ln(1 + x)` with no libm call. `x == 0` is `0`, `+inf` is `+inf`,
+/// `x == -1` is `-inf`, and NaN or `x < -1` is NaN. Below `2^-10` the
+/// series is used, because `1 + x` is not exact in `f64` for a tiny `x`;
+/// above that, every normal `f32` is exact in `f64` and [`ln_wide`] is
+/// applied to `1 + x`.
+pub fn log1p_exact(x: f32) -> f32 {
+    if x == 0.0 {
+        return 0.0;
+    }
+    if x.is_nan() || x < -1.0 {
+        return f32::NAN;
+    }
+    if x == -1.0 {
+        return f32::NEG_INFINITY;
+    }
+    if x.is_infinite() {
+        return f32::INFINITY;
+    }
+    let xd = f64::from(x);
+    // 2^-10. Above this, 1 + x is exact in f64.
+    if x.abs() < 1.0 / 1024.0 {
+        let mut term = xd;
+        let mut sum = 0.0f64;
+        let mut sign = 1.0f64;
+        for k in 1..=8 {
+            sum += sign * term / f64::from(k);
+            term *= xd;
+            sign = -sign;
+        }
+        return sum as f32;
+    }
+    ln_wide(1.0 + xd) as f32
+}
+
+/// `ln x` for a positive finite `f32`, with no libm call. Anything else is
+/// NaN.
+pub fn ln_exact(x: f32) -> f32 {
+    if !(x.is_finite() && x > 0.0) {
+        return f32::NAN;
+    }
+    ln_wide(f64::from(x)) as f32
+}
+
+/// Loss and unnormalized scale of a target-excluded cross-entropy row.
+///
+/// `max_other` and `sum_other` are the max and `sum exp(z - max)` over every
+/// class except the target. `scale` multiplies those stored exponentials to
+/// make the non-target gradient; the target gradient is `-sum_other * scale`.
+/// An empty other-set (`sum_other == 0`, one class) is loss 0 and scale 0.
+/// A negative sum is not produced by that reduction and is refused.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ExcludedCe {
+    /// `softplus(-(max_other - target))` when the other-set is non-empty.
+    pub loss: f32,
+    /// `exp(max_other - target) / (1 + q)` in the branch whose exp argument
+    /// is non-positive. When `1 + q` rounds to 1 this stays the nonzero exp.
+    pub scale: f32,
+}
+
+/// Target-excluded cross-entropy. `sum_other == 0` (no other class) is loss
+/// 0 and scale 0 even when `max_other` is the empty-max sentinel. Any
+/// non-finite `sum_other` or `target`, a negative sum, or a non-finite max
+/// of a non-empty other-set is NaN. Both branches agree at a zero margin.
+/// No libm call.
+pub fn excluded_ce(max_other: f32, sum_other: f32, target: f32) -> ExcludedCe {
+    if !sum_other.is_finite() || !target.is_finite() || sum_other < 0.0 {
+        return ExcludedCe {
+            loss: f32::NAN,
+            scale: f32::NAN,
+        };
+    }
+    if sum_other == 0.0 {
+        return ExcludedCe {
+            loss: 0.0,
+            scale: 0.0,
+        };
+    }
+    if !max_other.is_finite() {
+        return ExcludedCe {
+            loss: f32::NAN,
+            scale: f32::NAN,
+        };
+    }
+    let delta = max_other - target;
+    if delta <= 0.0 {
+        let e = exp_exact(delta);
+        let q = sum_other * e;
+        ExcludedCe {
+            loss: log1p_exact(q),
+            // When q is below the f32 ulp of 1, this division is e / 1.
+            scale: e / (1.0 + q),
+        }
+    } else {
+        let e = exp_exact(-delta);
+        ExcludedCe {
+            loss: delta + ln_exact(sum_other + e),
+            scale: 1.0 / (e + sum_other),
+        }
+    }
+}
+
 /// `ln x` for a positive normal `f64` (every positive finite `f32` is one):
 /// `x = m · 2^e` with `m` in `[√½, √2)`, then
 /// `ln m = 2·atanh(z)`, `z = (m - 1)/(m + 1)`, `|z| <= 0.1716`, by its odd
@@ -352,5 +453,67 @@ mod tests {
         ] {
             assert!(log_sum_exp_exact(max, sum).is_nan(), "{max} {sum}");
         }
+    }
+
+    #[test]
+    fn log1p_exact_matches_f64_and_refuses_the_domain() {
+        assert_eq!(log1p_exact(0.0), 0.0);
+        assert_eq!(log1p_exact(-0.0), 0.0);
+        assert_eq!(log1p_exact(f32::INFINITY), f32::INFINITY);
+        assert_eq!(log1p_exact(-1.0), f32::NEG_INFINITY);
+        assert!(log1p_exact(f32::NAN).is_nan());
+        assert!(log1p_exact(-1.1).is_nan());
+        for x in [
+            1.0e-20,
+            1.0e-8,
+            1.5e-4,
+            1.0 / 1024.0,
+            1.0e-3,
+            0.1,
+            1.0,
+            40.0,
+        ] {
+            let got = log1p_exact(x);
+            let want = f64::from(x).ln_1p() as f32;
+            assert!(
+                got.to_bits().abs_diff(want.to_bits()) <= 2,
+                "log1p({x:e}) = {got:e}, f64 {want:e}"
+            );
+        }
+    }
+
+    #[test]
+    fn excluded_ce_stays_nonzero_past_the_fp32_cliff() {
+        // [9, -9, -9], target 0: max of the others is -9, their exp sum is 2,
+        // margin 18. 1 + 2·exp(-18) rounds to 1 in f32, so a max-included
+        // log returns 0 and a p-1 target gradient returns 0.
+        let e = exp_exact(-18.0);
+        let ex = excluded_ce(-9.0, 2.0, 9.0);
+        assert_eq!(ex.scale.to_bits(), e.to_bits(), "scale collapsed to 0");
+        assert!(ex.loss > 0.0 && ex.loss.is_finite(), "loss {}", ex.loss);
+        let q = 2.0 * (-18.0f64).exp();
+        let want = q.ln_1p() as f32;
+        assert!(
+            ex.loss.to_bits().abs_diff(want.to_bits()) <= 2,
+            "loss {} want {want}",
+            ex.loss
+        );
+        let empty = excluded_ce(f32::NEG_INFINITY, 0.0, 4.0);
+        assert_eq!(empty.loss, 0.0);
+        assert_eq!(empty.scale, 0.0);
+        assert!(excluded_ce(-1.0, 1.0, f32::NAN).loss.is_nan());
+        assert!(excluded_ce(f32::NAN, 1.0, 0.0).loss.is_nan());
+        assert!(excluded_ce(0.0, -1.0, 0.0).scale.is_nan());
+        // Both branches at a zero margin: sum 3, target equal to the max.
+        let at = excluded_ce(1.0, 3.0, 1.0);
+        let want_loss = 3.0f64.ln_1p() as f32;
+        assert!(at.loss.to_bits().abs_diff(want_loss.to_bits()) <= 2);
+        assert!((at.scale - 0.25).abs() <= 1e-7, "scale {}", at.scale);
+        // Target below the other max: the positive-delta branch.
+        let below = excluded_ce(2.0, 1.0, 0.0);
+        let e2 = (-2.0f64).exp();
+        let want_below = (2.0 + (1.0 + e2).ln()) as f32;
+        assert!(below.loss.to_bits().abs_diff(want_below.to_bits()) <= 2);
+        assert!((below.scale as f64 - 1.0 / (e2 + 1.0)).abs() < 1e-7);
     }
 }

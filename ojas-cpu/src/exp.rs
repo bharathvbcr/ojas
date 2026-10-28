@@ -86,37 +86,54 @@ pub(crate) fn exp2_affine(xs: &mut [f32], mul: f32, add: f32) -> f32 {
 
 /// `sum_i e^(x_i - shift)` over `row`, in the fixed order
 /// of [`exp2_affine`]. `x_i - shift` is one f32 subtraction, as the scalar
-/// path forms it. Nothing is stored.
-pub(crate) fn exp_sub_sum(row: &[f32], shift: f32) -> f32 {
+/// path forms it. Nothing is stored. `skip` contributes 0 and is not
+/// exponentiated (the target class of an excluded-sum cross-entropy).
+pub(crate) fn exp_sub_sum(row: &[f32], shift: f32, skip: Option<usize>) -> f32 {
     let (chunks, rest) = row.as_chunks::<LANES>();
     let mut acc = [0.0f32; LANES];
-    for chunk in chunks {
-        for (a, word) in acc.iter_mut().zip(chunk) {
+    for (chunk_i, chunk) in chunks.iter().enumerate() {
+        for (lane, (a, word)) in acc.iter_mut().zip(chunk).enumerate() {
+            if Some(chunk_i * LANES + lane) == skip {
+                continue;
+            }
             *a += exp(*word - shift);
         }
     }
     let mut total = fold(&acc);
-    for word in rest {
+    let base = chunks.len() * LANES;
+    for (k, word) in rest.iter().enumerate() {
+        if Some(base + k) == skip {
+            continue;
+        }
         total += exp(*word - shift);
     }
     total
 }
 
 /// [`exp_sub_sum`] that also stores each `e^(x_i - shift)` in `out`. `out`
-/// is as long as `row`.
-pub(crate) fn exp_sub_store(row: &[f32], shift: f32, out: &mut [f32]) -> f32 {
+/// is as long as `row`. A skipped index is stored as 0 and left out of the sum.
+pub(crate) fn exp_sub_store(row: &[f32], shift: f32, out: &mut [f32], skip: Option<usize>) -> f32 {
     let (chunks, rest) = row.as_chunks::<LANES>();
     let (out_chunks, out_rest) = out.as_chunks_mut::<LANES>();
     let mut acc = [0.0f32; LANES];
-    for (chunk, dst) in chunks.iter().zip(out_chunks) {
-        for ((a, word), slot) in acc.iter_mut().zip(chunk).zip(dst.iter_mut()) {
+    for (chunk_i, (chunk, dst)) in chunks.iter().zip(out_chunks).enumerate() {
+        for (lane, ((a, word), slot)) in acc.iter_mut().zip(chunk).zip(dst.iter_mut()).enumerate() {
+            if Some(chunk_i * LANES + lane) == skip {
+                *slot = 0.0;
+                continue;
+            }
             let e = exp(*word - shift);
             *a += e;
             *slot = e;
         }
     }
     let mut total = fold(&acc);
-    for (word, slot) in rest.iter().zip(out_rest) {
+    let base = chunks.len() * LANES;
+    for (k, (word, slot)) in rest.iter().zip(out_rest).enumerate() {
+        if Some(base + k) == skip {
+            *slot = 0.0;
+            continue;
+        }
         let e = exp(*word - shift);
         total += e;
         *slot = e;
@@ -376,14 +393,14 @@ mod tests {
 
             let shift = -3.5f32;
             let want: Vec<f32> = base.iter().map(|&x| exp(x - shift)).collect();
-            let sum = exp_sub_sum(&base, shift);
+            let sum = exp_sub_sum(&base, shift, None);
             assert_eq!(
                 sum.to_bits(),
                 order(&want).to_bits(),
                 "exp_sub_sum len {len}"
             );
             let mut out = vec![0.0f32; len];
-            let stored = exp_sub_store(&base, shift, &mut out);
+            let stored = exp_sub_store(&base, shift, &mut out, None);
             assert_eq!(stored.to_bits(), sum.to_bits(), "exp_sub_store len {len}");
             assert_eq!(bits(&out), bits(&want), "exp_sub_store values len {len}");
         }

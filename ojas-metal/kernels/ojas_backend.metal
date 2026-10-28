@@ -1171,17 +1171,55 @@ inline float2 ce_merge(float2 a, float2 b)
     return float2(m, a.y * precise::exp(a.x - m) + b.y * precise::exp(b.x - m));
 }
 
+/// Loss and unnormalized scale of a target-excluded row. `.x` is the loss,
+/// `.y` is the scale that multiplies `exp(z - max_other)`. `sum == 0` (no
+/// other class, `max` may be -inf) is (0, 0). When `1 + q` rounds to 1 the
+/// scale stays the nonzero exp and the loss stays `q`, not `log(1 + q)`.
+inline float2 ce_excluded(float max_o, float sum_o, float target)
+{
+    if (!isfinite(sum_o) || !isfinite(target) || sum_o < 0.0f) return float2(NAN, NAN);
+    if (!(sum_o > 0.0f)) return float2(0.0f, 0.0f);
+    if (!isfinite(max_o)) return float2(NAN, NAN);
+    const float delta = max_o - target;
+    if (delta <= 0.0f) {
+        const float e = precise::exp(delta);
+        const float q = sum_o * e;
+        const float u = 1.0f + q;
+        const float loss = (u == 1.0f) ? q : precise::log(u) * precise::divide(q, u - 1.0f);
+        return float2(loss, precise::divide(e, u));
+    }
+    const float e = precise::exp(-delta);
+    return float2(delta + precise::log(sum_o + e), precise::divide(1.0f, e + sum_o));
+}
+
+/// Online (max, sum exp) of one finite logit, starting from an empty lane
+/// (`m == -inf`, `s == 0`) without exponentiating the sentinel.
+inline void ce_online(thread float &m, thread float &s, float x)
+{
+    if (m == -INFINITY) {
+        m = x;
+        s = 1.0f;
+    } else if (x > m) {
+        s = s * precise::exp(m - x) + 1.0f;
+        m = x;
+    } else {
+        s += precise::exp(x - m);
+    }
+}
+
 /// Cross-entropy in two passes over each row instead of five, with the
 /// finiteness checks folded in rather than run as separate passes:
 /// 1. every row, ignored or not, is read once: a NaN or infinity sets ST_IN,
-///    and each lane keeps an online (max, sum of exp) that the threadgroup
-///    merges; the loss row is max + log(sum) - logit[target];
-/// 2. with `write_grad`, the gradient row (softmax / n_valid, minus
-///    1 / n_valid at the target, the same arithmetic as before) is written,
-///    and a value that is not finite sets ST_OUT.
+///    and each lane keeps an online (max, sum of exp) of every class except
+///    the target that the threadgroup merges; the loss is softplus of the
+///    negated margin;
+/// 2. with `write_grad`, the gradient row is written (other classes
+///    `exp(z - max) * scale / n_valid`, the target the negation of their
+///    sum), and a value that is not finite sets ST_OUT.
 /// An ignored or out-of-range row writes loss 0 and a zero gradient row.
 /// n_valid, the rows neither ignored nor out of range, is counted on the
-/// host from its copy of the targets.
+/// host from its copy of the targets. A one-class row has an empty other-set
+/// and writes loss 0 and a zero gradient without exponentiating -inf.
 kernel void ojas_ce_fused(
     device const float *logits [[buffer(0)]],
     device const uint *targets [[buffer(1)]],
@@ -1211,12 +1249,8 @@ kernel void ojas_ce_fused(
             bad = true;
             continue;
         }
-        if (x > m) {
-            s = s * precise::exp(m - x) + 1.0f;
-            m = x;
-        } else {
-            s += precise::exp(x - m);
-        }
+        if (!skip && c == t) continue;
+        ce_online(m, s, x);
     }
     if (bad) atomic_store_explicit(&st[ST_IN], 1u, memory_order_relaxed);
     if (skip) {
@@ -1234,15 +1268,20 @@ kernel void ojas_ce_fused(
     }
     const float mx = sh[0].x;
     const float sum = sh[0].y;
-    if (lane == 0u) loss_rows[r] = mx + precise::log(sum) - logits[base + t];
+    const float2 ex = ce_excluded(mx, sum, logits[base + t]);
+    if (lane == 0u) {
+        if (!isfinite(ex.x)) atomic_store_explicit(&st[ST_IN], 1u, memory_order_relaxed);
+        loss_rows[r] = ex.x;
+    }
     if (write_grad == 0u) return;
     const float denom = (float)n_valid;
-    const float at_target = precise::divide(1.0f, denom);
+    const float scale = ex.y / denom;
     bool bad_out = false;
     for (uint c = lane; c < vocab; c += CE_TG) {
-        const float p = precise::divide(precise::exp(logits[base + c] - mx), sum);
-        float g = precise::divide(p, denom);
-        if (c == t) g -= at_target;
+        float g = 0.0f;
+        if (sum > 0.0f) {
+            g = (c == t) ? -sum * scale : precise::exp(logits[base + c] - mx) * scale;
+        }
         bad_out = bad_out || !isfinite(g);
         grad[base + c] = g;
     }
@@ -1257,11 +1296,12 @@ kernel void ojas_ce_fused(
 // running (max, sum of exp) is merged across vocabulary tiles with ce_merge;
 // `stats` holds (max, sum, target logit) per row of the current row tile.
 
-/// Per tile row (one threadgroup): online (max, sum exp) of the tile row,
-/// merged into the row's running pair (assigned on the first column tile),
-/// and the target's logit when the target falls in this tile. Every logit is
-/// checked, ignored rows included; a non-finite one sets ST_IN, because the
-/// composition's linear_forward refuses it before cross-entropy runs.
+/// Per tile row (one threadgroup): online (max, sum exp) of the tile row
+/// excluding the target column, merged into the row's running pair (assigned
+/// on the first column tile), and the target's logit when the target falls
+/// in this tile. Every logit is checked, the target included; a non-finite
+/// one sets ST_IN, because the composition's linear_forward refuses it
+/// before cross-entropy runs. A target-only tile stays (m = -inf, s = 0).
 kernel void ojas_lce_stats(
     device const float *tile [[buffer(0)]],
     device const uint *targets [[buffer(1)]],
@@ -1277,6 +1317,8 @@ kernel void ojas_lce_stats(
     threadgroup float2 sh[CE_TG];
     if (r >= rr) return;
     const ulong base = (ulong)r * cc;
+    const uint t = targets[r];
+    const bool in_tile = t >= col0 && (t - col0) < cc;
     bool bad = false;
     float m = -INFINITY;
     float s = 0.0f;
@@ -1286,12 +1328,8 @@ kernel void ojas_lce_stats(
             bad = true;
             continue;
         }
-        if (x > m) {
-            s = s * precise::exp(m - x) + 1.0f;
-            m = x;
-        } else {
-            s += precise::exp(x - m);
-        }
+        if (in_tile && c == t - col0) continue;
+        ce_online(m, s, x);
     }
     if (bad) atomic_store_explicit(&st[ST_IN], 1u, memory_order_relaxed);
     sh[lane] = float2(m, s);
@@ -1305,12 +1343,12 @@ kernel void ojas_lce_stats(
     const float2 merged = ce_merge(run, sh[0]);
     stats[3u * r] = merged.x;
     stats[3u * r + 1u] = merged.y;
-    const uint t = targets[r];
-    if (t >= col0 && t - col0 < cc) stats[3u * r + 2u] = tile[base + (t - col0)];
+    if (in_tile) stats[3u * r + 2u] = tile[base + (t - col0)];
 }
 
-/// loss_rows[r] = max + log(sum) - target logit, or 0 for an ignored or
-/// out-of-range target (the host has refused the latter).
+/// loss_rows[r] = softplus of the negated margin, or 0 for an ignored or
+/// out-of-range target (the host has refused the latter) and for a one-class
+/// row.
 kernel void ojas_lce_loss(
     device const float *stats [[buffer(0)]],
     device const uint *targets [[buffer(1)]],
@@ -1326,13 +1364,14 @@ kernel void ojas_lce_loss(
     const bool skip = (has_ignore != 0u && t == ignore) || t >= vocab;
     loss_rows[r] = skip
         ? 0.0f
-        : stats[3u * r] + precise::log(stats[3u * r + 1u]) - stats[3u * r + 2u];
+        : ce_excluded(stats[3u * r], stats[3u * r + 1u], stats[3u * r + 2u]).x;
 }
 
-/// The logits tile becomes the gradient tile in place: softmax / n_valid,
-/// minus 1 / n_valid at the target, zero for a skipped row; the arithmetic
-/// of ojas_ce_fused. A non-finite value sets ST_OUT. x is the column, y the
-/// row.
+/// The logits tile becomes the gradient tile in place: the other classes are
+/// `exp(logit - max) * scale / n_valid` and the target column is the negation
+/// of the other-class sum, zero for a skipped row or an empty other-set; the
+/// arithmetic of ojas_ce_fused. A non-finite value sets ST_OUT. x is the
+/// column, y the row.
 kernel void ojas_lce_grad(
     device float *tile [[buffer(0)]],
     device const uint *targets [[buffer(1)]],
@@ -1356,9 +1395,13 @@ kernel void ojas_lce_grad(
         return;
     }
     const float denom = (float)n_valid;
-    const float p = precise::divide(precise::exp(tile[at] - stats[3u * r]), stats[3u * r + 1u]);
-    float g = precise::divide(p, denom);
-    if (col0 + gid.x == t) g -= precise::divide(1.0f, denom);
+    const float mx = stats[3u * r];
+    const float sum = stats[3u * r + 1u];
+    const float scale = ce_excluded(mx, sum, stats[3u * r + 2u]).y / denom;
+    float g = 0.0f;
+    if (sum > 0.0f) {
+        g = (col0 + gid.x == t) ? -sum * scale : precise::exp(tile[at] - mx) * scale;
+    }
     if (!isfinite(g)) atomic_store_explicit(&st[ST_OUT], 1u, memory_order_relaxed);
     tile[at] = g;
 }

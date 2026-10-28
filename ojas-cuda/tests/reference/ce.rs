@@ -4,9 +4,10 @@
 //!
 //! ```text
 //! logits_i = W h[rows[i]]                     (the full [n, V] matrix: the reference can afford it)
-//! loss_i   = logsumexp(logits_i) - logits_i[targets[i]]
+//! loss_i   = softplus(-(max_{j≠t} z_j - z_t)) = ln(1 + sum_{j≠t} exp(z_j - z_t))
 //! loss     = mean_i loss_i  |  sum_i loss_i
-//! dlogit   = (softmax(logits_i) - onehot) * scale / (n | 1)
+//! dlogit_j = exp(z_j - z_t) / (1 + q) * scale / (n | 1)    (j ≠ t, q = sum_{j≠t} exp(z_j - z_t))
+//! dlogit_t = -sum_{j≠t} dlogit_j
 //! dh_i     = dlogit_i W        (per supplied row: a repeated row gets two)
 //! dW       = sum_i dlogit_i^T h[rows[i]]
 //! ```
@@ -88,13 +89,45 @@ pub fn cross_entropy_rows_f64(
                     .sum()
             })
             .collect();
-        let m = logits.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-        let lse = m + logits.iter().map(|l| (l - m).exp()).sum::<f64>().ln();
         let t = targets[i];
-        per_row.push(lse - logits[t]);
+        let mut max_o = f64::NEG_INFINITY;
         for (j, &l) in logits.iter().enumerate() {
-            let onehot = if j == t { 1.0 } else { 0.0 };
-            let g = ((l - lse).exp() - onehot) * factor;
+            if j != t && l > max_o {
+                max_o = l;
+            }
+        }
+        let mut sum_o = 0.0;
+        if max_o.is_finite() {
+            for (j, &l) in logits.iter().enumerate() {
+                if j != t {
+                    sum_o += (l - max_o).exp();
+                }
+            }
+        }
+        // Same two branches as the f32 kernels, in f64: every exp argument
+        // is non-positive, and an empty other-set is loss 0 / gradient 0.
+        let (loss_i, scale) = if sum_o == 0.0 {
+            (0.0, 0.0)
+        } else {
+            let delta = max_o - logits[t];
+            if delta <= 0.0 {
+                let e = delta.exp();
+                let q = sum_o * e;
+                (q.ln_1p(), e / (1.0 + q))
+            } else {
+                let e = (-delta).exp();
+                (delta + (sum_o + e).ln(), 1.0 / (e + sum_o))
+            }
+        };
+        per_row.push(loss_i);
+        for (j, &l) in logits.iter().enumerate() {
+            let g = if sum_o == 0.0 {
+                0.0
+            } else if j == t {
+                -sum_o * scale * factor
+            } else {
+                (l - max_o).exp() * scale * factor
+            };
             let wr = &w[j * hidden..(j + 1) * hidden];
             for k in 0..hidden {
                 dh[i * hidden + k] += g * wr[k];

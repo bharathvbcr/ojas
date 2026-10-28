@@ -1766,19 +1766,48 @@ mod tests {
         let scale = 1.0f32 / rows as f32;
         for r in 0..rows {
             let row = &logits[r * vocab..(r + 1) * vocab];
-            let max = row.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-            let mut sum = 0.0f32;
-            let mut exp = vec![0.0f32; vocab];
-            for j in 0..vocab {
-                exp[j] = (row[j] - max).exp();
-                sum += exp[j];
-            }
             let t = targets[r] as usize;
-            loss += f64::from(max + sum.ln() - row[t]);
+            let mut max_o = f32::NEG_INFINITY;
+            for (j, &z) in row.iter().enumerate() {
+                if j != t && z > max_o {
+                    max_o = z;
+                }
+            }
+            let mut sum_o = 0.0f32;
+            if max_o.is_finite() {
+                for (j, &z) in row.iter().enumerate() {
+                    if j != t {
+                        sum_o += (z - max_o).exp();
+                    }
+                }
+            }
+            // The target is not in the sum. When 1 + q rounds to 1 the loss
+            // stays q and the scale stays the exp, which is the f32 cliff.
+            let (row_loss, gscale) = if sum_o == 0.0 {
+                (0.0f32, 0.0f32)
+            } else {
+                let delta = max_o - row[t];
+                if delta <= 0.0 {
+                    let e = delta.exp();
+                    let q = sum_o * e;
+                    let u = 1.0 + q;
+                    let row_loss = if u == 1.0 { q } else { u.ln() * q / (u - 1.0) };
+                    (row_loss, e / u)
+                } else {
+                    let e = (-delta).exp();
+                    (delta + (sum_o + e).ln(), 1.0 / (e + sum_o))
+                }
+            };
+            loss += f64::from(row_loss);
             for j in 0..vocab {
-                let p = exp[j] / sum;
-                let one = if j == t { 1.0 } else { 0.0 };
-                d_logits[r * vocab + j] = (p - one) * scale;
+                let g = if !(sum_o > 0.0) {
+                    0.0
+                } else if j == t {
+                    -sum_o * gscale
+                } else {
+                    (row[j] - max_o).exp() * gscale
+                };
+                d_logits[r * vocab + j] = g * scale;
             }
         }
         loss /= rows as f64;
