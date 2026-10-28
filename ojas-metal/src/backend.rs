@@ -33,8 +33,10 @@
 //!   ([`WaitCounts::freed`]). An op's temporaries (its charged scratch,
 //!   dropped when it returns) count toward the bytes allocated since the
 //!   last waited commit, which wait after the command that passes the cap
-//!   ([`WaitCounts::mem_cap`]). The memory cap is a quarter of the budget
-//!   the backend opened with, at most 1 GiB.
+//!   ([`WaitCounts::mem_cap`]). The memory cap starts at a quarter of the
+//!   budget the backend opened with, at most 1 GiB, and
+//!   [`MetalBackend::set_mem_cap`] moves it anywhere from 1 byte to that
+//!   budget.
 //!
 //! So the device holds at most the budget's live bytes, plus the rounding
 //! above, plus the pool cap, plus the backend's status slab (128 KiB), plus
@@ -492,6 +494,47 @@ impl MetalBackend {
             other => Err(metal_err(format!(
                 "set_inline_uploads: device returned {other:?}"
             ))),
+        }
+    }
+
+    /// The byte cap past which the device thread waits for a commit: bytes
+    /// allocated since the last waited commit (counted as
+    /// [`WaitCounts::mem_cap`]) and bytes freed since it
+    /// ([`WaitCounts::freed`]) are compared with it. A backend opens with the
+    /// smaller of 1 GiB and a quarter of its budget. Telemetry for tests and
+    /// benches, on the pattern of [`Self::set_inline_uploads`]; not a stable
+    /// API.
+    #[doc(hidden)]
+    pub fn mem_cap(&self) -> Result<u64, OjasError> {
+        match self.link.call(Cmd::MemCap { set: None })? {
+            Reply::Cap(cap) => Ok(cap),
+            other => Err(metal_err(format!("mem_cap: device returned {other:?}"))),
+        }
+    }
+
+    /// Replace the cap [`Self::mem_cap`] reads, for every handle that shares
+    /// the device thread (`with_budget` handles included), until the next
+    /// call. For before/after wait measurements; no default changes with it.
+    ///
+    /// It is a device command, not a field write: the device runs its
+    /// freed-bytes check at the old cap, installs the new one, then runs its
+    /// commit triggers at the new one. Lowering the cap below the bytes
+    /// allocated since the last waited commit, with work recorded, therefore
+    /// makes this call wait for a commit once (counted as
+    /// [`WaitCounts::mem_cap`]); it returns after that commit.
+    ///
+    /// A zero cap is refused as [`OjasError::OutOfRange`] as meaningless (a
+    /// cap of 1 already waits after every allocating command). So is a cap
+    /// above the budget the backend opened with, which would void the
+    /// residency bound in the module docs: what the device holds past the
+    /// budget's live bytes stays under one memory cap of frees, one of
+    /// temporaries, and the pool cap. A refused cap leaves the cap as it was.
+    /// Not a stable API.
+    #[doc(hidden)]
+    pub fn set_mem_cap(&self, bytes: u64) -> Result<(), OjasError> {
+        match self.link.call(Cmd::MemCap { set: Some(bytes) })? {
+            Reply::Cap(_) => Ok(()),
+            other => Err(metal_err(format!("set_mem_cap: device returned {other:?}"))),
         }
     }
 
@@ -4063,13 +4106,11 @@ mod tests {
     fn tune(
         m: &MetalBackend,
         overlap: Option<usize>,
-        mem_cap: Option<u64>,
         ws_limit: Option<u64>,
         fail_allocs: (u32, u32),
     ) {
         let r = m.link.call(Cmd::Tune {
             overlap,
-            mem_cap,
             ws_limit,
             fail_allocs,
         });
@@ -4167,7 +4208,8 @@ mod tests {
         let m = MetalBackend::new(Budget::new(1 << 30)).expect("Metal device");
         let nan = put(&m, &[f32::NAN, 1.0], &[2]);
         let one = put(&m, &[0.5, 0.25], &[2]);
-        tune(&m, None, Some(1), None, (0, 0));
+        tune(&m, None, None, (0, 0));
+        m.set_mem_cap(1).expect("1-byte memory cap");
         let w0 = m.waits();
         let _y = m.silu_forward(&nan).expect("silu records");
         for _ in 0..10 {
@@ -4189,7 +4231,9 @@ mod tests {
         let m = MetalBackend::new(Budget::new(4 << 30)).expect("Metal device");
         let one = put(&m, &[0.5], &[1]);
         m.sync().expect("settle");
-        tune(&m, None, Some(u64::MAX), Some(1), (0, 0));
+        // The memory cap out of the way: the budget itself, far above the 192 MiB below.
+        m.set_mem_cap(4 << 30).expect("memory cap at the budget");
+        tune(&m, None, Some(1), (0, 0));
         let w0 = m.waits();
         for _ in 0..200 {
             drop(m.silu_forward(&one).expect("tiny op"));
@@ -4222,7 +4266,7 @@ mod tests {
         for _ in 0..5 {
             m.silu_forward(&one).expect("clean");
         }
-        tune(&m, None, None, None, (0, 1));
+        tune(&m, None, None, (0, 1));
         let w0 = m.waits();
         let y = m.rms_norm_forward(&x, &w, 1e-6);
         assert!(y.is_ok(), "the retried allocation should succeed: {y:?}");
@@ -4248,7 +4292,7 @@ mod tests {
         // Muon checks p, g and m, then allocates: fail that allocation and
         // both its retries (after the recycle, after the trim), after the
         // checks have run.
-        tune(&m, None, None, None, (0, 3));
+        tune(&m, None, None, (0, 3));
         let r = m.muon_ns5_step(&mut p, &g, &mut mo, MuonNs5Config::nanolab_default());
         assert!(
             matches!(r, Err(OjasError::CapacityExceeded { .. })),
@@ -4270,7 +4314,7 @@ mod tests {
         let w = put(&m, &[1.0; 16], &[16]);
         // q's side allocates one output; fail k's output and both its
         // retries.
-        tune(&m, None, None, None, (1, 3));
+        tune(&m, None, None, (1, 3));
         let r = m.rms_qk_norm_forward(&q, &k, &w, &w, 1e-6);
         assert!(
             matches!(r, Err(OjasError::CapacityExceeded { .. })),
@@ -4343,7 +4387,7 @@ mod tests {
         const LEN: usize = 1000;
         watchdog(300, || {
             let serial = MetalBackend::new(Budget::new(1 << 30)).expect("Metal device");
-            tune(&serial, Some(usize::MAX), None, None, (0, 0));
+            tune(&serial, Some(usize::MAX), None, (0, 0));
             let one = std::sync::Barrier::new(1);
             let want: Vec<_> = (0..THREADS).map(|i| chain(&serial, i, LEN, &one)).collect();
             assert_eq!(pending(&serial), None);
@@ -4512,14 +4556,15 @@ mod tests {
                 gdn_round(m, 11)
             };
             let calm = MetalBackend::new(Budget::new(1 << 30)).expect("Metal device");
-            tune(&calm, Some(usize::MAX), None, None, (0, 0));
+            tune(&calm, Some(usize::MAX), None, (0, 0));
             let before = calm.waits();
             let want = body(&calm);
             let calm_round = calm.waits() - before;
             assert_eq!(pending(&calm), None);
 
             let m = MetalBackend::new(Budget::new(1 << 30)).expect("Metal device");
-            tune(&m, Some(1), Some(1), None, (0, 0));
+            tune(&m, Some(1), None, (0, 0));
+            m.set_mem_cap(1).expect("1-byte memory cap");
             let before = m.waits();
             for round in 0..12 {
                 assert!(body(&m) == want, "round {round}: bits changed");
@@ -4563,7 +4608,7 @@ mod tests {
             let want = gdn_round(&calm, 12);
             for skip in 0..24u32 {
                 let m = MetalBackend::new(Budget::new(1 << 30)).expect("Metal device");
-                tune(&m, None, None, None, (skip, 1));
+                tune(&m, None, None, (skip, 1));
                 assert!(
                     gdn_round(&m, 12) == want,
                     "skip {skip}: a retried allocation changed bits"
@@ -4581,7 +4626,7 @@ mod tests {
             let v = up(t * dv, &[1, t, 1, dv]);
             let g = up(t, &[1, t, 1]);
             let base = m.budget().live_bytes().expect("live");
-            tune(&m, None, None, None, (0, u32::MAX));
+            tune(&m, None, None, (0, u32::MAX));
             let r = m.chunked_gdn_forward(GdnInputs {
                 q: &q,
                 k: &q,
@@ -4594,7 +4639,7 @@ mod tests {
                 matches!(r, Err(OjasError::CapacityExceeded { .. })),
                 "{r:?}"
             );
-            tune(&m, None, None, None, (0, 0));
+            tune(&m, None, None, (0, 0));
             assert_eq!(pending(&m), None);
             assert_eq!(m.budget().live_bytes().expect("live"), base);
         });
@@ -4702,11 +4747,11 @@ mod tests {
             let m = MetalBackend::new(Budget::new(1 << 30)).expect("Metal device");
             let x = put(&m, &vec![0.5; 1 << 16], &[1 << 16]);
             let before = m.wait_counts().recycle;
-            tune(&m, None, None, None, (0, 2));
+            tune(&m, None, None, (0, 2));
             let y = m.silu_forward(&x).expect("the third try allocates");
             assert_eq!(m.wait_counts().recycle, before + 1);
             drop(y);
-            tune(&m, None, None, None, (0, u32::MAX));
+            tune(&m, None, None, (0, u32::MAX));
             let ws = m.memory().expect("memory").recommended_working_set;
             let live_before = m.budget().live_bytes().expect("live");
             match m.silu_forward(&x) {
@@ -4721,7 +4766,7 @@ mod tests {
                 }
                 other => panic!("{other:?}"),
             }
-            tune(&m, None, None, None, (0, 0));
+            tune(&m, None, None, (0, 0));
             assert_eq!(pending(&m), None);
             assert_eq!(m.budget().live_bytes().expect("live"), live_before);
         });
@@ -4742,7 +4787,7 @@ mod tests {
             let ids = Tensor::from_u32(&want, &[want.len()], &Budget::new(1 << 30)).expect("host");
             let _recorded = m.silu_forward(&x).expect("recorded");
             let before = m.wait_counts();
-            tune(&m, None, None, None, (0, 1));
+            tune(&m, None, None, (0, 1));
             let d = m.upload(&ids).expect("the retry allocates");
             let after = m.wait_counts();
             assert_eq!(after.recycle, before.recycle + 1);
@@ -4751,7 +4796,7 @@ mod tests {
             assert_eq!(got.u32_slice().expect("u32"), want.as_slice());
 
             let _recorded = m.silu_forward(&x).expect("recorded");
-            tune(&m, None, None, None, (0, u32::MAX));
+            tune(&m, None, None, (0, u32::MAX));
             let live_before = m.budget().live_bytes().expect("live");
             let before = m.wait_counts();
             match m.upload(&ids) {
@@ -4761,7 +4806,7 @@ mod tests {
                 other => panic!("{other:?}"),
             }
             assert_eq!(m.wait_counts().upload, before.upload);
-            tune(&m, None, None, None, (0, 0));
+            tune(&m, None, None, (0, 0));
             assert_eq!(pending(&m), None);
             assert_eq!(m.budget().live_bytes().expect("live"), live_before);
         });

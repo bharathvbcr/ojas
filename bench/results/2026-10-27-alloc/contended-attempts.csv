@@ -1,0 +1,13 @@
+row,attempt,load_start,load_end,control_tflops,pageouts_delta,swapins_delta,verdict
+conv2d,1,25.11,23.73,5.86,1883,8097,verdict pressure
+conv2d,2,23.73,44.65,4.49,153,5924,verdict pressure
+conv2d,3,44.65,65.33,4.91,786,10992,verdict pressure
+conv_transpose2d,1,65.33,52.17,3.53,74,3867,verdict pressure
+conv_transpose2d,2,56.69,48.27,2.64,166,1441,verdict pressure
+conv_transpose2d,3,48.27,43.11,3.22,2117,1045,verdict pressure
+interpolate_bilinear,1,43.11,28.42,5.95,16421,76,verdict pressure
+interpolate_bilinear,2,28.42,21.62,6.06,9,7464,verdict pressure
+interpolate_bilinear,3,21.62,37.68,6.08,1,87,verdict pressure
+linear_bias,1,37.68,86.00,6.10,3,199,verdict pressure
+linear_bias,2,86.00,58.67,6.00,280,276,verdict pressure
+linear_bias,3,58.67,56.16,6.10,40,157,verdict pressure

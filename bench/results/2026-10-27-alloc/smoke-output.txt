@@ -1,0 +1,232 @@
+mac_heavy: 2026-10-27T21:47:42Z '78-b6-smoke' waits without the lock: machine busy (load 42.71, max 30; 1111 processes, max 2500)
+mac_heavy: 2026-10-27T21:50:23Z '78-b6-smoke' holds the lock (waited 160s; load 24.33, 1131 processes); running: bash /Users/bharath/Code/research/ojas/backups/78-tools/jobs/b6-step.sh 600 /Users/bharath/Code/research/ojas/backups/78-tools/bin/alloc_bench_run 1 3 conv2d
+# step_before 21:50:23 pageouts 246518 swapins 2199653 swap [total = 15360.00M  used = 13827.00M  free = 1533.00M  (encrypted)] load 24.33 42.94 57.94
+# backend 24 GiB: recommended_working_set 51539607552 pool_cache_cap 1073741824 allocated 35618816
+# backend 28 GiB: recommended_working_set 51539607552 pool_cache_cap 1073741824 allocated 35618816
+# load_start 24.33 42.94 57.94
+# columns: row	attempt	arm	bytes	min_ms	p10_ms	median_ms	p90_ms	gap_ms	spread_ms	pair	waits_mean	waits_max	dispatches_mean	triggers (mean per call, nonzero)
+# row	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	output_bytes 84934656	small_churn_pieces 32 of 10616832 elements
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	A steady	172229632	77.5498	77.5498	80.3114	81.8735	2.6536	11.3768	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	A steady'	172229632	70.3684	70.3684	77.6577	81.7452	2.6536	11.3768	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	B big churn (24 GiB)	172229632	98.0655	98.0655	99.3810	110.5983	1.3520	20.8825	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	B big churn (24 GiB)'	172229632	82.6766	82.6766	98.0289	103.5591	1.3520	20.8825	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	B2 small churn (24 GiB)	172229632	77.5032	77.5032	86.3878	89.8605	6.8625	12.3573	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	B2 small churn (24 GiB)'	172229632	77.9767	77.9767	79.5253	81.8508	6.8625	12.3573	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	C28 big churn (28 GiB backend)	172229632	83.6504	83.6504	88.1944	94.2683	5.4683	10.6180	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	C28 big churn (28 GiB backend)'	172229632	82.4147	82.4147	82.7261	85.4515	5.4683	10.6180	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	E fresh (trim_pool before each call)	172229632	74.8850	74.8850	85.8536	91.4802	1.2758	16.5952	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	E fresh (trim_pool before each call)'	172229632	81.5087	81.5087	87.1294	87.1416	1.2758	16.5952	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	Dsync x8	172229632	33.1135	33.1135	70.9480	78.9229	9.3291	48.6386	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	Dsync x8'	172229632	33.7509	33.7509	80.2771	82.3895	9.3291	48.6386	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	Dnosync x8	172229632	71.9375	71.9375	75.1121	114.1849	3.9793	42.2474	ok	waits_mean 0.50	waits_max 0	dispatches_mean 7.00	mem_cap=0.50
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	Dnosync x8'	172229632	70.3961	70.3961	79.0914	85.4689	3.9793	42.2474	ok	waits_mean 0.50	waits_max 0	dispatches_mean 7.00	mem_cap=0.50
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	control: f32 linear fc1	138838016	10.7937	10.7937	11.5907	11.7537	2.5721	6.1240	ok	waits_mean 1.00	waits_max 1	dispatches_mean 4.00	sync=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	control: f32 linear fc1'	138838016	11.7741	11.7741	14.1628	17.8981	2.5721	6.1240	ok	waits_mean 1.00	waits_max 1	dispatches_mean 4.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	A steady	0	0	80.3114	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	A steady	0	1	77.5498	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	A steady	0	2	81.8735	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	A steady	1	0	81.7452	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	A steady	1	1	70.3684	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	A steady	1	2	77.6577	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	B big churn (24 GiB)	0	0	110.5983	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	B big churn (24 GiB)	0	1	98.0655	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	B big churn (24 GiB)	0	2	99.3810	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	B big churn (24 GiB)	1	0	98.0289	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	B big churn (24 GiB)	1	1	82.6766	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	B big churn (24 GiB)	1	2	103.5591	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	B2 small churn (24 GiB)	0	0	89.8605	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	B2 small churn (24 GiB)	0	1	86.3878	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	B2 small churn (24 GiB)	0	2	77.5032	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	B2 small churn (24 GiB)	1	0	77.9767	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	B2 small churn (24 GiB)	1	1	81.8508	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	B2 small churn (24 GiB)	1	2	79.5253	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	C28 big churn (28 GiB backend)	0	0	94.2683	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	C28 big churn (28 GiB backend)	0	1	88.1944	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	C28 big churn (28 GiB backend)	0	2	83.6504	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	C28 big churn (28 GiB backend)	1	0	85.4515	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	C28 big churn (28 GiB backend)	1	1	82.7261	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	C28 big churn (28 GiB backend)	1	2	82.4147	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	E fresh (trim_pool before each call)	0	0	91.4802	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	E fresh (trim_pool before each call)	0	1	74.8850	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	E fresh (trim_pool before each call)	0	2	85.8536	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	E fresh (trim_pool before each call)	1	0	87.1416	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	E fresh (trim_pool before each call)	1	1	87.1294	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	E fresh (trim_pool before each call)	1	2	81.5087	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	Dsync x8	0	0	78.9229	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	Dsync x8	0	1	33.1135	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	Dsync x8	0	2	70.9480	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	Dsync x8	1	0	82.3895	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	Dsync x8	1	1	33.7509	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	Dsync x8	1	2	80.2771	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	Dnosync x8	0	0	114.1849	0.50	7.00	mem_cap=0.50
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	Dnosync x8	0	1	75.1121	0.50	7.00	mem_cap=0.50
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	Dnosync x8	0	2	71.9375	0.50	7.00	mem_cap=0.50
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	Dnosync x8	1	0	79.0914	0.50	7.00	mem_cap=0.50
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	Dnosync x8	1	1	70.3961	0.50	7.00	mem_cap=0.50
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	Dnosync x8	1	2	85.4689	0.50	7.00	mem_cap=0.50
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	control: f32 linear fc1	0	0	11.7537	1.00	4.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	control: f32 linear fc1	0	1	10.7937	1.00	4.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	control: f32 linear fc1	0	2	11.5907	1.00	4.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	control: f32 linear fc1	1	0	14.1628	1.00	4.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	control: f32 linear fc1	1	1	11.7741	1.00	4.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	control: f32 linear fc1	1	2	17.8981	1.00	4.00	sync=1.00
+# quiet_rounds	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	A steady	0 of 3 rounds	median_quiet_ms NaN	median_all_ms 80.3114
+# quiet_rounds	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	B big churn (24 GiB)	0 of 3 rounds	median_quiet_ms NaN	median_all_ms 99.3810
+# quiet_rounds	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	B2 small churn (24 GiB)	0 of 3 rounds	median_quiet_ms NaN	median_all_ms 81.8508
+# quiet_rounds	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	C28 big churn (28 GiB backend)	0 of 3 rounds	median_quiet_ms NaN	median_all_ms 85.4515
+# quiet_rounds	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	E fresh (trim_pool before each call)	0 of 3 rounds	median_quiet_ms NaN	median_all_ms 87.1294
+# quiet_rounds	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	Dsync x8	0 of 3 rounds	median_quiet_ms NaN	median_all_ms 78.9229
+# quiet_rounds	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	Dnosync x8	0 of 3 rounds	median_quiet_ms NaN	median_all_ms 79.0914
+# quiet_rounds	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	control: f32 linear fc1	0 of 3 rounds	median_quiet_ms NaN	median_all_ms 11.7741
+# attempt	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	1	load_start 23.59 42.47 57.69	load_end 22.35 40.36 56.39	control_tflops 4.34	control_ok false	noisy_pairs_gating 0	pageouts_delta 8	swapins_delta 247	swap_before total = 15360.00M  used = 13827.00M  free = 1533.00M  (encrypted)	swap_after total = 15360.00M  used = 13827.00M  free = 1533.00M  (encrypted)	verdict pressure
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	A steady	172229632	71.4937	71.4937	72.6288	83.3835	5.7296	19.3773	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	A steady'	172229632	56.0074	56.0074	66.8992	75.3847	5.7296	19.3773	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	B big churn (24 GiB)	172229632	90.4557	90.4557	99.3706	123.9022	10.6414	33.4465	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	B big churn (24 GiB)'	172229632	71.2325	71.2325	88.7292	93.6334	10.6414	33.4465	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	B2 small churn (24 GiB)	172229632	66.3436	66.3436	71.5710	84.1047	5.5302	17.7611	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	B2 small churn (24 GiB)'	172229632	75.4306	75.4306	77.1011	78.5099	5.5302	17.7611	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	C28 big churn (28 GiB backend)	172229632	72.5285	72.5285	72.5930	75.0462	3.7923	17.6128	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	C28 big churn (28 GiB backend)'	172229632	67.5995	67.5995	68.8007	85.2122	3.7923	17.6128	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	E fresh (trim_pool before each call)	172229632	66.7302	66.7302	71.7768	73.3103	1.6064	6.5802	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	E fresh (trim_pool before each call)'	172229632	69.2328	69.2328	70.1704	72.0803	1.6064	6.5802	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	Dsync x8	172229632	26.6526	26.6526	62.5104	64.2611	5.7707	49.1420	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	Dsync x8'	172229632	26.9012	26.9012	68.2810	76.0432	5.7707	49.1420	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	Dnosync x8	172229632	60.3059	60.3059	62.1597	73.2625	16.1942	17.2840	ok	waits_mean 0.50	waits_max 0	dispatches_mean 7.00	mem_cap=0.50
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	Dnosync x8'	172229632	64.0827	64.0827	78.3539	81.3666	16.1942	17.2840	ok	waits_mean 0.50	waits_max 0	dispatches_mean 7.00	mem_cap=0.50
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	control: f32 linear fc1	138838016	8.1231	8.1231	8.4838	9.7487	5.2000	7.7050	ok	waits_mean 1.00	waits_max 1	dispatches_mean 4.00	sync=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	control: f32 linear fc1'	138838016	8.6907	8.6907	13.6838	16.3957	5.2000	7.7050	ok	waits_mean 1.00	waits_max 1	dispatches_mean 4.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	A steady	0	0	72.6288	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	A steady	0	1	71.4937	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	A steady	0	2	83.3835	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	A steady	1	0	66.8992	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	A steady	1	1	56.0074	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	A steady	1	2	75.3847	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	B big churn (24 GiB)	0	0	90.4557	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	B big churn (24 GiB)	0	1	99.3706	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	B big churn (24 GiB)	0	2	123.9022	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	B big churn (24 GiB)	1	0	93.6334	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	B big churn (24 GiB)	1	1	71.2325	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	B big churn (24 GiB)	1	2	88.7292	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	B2 small churn (24 GiB)	0	0	71.5710	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	B2 small churn (24 GiB)	0	1	66.3436	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	B2 small churn (24 GiB)	0	2	84.1047	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	B2 small churn (24 GiB)	1	0	78.5099	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	B2 small churn (24 GiB)	1	1	75.4306	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	B2 small churn (24 GiB)	1	2	77.1011	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	C28 big churn (28 GiB backend)	0	0	72.5930	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	C28 big churn (28 GiB backend)	0	1	72.5285	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	C28 big churn (28 GiB backend)	0	2	75.0462	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	C28 big churn (28 GiB backend)	1	0	68.8007	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	C28 big churn (28 GiB backend)	1	1	67.5995	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	C28 big churn (28 GiB backend)	1	2	85.2122	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	E fresh (trim_pool before each call)	0	0	71.7768	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	E fresh (trim_pool before each call)	0	1	66.7302	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	E fresh (trim_pool before each call)	0	2	73.3103	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	E fresh (trim_pool before each call)	1	0	70.1704	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	E fresh (trim_pool before each call)	1	1	69.2328	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	E fresh (trim_pool before each call)	1	2	72.0803	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	Dsync x8	0	0	62.5104	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	Dsync x8	0	1	26.6526	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	Dsync x8	0	2	64.2611	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	Dsync x8	1	0	68.2810	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	Dsync x8	1	1	26.9012	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	Dsync x8	1	2	76.0432	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	Dnosync x8	0	0	73.2625	0.50	7.00	mem_cap=0.50
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	Dnosync x8	0	1	60.3059	0.50	7.00	mem_cap=0.50
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	Dnosync x8	0	2	62.1597	0.50	7.00	mem_cap=0.50
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	Dnosync x8	1	0	78.3539	0.50	7.00	mem_cap=0.50
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	Dnosync x8	1	1	64.0827	0.50	7.00	mem_cap=0.50
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	Dnosync x8	1	2	81.3666	0.50	7.00	mem_cap=0.50
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	control: f32 linear fc1	0	0	9.7487	1.00	4.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	control: f32 linear fc1	0	1	8.1231	1.00	4.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	control: f32 linear fc1	0	2	8.4838	1.00	4.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	control: f32 linear fc1	1	0	13.6838	1.00	4.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	control: f32 linear fc1	1	1	8.6907	1.00	4.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	control: f32 linear fc1	1	2	16.3957	1.00	4.00	sync=1.00
+# quiet_rounds	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	A steady	0 of 3 rounds	median_quiet_ms NaN	median_all_ms 72.6288
+# quiet_rounds	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	B big churn (24 GiB)	0 of 3 rounds	median_quiet_ms NaN	median_all_ms 93.6334
+# quiet_rounds	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	B2 small churn (24 GiB)	0 of 3 rounds	median_quiet_ms NaN	median_all_ms 77.1011
+# quiet_rounds	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	C28 big churn (28 GiB backend)	0 of 3 rounds	median_quiet_ms NaN	median_all_ms 72.5930
+# quiet_rounds	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	E fresh (trim_pool before each call)	0 of 3 rounds	median_quiet_ms NaN	median_all_ms 71.7768
+# quiet_rounds	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	Dsync x8	0 of 3 rounds	median_quiet_ms NaN	median_all_ms 64.2611
+# quiet_rounds	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	Dnosync x8	0 of 3 rounds	median_quiet_ms NaN	median_all_ms 73.2625
+# quiet_rounds	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	control: f32 linear fc1	0 of 3 rounds	median_quiet_ms NaN	median_all_ms 9.7487
+# attempt	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	2	load_start 22.35 40.36 56.39	load_end 20.82 38.51 55.26	control_tflops 5.93	control_ok false	noisy_pairs_gating 0	pageouts_delta 4	swapins_delta 4	swap_before total = 15360.00M  used = 13827.00M  free = 1533.00M  (encrypted)	swap_after total = 15360.00M  used = 13827.00M  free = 1533.00M  (encrypted)	verdict pressure
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	A steady	172229632	66.8351	66.8351	67.2504	77.1290	0.4422	27.0725	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	A steady'	172229632	56.0653	56.0653	67.6927	83.1379	0.4422	27.0725	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	B big churn (24 GiB)	172229632	76.8550	76.8550	95.4562	137.6118	3.7688	60.7567	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	B big churn (24 GiB)'	172229632	65.1768	65.1768	99.2250	100.6813	3.7688	60.7567	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	B2 small churn (24 GiB)	172229632	64.0133	64.0133	94.0910	103.3183	23.0415	39.3050	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	B2 small churn (24 GiB)'	172229632	65.8982	65.8982	71.0495	81.7837	23.0415	39.3050	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	C28 big churn (28 GiB backend)	172229632	74.2030	74.2030	92.9947	95.8418	3.7242	21.6388	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	C28 big churn (28 GiB backend)'	172229632	70.2088	70.2088	89.2705	91.5997	3.7242	21.6388	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	E fresh (trim_pool before each call)	172229632	63.8371	63.8371	68.8164	72.2770	3.3297	32.8011	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	E fresh (trim_pool before each call)'	172229632	64.9184	64.9184	72.1461	97.7195	3.3297	32.8011	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	Dsync x8	172229632	26.4817	26.4817	58.2693	60.7507	11.5909	46.6574	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	Dsync x8'	172229632	31.5691	31.5691	69.8602	78.2265	11.5909	46.6574	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	Dnosync x8	172229632	59.2245	59.2245	60.3349	63.7079	6.1918	4.4834	noisy (not gating)	waits_mean 0.50	waits_max 0	dispatches_mean 7.00	mem_cap=0.50
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	Dnosync x8'	172229632	65.6077	65.6077	66.5267	68.0221	6.1918	4.4834	noisy (not gating)	waits_mean 0.50	waits_max 0	dispatches_mean 7.00	mem_cap=0.50
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	control: f32 linear fc1	138838016	8.2606	8.2606	8.2923	8.5410	4.4758	5.4147	ok	waits_mean 1.00	waits_max 1	dispatches_mean 4.00	sync=1.00
+conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	control: f32 linear fc1'	138838016	8.5584	8.5584	12.7681	13.9731	4.4758	5.4147	ok	waits_mean 1.00	waits_max 1	dispatches_mean 4.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	A steady	0	0	67.2504	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	A steady	0	1	77.1290	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	A steady	0	2	66.8351	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	A steady	1	0	83.1379	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	A steady	1	1	56.0653	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	A steady	1	2	67.6927	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	B big churn (24 GiB)	0	0	95.4562	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	B big churn (24 GiB)	0	1	137.6118	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	B big churn (24 GiB)	0	2	76.8550	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	B big churn (24 GiB)	1	0	100.6813	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	B big churn (24 GiB)	1	1	65.1768	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	B big churn (24 GiB)	1	2	99.2250	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	B2 small churn (24 GiB)	0	0	64.0133	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	B2 small churn (24 GiB)	0	1	103.3183	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	B2 small churn (24 GiB)	0	2	94.0910	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	B2 small churn (24 GiB)	1	0	65.8982	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	B2 small churn (24 GiB)	1	1	81.7837	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	B2 small churn (24 GiB)	1	2	71.0495	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	C28 big churn (28 GiB backend)	0	0	74.2030	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	C28 big churn (28 GiB backend)	0	1	95.8418	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	C28 big churn (28 GiB backend)	0	2	92.9947	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	C28 big churn (28 GiB backend)	1	0	70.2088	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	C28 big churn (28 GiB backend)	1	1	89.2705	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	C28 big churn (28 GiB backend)	1	2	91.5997	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	E fresh (trim_pool before each call)	0	0	72.2770	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	E fresh (trim_pool before each call)	0	1	68.8164	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	E fresh (trim_pool before each call)	0	2	63.8371	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	E fresh (trim_pool before each call)	1	0	64.9184	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	E fresh (trim_pool before each call)	1	1	97.7195	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	E fresh (trim_pool before each call)	1	2	72.1461	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	Dsync x8	0	0	60.7507	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	Dsync x8	0	1	26.4817	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	Dsync x8	0	2	58.2693	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	Dsync x8	1	0	69.8602	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	Dsync x8	1	1	31.5691	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	Dsync x8	1	2	78.2265	1.00	7.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	Dnosync x8	0	0	59.2245	0.50	7.00	mem_cap=0.50
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	Dnosync x8	0	1	60.3349	0.50	7.00	mem_cap=0.50
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	Dnosync x8	0	2	63.7079	0.50	7.00	mem_cap=0.50
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	Dnosync x8	1	0	65.6077	0.50	7.00	mem_cap=0.50
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	Dnosync x8	1	1	68.0221	0.50	7.00	mem_cap=0.50
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	Dnosync x8	1	2	66.5267	0.50	7.00	mem_cap=0.50
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	control: f32 linear fc1	0	0	8.5410	1.00	4.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	control: f32 linear fc1	0	1	8.2606	1.00	4.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	control: f32 linear fc1	0	2	8.2923	1.00	4.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	control: f32 linear fc1	1	0	13.9731	1.00	4.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	control: f32 linear fc1	1	1	8.5584	1.00	4.00	sync=1.00
+# sample	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	control: f32 linear fc1	1	2	12.7681	1.00	4.00	sync=1.00
+# quiet_rounds	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	A steady	0 of 3 rounds	median_quiet_ms NaN	median_all_ms 67.6927
+# quiet_rounds	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	B big churn (24 GiB)	0 of 3 rounds	median_quiet_ms NaN	median_all_ms 99.2250
+# quiet_rounds	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	B2 small churn (24 GiB)	0 of 3 rounds	median_quiet_ms NaN	median_all_ms 81.7837
+# quiet_rounds	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	C28 big churn (28 GiB backend)	0 of 3 rounds	median_quiet_ms NaN	median_all_ms 91.5997
+# quiet_rounds	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	E fresh (trim_pool before each call)	0 of 3 rounds	median_quiet_ms NaN	median_all_ms 72.1461
+# quiet_rounds	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	Dsync x8	0 of 3 rounds	median_quiet_ms NaN	median_all_ms 60.7507
+# quiet_rounds	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	Dnosync x8	0 of 3 rounds	median_quiet_ms NaN	median_all_ms 65.6077
+# quiet_rounds	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	control: f32 linear fc1	0 of 3 rounds	median_quiet_ms NaN	median_all_ms 8.5584
+# attempt	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	3	load_start 20.82 38.51 55.26	load_end 20.51 36.65 54.00	control_tflops 6.06	control_ok false	noisy_pairs_gating 0	pageouts_delta 0	swapins_delta 36	swap_before total = 15360.00M  used = 13827.00M  free = 1533.00M  (encrypted)	swap_after total = 15360.00M  used = 13827.00M  free = 1533.00M  (encrypted)	verdict pressure
+# row	conv2d [1, 256, 288, 288] x [256, 256, 3, 3] x [256] stride 1 pad 1	clean false
+# load_end 20.51 36.65 54.00
+# rows_clean 0 of 1
+# step_after 21:51:53 pageouts 246530 swapins 2199948 swap [total = 15360.00M  used = 13827.00M  free = 1533.00M  (encrypted)] load 20.51 36.65 54.00 exit 0
+mac_heavy: 2026-10-27T21:51:55Z '78-b6-smoke' finished with exit 0

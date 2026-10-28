@@ -1,0 +1,1287 @@
+mac_heavy: 2026-10-28T09:08:16Z '78-b6-alloc' holds the lock (waited 0s; load 3.09, 882 processes); running: bash /Users/bharath/Code/research/ojas/backups/78-tools/jobs/b6-step.sh 2400 /Users/bharath/Code/research/ojas/backups/78-tools/bin/alloc_bench_run 5 25 conv_transpose2d
+# step_before 09:08:16 pageouts 300004 swapins 3076485 swap [total = 5120.00M  used = 3895.94M  free = 1224.06M  (encrypted)] load 3.09 3.74 4.19
+# backend 24 GiB: recommended_working_set 51539607552 pool_cache_cap 1073741824 allocated 35618816
+# backend 28 GiB: recommended_working_set 51539607552 pool_cache_cap 1073741824 allocated 35618816
+# load_start 3.09 3.74 4.19
+# columns: row	attempt	arm	bytes	min_ms	p10_ms	median_ms	p90_ms	gap_ms	spread_ms	pair	waits_mean	waits_max	dispatches_mean	triggers (mean per call, nonzero)
+# row	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	output_bytes 84934656	small_churn_pieces 32 of 10616832 elements
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	129500160	10.5108	10.7790	11.6495	12.4068	0.8510	6.6257	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady'	129500160	5.6499	5.7044	10.7985	12.3301	0.8510	6.6257	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	129500160	21.7498	23.3970	30.7674	32.9556	4.4739	14.0861	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)'	129500160	17.3301	18.7803	26.2935	32.8665	4.4739	14.0861	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	129500160	12.4387	13.1895	15.4578	23.0575	0.2633	9.9738	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)'	129500160	13.6241	13.7303	15.1946	23.7041	0.2633	9.9738	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	129500160	12.5559	13.7286	16.8451	22.3838	0.9600	9.1864	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)'	129500160	13.1980	13.6181	15.8851	22.8045	0.9600	9.1864	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	129500160	11.6479	11.7344	12.4027	13.5341	0.4103	3.2032	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)'	129500160	10.8670	11.4462	12.8130	14.6495	0.4103	3.2032	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	129500160	5.6869	5.7037	5.8737	5.9878	4.9294	5.9365	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8'	129500160	5.6675	5.7097	10.8031	11.6462	4.9294	5.9365	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	129500160	6.5199	6.5317	6.6157	6.8301	3.4469	4.2192	ok	waits_mean 0.25	waits_max 0	dispatches_mean 7.00	sync=0.12 mem_cap=0.12
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8'	129500160	6.5113	6.5213	10.0626	10.7405	3.4469	4.2192	ok	waits_mean 0.25	waits_max 0	dispatches_mean 7.00	sync=0.12 mem_cap=0.12
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	138838016	10.3862	10.8564	11.2395	12.0812	0.0725	1.3458	ok	waits_mean 1.00	waits_max 1	dispatches_mean 4.00	sync=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1'	138838016	10.5185	10.7217	11.3120	12.0675	0.0725	1.3458	ok	waits_mean 1.00	waits_max 1	dispatches_mean 4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	0	0	11.1558	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	0	1	11.4299	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	0	2	11.6495	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	0	3	12.2755	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	0	4	12.4068	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	0	5	10.7790	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	0	6	10.5108	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	0	7	11.2504	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	0	8	12.2803	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	0	9	11.4753	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	0	10	11.7466	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	0	11	11.6505	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	0	12	10.8789	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	0	13	11.7242	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	0	14	11.7535	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	0	15	12.8247	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	0	16	12.3986	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	0	17	11.1457	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	0	18	10.9326	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	0	19	11.7114	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	0	20	12.0050	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	0	21	11.3132	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	0	22	13.2095	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	0	23	10.5377	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	0	24	11.1734	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	1	0	11.0625	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	1	1	6.2591	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	1	2	12.0625	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	1	3	5.6993	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	1	4	10.7985	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	1	5	6.1390	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	1	6	12.1228	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	1	7	5.7113	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	1	8	11.1720	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	1	9	5.7303	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	1	10	11.6490	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	1	11	5.6499	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	1	12	11.4745	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	1	13	5.7044	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	1	14	12.0455	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	1	15	5.7241	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	1	16	10.8915	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	1	17	5.7544	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	1	18	12.3301	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	1	19	5.7135	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	1	20	13.2227	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	1	21	5.7156	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	1	22	11.2899	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	1	23	5.7188	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	1	24	12.4659	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	0	0	30.4625	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	0	1	23.7693	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	0	2	32.0891	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	0	3	32.3469	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	0	4	32.5521	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	0	5	21.7498	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	0	6	30.6333	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	0	7	26.3004	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	0	8	31.0001	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	0	9	25.0119	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	0	10	23.2939	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	0	11	30.7674	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	0	12	31.2224	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	0	13	24.2436	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	0	14	33.8555	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	0	15	24.6812	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	0	16	32.9556	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	0	17	31.8288	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	0	18	31.0460	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	0	19	32.5497	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	0	20	30.7446	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	0	21	23.3970	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	0	22	33.4313	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	0	23	29.5280	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	0	24	31.3818	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	1	0	31.4993	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	1	1	25.1706	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	1	2	24.5875	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	1	3	23.7011	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	1	4	24.5182	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	1	5	24.0504	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	1	6	32.3747	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	1	7	25.4958	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	1	8	31.5001	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	1	9	18.7803	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	1	10	30.7127	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	1	11	27.5936	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	1	12	32.8665	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	1	13	28.1006	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	1	14	32.7230	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	1	15	19.2939	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	1	16	33.1043	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	1	17	17.9364	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	1	18	34.3720	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	1	19	26.6493	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	1	20	32.5102	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	1	21	19.1590	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	1	22	22.6180	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	1	23	17.3301	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	1	24	26.2935	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	0	0	15.4984	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	0	1	22.4830	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	0	2	22.2277	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	0	3	14.5147	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	0	4	23.1371	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	0	5	17.4187	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	0	6	15.5282	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	0	7	15.4578	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	0	8	13.5993	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	0	9	26.0935	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	0	10	13.2532	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	0	11	12.8602	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	0	12	13.1895	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	0	13	17.2018	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	0	14	23.0575	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	0	15	21.3106	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	0	16	14.1562	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	0	17	13.2315	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	0	18	12.4387	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	0	19	14.1875	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	0	20	13.7575	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	0	21	18.4458	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	0	22	21.2030	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	0	23	14.3174	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	0	24	13.4781	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	1	0	13.6241	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	1	1	24.5475	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	1	2	22.2609	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	1	3	23.7041	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	1	4	15.3174	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	1	5	15.9425	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	1	6	15.0704	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	1	7	16.5602	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	1	8	24.0935	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	1	9	17.7665	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	1	10	14.8588	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	1	11	15.2737	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	1	12	13.7096	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	1	13	14.8224	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	1	14	14.7526	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	1	15	17.1296	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	1	16	14.5590	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	1	17	14.9223	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	1	18	13.7303	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	1	19	16.5984	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	1	20	14.1850	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	1	21	15.1946	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	1	22	14.7412	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	1	23	17.3296	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	1	24	14.3622	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	0	0	22.1470	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	0	1	21.2381	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	0	2	22.3088	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	0	3	16.0640	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	0	4	15.6943	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	0	5	14.2965	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	0	6	13.5454	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	0	7	22.6479	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	0	8	14.4197	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	0	9	22.3558	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	0	10	13.7286	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	0	11	22.9612	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	0	12	22.1503	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	0	13	20.1679	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	0	14	14.1216	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	0	15	22.3838	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	0	16	14.8848	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	0	17	16.8451	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	0	18	12.5559	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	0	19	22.3481	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	0	20	14.3930	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	0	21	15.6658	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	0	22	13.8230	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	0	23	17.9389	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	0	24	21.2461	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	1	0	21.0808	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	1	1	15.8851	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	1	2	13.6181	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	1	3	18.5784	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	1	4	22.8045	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	1	5	16.5575	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	1	6	14.0064	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	1	7	25.4340	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	1	8	14.2918	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	1	9	16.7860	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	1	10	13.7760	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	1	11	21.8500	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	1	12	13.3780	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	1	13	15.0053	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	1	14	22.9024	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	1	15	19.7899	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	1	16	22.0541	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	1	17	19.6868	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	1	18	14.2029	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	1	19	14.7120	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	1	20	14.1526	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	1	21	15.0225	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	1	22	14.2461	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	1	23	20.5795	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	1	24	13.1980	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	0	0	12.2622	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	0	1	11.7245	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	0	2	12.4203	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	0	3	18.7170	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	0	4	12.4027	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	0	5	12.1690	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	0	6	12.5258	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	0	7	12.2007	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	0	8	12.3316	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	0	9	12.5084	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	0	10	13.5341	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	0	11	11.8936	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	0	12	12.2716	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	0	13	16.5768	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	0	14	11.7344	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	0	15	12.7368	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	0	16	12.2005	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	0	17	11.6479	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	0	18	12.3842	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	0	19	13.0309	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	0	20	12.7185	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	0	21	13.2472	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	0	22	12.4293	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	0	23	12.0098	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	0	24	13.3569	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	1	0	11.9442	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	1	1	13.3997	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	1	2	13.1867	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	1	3	14.6495	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	1	4	12.4995	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	1	5	11.1775	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	1	6	11.4722	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	1	7	14.3560	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	1	8	12.9035	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	1	9	12.4750	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	1	10	12.7368	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	1	11	11.6637	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	1	12	10.8670	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	1	13	13.1141	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	1	14	13.1107	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	1	15	17.2040	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	1	16	12.1178	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	1	17	11.4462	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	1	18	12.8130	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	1	19	15.7231	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	1	20	12.1292	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	1	21	12.8605	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	1	22	11.8858	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	1	23	14.3872	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	1	24	13.1173	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	0	0	5.7548	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	0	1	6.0840	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	0	2	5.7075	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	0	3	5.9196	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	0	4	5.9237	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	0	5	5.7219	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	0	6	6.0198	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	0	7	5.9878	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	0	8	5.7066	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	0	9	5.7043	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	0	10	5.9330	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	0	11	5.6869	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	0	12	5.9004	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	0	13	5.8028	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	0	14	5.8598	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	0	15	5.9523	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	0	16	5.7037	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	0	17	5.8737	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	0	18	5.9205	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	0	19	5.7072	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	0	20	5.9471	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	0	21	5.9091	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	0	22	5.7779	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	0	23	5.6907	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	0	24	5.9084	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	1	0	10.8855	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	1	1	5.8977	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	1	2	11.4332	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	1	3	5.8508	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	1	4	11.5286	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	1	5	5.9014	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	1	6	11.0509	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	1	7	5.7048	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	1	8	11.7536	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	1	9	5.7978	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	1	10	11.6462	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	1	11	5.6675	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	1	12	10.8031	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	1	13	5.8072	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	1	14	11.4247	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	1	15	5.9762	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	1	16	11.4860	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	1	17	5.8432	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	1	18	11.6363	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	1	19	5.7717	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	1	20	11.7076	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	1	21	5.7097	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	1	22	11.5313	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	1	23	5.9834	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	1	24	11.0341	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	0	0	6.9273	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	0	1	6.7028	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	0	2	6.5317	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	0	3	6.6244	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	0	4	6.5892	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	0	5	6.5852	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	0	6	6.6268	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	0	7	6.5516	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	0	8	6.7742	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	0	9	6.5797	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	0	10	6.6646	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	0	11	6.6798	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	0	12	6.5620	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	0	13	6.6089	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	0	14	6.5199	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	0	15	6.7201	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	0	16	6.5338	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	0	17	6.5585	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	0	18	6.7763	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	0	19	6.5300	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	0	20	6.8416	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	0	21	6.7205	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	0	22	6.6157	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	0	23	6.5483	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	0	24	6.8301	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	1	0	10.0626	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	1	1	6.5213	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	1	2	10.2618	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	1	3	6.7144	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	1	4	10.1825	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	1	5	6.5876	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	1	6	10.4494	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	1	7	6.7097	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	1	8	10.8564	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	1	9	6.5987	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	1	10	10.5491	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	1	11	6.5113	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	1	12	10.5008	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	1	13	6.5806	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	1	14	10.7310	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	1	15	6.5210	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	1	16	10.7520	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	1	17	6.7950	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	1	18	10.3713	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	1	19	6.5330	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	1	20	10.6424	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	1	21	6.7373	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	1	22	10.7405	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	1	23	6.6853	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	1	24	10.3362	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	0	0	10.6167	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	0	1	11.3725	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	0	2	11.1140	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	0	3	11.2395	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	0	4	10.8758	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	0	5	11.0498	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	0	6	10.8952	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	0	7	11.2745	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	0	8	12.0101	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	0	9	11.7665	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	0	10	11.3046	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	0	11	12.2133	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	0	12	11.1492	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	0	13	10.8564	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	0	14	11.3622	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	0	15	10.9002	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	0	16	12.6285	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	0	17	10.9659	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	0	18	10.3862	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	0	19	12.0812	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	0	20	11.3471	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	0	21	11.6774	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	0	22	11.8461	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	0	23	11.2109	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	0	24	11.2175	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	1	0	10.7217	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	1	1	10.9882	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	1	2	11.4639	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	1	3	11.4885	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	1	4	12.5791	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	1	5	10.5185	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	1	6	11.8244	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	1	7	11.9784	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	1	8	13.9951	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	1	9	10.7713	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	1	10	11.8084	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	1	11	11.0840	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	1	12	11.1254	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	1	13	11.3120	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	1	14	11.2771	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	1	15	11.4290	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	1	16	12.0675	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	1	17	10.6142	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	1	18	10.9464	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	1	19	11.7289	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	1	20	10.9312	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	1	21	11.7120	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	1	22	11.1969	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	1	23	11.1849	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	1	24	11.3153	1.00	4.00	sync=1.00
+# quiet_rounds	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	A steady	7 of 25 rounds	median_quiet_ms 11.4745	median_all_ms 11.2899
+# quiet_rounds	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B big churn (24 GiB)	7 of 25 rounds	median_quiet_ms 31.2224	median_all_ms 30.4625
+# quiet_rounds	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	B2 small churn (24 GiB)	7 of 25 rounds	median_quiet_ms 17.3296	median_all_ms 15.2737
+# quiet_rounds	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	C28 big churn (28 GiB backend)	7 of 25 rounds	median_quiet_ms 18.5784	median_all_ms 16.5575
+# quiet_rounds	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	E fresh (trim_pool before each call)	7 of 25 rounds	median_quiet_ms 13.1173	median_all_ms 12.4995
+# quiet_rounds	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dsync x8	7 of 25 rounds	median_quiet_ms 5.9196	median_all_ms 5.9091
+# quiet_rounds	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	Dnosync x8	7 of 25 rounds	median_quiet_ms 6.7028	median_all_ms 6.7028
+# quiet_rounds	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	control: f32 linear fc1	7 of 25 rounds	median_quiet_ms 11.2395	median_all_ms 11.2771
+# attempt	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	1	load_start 3.09 3.74 4.19	load_end 4.41 3.97 4.25	control_tflops 4.47	control_ok false	noisy_pairs_gating 0	pageouts_delta 0	swapins_delta 0	swap_before total = 5120.00M  used = 3895.94M  free = 1224.06M  (encrypted)	swap_after total = 5120.00M  used = 3895.94M  free = 1224.06M  (encrypted)	verdict repeat
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	129500160	10.1593	10.5468	11.5905	12.7790	0.7912	7.2618	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady'	129500160	5.6996	5.7090	10.7993	12.9708	0.7912	7.2618	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	129500160	23.1929	23.2214	30.5577	33.3323	2.3031	14.2271	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)'	129500160	16.8984	18.6481	28.2546	32.8752	2.3031	14.2271	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	129500160	12.4746	12.6703	14.5085	17.0973	1.1095	10.0918	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)'	129500160	12.4658	13.4865	15.6181	23.5782	1.1095	10.0918	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	129500160	13.3972	13.6913	19.2689	22.6832	3.5571	9.8459	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)'	129500160	12.9924	13.1037	15.7118	22.9496	3.5571	9.8459	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	129500160	11.3718	12.0259	12.4915	15.4835	0.1362	3.4577	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)'	129500160	11.3385	11.6122	12.3553	14.2920	0.1362	3.4577	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	129500160	5.6820	5.7156	5.7959	5.9829	5.1948	5.9632	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8'	129500160	5.6729	5.7735	10.9907	11.7367	5.1948	5.9632	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	129500160	6.3992	6.5494	6.7120	6.8676	3.5440	4.1928	ok	waits_mean 0.25	waits_max 0	dispatches_mean 7.00	sync=0.12 mem_cap=0.12
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8'	129500160	6.5069	6.5912	10.2560	10.7840	3.5440	4.1928	ok	waits_mean 0.25	waits_max 0	dispatches_mean 7.00	sync=0.12 mem_cap=0.12
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	138838016	10.2867	10.6643	11.2320	11.6660	0.0112	1.7411	ok	waits_mean 1.00	waits_max 1	dispatches_mean 4.00	sync=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1'	138838016	10.2188	10.5330	11.2432	12.2741	0.0112	1.7411	ok	waits_mean 1.00	waits_max 1	dispatches_mean 4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	0	0	11.0765	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	0	1	11.5905	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	0	2	11.3403	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	0	3	13.3666	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	0	4	12.6843	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	0	5	11.0390	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	0	6	10.1593	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	0	7	12.7790	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	0	8	11.2420	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	0	9	11.5415	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	0	10	12.0615	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	0	11	10.9319	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	0	12	11.5473	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	0	13	11.6428	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	0	14	11.3836	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	0	15	11.7844	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	0	16	12.5797	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	0	17	10.5468	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	0	18	11.5092	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	0	19	11.8023	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	0	20	16.1931	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	0	21	12.0029	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	0	22	11.9569	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	0	23	12.2355	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	0	24	10.4407	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	1	0	11.5370	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	1	1	6.1404	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	1	2	16.0843	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	1	3	5.7200	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	1	4	11.7131	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	1	5	6.1780	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	1	6	12.9708	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	1	7	5.8679	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	1	8	11.8325	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	1	9	6.1071	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	1	10	10.7993	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	1	11	5.7090	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	1	12	12.2096	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	1	13	5.7085	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	1	14	11.6024	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	1	15	5.7399	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	1	16	11.6156	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	1	17	6.1956	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	1	18	11.7348	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	1	19	5.7125	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	1	20	13.0009	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	1	21	5.7233	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	1	22	11.7923	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	1	23	5.6996	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	1	24	11.2119	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	0	0	31.3879	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	0	1	27.1942	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	0	2	24.0869	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	0	3	25.2845	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	0	4	30.5577	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	0	5	23.2831	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	0	6	23.1929	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	0	7	31.7518	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	0	8	32.9930	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	0	9	31.6956	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	0	10	33.0758	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	0	11	24.3509	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	0	12	33.6220	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	0	13	33.3323	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	0	14	30.4135	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	0	15	32.6775	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	0	16	32.7812	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	0	17	23.2155	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	0	18	31.3819	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	0	19	24.3584	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	0	20	33.4438	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	0	21	23.2214	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	0	22	23.8893	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	0	23	31.3698	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	0	24	28.4002	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	1	0	32.9310	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	1	1	26.8690	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	1	2	28.2546	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	1	3	19.0709	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	1	4	22.5949	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	1	5	16.8984	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	1	6	31.2792	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	1	7	27.1271	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	1	8	32.0784	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	1	9	18.8825	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	1	10	32.0777	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	1	11	26.2399	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	1	12	24.2075	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	1	13	29.2847	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	1	14	34.6778	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	1	15	28.6872	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	1	16	31.0571	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	1	17	25.9912	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	1	18	31.8211	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	1	19	29.3674	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	1	20	25.5016	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	1	21	18.6481	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	1	22	31.6865	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	1	23	18.1689	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	1	24	32.8752	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	0	0	15.6135	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	0	1	27.5659	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	0	2	14.5141	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	0	3	15.7611	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	0	4	14.7471	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	0	5	14.5494	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	0	6	12.6217	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	0	7	13.4853	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	0	8	12.6703	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	0	9	14.3541	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	0	10	12.4746	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	0	11	14.8660	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	0	12	14.5122	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	0	13	14.5085	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	0	14	15.2169	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	0	15	14.1456	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	0	16	14.2045	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	0	17	16.2465	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	0	18	14.4330	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	0	19	18.0982	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	0	20	14.3718	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	0	21	17.0973	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	0	22	13.8515	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	0	23	12.9301	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	0	24	13.9365	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	1	0	14.1927	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	1	1	23.9298	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	1	2	13.9151	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	1	3	16.1398	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	1	4	24.8753	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	1	5	14.7226	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	1	6	13.5610	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	1	7	18.7227	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	1	8	15.5184	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	1	9	15.8663	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	1	10	13.4865	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	1	11	18.6172	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	1	12	15.5700	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	1	13	23.5782	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	1	14	15.2890	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	1	15	14.8418	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	1	16	16.4037	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	1	17	15.6181	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	1	18	12.9820	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	1	19	19.6541	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	1	20	17.5966	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	1	21	17.2424	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	1	22	15.5155	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	1	23	17.9873	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	1	24	12.4658	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	0	0	13.6913	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	0	1	15.3818	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	0	2	13.8110	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	0	3	16.7581	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	0	4	22.4953	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	0	5	22.1671	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	0	6	20.9519	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	0	7	20.3522	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	0	8	22.3976	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	0	9	15.9448	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	0	10	14.1964	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	0	11	13.3972	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	0	12	22.3413	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	0	13	21.8734	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	0	14	16.8145	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	0	15	24.5109	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	0	16	14.1615	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	0	17	19.2689	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	0	18	20.7464	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	0	19	22.6832	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	0	20	14.7638	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	0	21	22.1514	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	0	22	14.5603	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	0	23	24.4793	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	0	24	13.6483	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	1	0	12.9976	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	1	1	22.3102	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	1	2	13.8671	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	1	3	14.6951	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	1	4	21.6849	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	1	5	15.8570	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	1	6	21.9827	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	1	7	22.6328	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	1	8	23.5564	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	1	9	15.4938	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	1	10	15.5285	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	1	11	21.1607	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	1	12	21.3729	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	1	13	14.3968	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	1	14	13.5737	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	1	15	21.4399	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	1	16	15.6896	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	1	17	15.7118	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	1	18	12.9924	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	1	19	22.9496	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	1	20	14.0187	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	1	21	22.9538	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	1	22	14.4482	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	1	23	21.6427	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	1	24	13.1037	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	0	0	12.4813	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	0	1	13.7782	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	0	2	12.1975	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	0	3	12.3303	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	0	4	12.4562	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	0	5	11.3718	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	0	6	11.4252	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	0	7	15.6165	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	0	8	12.7145	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	0	9	15.4835	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	0	10	12.8182	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	0	11	13.1492	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	0	12	12.2511	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	0	13	12.5189	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	0	14	12.0903	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	0	15	16.9793	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	0	16	12.0259	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	0	17	12.7379	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	0	18	12.6539	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	0	19	13.3263	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	0	20	12.6538	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	0	21	12.4546	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	0	22	12.2615	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	0	23	12.1983	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	0	24	12.4915	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	1	0	11.9152	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	1	1	12.2569	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	1	2	13.0513	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	1	3	13.4506	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	1	4	12.2769	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	1	5	11.7756	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	1	6	11.3385	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	1	7	13.7060	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	1	8	13.8420	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	1	9	14.3479	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	1	10	11.9441	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	1	11	11.5879	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	1	12	11.6122	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	1	13	14.2415	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	1	14	12.4415	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	1	15	19.0329	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	1	16	12.2715	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	1	17	12.1576	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	1	18	12.2812	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	1	19	14.2920	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	1	20	12.3553	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	1	21	13.0526	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	1	22	12.5910	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	1	23	12.6830	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	1	24	11.6293	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	0	0	5.7554	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	0	1	5.7119	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	0	2	5.9848	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	0	3	5.7156	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	0	4	5.7402	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	0	5	5.7958	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	0	6	5.8559	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	0	7	6.2301	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	0	8	5.7959	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	0	9	5.7677	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	0	10	5.9458	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	0	11	5.8128	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	0	12	5.7383	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	0	13	5.8569	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	0	14	5.7161	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	0	15	5.8840	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	0	16	5.7187	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	0	17	5.9524	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	0	18	5.7615	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	0	19	5.9183	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	0	20	5.9829	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	0	21	5.7215	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	0	22	5.9168	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	0	23	5.8817	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	0	24	5.6820	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	1	0	11.1071	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	1	1	5.7690	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	1	2	11.5602	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	1	3	5.7851	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	1	4	11.4767	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	1	5	5.7735	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	1	6	11.0261	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	1	7	5.9503	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	1	8	12.4981	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	1	9	5.8922	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	1	10	11.4284	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	1	11	5.9279	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	1	12	11.0526	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	1	13	5.9254	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	1	14	11.7367	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	1	15	5.9014	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	1	16	11.6592	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	1	17	5.8092	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	1	18	11.4977	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	1	19	5.9694	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	1	20	11.7218	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	1	21	5.8251	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	1	22	11.7827	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	1	23	5.6729	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	1	24	10.9907	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	0	0	6.7708	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	0	1	6.7001	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	0	2	6.6003	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	0	3	6.9126	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	0	4	6.7104	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	0	5	6.8437	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	0	6	6.7120	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	0	7	6.7461	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	0	8	6.8081	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	0	9	6.6936	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	0	10	6.9453	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	0	11	6.5794	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	0	12	6.5412	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	0	13	6.7480	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	0	14	6.5583	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	0	15	6.8007	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	0	16	6.7532	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	0	17	6.7366	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	0	18	6.3992	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	0	19	6.6299	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	0	20	6.6931	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	0	21	6.5494	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	0	22	6.7916	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	0	23	6.8676	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	0	24	6.6025	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	1	0	10.5682	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	1	1	6.6310	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	1	2	10.5416	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	1	3	6.8601	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	1	4	10.8815	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	1	5	6.7544	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	1	6	10.2560	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	1	7	6.8097	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	1	8	10.6152	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	1	9	6.7082	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	1	10	10.7547	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	1	11	6.5912	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	1	12	10.9185	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	1	13	6.5987	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	1	14	10.7840	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	1	15	6.7041	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	1	16	10.6451	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	1	17	6.5427	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	1	18	10.3422	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	1	19	6.9083	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	1	20	10.5836	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	1	21	6.6488	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	1	22	10.3185	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	1	23	6.5069	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	1	24	10.6275	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	0	0	11.1978	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	0	1	10.6643	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	0	2	11.4049	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	0	3	11.4426	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	0	4	10.9371	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	0	5	11.6660	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	0	6	11.3229	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	0	7	11.0051	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	0	8	11.7133	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	0	9	10.5728	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	0	10	10.9442	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	0	11	10.9114	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	0	12	10.2867	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	0	13	11.6062	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	0	14	10.9854	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	0	15	11.2320	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	0	16	11.0113	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	0	17	11.4776	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	0	18	11.2670	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	0	19	11.2740	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	0	20	11.2951	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	0	21	11.3084	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	0	22	11.1067	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	0	23	11.8326	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	0	24	11.0721	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	1	0	10.2188	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	1	1	10.8663	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	1	2	11.1022	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	1	3	11.6837	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	1	4	12.0004	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	1	5	11.6453	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	1	6	11.2462	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	1	7	10.5330	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	1	8	10.6707	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	1	9	11.4584	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	1	10	10.9488	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	1	11	12.9108	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	1	12	10.9937	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	1	13	11.2436	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	1	14	11.3165	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	1	15	10.8032	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	1	16	12.2741	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	1	17	11.6946	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	1	18	11.0925	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	1	19	11.2432	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	1	20	14.7695	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	1	21	10.4815	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	1	22	10.9089	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	1	23	11.7265	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	1	24	10.5744	1.00	4.00	sync=1.00
+# quiet_rounds	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	A steady	7 of 25 rounds	median_quiet_ms 11.7348	median_all_ms 11.5415
+# quiet_rounds	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B big churn (24 GiB)	7 of 25 rounds	median_quiet_ms 31.2792	median_all_ms 29.2847
+# quiet_rounds	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	B2 small churn (24 GiB)	7 of 25 rounds	median_quiet_ms 14.4330	median_all_ms 14.8660
+# quiet_rounds	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	C28 big churn (28 GiB backend)	7 of 25 rounds	median_quiet_ms 15.5285	median_all_ms 16.8145
+# quiet_rounds	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	E fresh (trim_pool before each call)	7 of 25 rounds	median_quiet_ms 12.4415	median_all_ms 12.4813
+# quiet_rounds	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dsync x8	7 of 25 rounds	median_quiet_ms 5.9848	median_all_ms 5.9014
+# quiet_rounds	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	Dnosync x8	7 of 25 rounds	median_quiet_ms 6.9453	median_all_ms 6.7544
+# quiet_rounds	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	control: f32 linear fc1	7 of 25 rounds	median_quiet_ms 11.2432	median_all_ms 11.2432
+# attempt	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	2	load_start 4.41 3.97 4.25	load_end 4.53 4.05 4.26	control_tflops 4.48	control_ok false	noisy_pairs_gating 0	pageouts_delta 0	swapins_delta 0	swap_before total = 5120.00M  used = 3895.94M  free = 1224.06M  (encrypted)	swap_after total = 5120.00M  used = 3895.94M  free = 1224.06M  (encrypted)	verdict repeat
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	129500160	10.4016	10.7760	11.8189	12.2541	1.4932	6.5234	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady'	129500160	5.6837	5.7074	10.3257	12.2308	1.4932	6.5234	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	129500160	21.6742	23.5192	31.9647	33.9496	6.2541	14.0043	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)'	129500160	18.5840	19.2867	25.7106	33.2910	6.2541	14.0043	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	129500160	12.6292	13.2771	14.9791	22.5378	4.3224	9.9212	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)'	129500160	12.9193	14.0334	19.3015	23.9546	4.3224	9.9212	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	129500160	12.3745	12.7481	19.0080	22.7286	3.2227	9.9805	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)'	129500160	12.1067	13.5262	15.7853	23.3393	3.2227	9.9805	ok	waits_mean 2.00	waits_max 2	dispatches_mean 7.00	sync=1.00 freed=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	129500160	11.1488	11.7275	12.3444	13.8296	0.1586	2.1695	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)'	129500160	11.2980	11.6528	12.1858	13.8223	0.1586	2.1695	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	129500160	5.6645	5.6843	5.8537	5.9625	5.0607	5.7464	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8'	129500160	5.6707	5.7254	10.9144	11.4719	5.0607	5.7464	ok	waits_mean 1.00	waits_max 1	dispatches_mean 7.00	sync=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	129500160	6.4844	6.5202	6.6903	6.8429	3.6287	4.2912	ok	waits_mean 0.25	waits_max 0	dispatches_mean 7.00	sync=0.12 mem_cap=0.12
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8'	129500160	6.4399	6.5598	10.3190	10.8510	3.6287	4.2912	ok	waits_mean 0.25	waits_max 0	dispatches_mean 7.00	sync=0.12 mem_cap=0.12
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	138838016	10.3965	10.6339	11.1670	11.9636	0.2421	1.3297	ok	waits_mean 1.00	waits_max 1	dispatches_mean 4.00	sync=1.00
+conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1'	138838016	10.6821	10.7660	11.4090	12.0286	0.2421	1.3297	ok	waits_mean 1.00	waits_max 1	dispatches_mean 4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	0	0	10.9218	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	0	1	11.9050	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	0	2	12.0542	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	0	3	12.2343	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	0	4	12.4272	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	0	5	10.7760	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	0	6	10.9262	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	0	7	11.2278	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	0	8	11.6981	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	0	9	11.8278	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	0	10	13.2440	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	0	11	10.4016	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	0	12	11.8582	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	0	13	11.8758	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	0	14	11.6898	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	0	15	11.5723	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	0	16	12.2541	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	0	17	11.8189	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	0	18	11.0633	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	0	19	11.8790	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	0	20	11.9594	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	0	21	11.5817	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	0	22	11.9275	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	0	23	10.4564	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	0	24	11.5064	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	1	0	11.3454	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	1	1	5.7074	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	1	2	12.2308	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	1	3	5.7756	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	1	4	12.3544	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	1	5	6.3015	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	1	6	11.7670	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	1	7	5.7468	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	1	8	12.3885	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	1	9	5.7383	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	1	10	10.8062	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	1	11	5.7045	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	1	12	11.9237	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	1	13	5.7166	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	1	14	11.1929	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	1	15	5.7106	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	1	16	10.3257	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	1	17	5.6837	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	1	18	11.8236	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	1	19	5.7323	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	1	20	11.9778	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	1	21	5.7299	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	1	22	11.3265	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	1	23	6.1350	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	1	24	10.9738	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	0	0	22.0828	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	0	1	31.6823	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	0	2	31.9647	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	0	3	32.4537	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	0	4	27.0235	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	0	5	30.9287	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	0	6	38.2468	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	0	7	33.3238	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	0	8	32.5711	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	0	9	25.0328	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	0	10	37.0526	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	0	11	21.6742	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	0	12	23.5192	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	0	13	31.7237	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	0	14	26.3475	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	0	15	33.1803	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	0	16	33.9062	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	0	17	33.2168	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	0	18	31.1975	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	0	19	32.0692	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	0	20	33.9496	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	0	21	33.5411	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	0	22	31.7828	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	0	23	23.6370	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	0	24	33.5115	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	1	0	33.2910	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	1	1	19.2867	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	1	2	23.6139	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	1	3	18.5840	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	1	4	21.5698	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	1	5	18.8506	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	1	6	33.0156	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	1	7	28.4387	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	1	8	32.6584	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	1	9	28.6494	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	1	10	33.3432	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	1	11	19.3734	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	1	12	25.6798	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	1	13	19.7615	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	1	14	25.7106	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	1	15	27.9639	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	1	16	25.3396	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	1	17	27.0093	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	1	18	24.5554	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	1	19	28.1178	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	1	20	26.6226	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	1	21	20.2346	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	1	22	29.9480	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	1	23	20.6605	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	1	24	34.3090	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	0	0	12.6292	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	0	1	14.8527	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	0	2	14.9791	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	0	3	13.4128	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	0	4	13.9435	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	0	5	19.3579	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	0	6	23.1396	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	0	7	19.4980	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	0	8	21.8794	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	0	9	21.0354	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	0	10	14.6925	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	0	11	14.5879	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	0	12	22.6005	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	0	13	15.0564	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	0	14	14.2547	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	0	15	14.6895	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	0	16	14.5374	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	0	17	13.1783	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	0	18	22.1041	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	0	19	15.4612	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	0	20	21.6336	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	0	21	13.9824	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	0	22	13.2771	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	0	23	15.5239	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	0	24	22.5378	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	1	0	13.7689	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	1	1	20.3880	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	1	2	14.0334	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	1	3	23.9546	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	1	4	15.7576	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	1	5	21.8750	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	1	6	12.9193	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	1	7	23.9567	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	1	8	15.1745	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	1	9	20.2921	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	1	10	20.9705	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	1	11	15.0122	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	1	12	21.9032	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	1	13	24.8877	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	1	14	14.8012	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	1	15	23.7928	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	1	16	14.3129	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	1	17	23.2883	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	1	18	21.9509	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	1	19	19.3015	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	1	20	19.2923	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	1	21	17.0374	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	1	22	20.0886	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	1	23	15.6684	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	1	24	14.7732	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	0	0	13.3069	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	0	1	22.6688	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	0	2	22.5493	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	0	3	22.0012	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	0	4	14.1007	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	0	5	22.3729	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	0	6	21.5392	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	0	7	19.0080	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	0	8	22.1534	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	0	9	22.9147	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	0	10	13.6667	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	0	11	16.9879	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	0	12	12.3745	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	0	13	21.6989	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	0	14	14.5383	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	0	15	22.7286	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	0	16	14.3847	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	0	17	21.2661	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	0	18	12.7481	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	0	19	23.3352	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	0	20	14.2047	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	0	21	14.3225	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	0	22	15.5140	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	0	23	21.3721	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	0	24	12.6828	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	1	0	13.5262	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	1	1	14.9639	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	1	2	13.9389	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	1	3	22.6288	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	1	4	14.6894	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	1	5	21.4070	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	1	6	16.4771	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	1	7	23.3393	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	1	8	14.2714	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	1	9	15.7853	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	1	10	21.1376	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	1	11	27.1923	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	1	12	14.1227	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	1	13	21.9027	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	1	14	23.3011	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	1	15	21.7453	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	1	16	12.1067	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	1	17	12.5599	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	1	18	13.5566	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	1	19	15.0588	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	1	20	14.1626	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	1	21	22.9369	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	1	22	19.1237	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	1	23	25.3929	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	1	24	14.8112	2.00	7.00	sync=1.00 freed=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	0	0	12.1872	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	0	1	12.5376	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	0	2	13.4518	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	0	3	13.4175	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	0	4	12.6544	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	0	5	11.6372	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	0	6	11.7536	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	0	7	13.8296	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	0	8	12.1453	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	0	9	13.8753	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	0	10	12.1767	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	0	11	12.1522	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	0	12	11.1488	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	0	13	12.3444	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	0	14	12.1300	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	0	15	11.7275	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	0	16	12.2060	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	0	17	12.3563	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	0	18	12.4596	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	0	19	17.3718	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	0	20	13.4996	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	0	21	12.7238	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	0	22	12.5546	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	0	23	12.1595	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	0	24	11.8156	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	1	0	13.0279	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	1	1	14.6518	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	1	2	13.2709	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	1	3	12.6365	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	1	4	12.5983	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	1	5	11.2980	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	1	6	11.7429	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	1	7	12.0028	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	1	8	12.3584	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	1	9	13.8619	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	1	10	12.1737	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	1	11	12.1913	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	1	12	11.6619	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	1	13	11.8723	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	1	14	11.9201	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	1	15	11.7480	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	1	16	11.3260	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	1	17	11.8296	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	1	18	12.5273	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	1	19	13.8223	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	1	20	11.6528	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	1	21	12.4787	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	1	22	11.8718	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	1	23	12.1858	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	1	24	12.8374	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	0	0	5.8775	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	0	1	5.7193	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	0	2	5.9216	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	0	3	5.7596	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	0	4	5.7101	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	0	5	5.6675	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	0	6	5.6645	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	0	7	5.8850	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	0	8	5.7684	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	0	9	6.1439	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	0	10	6.0561	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	0	11	5.7461	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	0	12	5.8709	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	0	13	5.7226	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	0	14	5.8067	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	0	15	5.9625	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	0	16	5.8108	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	0	17	5.8539	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	0	18	5.6843	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	0	19	5.9491	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	0	20	5.8537	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	0	21	5.9104	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	0	22	5.8938	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	0	23	5.7905	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	0	24	5.9415	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	1	0	11.3223	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	1	1	5.8037	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	1	2	11.4361	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	1	3	5.7254	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	1	4	11.5556	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	1	5	6.1021	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	1	6	10.9144	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	1	7	5.9760	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	1	8	11.2114	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	1	9	5.8192	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	1	10	11.4131	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	1	11	5.8372	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	1	12	11.4123	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	1	13	6.0821	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	1	14	11.2536	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	1	15	5.7202	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	1	16	11.1414	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	1	17	5.8993	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	1	18	11.4179	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	1	19	5.7924	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	1	20	11.7173	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	1	21	5.7254	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	1	22	11.1997	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	1	23	5.6707	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	1	24	11.4719	1.00	7.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	0	0	6.8429	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	0	1	6.8524	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	0	2	6.7197	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	0	3	6.8718	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	0	4	6.6622	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	0	5	6.7110	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	0	6	6.4844	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	0	7	6.7950	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	0	8	6.7129	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	0	9	6.6766	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	0	10	6.6975	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	0	11	6.6013	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	0	12	6.6140	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	0	13	6.5349	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	0	14	6.6852	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	0	15	6.7219	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	0	16	6.6903	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	0	17	6.7766	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	0	18	6.5886	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	0	19	6.7043	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	0	20	6.5011	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	0	21	6.5202	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	0	22	6.5636	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	0	23	6.6345	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	0	24	6.7244	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	1	0	10.4623	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	1	1	6.7279	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	1	2	11.1088	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	1	3	6.7496	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	1	4	10.9797	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	1	5	6.9066	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	1	6	10.3588	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	1	7	6.7394	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	1	8	10.5186	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	1	9	6.4399	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	1	10	10.8206	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	1	11	6.5856	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	1	12	10.5268	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	1	13	6.8928	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	1	14	10.5968	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	1	15	6.6118	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	1	16	10.8241	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	1	17	6.5837	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	1	18	10.3190	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	1	19	6.5380	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	1	20	10.8510	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	1	21	6.6114	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	1	22	10.6219	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	1	23	6.5598	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	1	24	10.7140	0.25	7.00	sync=0.12 mem_cap=0.12
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	0	0	10.9011	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	0	1	11.2355	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	0	2	10.9666	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	0	3	11.5738	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	0	4	11.1670	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	0	5	10.3965	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	0	6	10.6339	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	0	7	10.7829	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	0	8	11.9636	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	0	9	12.0775	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	0	10	11.4457	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	0	11	11.2050	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	0	12	10.5505	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	0	13	11.1059	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	0	14	11.4822	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	0	15	10.7674	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	0	16	11.3328	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	0	17	11.6013	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	0	18	10.8821	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	0	19	11.2767	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	0	20	12.4581	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	0	21	10.9842	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	0	22	10.8208	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	0	23	11.5610	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	0	24	11.1062	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	1	0	10.7660	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	1	1	11.3243	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	1	2	11.4424	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	1	3	10.9086	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	1	4	12.9137	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	1	5	11.1137	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	1	6	10.7250	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	1	7	11.7551	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	1	8	11.2183	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	1	9	10.8960	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	1	10	11.4090	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	1	11	11.0280	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	1	12	10.6821	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	1	13	11.8910	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	1	14	11.4057	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	1	15	11.4893	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	1	16	11.4694	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	1	17	10.8986	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	1	18	11.8823	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	1	19	11.5608	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	1	20	11.7675	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	1	21	10.9026	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	1	22	11.8349	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	1	23	12.0286	1.00	4.00	sync=1.00
+# sample	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	1	24	12.0659	1.00	4.00	sync=1.00
+# quiet_rounds	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	A steady	7 of 25 rounds	median_quiet_ms 11.6898	median_all_ms 11.5064
+# quiet_rounds	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B big churn (24 GiB)	7 of 25 rounds	median_quiet_ms 28.1178	median_all_ms 28.6494
+# quiet_rounds	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	B2 small churn (24 GiB)	7 of 25 rounds	median_quiet_ms 14.8527	median_all_ms 15.7576
+# quiet_rounds	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	C28 big churn (28 GiB backend)	7 of 25 rounds	median_quiet_ms 16.9879	median_all_ms 16.9879
+# quiet_rounds	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	E fresh (trim_pool before each call)	7 of 25 rounds	median_quiet_ms 12.2060	median_all_ms 12.2060
+# quiet_rounds	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dsync x8	7 of 25 rounds	median_quiet_ms 5.9216	median_all_ms 5.8938
+# quiet_rounds	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	Dnosync x8	7 of 25 rounds	median_quiet_ms 6.7197	median_all_ms 6.7219
+# quiet_rounds	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	control: f32 linear fc1	7 of 25 rounds	median_quiet_ms 11.4057	median_all_ms 11.2767
+# attempt	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	3	load_start 4.53 4.05 4.26	load_end 5.45 4.36 4.36	control_tflops 4.50	control_ok false	noisy_pairs_gating 0	pageouts_delta 0	swapins_delta 0	swap_before total = 5120.00M  used = 3895.94M  free = 1224.06M  (encrypted)	swap_after total = 5120.00M  used = 3895.94M  free = 1224.06M  (encrypted)	verdict repeat
+# row	conv_transpose2d [1, 512, 144, 144] x [512, 256, 2, 2] x [256] stride 2	clean false
+# load_end 5.45 4.36 4.36
+# rows_clean 0 of 1
+# step_after 09:10:44 pageouts 300004 swapins 3076485 swap [total = 5120.00M  used = 3895.94M  free = 1224.06M  (encrypted)] load 5.45 4.36 4.36 exit 0
+mac_heavy: 2026-10-28T09:10:44Z '78-b6-alloc' finished with exit 0
