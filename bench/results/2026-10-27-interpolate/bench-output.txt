@@ -1,0 +1,106 @@
+# interpolate bench, run 1 of 2: contended (load 14.5 to 20.8, control 4.3 to 5.95 TFLOP/s), no clean attempt, no number (rules.md addendum). Log as written by mac_heavy job 78-b3in-bench.
+mac_heavy: 2026-10-27T13:22:14Z '78-b3in-bench' waits without the lock: no cargo slot free (all 2 held in /Users/bharath/.cache/cargo-slots)
+mac_heavy: 2026-10-27T13:24:14Z '78-b3in-bench' holds the lock (waited 120s; load 14.48, 1316 processes); running: cargo run --release --manifest-path /Users/bharath/Code/research/ojas-78b/Cargo.toml -p ojas-metal --features metal --example frame_ops_bench -- 5 25 =interpolate_bilinear_forward	[2, 1, 288, 288] -> [1152, 1152]|=interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 640]|=interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 854]
+   Compiling objc2 v0.6.4
+   Compiling objc2-encode v4.1.0
+   Compiling libc v0.2.189
+   Compiling ojas-core v0.1.0 (/Users/bharath/Code/research/ojas-78b/ojas-core)
+   Compiling bitflags v2.13.2
+   Compiling block2 v0.6.2
+   Compiling objc2-core-foundation v0.3.2
+   Compiling tessl v0.2.0 (/Users/bharath/Code/research/tessl)
+   Compiling objc2-foundation v0.3.2
+   Compiling dispatch2 v0.3.1
+   Compiling ojas-io v0.1.0 (/Users/bharath/Code/research/ojas-78b/ojas-io)
+   Compiling ojas-metal v0.1.0 (/Users/bharath/Code/research/ojas-78b/ojas-metal)
+   Compiling ojas-device v0.1.0 (/Users/bharath/Code/research/ojas-78b/ojas-device)
+   Compiling ojas-kernels v0.1.0 (/Users/bharath/Code/research/ojas-78b/ojas-kernels)
+   Compiling objc2-metal v0.3.2
+   Compiling ojas-simd v0.1.0 (/Users/bharath/Code/research/ojas-78b/ojas-simd)
+   Compiling ojas-cpu v0.1.0 (/Users/bharath/Code/research/ojas-78b/ojas-cpu)
+   Compiling ojas-data v0.1.0 (/Users/bharath/Code/research/ojas-78b/ojas-data)
+   Compiling ojas-oracle v0.1.0 (/Users/bharath/Code/research/ojas-78b/ojas-oracle)
+    Finished `release` profile [optimized] target(s) in 1m 06s
+     Running `target-78b/release/examples/frame_ops_bench 5 25 '=interpolate_bilinear_forward	[2, 1, 288, 288] -> [1152, 1152]|=interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 640]|=interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 854]'`
+# load_start 14.85 17.78 20.81
+# columns: row	attempt	arm	bytes	min_ms	p10_ms	median_ms	p90_ms	gb_per_s	gap_ms	spread_ms	pair
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [1152, 1152]	1	op	11280384	0.3161	0.3498	0.4625	2.0400	24.4	0.1946	2.1478	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [1152, 1152]	1	op'	11280384	0.3399	0.3940	0.6571	2.5418	17.2	0.1946	2.1478	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [1152, 1152]	1	control: f32 linear fc1	138838016	10.0758	10.2052	10.6152	12.0497	13.1	0.3958	2.2151	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [1152, 1152]	1	control: f32 linear fc1'	138838016	10.0807	10.1285	11.0110	12.3436	12.6	0.3958	2.2151	ok
+# attempt	interpolate_bilinear_forward	[2, 1, 288, 288] -> [1152, 1152]	1	load_start 14.85 17.78 20.81	load_end 14.85 17.78 20.81	control_tflops 4.74	control_ok false	noisy_pairs 0	verdict repeat
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [1152, 1152]	2	op	11280384	0.2582	0.2672	0.3673	1.2663	30.7	0.0275	0.9991	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [1152, 1152]	2	op'	11280384	0.3165	0.3247	0.3948	0.8037	28.6	0.0275	0.9991	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [1152, 1152]	2	control: f32 linear fc1	138838016	8.1431	8.1988	8.8637	12.3005	15.7	0.0428	4.1016	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [1152, 1152]	2	control: f32 linear fc1'	138838016	8.0059	8.0549	8.9065	9.5420	15.6	0.0428	4.1016	ok
+# attempt	interpolate_bilinear_forward	[2, 1, 288, 288] -> [1152, 1152]	2	load_start 14.85 17.78 20.81	load_end 14.85 17.78 20.81	control_tflops 5.67	control_ok false	noisy_pairs 0	verdict repeat
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [1152, 1152]	3	op	11280384	0.2556	0.2852	0.3772	0.4572	29.9	0.0125	0.1720	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [1152, 1152]	3	op'	11280384	0.3264	0.3529	0.3897	0.5085	28.9	0.0125	0.1720	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [1152, 1152]	3	control: f32 linear fc1	138838016	8.1790	9.8187	10.3453	11.9051	13.4	0.0631	2.1036	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [1152, 1152]	3	control: f32 linear fc1'	138838016	9.8563	9.9282	10.2822	12.0318	13.5	0.0631	2.1036	ok
+# attempt	interpolate_bilinear_forward	[2, 1, 288, 288] -> [1152, 1152]	3	load_start 14.85 17.78 20.81	load_end 14.85 17.78 20.81	control_tflops 4.86	control_ok false	noisy_pairs 0	verdict repeat
+# row	interpolate_bilinear_forward	[2, 1, 288, 288] -> [1152, 1152]	clean false
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 640]	1	op	3121152	0.1728	0.2303	0.3064	0.5607	10.2	0.0248	0.5432	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 640]	1	op'	3121152	0.2516	0.2822	0.3312	0.8254	9.4	0.0248	0.5432	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 640]	1	control: f32 linear fc1	138838016	9.8156	9.8770	10.0180	11.6638	13.9	0.1451	1.9128	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 640]	1	control: f32 linear fc1'	138838016	9.8556	9.8692	10.1631	11.7820	13.7	0.1451	1.9128	ok
+# attempt	interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 640]	1	load_start 14.85 17.78 20.81	load_end 14.85 17.78 20.81	control_tflops 5.02	control_ok false	noisy_pairs 0	verdict repeat
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 640]	2	op	3121152	0.1957	0.2459	0.3003	0.9434	10.4	0.0145	0.6975	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 640]	2	op'	3121152	0.2627	0.2784	0.3148	0.8506	9.9	0.0145	0.6975	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 640]	2	control: f32 linear fc1	138838016	8.0219	8.0534	8.4559	9.8856	16.4	0.1945	1.8322	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 640]	2	control: f32 linear fc1'	138838016	8.0366	8.1433	8.2614	8.8239	16.8	0.1945	1.8322	ok
+# attempt	interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 640]	2	load_start 14.85 17.78 20.81	load_end 14.85 17.78 20.81	control_tflops 5.95	control_ok false	noisy_pairs 0	verdict repeat
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 640]	3	op	3121152	0.2113	0.2443	0.3349	1.1848	9.3	0.1527	1.8503	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 640]	3	op'	3121152	0.2762	0.2978	0.4876	2.1480	6.4	0.1527	1.8503	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 640]	3	control: f32 linear fc1	138838016	8.3055	8.4126	10.5460	12.5404	13.2	0.0812	4.1278	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 640]	3	control: f32 linear fc1'	138838016	8.3692	9.3116	10.6272	11.9852	13.1	0.0812	4.1278	ok
+# attempt	interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 640]	3	load_start 14.85 17.78 20.81	load_end 14.85 17.78 20.81	control_tflops 4.77	control_ok false	noisy_pairs 0	verdict repeat
+# row	interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 640]	clean false
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 854]	1	op	3942912	0.2358	0.2625	0.3368	0.9739	11.7	0.0137	0.9834	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 854]	1	op'	3942912	0.3053	0.3141	0.3505	1.2975	11.2	0.0137	0.9834	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 854]	1	control: f32 linear fc1	138838016	8.2800	8.4463	10.2813	11.9892	13.5	0.0178	3.5429	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 854]	1	control: f32 linear fc1'	138838016	8.4938	9.2100	10.2635	11.5577	13.5	0.0178	3.5429	ok
+# attempt	interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 854]	1	load_start 14.85 17.78 20.81	load_end 14.85 17.78 20.81	control_tflops 4.89	control_ok false	noisy_pairs 0	verdict repeat
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 854]	2	op	3942912	0.2457	0.2571	0.3321	0.3747	11.9	0.0389	0.2079	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 854]	2	op'	3942912	0.2841	0.3087	0.3710	0.5166	10.6	0.0389	0.2079	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 854]	2	control: f32 linear fc1	138838016	8.2276	8.4050	8.7893	9.7855	15.8	0.0020	1.5596	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 854]	2	control: f32 linear fc1'	138838016	8.3048	8.3850	8.7912	9.9445	15.8	0.0020	1.5596	ok
+# attempt	interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 854]	2	load_start 14.85 17.78 20.81	load_end 14.54 17.67 20.75	control_tflops 5.72	control_ok false	noisy_pairs 0	verdict repeat
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 854]	3	op	3942912	0.2861	0.3240	0.3863	1.4389	10.2	0.0084	1.1149	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 854]	3	op'	3942912	0.3223	0.3416	0.3947	1.3982	10.0	0.0084	1.1149	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 854]	3	control: f32 linear fc1	138838016	9.4663	9.7357	11.7514	14.1750	11.8	0.1026	4.4393	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 854]	3	control: f32 linear fc1'	138838016	9.3922	9.7135	11.6488	13.4650	11.9	0.1026	4.4393	ok
+# attempt	interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 854]	3	load_start 14.54 17.67 20.75	load_end 14.54 17.67 20.75	control_tflops 4.28	control_ok false	noisy_pairs 0	verdict repeat
+# row	interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 854]	clean false
+# load_end 14.54 17.67 20.75
+# rows_clean 0 of 3
+mac_heavy: 2026-10-27T13:25:28Z '78-b3in-bench' finished with exit 0
+
+# interpolate bench, run 2 of 2: the quiet window of b7-run (2026-10-28 08:49 UTC): load 4.26, control 6.41 to 6.43 TFLOP/s, Pageouts and Swapins deltas 0, 3 of 3 rows clean. Log as written by b6-step.sh under mac_heavy job 78-b6-interp, step lines included.
+mac_heavy: 2026-10-28T08:46:43Z '78-b6-interp' waiting 0s for the lock; holder: label=tessl-w33-gate pid=11042 start=2026-10-28T08:44:37Z cwd=/Users/bharath/Code/research/tessl 
+mac_heavy: 2026-10-28T08:49:23Z '78-b6-interp' holds the lock (waited 160s; load 4.26, 897 processes); running: bash /Users/bharath/Code/research/ojas/backups/78-tools/jobs/b6-step.sh 600 /Users/bharath/Code/research/ojas/backups/78-tools/bin/frame_ops_bench_ledger3 5 25 =interpolate_bilinear_forward	[2, 1, 288, 288] -> [1152, 1152]|=interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 640]|=interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 854]
+# step_before 08:49:23 pageouts 300004 swapins 3076461 swap [total = 5120.00M  used = 3895.94M  free = 1224.06M  (encrypted)] load 4.26 4.43 5.37
+# load_start 4.26 4.43 5.37
+# columns: row	attempt	arm	bytes	min_ms	p10_ms	median_ms	p90_ms	gb_per_s	gap_ms	spread_ms	pair
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [1152, 1152]	1	op	11280384	0.2390	0.2560	0.2718	0.3010	41.5	0.0183	0.0451	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [1152, 1152]	1	op'	11280384	0.2667	0.2725	0.2901	0.3066	38.9	0.0183	0.0451	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [1152, 1152]	1	control: f32 linear fc1	138838016	7.7974	7.8026	7.8466	8.3400	17.7	0.0201	0.5374	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [1152, 1152]	1	control: f32 linear fc1'	138838016	7.8118	7.8227	7.8667	8.2746	17.6	0.0201	0.5374	ok
+# attempt	interpolate_bilinear_forward	[2, 1, 288, 288] -> [1152, 1152]	1	load_start 4.26 4.43 5.37	load_end 4.26 4.43 5.37	control_tflops 6.41	control_ok true	noisy_pairs 0	verdict clean
+# row	interpolate_bilinear_forward	[2, 1, 288, 288] -> [1152, 1152]	clean true
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 640]	1	op	3121152	0.1729	0.1814	0.2090	0.2355	14.9	0.0182	0.0541	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 640]	1	op'	3121152	0.1965	0.2022	0.2272	0.2453	13.7	0.0182	0.0541	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 640]	1	control: f32 linear fc1	138838016	7.7677	7.7904	7.8259	7.8663	17.7	0.0256	0.0759	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 640]	1	control: f32 linear fc1'	138838016	7.7733	7.7744	7.8003	7.8210	17.8	0.0256	0.0759	ok
+# attempt	interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 640]	1	load_start 4.26 4.43 5.37	load_end 4.26 4.43 5.37	control_tflops 6.43	control_ok true	noisy_pairs 0	verdict clean
+# row	interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 640]	clean true
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 854]	1	op	3942912	0.1669	0.1731	0.2040	0.2327	19.3	0.0138	0.0597	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 854]	1	op'	3942912	0.1875	0.1955	0.2179	0.2450	18.1	0.0138	0.0597	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 854]	1	control: f32 linear fc1	138838016	7.7629	7.7810	7.8400	8.3611	17.7	0.0326	0.5800	ok
+interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 854]	1	control: f32 linear fc1'	138838016	7.7409	7.7611	7.8074	8.0803	17.8	0.0326	0.5800	ok
+# attempt	interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 854]	1	load_start 4.26 4.43 5.37	load_end 4.26 4.43 5.37	control_tflops 6.41	control_ok true	noisy_pairs 0	verdict clean
+# row	interpolate_bilinear_forward	[2, 1, 288, 288] -> [480, 854]	clean true
+# load_end 4.26 4.43 5.37
+# rows_clean 3 of 3
+# step_after 08:49:25 pageouts 300004 swapins 3076461 swap [total = 5120.00M  used = 3895.94M  free = 1224.06M  (encrypted)] load 4.26 4.43 5.37 exit 0
+mac_heavy: 2026-10-28T08:49:25Z '78-b6-interp' finished with exit 0
