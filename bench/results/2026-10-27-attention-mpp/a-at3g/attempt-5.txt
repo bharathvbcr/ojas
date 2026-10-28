@@ -1,0 +1,117 @@
+# load_start 6.20 13.32 18.30
+row	arm	p10_ms	median_ms	p90_ms	median_ms_A'	gap_ms	spread_ms	pair	note
+control fc1 [5184,1024]x[4736,1024]	fc1 linear f32 (control)	9.067	12.845	24.597	13.261	0.416	17.309	ok	3.91 TFLOP/s
+# control 3.91 TFLOP/s outside 6.11 to 6.49
+# observable memory cross m=5200 | the flash kernel ran if the dispatcher's call is at least 3x faster than the same call forced onto the scalar kernel: dispatcher 9.27 ms, forced scalar 345.68 ms, ratio 37.3x -> confirmed
+memory cross m=5200	flash	10.067	11.371	17.397	11.553	0.182	7.330	ok	2.43 TFLOP/s on the useful work
+memory cross m=5200	split-K	20.523	23.633	36.390	23.911	0.279	15.867	ok	1.17 TFLOP/s on the useful work
+memory cross m=5200	pad-q	9.541	11.343	16.641	11.084	0.259	7.100	ok	2.43 TFLOP/s on the useful work
+# row memory cross m=5200 | dispatcher-vs-splitK max abs out 1.53e-7 lse 2.86e-6 vs scalar out 1.21e-7 lse 4.77e-6 vs pad-q 3.54e-8 dispatches dispatcher 6 split-K 7 scalar 6; kernels dispatcher Ran { flash: 1, scalar: 0, part: 0, combine: 0 } split-K Ran { flash: 0, scalar: 0, part: 1, combine: 1 } scalar Ran { flash: 0, scalar: 1, part: 0, combine: 0 } forced flash 6 Ran { flash: 1, scalar: 0, part: 0, combine: 0 } flash-vs-scalar time ratio 37.3x | dispatcher - splitK = -12.261 ms (noise bar 15.867) no regression
+# row memory cross m=5200 | pad-q - dispatcher = -0.028 ms (noise bar 7.330), dispatcher faster in 9/50 paired samples; better of split-K and pad-q = 11.343 ms
+# cross memory cross m=5200 | dispatcher beats pad-q beyond noise: false
+# stand-in memory cross m=5200 | dispatcher / pad-q = 1.002 x quiet pad-q 5.601 ms = 5.61 ms; pad-q arm 11.34 ms against its quiet anchor 5.60 ms (x2.03)
+# observable memory cross m=10400 | the flash kernel ran if the dispatcher's call is at least 3x faster than the same call forced onto the scalar kernel: dispatcher 18.31 ms, forced scalar 754.15 ms, ratio 41.2x -> confirmed
+memory cross m=10400	flash	26.219	28.437	31.337	27.273	1.164	6.616	ok	1.94 TFLOP/s on the useful work
+memory cross m=10400	split-K	53.464	59.377	67.659	57.922	1.454	14.765	ok	0.93 TFLOP/s on the useful work
+memory cross m=10400	pad-q	47.244	51.192	60.107	50.938	0.254	14.265	ok	1.08 TFLOP/s on the useful work
+# row memory cross m=10400 | dispatcher-vs-splitK max abs out 1.24e-7 lse 3.81e-6 vs scalar out 1.34e-7 lse 6.68e-6 vs pad-q 2.79e-8 dispatches dispatcher 6 split-K 7 scalar 6; kernels dispatcher Ran { flash: 1, scalar: 0, part: 0, combine: 0 } split-K Ran { flash: 0, scalar: 0, part: 1, combine: 1 } scalar Ran { flash: 0, scalar: 1, part: 0, combine: 0 } forced flash 6 Ran { flash: 1, scalar: 0, part: 0, combine: 0 } flash-vs-scalar time ratio 41.2x | dispatcher - splitK = -30.939 ms (noise bar 14.195) no regression
+# row memory cross m=10400 | pad-q - dispatcher = 22.754 ms (noise bar 12.862), dispatcher faster in 50/50 paired samples; better of split-K and pad-q = 51.192 ms
+# cross memory cross m=10400 | dispatcher beats pad-q beyond noise: true
+# stand-in memory cross m=10400 | dispatcher / pad-q = 0.556 x quiet pad-q 21.056 ms = 11.70 ms; pad-q arm 51.19 ms against its quiet anchor 21.06 ms (x2.43)
+# observable memory cross m=10624 | the flash kernel ran if the dispatcher's call is at least 3x faster than the same call forced onto the scalar kernel: dispatcher 18.38 ms, forced scalar 665.78 ms, ratio 36.2x -> confirmed
+memory cross m=10624	flash	22.620	23.729	27.508	24.012	0.284	5.366	ok	2.38 TFLOP/s on the useful work
+memory cross m=10624	split-K	47.148	49.183	55.505	49.236	0.053	13.572	ok	1.15 TFLOP/s on the useful work
+memory cross m=10624	pad-q	40.346	43.638	46.880	43.819	0.182	7.470	ok	1.29 TFLOP/s on the useful work
+# row memory cross m=10624 | dispatcher-vs-splitK max abs out 1.32e-7 lse 3.81e-6 vs scalar out 1.19e-7 lse 7.63e-6 vs pad-q 2.61e-8 dispatches dispatcher 6 split-K 7 scalar 6; kernels dispatcher Ran { flash: 1, scalar: 0, part: 0, combine: 0 } split-K Ran { flash: 0, scalar: 0, part: 1, combine: 1 } scalar Ran { flash: 0, scalar: 1, part: 0, combine: 0 } forced flash 6 Ran { flash: 1, scalar: 0, part: 0, combine: 0 } flash-vs-scalar time ratio 36.2x | dispatcher - splitK = -25.454 ms (noise bar 8.357) no regression
+# row memory cross m=10624 | pad-q - dispatcher = 19.909 ms (noise bar 6.534), dispatcher faster in 49/50 paired samples; better of split-K and pad-q = 43.638 ms
+# cross memory cross m=10624 | dispatcher beats pad-q beyond noise: true
+# stand-in memory cross m=10624 | dispatcher / pad-q = 0.544 x quiet pad-q 21.863 ms = 11.89 ms; pad-q arm 43.64 ms against its quiet anchor 21.86 ms (x2.00)
+# observable memory cross m=15584 | the flash kernel ran if the dispatcher's call is at least 3x faster than the same call forced onto the scalar kernel: dispatcher 28.57 ms, forced scalar 999.26 ms, ratio 35.0x -> confirmed
+memory cross m=15584	flash	42.637	50.606	63.888	49.152	1.454	21.251	ok	1.63 TFLOP/s on the useful work
+memory cross m=15584	split-K	88.750	111.718	124.395	109.213	2.505	43.943	ok	0.74 TFLOP/s on the useful work
+memory cross m=15584	pad-q	103.592	137.414	165.763	133.910	3.504	62.171	ok	0.60 TFLOP/s on the useful work
+# row memory cross m=15584 | dispatcher-vs-splitK max abs out 1.30e-7 lse 4.77e-6 vs scalar out 1.10e-7 lse 7.63e-6 vs pad-q 2.98e-8 dispatches dispatcher 6 split-K 7 scalar 6; kernels dispatcher Ran { flash: 1, scalar: 0, part: 0, combine: 0 } split-K Ran { flash: 0, scalar: 0, part: 1, combine: 1 } scalar Ran { flash: 0, scalar: 1, part: 0, combine: 0 } forced flash 6 Ran { flash: 1, scalar: 0, part: 0, combine: 0 } flash-vs-scalar time ratio 35.0x | dispatcher - splitK = -61.111 ms (noise bar 35.645) no regression
+# row memory cross m=15584 | pad-q - dispatcher = 86.807 ms (noise bar 62.171), dispatcher faster in 50/50 paired samples; better of split-K and pad-q = 111.718 ms
+# cross memory cross m=15584 | dispatcher beats pad-q beyond noise: true
+# stand-in memory cross m=15584 | dispatcher / pad-q = 0.368 x quiet pad-q 46.836 ms = 17.25 ms (gate 20 ms: met); pad-q arm 137.41 ms against its quiet anchor 46.84 ms (x2.93)
+# observable memory cross m=36320 | the flash kernel ran if the dispatcher's call is at least 3x faster than the same call forced onto the scalar kernel: dispatcher 113.83 ms, forced scalar 2816.69 ms, ratio 24.7x -> confirmed
+memory cross m=36320	flash	95.269	110.613	126.756	122.858	12.245	61.945	ok	1.74 TFLOP/s on the useful work
+memory cross m=36320	split-K	232.219	265.935	288.894	265.006	0.929	56.675	ok	0.72 TFLOP/s on the useful work
+memory cross m=36320	pad-q	983.404	1066.070	1142.975	1054.398	11.672	159.570	ok	0.18 TFLOP/s on the useful work
+# row memory cross m=36320 | dispatcher-vs-splitK max abs out 1.54e-7 lse 6.68e-6 vs scalar out 1.33e-7 lse 1.34e-5 vs pad-q 2.79e-8 dispatches dispatcher 6 split-K 7 scalar 6; kernels dispatcher Ran { flash: 1, scalar: 0, part: 0, combine: 0 } split-K Ran { flash: 0, scalar: 0, part: 1, combine: 1 } scalar Ran { flash: 0, scalar: 1, part: 0, combine: 0 } forced flash 6 Ran { flash: 1, scalar: 0, part: 0, combine: 0 } flash-vs-scalar time ratio 24.7x | dispatcher - splitK = -155.322 ms (noise bar 56.675) no regression
+# row memory cross m=36320 | pad-q - dispatcher = 955.457 ms (noise bar 159.570), dispatcher faster in 50/50 paired samples; better of split-K and pad-q = 265.935 ms
+# stand-in memory cross m=36320 | dispatcher / pad-q = 0.104 x quiet pad-q 281.832 ms = 29.24 ms (gate 45 ms: met); pad-q arm 1066.07 ms against its quiet anchor 281.83 ms (x3.78)
+detector bias [1,8,201,32]x5184	dispatcher	1.241	1.447	2.566	1.554	0.108	1.578	ok	0.74 TFLOP/s on the useful work
+detector bias [1,8,201,32]x5184	split-K	1.251	1.496	4.446	1.474	0.022	3.195	ok	0.71 TFLOP/s on the useful work
+# row detector bias [1,8,201,32]x5184 | dispatcher-vs-splitK max abs out 0.00e0 lse 0.00e0 dispatches dispatcher 8 split-K 8 scalar 7; kernels dispatcher Ran { flash: 0, scalar: 0, part: 1, combine: 1 } split-K Ran { flash: 0, scalar: 0, part: 1, combine: 1 } scalar Ran { flash: 0, scalar: 1, part: 0, combine: 0 } | dispatcher - splitK = -0.049 ms (noise bar 3.195) no regression
+decoder D16 [1,8,80,16]x5184	dispatcher	0.644	1.052	3.162	1.120	0.068	2.518	ok	0.20 TFLOP/s on the useful work
+decoder D16 [1,8,80,16]x5184	split-K	0.642	1.095	2.028	1.229	0.134	1.501	ok	0.19 TFLOP/s on the useful work
+# row decoder D16 [1,8,80,16]x5184 | dispatcher-vs-splitK max abs out 0.00e0 lse 0.00e0 dispatches dispatcher 7 split-K 7 scalar 6; kernels dispatcher Ran { flash: 0, scalar: 0, part: 1, combine: 1 } split-K Ran { flash: 0, scalar: 0, part: 1, combine: 1 } scalar Ran { flash: 0, scalar: 1, part: 0, combine: 0 } | dispatcher - splitK = -0.044 ms (noise bar 2.518) no regression
+sweep tq=1 m=5184	flash (forced)	0.861	0.995	1.351	1.041	0.046	0.578	ok	0.01 TFLOP/s on the useful work
+sweep tq=1 m=5184	split-K	0.633	0.740	0.892	0.760	0.020	0.630	ok	0.01 TFLOP/s on the useful work
+sweep tq=1 m=5184	dispatcher	0.628	0.712	0.911	0.850	0.138	0.795	ok	0.01 TFLOP/s on the useful work
+# sweep sweep tq=1 m=5184 | groups 8 | flash - splitK = 0.255 ms (noise bar 0.490): flash does not win | dispatcher routed split-K | dispatcher - splitK = -0.028 ms (noise bar 0.283) no regression
+sweep tq=8 m=5184	flash (forced)	0.836	0.897	0.996	0.874	0.023	0.276	ok	0.05 TFLOP/s on the useful work
+sweep tq=8 m=5184	split-K	0.588	0.646	0.737	0.657	0.010	0.182	ok	0.07 TFLOP/s on the useful work
+sweep tq=8 m=5184	dispatcher	0.578	0.645	0.821	0.650	0.005	0.242	ok	0.07 TFLOP/s on the useful work
+# sweep sweep tq=8 m=5184 | groups 8 | flash - splitK = 0.250 ms (noise bar 0.161): flash does not win | dispatcher routed split-K | dispatcher - splitK = -0.001 ms (noise bar 0.242) no regression
+sweep tq=32 m=5184	flash (forced)	0.806	1.016	1.138	0.982	0.035	0.544	ok	0.17 TFLOP/s on the useful work
+sweep tq=32 m=5184	split-K	0.666	0.758	0.902	0.747	0.011	0.279	ok	0.22 TFLOP/s on the useful work
+sweep tq=32 m=5184	dispatcher	0.611	0.743	0.945	0.755	0.012	0.344	ok	0.23 TFLOP/s on the useful work
+# sweep sweep tq=32 m=5184 | groups 8 | flash - splitK = 0.258 ms (noise bar 0.331): flash does not win | dispatcher routed split-K | dispatcher - splitK = -0.015 ms (noise bar 0.334) no regression
+sweep tq=64 m=5184	flash (forced)	0.881	1.621	2.210	1.556	0.064	1.329	ok	0.21 TFLOP/s on the useful work
+sweep tq=64 m=5184	split-K	0.727	1.469	2.368	1.410	0.059	1.641	ok	0.23 TFLOP/s on the useful work
+sweep tq=64 m=5184	dispatcher	0.761	1.441	2.862	1.384	0.057	2.102	ok	0.24 TFLOP/s on the useful work
+# sweep sweep tq=64 m=5184 | groups 16 | flash - splitK = 0.151 ms (noise bar 1.641): flash does not win | dispatcher routed split-K | dispatcher - splitK = -0.028 ms (noise bar 2.102) no regression
+sweep tq=201 m=5184	flash (forced)	1.237	1.324	2.589	1.408	0.084	1.352	ok	0.81 TFLOP/s on the useful work
+sweep tq=201 m=5184	split-K	1.533	1.682	2.067	1.733	0.051	0.801	ok	0.63 TFLOP/s on the useful work
+sweep tq=201 m=5184	dispatcher	1.578	1.729	2.278	1.768	0.039	0.972	ok	0.62 TFLOP/s on the useful work
+# sweep sweep tq=201 m=5184 | groups 56 | flash - splitK = -0.358 ms (noise bar 1.352): flash does not win | dispatcher routed split-K | dispatcher - splitK = 0.047 ms (noise bar 0.700) no regression
+sweep tq=512 m=5184	flash (forced)	1.276	1.505	2.587	1.439	0.066	1.312	ok	1.81 TFLOP/s on the useful work
+sweep tq=512 m=5184	split-K	2.010	2.300	3.499	2.197	0.102	1.489	ok	1.18 TFLOP/s on the useful work
+sweep tq=512 m=5184	dispatcher	1.994	2.173	3.728	2.327	0.153	2.719	ok	1.25 TFLOP/s on the useful work
+# sweep sweep tq=512 m=5184 | groups 128 | flash - splitK = -0.795 ms (noise bar 1.489): flash does not win | dispatcher routed split-K | dispatcher - splitK = -0.126 ms (noise bar 1.734) no regression
+sweep tq=1024 m=5184	flash (forced)	2.023	2.698	3.971	3.091	0.393	2.455	ok	2.01 TFLOP/s on the useful work
+sweep tq=1024 m=5184	split-K	3.612	5.380	13.122	4.902	0.478	9.510	ok	1.01 TFLOP/s on the useful work
+sweep tq=1024 m=5184	dispatcher	3.719	4.804	9.249	5.447	0.643	5.530	ok	1.13 TFLOP/s on the useful work
+# sweep sweep tq=1024 m=5184 | groups 256 | flash - splitK = -2.682 ms (noise bar 9.510): flash does not win | dispatcher routed split-K | dispatcher - splitK = -0.576 ms (noise bar 9.510) no regression
+sweep tq=2048 m=5184	flash (forced)	4.387	4.819	6.214	4.804	0.015	1.827	ok	2.26 TFLOP/s on the useful work
+sweep tq=2048 m=5184	split-K	8.286	9.890	12.331	9.566	0.323	4.046	ok	1.10 TFLOP/s on the useful work
+sweep tq=2048 m=5184	dispatcher	4.353	5.102	11.368	4.952	0.150	7.015	ok	2.13 TFLOP/s on the useful work
+# sweep sweep tq=2048 m=5184 | groups 512 | flash - splitK = -5.070 ms (noise bar 4.046): flash WINS | dispatcher routed flash | dispatcher - splitK = -4.788 ms (noise bar 7.015) no regression
+sweep tq=1 m=15584	flash (forced)	1.588	2.684	3.693	2.715	0.031	3.205	ok	0.01 TFLOP/s on the useful work
+sweep tq=1 m=15584	split-K	0.979	1.587	2.352	1.833	0.246	1.869	ok	0.01 TFLOP/s on the useful work
+sweep tq=1 m=15584	dispatcher	1.090	1.598	2.744	1.653	0.055	1.654	ok	0.01 TFLOP/s on the useful work
+# sweep sweep tq=1 m=15584 | groups 8 | flash - splitK = 1.097 ms (noise bar 2.105): flash does not win | dispatcher routed split-K | dispatcher - splitK = 0.011 ms (noise bar 1.654) no regression
+sweep tq=8 m=15584	flash (forced)	1.382	1.491	1.781	1.539	0.047	0.399	ok	0.09 TFLOP/s on the useful work
+sweep tq=8 m=15584	split-K	0.859	0.929	1.318	0.989	0.060	0.459	ok	0.14 TFLOP/s on the useful work
+sweep tq=8 m=15584	dispatcher	0.829	0.913	1.482	0.944	0.030	0.654	ok	0.14 TFLOP/s on the useful work
+# sweep sweep tq=8 m=15584 | groups 8 | flash - splitK = 0.562 ms (noise bar 0.459): flash does not win | dispatcher routed split-K | dispatcher - splitK = -0.015 ms (noise bar 0.654) no regression
+sweep tq=32 m=15584	flash (forced)	1.826	2.547	3.144	2.524	0.023	1.789	ok	0.20 TFLOP/s on the useful work
+sweep tq=32 m=15584	split-K	1.233	1.628	2.819	1.626	0.002	1.587	ok	0.31 TFLOP/s on the useful work
+sweep tq=32 m=15584	dispatcher	1.203	1.405	2.454	1.603	0.198	1.251	ok	0.36 TFLOP/s on the useful work
+# sweep sweep tq=32 m=15584 | groups 8 | flash - splitK = 0.919 ms (noise bar 1.587): flash does not win | dispatcher routed split-K | dispatcher - splitK = -0.223 ms (noise bar 1.587) no regression
+sweep tq=64 m=15584	flash (forced)	1.306	1.397	2.087	1.427	0.030	0.781	ok	0.73 TFLOP/s on the useful work
+sweep tq=64 m=15584	split-K	1.074	1.235	2.036	1.198	0.037	0.962	ok	0.83 TFLOP/s on the useful work
+sweep tq=64 m=15584	dispatcher	1.043	1.113	3.243	1.219	0.106	2.200	ok	0.92 TFLOP/s on the useful work
+# sweep sweep tq=64 m=15584 | groups 16 | flash - splitK = 0.162 ms (noise bar 0.962): flash does not win | dispatcher routed split-K | dispatcher - splitK = -0.122 ms (noise bar 2.200) no regression
+sweep tq=201 m=15584	flash (forced)	2.344	3.556	7.612	3.766	0.209	9.009	ok	0.90 TFLOP/s on the useful work
+sweep tq=201 m=15584	split-K	2.795	4.309	9.791	4.920	0.611	6.996	ok	0.74 TFLOP/s on the useful work
+sweep tq=201 m=15584	dispatcher	2.735	5.636	8.665	4.707	0.929	5.931	ok	0.57 TFLOP/s on the useful work
+# sweep sweep tq=201 m=15584 | groups 56 | flash - splitK = -0.753 ms (noise bar 6.996): flash does not win | dispatcher routed split-K | dispatcher - splitK = 1.327 ms (noise bar 6.996) no regression
+sweep tq=512 m=15584	flash (forced)	3.810	6.318	10.537	5.951	0.367	6.726	ok	1.29 TFLOP/s on the useful work
+sweep tq=512 m=15584	split-K	6.058	10.767	15.762	9.082	1.685	9.704	ok	0.76 TFLOP/s on the useful work
+sweep tq=512 m=15584	dispatcher	6.001	9.408	20.243	9.385	0.022	14.243	ok	0.87 TFLOP/s on the useful work
+# sweep sweep tq=512 m=15584 | groups 128 | flash - splitK = -4.449 ms (noise bar 9.704): flash does not win | dispatcher routed split-K | dispatcher - splitK = -1.359 ms (noise bar 14.243) no regression
+sweep tq=1024 m=15584	flash (forced)	6.498	7.590	13.641	8.324	0.734	15.478	ok	2.15 TFLOP/s on the useful work
+sweep tq=1024 m=15584	split-K	12.811	14.670	27.926	15.369	0.699	15.115	ok	1.11 TFLOP/s on the useful work
+sweep tq=1024 m=15584	dispatcher	13.155	16.609	25.997	15.428	1.181	12.841	ok	0.98 TFLOP/s on the useful work
+# sweep sweep tq=1024 m=15584 | groups 256 | flash - splitK = -7.079 ms (noise bar 15.115): flash does not win | dispatcher routed split-K | dispatcher - splitK = 1.939 ms (noise bar 15.115) no regression
+sweep tq=2048 m=15584	flash (forced)	14.411	15.448	17.846	15.791	0.343	8.130	ok	2.12 TFLOP/s on the useful work
+sweep tq=2048 m=15584	split-K	28.765	31.076	32.436	30.697	0.379	8.068	ok	1.05 TFLOP/s on the useful work
+sweep tq=2048 m=15584	dispatcher	13.985	15.905	18.787	15.368	0.538	4.801	ok	2.05 TFLOP/s on the useful work
+# sweep sweep tq=2048 m=15584 | groups 512 | flash - splitK = -15.628 ms (noise bar 3.671): flash WINS | dispatcher routed flash | dispatcher - splitK = -15.171 ms (noise bar 4.801) no regression
+# floor rule | FLASH_MIN_GROUPS = 512 by the sweep (current constant 384); valid only if the run's verdict is clean
+# load_end 30.34 19.34 19.68
+# noisy_pairs 0
+# verdict repeat

@@ -1,0 +1,13 @@
+# load_start 35.01 25.16 21.89
+shape	arm	bytes	min_ms	p10_ms	median_ms	p90_ms	gb_per_s	tflops	gap_ms	spread_ms	pair
+permute [256, 82944] by [1, 0] (detector.rs:372 instance masks [D, 288*288] to [82944, 256])	permute	169869312	0.794	0.817	0.877	0.952	193.8	-	0.021	0.135	ok
+permute [256, 82944] by [1, 0] (detector.rs:372 instance masks [D, 288*288] to [82944, 256])	permute'	169869312	0.822	0.838	0.898	0.943	189.2	-	0.021	0.135	ok
+permute [256, 82944] by [1, 0] (detector.rs:372 instance masks [D, 288*288] to [82944, 256])	permute identity (copy floor)	169869312	0.783	0.797	0.867	0.943	196.0	-	0.023	0.221	ok
+permute [256, 82944] by [1, 0] (detector.rs:372 instance masks [D, 288*288] to [82944, 256])	permute identity (copy floor)'	169869312	0.783	0.802	0.889	1.023	191.0	-	0.023	0.221	ok
+permute [256, 82944] by [1, 0] (detector.rs:372 instance masks [D, 288*288] to [82944, 256])	permute (generic kernel)	169869312	1.360	1.410	1.531	2.018	111.0	-	0.036	0.609	ok
+permute [256, 82944] by [1, 0] (detector.rs:372 instance masks [D, 288*288] to [82944, 256])	permute (generic kernel)'	169869312	1.367	1.448	1.567	1.817	108.4	-	0.036	0.609	ok
+permute [256, 82944] by [1, 0] (detector.rs:372 instance masks [D, 288*288] to [82944, 256])	relu (streaming reference)	169869312	0.768	0.794	0.852	0.941	199.5	-	0.046	0.147	ok
+permute [256, 82944] by [1, 0] (detector.rs:372 instance masks [D, 288*288] to [82944, 256])	relu (streaming reference)'	169869312	0.801	0.823	0.898	0.958	189.3	-	0.046	0.147	ok
+# load_end 35.01 25.16 21.89
+# noisy_pairs 0
+# verdict repeat
