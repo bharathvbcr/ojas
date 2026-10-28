@@ -369,7 +369,7 @@ fn excluded_loss_f64(max_o: f32, sum_o: f32, target: f32) -> f64 {
 /// exponentiate. No extra finite checks: a NaN target with a positive sum
 /// falls through to `exp_nonpos_f32` and comes back NaN, matching the device.
 fn excluded_scale_f32(max_o: f32, sum_o: f32, target: f32) -> f32 {
-    if sum_o.is_nan() || sum_o <= 0.0 {
+    if !(sum_o > 0.0) {
         return 0.0;
     }
     let delta = max_o - target;
@@ -464,7 +464,7 @@ pub fn softmax_grad_mirror(
         let sum_o = s[n];
         for c in 0..width {
             let at = n * width + c;
-            if sum_o.is_nan() || sum_o <= 0.0 {
+            if !(sum_o > 0.0) {
                 logits[at] = 0.0;
                 continue;
             }

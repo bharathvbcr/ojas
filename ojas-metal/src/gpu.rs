@@ -1810,7 +1810,7 @@ mod tests {
             };
             loss += f64::from(row_loss);
             for j in 0..vocab {
-                let g = if sum_o.is_nan() || sum_o <= 0.0 {
+                let g = if !(sum_o > 0.0) {
                     0.0
                 } else if j == t {
                     -sum_o * gscale
