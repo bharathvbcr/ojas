@@ -2356,10 +2356,7 @@ impl CeInput<'_> {
             let scale = ex.scale / self.valid as f32;
             for (j, slot) in dst.iter_mut().enumerate() {
                 if j == class {
-                    // 0.0 - x, not -x: a one-class row has sum == 0 and scale == 0,
-                    // and -x would write -0.0 where the GPU kernels write +0.0.
-                    // Any other value has the same bits either way.
-                    *slot = 0.0 - sum * scale;
+                    *slot = -sum * scale;
                 } else {
                     *slot *= scale;
                 }
