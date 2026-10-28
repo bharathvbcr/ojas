@@ -493,6 +493,102 @@ fn split_backward_passes_match_the_serial_loops_bit_for_bit() {
     }
 }
 
+/// Prime row count and a width that does not divide a piece: the last
+/// piece has fewer rows than the earlier ones. A finite row whose squares
+/// overflow, in the first piece and in that last piece, is refused after
+/// the scratch exists and releases it. A NaN gradient is refused by the
+/// operand scan and also releases nothing.
+#[test]
+fn gated_rms_backward_short_last_piece_matches_the_serial_loop_and_releases() {
+    let inputs = Budget::new(u64::MAX);
+    let shapes = [(1usize, 7usize), (10007, 7)];
+    for (rows, dim) in shapes {
+        let nx = f32s(&vals(41, rows * dim, -2.0, 2.0));
+        let nz = f32s(&vals(42, rows * dim, -2.0, 2.0));
+        let nw = f32s(&vals(43, dim, 0.5, 1.5));
+        let ng = f32s(&vals(44, rows * dim, -1.0, 1.0));
+        let want = gated_bwd_serial(&nx, &nz, &nw, &ng, dim, 1e-6);
+        for threads in [1usize, 3, 7, 18] {
+            for numerics in [Numerics::Exact, Numerics::Fast] {
+                let be = cpu(threads, numerics);
+                let f = |v: &[f32], shape: &[usize]| Tensor::from_f32(v, shape, &inputs).unwrap();
+                assert_eq!(be.budget().live_bytes().unwrap(), 0);
+                let g = be
+                    .gated_rms_norm_backward(
+                        &f(&nx, &[rows, dim]),
+                        &f(&nz, &[rows, dim]),
+                        &f(&nw, &[dim]),
+                        &f(&ng, &[rows, dim]),
+                        1e-6,
+                    )
+                    .unwrap();
+                for (name, got, want) in [
+                    ("dx", &g.input, &want[0]),
+                    ("dz", &g.gate, &want[1]),
+                    ("dw", &g.weight, &want[2]),
+                ] {
+                    assert_eq!(
+                        bits(&host(got)),
+                        bits(want),
+                        "{name}, {rows}x{dim}, {threads} threads, {numerics:?}"
+                    );
+                }
+                drop(g);
+                assert_eq!(
+                    be.budget().live_bytes().unwrap(),
+                    0,
+                    "scratch leaked, {rows}x{dim}, {threads} threads"
+                );
+            }
+        }
+        let be = cpu(7, Numerics::Exact);
+        let f = |v: &[f32], shape: &[usize]| Tensor::from_f32(v, shape, &inputs).unwrap();
+        for at in [0usize, rows - 1] {
+            let mut overflow = nx.clone();
+            let row = at * dim;
+            overflow[row..row + dim].fill(1.0e20);
+            let err = be
+                .gated_rms_norm_backward(
+                    &f(&overflow, &[rows, dim]),
+                    &f(&nz, &[rows, dim]),
+                    &f(&nw, &[dim]),
+                    &f(&ng, &[rows, dim]),
+                    1e-6,
+                )
+                .unwrap_err();
+            assert!(
+                matches!(err, OjasError::NonFinite { .. }),
+                "overflow row {at}: {err:?}"
+            );
+            assert_eq!(
+                be.budget().live_bytes().unwrap(),
+                0,
+                "overflow row {at} leaked"
+            );
+            let mut bad = ng.clone();
+            bad[row] = f32::NAN;
+            let err = be
+                .gated_rms_norm_backward(
+                    &f(&nx, &[rows, dim]),
+                    &f(&nz, &[rows, dim]),
+                    &f(&nw, &[dim]),
+                    &f(&bad, &[rows, dim]),
+                    1e-6,
+                )
+                .unwrap_err();
+            assert!(
+                matches!(err, OjasError::NonFinite { .. }),
+                "nan grad row {at}: {err:?}"
+            );
+            assert_eq!(
+                be.budget().live_bytes().unwrap(),
+                0,
+                "nan grad row {at} leaked"
+            );
+        }
+    }
+}
+
 /// Shapes are refused by the `ojas_core::shapes` validators with nothing
 /// charged; a NaN is refused; an output with no room is CapacityExceeded.
 #[test]
