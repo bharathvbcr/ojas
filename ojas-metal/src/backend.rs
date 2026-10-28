@@ -33,8 +33,10 @@
 //!   ([`WaitCounts::freed`]). An op's temporaries (its charged scratch,
 //!   dropped when it returns) count toward the bytes allocated since the
 //!   last waited commit, which wait after the command that passes the cap
-//!   ([`WaitCounts::mem_cap`]). The memory cap is a quarter of the budget
-//!   the backend opened with, at most 1 GiB.
+//!   ([`WaitCounts::mem_cap`]). The memory cap starts at a quarter of the
+//!   budget the backend opened with, at most 1 GiB, and
+//!   [`MetalBackend::set_mem_cap`] moves it anywhere from 1 byte to that
+//!   budget.
 //!
 //! So the device holds at most the budget's live bytes, plus the rounding
 //! above, plus the pool cap, plus the backend's status slab (128 KiB), plus
