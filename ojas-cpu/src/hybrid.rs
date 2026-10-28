@@ -220,10 +220,12 @@ pub(crate) fn gated_rms_forward(
 /// and `dw = sum_rows gy * n * g`.
 ///
 /// Plain RMSNorm's split ([`crate::norm`]): `dx` and `dz` are one row pass
-/// ([`scoped::chunks_into_n`] over whole rows), which also returns each row's
-/// `rstd`; then `dw` is cut by column, each piece summing its columns over
-/// every row in ascending order, so each sum takes its terms in the serial
-/// order whatever the cut. The `rstd`s are charged while they live.
+/// ([`scoped::chunks_into_n`] over whole rows). That pass writes each row's
+/// `rstd` into one buffer `room_for` already charged, through disjoint
+/// piece slices, so the values are not collected and concatenated into a
+/// second copy. Then `dw` is cut by column, each piece summing its columns
+/// over every row in ascending order, so each sum takes its terms in the
+/// serial order whatever the cut.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn gated_rms_backward(
     op: &'static str,
@@ -237,14 +239,18 @@ pub(crate) fn gated_rms_backward(
     let RmsDims { rows, dim } = d;
     let _hold = room_for(op, budget, rows)?;
     let [gx, gz, gw] = fill_outs(op, budget, exec, shapes, |[gx, gz, gw]| {
-        let parts = scoped::chunks_into_n(
+        // One f32 per row, the buffer `room_for(rows)` charged above. Writing
+        // through the piece slices avoids the old `parts.concat()`, which kept
+        // every piece and a full copy alive together (131072 bytes past the
+        // charge at 32768 rows).
+        let mut rstds = vec![0.0f32; rows];
+        scoped::chunks_into_n(
             exec,
-            [gx, gz],
+            [gx, gz, &mut rstds],
             rows,
-            [dim, dim],
+            [dim, dim, 1],
             scoped::min_rows(dim),
-            |range, [gxs, gzs]| {
-                let mut rstds = Vec::with_capacity(range.len());
+            |range, [gxs, gzs, rs]| {
                 for (local, row) in range.enumerate() {
                     let xs = &x[row * dim..(row + 1) * dim];
                     let zs = &z[row * dim..(row + 1) * dim];
@@ -267,12 +273,11 @@ pub(crate) fn gated_rms_backward(
                         *dx = r * (dn - n * mean);
                         *dz = ((gv * wv) * n) * slope;
                     }
-                    rstds.push(r);
+                    rs[local] = r;
                 }
-                Ok(rstds)
+                Ok(())
             },
         )?;
-        let rstds = parts.concat();
         let min_cols = (ROW_MIN_ELEMS / rows.max(1)).max(1);
         scoped::chunks_into(exec, gw, dim, 1, min_cols, |cols, sums| {
             sums.fill(0.0);

@@ -168,8 +168,8 @@ impl Case {
     }
 }
 
-/// Cases whose heap peak is known to exceed their charge: kept out of the
-/// gate above and run by the ignored test below, which fails until fixed.
+/// The 32768-row gated RMSNorm backward. Its per-row scratch is larger than
+/// `SLACK`, so this shape is gated on its own rather than inside `cases`.
 fn broken_cases() -> Vec<Case> {
     let mut rng = SplitMix64(0x0b5e_55ee);
     // Many short rows: the backward keeps one rstd per row.
@@ -699,15 +699,10 @@ fn every_op_heap_peak_stays_within_its_charged_peak() {
     );
 }
 
-/// BREAK: `gated_rms_backward` (`ojas-cpu/src/hybrid.rs`) charges
-/// `room_for(rows)` floats for the per-row `rstd`s, but they are on the heap
-/// twice: in each piece's returned `Vec` and again in `parts.concat()`. At
-/// 32768 rows that is 131 KB past `SLACK` (heap 8651168 against 8519808
-/// charged), the shape `rms_norm_backward rows 32768` above was written for.
-/// The fix is in `hybrid.rs` (drop the parts as they are joined, or charge
-/// twice), outside this card's files.
+/// One `rstd` per row is 128 KiB at 32768 rows, past `SLACK`, so a second
+/// copy of that buffer fails this test. The row pass writes the charged
+/// buffer in place (`ojas-cpu/src/hybrid.rs`).
 #[test]
-#[ignore = "BREAK: gated_rms_norm_backward holds its per-row rstds twice on the heap, 131 KB uncharged at 32768 rows (ojas-cpu/src/hybrid.rs)"]
 fn gated_rms_norm_backward_many_rows_heap_peak_stays_within_its_charged_peak() {
     let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
     let failures = heap_failures(&broken_cases());
