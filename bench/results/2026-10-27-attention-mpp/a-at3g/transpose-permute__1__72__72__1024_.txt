@@ -1,0 +1,13 @@
+# load_start 35.01 25.16 21.89
+shape	arm	bytes	min_ms	p10_ms	median_ms	p90_ms	gb_per_s	tflops	gap_ms	spread_ms	pair
+permute [1, 72, 72, 1024] by [0, 3, 1, 2] (backbone.rs:635 neck input to NCHW)	permute	42467328	0.304	0.316	0.341	0.547	124.6	-	0.010	0.231	ok
+permute [1, 72, 72, 1024] by [0, 3, 1, 2] (backbone.rs:635 neck input to NCHW)	permute'	42467328	0.290	0.300	0.331	0.516	128.5	-	0.010	0.231	ok
+permute [1, 72, 72, 1024] by [0, 3, 1, 2] (backbone.rs:635 neck input to NCHW)	permute identity (copy floor)	42467328	0.269	0.289	0.360	0.482	117.9	-	0.000	0.193	ok
+permute [1, 72, 72, 1024] by [0, 3, 1, 2] (backbone.rs:635 neck input to NCHW)	permute identity (copy floor)'	42467328	0.304	0.310	0.360	0.461	117.9	-	0.000	0.193	ok
+permute [1, 72, 72, 1024] by [0, 3, 1, 2] (backbone.rs:635 neck input to NCHW)	permute (generic kernel)	42467328	0.523	0.549	0.725	1.399	58.6	-	0.016	0.850	ok
+permute [1, 72, 72, 1024] by [0, 3, 1, 2] (backbone.rs:635 neck input to NCHW)	permute (generic kernel)'	42467328	0.509	0.572	0.709	1.340	59.9	-	0.016	0.850	ok
+permute [1, 72, 72, 1024] by [0, 3, 1, 2] (backbone.rs:635 neck input to NCHW)	relu (streaming reference)	42467328	0.314	0.324	0.358	0.559	118.6	-	0.006	0.234	ok
+permute [1, 72, 72, 1024] by [0, 3, 1, 2] (backbone.rs:635 neck input to NCHW)	relu (streaming reference)'	42467328	0.294	0.313	0.364	0.537	116.7	-	0.006	0.234	ok
+# load_end 35.01 25.16 21.89
+# noisy_pairs 0
+# verdict repeat

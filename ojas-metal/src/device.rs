@@ -1113,11 +1113,13 @@ impl Worker {
 
     fn k1(&self, name: &str, n: usize, f: impl FnOnce(&mut Binder<'_>)) -> Res<()> {
         let p = self.rt.pipeline(name).map_err(metal_err)?;
+        self.waits.note_kernel(name);
         dispatch::dispatch_1d(&self.rt, &p, n, f).map_err(metal_err)
     }
 
     fn k2(&self, name: &str, nx: usize, ny: usize, f: impl FnOnce(&mut Binder<'_>)) -> Res<()> {
         let p = self.rt.pipeline(name).map_err(metal_err)?;
+        self.waits.note_kernel(name);
         dispatch::dispatch_2d(&self.rt, &p, nx, ny, f).map_err(metal_err)
     }
 
@@ -1130,6 +1132,7 @@ impl Worker {
         f: impl FnOnce(&mut Binder<'_>),
     ) -> Res<()> {
         let p = self.rt.pipeline(name).map_err(metal_err)?;
+        self.waits.note_kernel(name);
         dispatch::dispatch_2d_tg(&self.rt, &p, gx, gy, threads, f).map_err(metal_err)
     }
 
@@ -2418,6 +2421,8 @@ impl Worker {
                 set_u32(b, g.rep, 8);
                 set_u32(b, g.window, 9);
                 set_f32(b, scale, 10);
+                set_u32(b, g.t, 11);
+                set_u32(b, 0, 12);
             })?;
         }
         self.check(&st, &o, ST_OUT)?;
@@ -2482,6 +2487,31 @@ impl Worker {
                 g.causal, g.window, g.d, g.splits, g.per_split, g.kv_len
             )));
         }
+        // The flash kernel runs the same call split-K or scalar would, but only
+        // where the TensorOps body covers it: head dim 32, non-causal, no
+        // window, bias or key lengths, and planes the matrix-unit views address.
+        if g.flash {
+            if tiled
+                || g.causal
+                || g.window != 0
+                || g.d != 32
+                || g.bias.is_some()
+                || g.has_lens
+                || g.kv_len == 0
+            {
+                return Err(metal_err(format!(
+                    "{op}: the flash kernel runs non-causal head dim 32 with no window, bias or key lengths, not causal {} window {} d {} bias {} lens {} splits {}",
+                    g.causal,
+                    g.window,
+                    g.d,
+                    g.bias.is_some(),
+                    g.has_lens,
+                    g.splits
+                )));
+            }
+            attn_plane_fits(op, g.q_len, g.d)?;
+            attn_plane_fits(op, g.kv_len, g.d)?;
+        }
         let o = self.fresh(qv.n)?;
         let lse = self.fresh(planes * q_len)?;
         // One (m, l, acc[D]) per split and row.
@@ -2502,7 +2532,34 @@ impl Worker {
         if let (Some(a), Some(b)) = (bias, bv.as_ref()) {
             self.check_operand(&st, a, b, ST_IN)?;
         }
-        if let (true, Some(part)) = (qv.n > 0, part.as_ref()) {
+        if g.flash {
+            if qv.n > 0 {
+                // One threadgroup per 32 query rows of a plane, four
+                // simdgroups, no partials: `ojas_attn_fwd_d32` with `cross`.
+                let scale = sdpa_scale(g.d)?;
+                self.ktg(
+                    "ojas_attn_fwd_d32",
+                    q_len.div_ceil(ATTN_ROWS),
+                    planes,
+                    ATTN_THREADS,
+                    |b| {
+                        bind(b, &qv, 0);
+                        bind(b, &kv, 1);
+                        bind(b, &vv, 2);
+                        bind(b, &o, 3);
+                        bind(b, &lse, 4);
+                        bind_st(b, &st, 5);
+                        set_u32(b, g.q_len, 6);
+                        set_u32(b, g.d, 7);
+                        set_u32(b, g.rep, 8);
+                        set_u32(b, 0, 9);
+                        set_f32(b, scale, 10);
+                        set_u32(b, g.kv_len, 11);
+                        set_u32(b, 1, 12);
+                    },
+                )?;
+            }
+        } else if let (true, Some(part)) = (qv.n > 0, part.as_ref()) {
             let flags = (u32::from(g.bias.is_some()) << 1) | (u32::from(g.has_lens) << 2);
             let [bias_b, bias_h, bias_q] = g.bias.unwrap_or([1, 1, 1]);
             let (bias_buf, lens_buf) = (bv.as_ref().unwrap_or(&qv), lv.as_ref().unwrap_or(&qv));
