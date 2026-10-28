@@ -13,6 +13,19 @@
 //! state is a running sum over the whole sequence) stay f32. A device tensor
 //! is never downloaded to round it.
 //!
+//! # Policy for the SAM ops
+//!
+//! Each op added for the SAM encoder has one [`AutocastClass`], assigned
+//! once in `SAM_AUTOCAST_POLICY` below and enforced op by op by
+//! `ojas-cpu/tests/autocast_sam_policy.rs`, which also fails when a
+//! `Backend` method is added without a class. The classes are matmul-class
+//! (round operands, round the output), pointwise (round the output only
+//! when the gating operands are already bf16-tagged), reduction (always
+//! f32) and data movement (never round, carry the tag). GELU, ReLU, scale,
+//! the broadcast ops, max pooling, bilinear resampling and interleaved RoPE
+//! are all pointwise, like SiLU and half-split RoPE before them; only the
+//! three norms and softmax pin f32.
+//!
 //! [`Backend`]: crate::Backend
 
 use crate::backend::{
@@ -84,6 +97,130 @@ pub fn f32_to_bf16(value: f32) -> u16 {
 pub fn round_f32_to_bf16(value: f32) -> f32 {
     bf16_to_f32(f32_to_bf16(value))
 }
+
+/// How [`Autocast`] treats one op inside a [`AutocastMode::Bf16`] region.
+/// Operand indices count the op's tensor parameters in `Backend` method
+/// order, with an `AttentionOpts` bias after the last one. Outside a region
+/// every class passes the call through.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AutocastClass {
+    /// A matmul-class op. Untagged `F32` operands round to bf16 before the
+    /// op (`prep`), except the operands in `f32_operands`, which the inner
+    /// backend reads as they are. The outputs are rounded and tagged
+    /// (`emit`), except those in `f32_outputs`.
+    Matmul {
+        f32_operands: &'static [usize],
+        f32_outputs: &'static [usize],
+    },
+    /// An elementwise, pooling, resampling or rotation op: nothing rounds
+    /// before the op, and the output is rounded and
+    /// tagged only when every operand in `tag_from` is already
+    /// bf16-tagged (`promote`). An untagged input never starts rounding.
+    Pointwise { tag_from: &'static [usize] },
+    /// A reduction (a norm's statistics, a softmax sum): nothing rounds and
+    /// the output is tagged `F32` whatever the tags of the operands
+    /// (`pass` then `keep_f32`).
+    Reduction,
+    /// Data movement: values are copied, never rounded, and the output is
+    /// bf16-tagged only when every input is (`copy_tag`).
+    Move,
+    /// An op with no tensor input (a constant): never rounded, tagged `F32`.
+    Source,
+}
+
+/// The class of every op added for the SAM encoder (the attention, encoder
+/// and spatial ops), the one statement of the policy. `rope_interleaved_*`
+/// gate on the data operand only; the cos and sin tables do not. The
+/// convolutions round their bias with the other operands; `linear_bias_forward`
+/// keeps its bias `F32`. Attention rounds its bias and leaves the saved
+/// log-sum-exp `F32`, as the causal pair does.
+///
+/// `ojas-cpu/tests/autocast_sam_policy.rs` runs each entry against
+/// `Autocast<CpuBackend>`, so an op added to the `Backend` trait or changed
+/// in `Autocast` without a matching entry here fails that test.
+#[doc(hidden)]
+pub const SAM_AUTOCAST_POLICY: &[(&str, AutocastClass)] = &[
+    (
+        "attention_forward",
+        AutocastClass::Matmul {
+            f32_operands: &[],
+            f32_outputs: &[],
+        },
+    ),
+    (
+        "attention_forward_saving",
+        AutocastClass::Matmul {
+            f32_operands: &[],
+            f32_outputs: &[1],
+        },
+    ),
+    (
+        "attention_backward",
+        AutocastClass::Matmul {
+            f32_operands: &[4],
+            f32_outputs: &[],
+        },
+    ),
+    (
+        "linear_bias_forward",
+        AutocastClass::Matmul {
+            f32_operands: &[2],
+            f32_outputs: &[],
+        },
+    ),
+    (
+        "conv2d_forward",
+        AutocastClass::Matmul {
+            f32_operands: &[],
+            f32_outputs: &[],
+        },
+    ),
+    (
+        "conv_transpose2d_forward",
+        AutocastClass::Matmul {
+            f32_operands: &[],
+            f32_outputs: &[],
+        },
+    ),
+    (
+        "gelu_erf_forward",
+        AutocastClass::Pointwise { tag_from: &[0] },
+    ),
+    ("relu_forward", AutocastClass::Pointwise { tag_from: &[0] }),
+    ("scale_forward", AutocastClass::Pointwise { tag_from: &[0] }),
+    (
+        "broadcast_add_forward",
+        AutocastClass::Pointwise { tag_from: &[0, 1] },
+    ),
+    (
+        "broadcast_mul_forward",
+        AutocastClass::Pointwise { tag_from: &[0, 1] },
+    ),
+    (
+        "max_pool2d_forward",
+        AutocastClass::Pointwise { tag_from: &[0] },
+    ),
+    (
+        "interpolate_bilinear_forward",
+        AutocastClass::Pointwise { tag_from: &[0] },
+    ),
+    (
+        "rope_interleaved_forward",
+        AutocastClass::Pointwise { tag_from: &[0] },
+    ),
+    (
+        "rope_interleaved_backward",
+        AutocastClass::Pointwise { tag_from: &[0] },
+    ),
+    ("layer_norm_forward", AutocastClass::Reduction),
+    ("channel_layer_norm_forward", AutocastClass::Reduction),
+    ("group_norm_forward", AutocastClass::Reduction),
+    ("softmax_forward", AutocastClass::Reduction),
+    ("concat", AutocastClass::Move),
+    ("slice", AutocastClass::Move),
+    ("fill", AutocastClass::Source),
+];
 
 struct Frame {
     id: u64,

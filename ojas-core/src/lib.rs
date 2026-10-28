@@ -22,6 +22,8 @@ mod shapes;
 mod spatial;
 mod tensor;
 
+#[doc(hidden)]
+pub use autocast::{AutocastClass, SAM_AUTOCAST_POLICY};
 pub use autocast::{
     bf16_to_f32, f32_to_bf16, round_f32_to_bf16, Autocast, AutocastGuard, AutocastMode,
 };
