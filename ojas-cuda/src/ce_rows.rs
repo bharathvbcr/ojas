@@ -4,16 +4,9 @@
 //! mirror of the whole walk. The device orchestration is
 //! [`crate::ce_rows_cuda`].
 //!
-//! The walk is tessl's `cross_entropy_rows` (`tessl/src/cross_entropy.rs:1-36`,
+//! The algorithm is tessl's `cross_entropy_rows` (`tessl/src/cross_entropy.rs:1-36`,
 //! `tessl/kernels/cross_entropy.metal`), at Qwen3.5's 248,320-row vocabulary
-//! in [`CE_CHUNK`] = 8,192-column chunks (`tessl/src/qwen35_train.rs:56`). Like
-//! tessl's, it leaves the target out of the running log-sum-exp, so neither
-//! collapses past the f32 cliff. The arithmetic is this crate's own, not
-//! "as tessl does": the scale is `exp(m - target) / (1 + s·exp(m - target))`
-//! from the excluded max `m` and sum `s` ([`excluded_scale_f32`]), where
-//! tessl forms `L = m + log s` in f32 and then `sigmoid(target - L)`. The two
-//! are the same function and differ in rounding, so this walk is not
-//! bit-identical to tessl's:
+//! in [`CE_CHUNK`] = 8,192-column chunks (`tessl/src/qwen35_train.rs:56`):
 //!
 //! 1. gather the `n` supervised rows of the hidden states into `[n, H]` f32
 //!    (K0's `ce_gather_rows`);
