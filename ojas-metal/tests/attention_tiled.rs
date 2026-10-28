@@ -13,6 +13,17 @@
 //! `causal` (which only the scalar kernel runs). `attention_forward_saving`
 //! never routes to tessl's `encoder_attn`, so it is the tiled kernel's entry
 //! at shapes the pad route would otherwise take.
+//!
+//! Head dim 32 with no bias and no key lengths takes the TensorOps flash
+//! kernel instead of these (`flash_cross_route`) once a call launches
+//! `FLASH_MIN_GROUPS` threadgroups, 32 query rows of a plane each. The shapes
+//! here are small: the flash-eligible ones (head dim 32, no bias or lengths) reach
+//! 10 groups, and only head-dim-16 and bias cases go higher (up to 1024), which
+//! never route to flash. They are split-K at the floor in
+//! force when this was written; `flash_dispatched` derives the route from
+//! `MetalBackend::flash_min_groups`, so a lower floor moves a case to the
+//! flash kernel and the planned kernel and the dispatch count are asserted for
+//! whichever kernel the floor gives it. The flash route is `attention_flash.rs`.
 
 #![cfg(target_os = "macos")]
 
@@ -102,24 +113,70 @@ impl Operands {
     }
 }
 
-/// Dispatches one `attention_forward_saving` call encodes.
-fn dispatches_of(m: &MetalBackend, o: &Operands, causal: bool) -> u64 {
+/// Whether the dispatcher runs the flash kernel for `c`: head dim 32, no bias
+/// or key lengths, on a TensorOps device, with at least `flash_min_groups`
+/// threadgroups of 32 query rows.
+fn flash_dispatched(m: &MetalBackend, c: &Case) -> bool {
+    let groups = (c.tq.div_ceil(32) * c.b * c.h) as u64;
+    m.has_tensorops()
+        && c.d == 32
+        && c.bias.is_none()
+        && c.lens.is_none()
+        && groups >= MetalBackend::flash_min_groups()
+}
+
+/// Dispatches one `attention_forward_saving` call encodes, and how many of
+/// them were the flash kernel and the scalar kernel: `(dispatches, flash,
+/// scalar)`. The flash and scalar kernels are both one dispatch, so the count
+/// alone cannot tell a scalar misroute from the flash route at a lowered
+/// floor; the kernel names can.
+fn observed_of(m: &MetalBackend, o: &Operands, causal: bool) -> (u64, u64, u64) {
     ok("sync", m.sync());
     let before = m.dispatches();
+    let kernels = (
+        m.kernel_dispatches("ojas_attn_fwd_d32"),
+        m.kernel_dispatches("ojas_attn_gen_fwd"),
+    );
     let out = ok(
         "saving",
         m.attention_forward_saving(&o.q, &o.k, &o.v, o.opts(causal)),
     );
     ok("sync", m.sync());
     drop(out);
-    m.dispatches() - before
+    (
+        m.dispatches() - before,
+        m.kernel_dispatches("ojas_attn_fwd_d32") - kernels.0,
+        m.kernel_dispatches("ojas_attn_gen_fwd") - kernels.1,
+    )
+}
+
+/// Dispatches one `attention_forward_saving` call encodes.
+fn dispatches_of(m: &MetalBackend, o: &Operands, causal: bool) -> u64 {
+    observed_of(m, o, causal).0
 }
 
 /// The tiled kernel agrees with the CPU on the output and the log-sum-exp,
-/// ran (one dispatch more than the scalar kernel's), and repeats bit for bit.
+/// ran (one dispatch more than the scalar kernel's and planned as split-K, or
+/// as many and planned as flash where `flash_dispatched` says the floor gives
+/// the case to the flash kernel), and repeats bit for bit.
 fn check(m: &MetalBackend, c: &Case, seed: u64) {
     let cpu = cpu();
     let host = Operands::host(c, seed);
+    {
+        let probe = host.up(m);
+        assert_eq!(
+            ok(
+                "planned",
+                m.attention_saving_kernel(&probe.q, &probe.k, &probe.v, probe.opts(false))
+            ),
+            if flash_dispatched(m, c) {
+                "flash"
+            } else {
+                "splitk"
+            },
+            "{c:?}: planned kernel"
+        );
+    }
     let dev = host.up(m);
     let tag = format!("{c:?}");
     let (want, want_lse) = ok(
@@ -145,12 +202,26 @@ fn check(m: &MetalBackend, c: &Case, seed: u64) {
         "{tag}: lse not repeatable"
     );
     // Fresh uploads for each call, so no operand scan is skipped in one.
-    let tiled = dispatches_of(m, &host.up(m), false);
-    let scalar = dispatches_of(m, &host.up(m), true);
+    let (tiled, tiled_flash, tiled_scalar) = observed_of(m, &host.up(m), false);
+    let (scalar, causal_flash, causal_scalar) = observed_of(m, &host.up(m), true);
+    assert_eq!(
+        (tiled_flash, tiled_scalar),
+        (u64::from(flash_dispatched(m, c)), 0),
+        "{tag}: kernels of the non-causal call (flash, scalar)"
+    );
+    assert_eq!(
+        (causal_flash, causal_scalar),
+        (0, 1),
+        "{tag}: kernels of the causal call (flash, scalar)"
+    );
     assert_eq!(
         tiled,
-        scalar + 1,
-        "{tag}: the tiled kernel is two dispatches, the scalar one"
+        if flash_dispatched(m, c) {
+            scalar
+        } else {
+            scalar + 1
+        },
+        "{tag}: the tiled kernel is two dispatches, the scalar and the flash kernel one"
     );
 }
 
@@ -359,12 +430,27 @@ fn a_budget_without_room_for_the_partials_runs_the_scalar_kernel() {
 #[test]
 fn causal_and_other_head_dims_stay_on_the_scalar_kernel() {
     let m = metal();
-    let base = Operands::host(&Case::new(1, 2, 2, 40, 40, 32), 60).up(&m);
-    let causal = dispatches_of(&m, &base, true);
+    let base_case = Case::new(1, 2, 2, 40, 40, 32);
+    let base = Operands::host(&base_case, 60).up(&m);
+    let (causal, causal_flash, causal_scalar) = observed_of(&m, &base, true);
+    assert_eq!((causal_flash, causal_scalar), (0, 1), "causal is scalar");
     let other = Operands::host(&Case::new(1, 2, 2, 40, 90, 64), 61).up(&m);
     let d64 = dispatches_of(&m, &other, false);
-    let tiled = dispatches_of(&m, &base, false);
-    assert_eq!(tiled, causal + 1, "head dim 32 non-causal is tiled");
+    let (tiled, tiled_flash, tiled_scalar) = observed_of(&m, &base, false);
+    assert_eq!(
+        (tiled_flash, tiled_scalar),
+        (u64::from(flash_dispatched(&m, &base_case)), 0),
+        "head dim 32 non-causal: flash or split-K, never the scalar kernel"
+    );
+    assert_eq!(
+        tiled,
+        if flash_dispatched(&m, &base_case) {
+            causal
+        } else {
+            causal + 1
+        },
+        "head dim 32 non-causal is tiled (one dispatch where the floor gives it to flash)"
+    );
     assert_eq!(
         d64, causal,
         "head dim 64 with Tq != Tk is the scalar kernel"
@@ -372,9 +458,11 @@ fn causal_and_other_head_dims_stay_on_the_scalar_kernel() {
 }
 
 /// The detector's bias case and the memory encoder's cross-attention, the
-/// tiled kernel (`attention_forward_saving`) against the pad route
-/// (`attention_forward`, which routes at these shapes): minimum of 5 after 2
-/// warm-up calls. Run with `--ignored --nocapture`.
+/// split-K tiled kernel (`attention_forward_saving_splitk`; the memory rows'
+/// dispatcher call is the flash kernel at these 1296 threadgroups, timed by
+/// `attention_flash_bench`) against the pad route (`attention_forward`, which
+/// routes at these shapes): minimum of 5 after 2 warm-up calls. Run with
+/// `--ignored --nocapture`.
 #[test]
 #[ignore = "timing, not a correctness check"]
 fn tiled_kernel_wall_clock() {
@@ -416,7 +504,7 @@ fn tiled_kernel_wall_clock() {
         let tiled = time(&|| {
             drop(ok(
                 "tiled",
-                m.attention_forward_saving(&mem.q, &mem.k, &mem.v, mem.opts(false)),
+                m.attention_forward_saving_splitk(&mem.q, &mem.k, &mem.v, mem.opts(false)),
             ));
         });
         let padded = time(&|| {
@@ -425,6 +513,16 @@ fn tiled_kernel_wall_clock() {
                 m.attention_forward(&mem.q, &mem.k, &mem.v, mem.opts(false)),
             ));
         });
-        eprintln!("TILED memory m={tk}: tiled {tiled:.1} ms, pad route {padded:.1} ms");
+        // `attention_forward` takes the pad route up to Tk = 2.25 Tq (11664
+        // keys here); beyond it, at head dim 32 with these 1296 threadgroups,
+        // it runs the flash kernel, which is what that column times.
+        let ran = if tk as f64 <= 2.25 * 5184.0 {
+            "pad route"
+        } else {
+            "flash kernel (beyond the pad ratio)"
+        };
+        eprintln!(
+            "TILED memory m={tk}: split-K {tiled:.1} ms, attention_forward {padded:.1} ms ({ran})"
+        );
     }
 }

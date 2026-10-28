@@ -2700,20 +2700,27 @@ inline void attn_bwd_dkv_body(
 /// P V accumulates in a cooperative tensor. Key blocks outside the block's
 /// windows are not visited. A live score that is not finite sets ST_OUT and
 /// counts as masked. Each live row's `m + log l` goes to LSE.
+///
+/// `cross` is the bidirectional form for a query length `T` (rows of Q, O and
+/// LSE) that differs from the key length `Tk`: every key block of the KV
+/// plane is visited from the first, no window, and a key at or past `Tk`
+/// (the ragged tail of the last block) is masked, so its score is not read
+/// and its probability is exactly 0. Otherwise `Tk == T` and the form is the
+/// causal one above.
 template <int DM>
 inline void attn_fwd_tiled_body(
     device float *Q, device float *K, device float *V, device float *O, device float *LSE,
-    device atomic_uint *st, uint T, uint D, uint rep, uint W, float scale, uint2 tgpig,
-    uint tid, threadgroup float *S, threadgroup float *m_row, threadgroup float *l_row,
-    threadgroup float *a_row)
+    device atomic_uint *st, uint T, uint Tk, bool cross, uint D, uint rep, uint W, float scale,
+    uint2 tgpig, uint tid, threadgroup float *S, threadgroup float *m_row,
+    threadgroup float *l_row, threadgroup float *a_row)
 {
     const uint q0 = tgpig.x * (uint)ATT_BQ;
     if (q0 >= T) { return; }
     const uint nq = min((uint)ATT_BQ, T - q0);
     const uint bh = tgpig.y;
     const ulong base = (ulong)bh * T * D;
-    const ulong kv_base = (ulong)(bh / rep) * T * D;
-    const uint t_end = q0 + nq;
+    const ulong kv_base = (ulong)(bh / rep) * Tk * D;
+    const uint t_end = cross ? Tk : q0 + nq;
 
     constexpr auto qk_desc = matmul2d_descriptor(
         ATT_BQ, ATT_FWD_BK, DM, false, true, false, matmul2d_descriptor::mode::multiply);
@@ -2723,8 +2730,8 @@ inline void attn_fwd_tiled_body(
     matmul2d<pv_desc, execution_simdgroups<ATT_NSG>> pv_op;
 
     auto mQ = tensor(Q + base, dextents<int, 2>{(int)D, (int)T}, array<int, 2>{1, (int)D});
-    auto mK = tensor(K + kv_base, dextents<int, 2>{(int)D, (int)T}, array<int, 2>{1, (int)D});
-    auto mV = tensor(V + kv_base, dextents<int, 2>{(int)D, (int)T}, array<int, 2>{1, (int)D});
+    auto mK = tensor(K + kv_base, dextents<int, 2>{(int)D, (int)Tk}, array<int, 2>{1, (int)D});
+    auto mV = tensor(V + kv_base, dextents<int, 2>{(int)D, (int)Tk}, array<int, 2>{1, (int)D});
     auto tQ = mQ.slice(0, (int)q0);
     auto tP = tensor(S, dextents<int, 2>{ATT_FWD_BK, ATT_BQ}, array<int, 2>{1, ATT_FWD_BK});
 
@@ -2745,7 +2752,8 @@ inline void attn_fwd_tiled_body(
     const uint qi = q0 + r;
     bool bad = false;
 
-    for (uint kb = attn_first_key(q0, W, ATT_FWD_BK); kb < t_end; kb += (uint)ATT_FWD_BK) {
+    for (uint kb = cross ? 0u : attn_first_key(q0, W, ATT_FWD_BK); kb < t_end;
+         kb += (uint)ATT_FWD_BK) {
         auto tK = mK.slice(0, (int)kb);
         auto sT = qk_op.template get_destination_cooperative_tensor<
             decltype(tQ), decltype(tK), float>();
@@ -2756,7 +2764,8 @@ inline void attn_fwd_tiled_body(
         float s[ATT_FWD_CPR];
         float mx = -INFINITY;
         for (uint c = 0; c < (uint)ATT_FWD_CPR; ++c) {
-            const bool live = row_live && attn_live(qi, kb + c0 + c, W);
+            const uint kj = kb + c0 + c;
+            const bool live = row_live && (cross ? kj < Tk : attn_live(qi, kj, W));
             const float v = S[r * ATT_FWD_BK + c0 + c] * scale;
             const bool ok = live && isfinite(v);
             bad = bad || (live && !ok);
@@ -2825,7 +2834,8 @@ kernel void ojas_attn_fwd_d##DM(                                              \
     device float *lse [[buffer(4)]], device atomic_uint *st [[buffer(5)]],    \
     constant uint &T [[buffer(6)]], constant uint &D [[buffer(7)]],           \
     constant uint &rep [[buffer(8)]], constant uint &W [[buffer(9)]],         \
-    constant float &scale [[buffer(10)]],                                     \
+    constant float &scale [[buffer(10)]], constant uint &Tk [[buffer(11)]],   \
+    constant uint &cross [[buffer(12)]],                                      \
     uint2 tgpig [[threadgroup_position_in_grid]],                             \
     uint tid [[thread_index_in_threadgroup]])                                 \
 {                                                                             \
@@ -2835,9 +2845,9 @@ kernel void ojas_attn_fwd_d##DM(                                              \
     threadgroup float a_row[ATT_BQ];                                          \
     attn_fwd_tiled_body<DM>(const_cast<device float *>(q),                    \
                             const_cast<device float *>(k),                    \
-                            const_cast<device float *>(v), o, lse, st, T, D,  \
-                            rep, W, scale, tgpig, tid, S, m_row, l_row,       \
-                            a_row);                                           \
+                            const_cast<device float *>(v), o, lse, st, T, Tk, \
+                            cross != 0u, D, rep, W, scale, tgpig, tid, S,     \
+                            m_row, l_row, a_row);                             \
 }                                                                             \
 kernel void ojas_attn_bwd_dq_d##DM(                                           \
     device const float *q [[buffer(0)]], device const float *k [[buffer(1)]], \
