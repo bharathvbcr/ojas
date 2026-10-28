@@ -397,7 +397,7 @@ fn softmax_row(numerics: Numerics, row: &[f32], dst: &mut [f32]) {
             }
             sum
         }
-        Numerics::Fast => exp_sub_store(row, max, dst),
+        Numerics::Fast => exp_sub_store(row, max, dst, None),
     };
     for out in dst.iter_mut() {
         *out /= sum;
