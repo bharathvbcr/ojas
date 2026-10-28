@@ -27,6 +27,35 @@ fn mean_std(v: &[f32]) -> (f64, f64) {
 }
 
 #[test]
+fn embedded_f32_fixtures_are_finite() {
+    let finite = |what: &str, data: &[f32]| {
+        assert!(
+            data.iter().all(|v| v.is_finite()),
+            "{what} holds a non-finite f32"
+        );
+    };
+    for tensor in tiny_init().unwrap().params.iter() {
+        finite(&format!("tiny_init {}", tensor.name), &tensor.data);
+    }
+    for at in [GradsAt::Init, GradsAt::Step5] {
+        let grads = tiny_grads(at).unwrap();
+        assert!(grads.loss.is_finite(), "tiny_grads {at:?} loss");
+        assert!(grads.loss_seed.is_finite(), "tiny_grads {at:?} loss_seed");
+        for tensor in grads.grads.iter() {
+            finite(&format!("tiny_grads {at:?} {}", tensor.name), &tensor.data);
+        }
+    }
+    for ns5 in [Ns5::F32, Ns5::Bf16] {
+        for tensor in tiny_trace(ns5).unwrap().params.iter() {
+            finite(&format!("tiny_trace {ns5:?} {}", tensor.name), &tensor.data);
+        }
+    }
+    let forward = tiny_forward().unwrap();
+    assert!(forward.loss.is_finite(), "tiny_forward loss");
+    finite("tiny_forward logits", &forward.logits);
+}
+
+#[test]
 fn init_spec_names_and_provenance() {
     let init = tiny_init().unwrap();
     assert_eq!(init.spec, tiny_spec());
