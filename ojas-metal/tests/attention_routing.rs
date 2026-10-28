@@ -579,8 +579,10 @@ fn opts<'a>(causal: bool, bias: Option<&'a Tensor>, lens: Option<&'a Tensor>) ->
 /// `Tk / Tq <= 2.25` at head dim 32 or 64 with no bias or lengths takes the
 /// pad route; beyond it, and at any ratio with a bias, key lengths or head
 /// dim 16, the inference form takes the split-K tiled kernel at head dim 16
-/// and 32 (one dispatch more than the scalar kernel) and the scalar kernel at
-/// head dim 64. Which one ran is read off the dispatches of the call against
+/// and 32 (one dispatch more than the scalar kernel; at head dim 32 with no
+/// bias or lengths, from `flash_min_groups` threadgroups on, the flash kernel,
+/// one dispatch, which the `Tiled` class stands for there) and the scalar
+/// kernel at head dim 64. Which one ran is read off the dispatches of the call against
 /// the same call made `causal` (always scalar) and against the saving form
 /// (never routed), and every call is checked against the CPU.
 #[test]
@@ -622,14 +624,24 @@ fn the_pad_ratio_bound_and_the_tiled_kernel_split_the_shape_classes() {
         let (dq, dk, dv) = (up(&m, &q), up(&m, &k), up(&m, &v));
         let dbias = bias.as_ref().map(|t| up(&m, t));
         let dlens = lens.as_ref().map(|t| up(&m, t));
+        // Dispatches of a call and the flash and scalar kernels it encoded
+        // (both are one dispatch, so only the kernel names tell them apart).
         let count = |f: &dyn Fn()| {
             ok("sync", m.sync());
             let before = m.dispatches();
+            let kernels = (
+                m.kernel_dispatches("ojas_attn_fwd_d32"),
+                m.kernel_dispatches("ojas_attn_gen_fwd"),
+            );
             f();
             ok("sync", m.sync());
-            m.dispatches() - before
+            (
+                m.dispatches() - before,
+                m.kernel_dispatches("ojas_attn_fwd_d32") - kernels.0,
+                m.kernel_dispatches("ojas_attn_gen_fwd") - kernels.1,
+            )
         };
-        let plain = count(&|| {
+        let (plain, plain_flash, plain_scalar) = count(&|| {
             drop(ok(
                 "inference",
                 m.attention_forward(&dq, &dk, &dv, opts(false, dbias.as_ref(), dlens.as_ref())),
@@ -639,7 +651,7 @@ fn the_pad_ratio_bound_and_the_tiled_kernel_split_the_shape_classes() {
             "inference",
             m.attention_forward(&dq, &dk, &dv, opts(false, dbias.as_ref(), dlens.as_ref())),
         );
-        let scalar = count(&|| {
+        let (scalar, _, _) = count(&|| {
             drop(ok(
                 "scalar",
                 m.attention_forward_saving(
@@ -650,7 +662,7 @@ fn the_pad_ratio_bound_and_the_tiled_kernel_split_the_shape_classes() {
                 ),
             ));
         });
-        let saving = count(&|| {
+        let (saving, saving_flash, saving_scalar) = count(&|| {
             drop(ok(
                 "saving",
                 m.attention_forward_saving(
@@ -661,9 +673,20 @@ fn the_pad_ratio_bound_and_the_tiled_kernel_split_the_shape_classes() {
                 ),
             ));
         });
+        // Head dim 32 with no bias or lengths takes the flash kernel (one
+        // dispatch, as the scalar kernel) from `flash_min_groups` threadgroups
+        // of 32 query rows; these are B = 2, H = 2.
+        let flash = d == 32
+            && !with_bias
+            && !with_lens
+            && (tq.div_ceil(32) * 4) as u64 >= MetalBackend::flash_min_groups();
         if m.has_tensorops() {
             let ran = if plain == scalar {
-                Ran::Scalar
+                if flash {
+                    Ran::Tiled
+                } else {
+                    Ran::Scalar
+                }
             } else if plain == scalar + 1 {
                 Ran::Tiled
             } else {
@@ -675,7 +698,26 @@ fn the_pad_ratio_bound_and_the_tiled_kernel_split_the_shape_classes() {
             );
             // The saving form never routes: tiled at head dim 16 and 32,
             // scalar at 64.
-            assert_eq!(saving, if d == 64 { scalar } else { scalar + 1 }, "{tag}");
+            assert_eq!(
+                saving,
+                if d == 64 || flash { scalar } else { scalar + 1 },
+                "{tag}"
+            );
+            // The kernel names settle what the dispatch counts cannot: flash
+            // and scalar are both one dispatch, so a scalar misroute at a
+            // lowered floor would pass the counts alone.
+            assert_eq!(
+                (saving_flash, saving_scalar),
+                (u64::from(flash), u64::from(d == 64)),
+                "{tag}: the saving form's kernels (flash, scalar)"
+            );
+            if expected != Ran::Pad {
+                assert_eq!(
+                    (plain_flash, plain_scalar),
+                    (u64::from(flash), u64::from(expected == Ran::Scalar)),
+                    "{tag}: the inference form's kernels (flash, scalar)"
+                );
+            }
         }
         same_tensor(&tag, &out, &want, tol(tk), 1e-4);
     }

@@ -1,0 +1,67 @@
+metallib /Users/bharath/Code/research/ojas-78a-target/release/build/ojas-metal-c7041414e647641d/out/ojas_per_head_gate.metallib 671370 bytes Oct 27 17:57:06 2026
+binaries copied; sources at 2b14dca
+load 5.59 at 18:46:18: taking the lock
+attempt 1 exit=0 # verdict repeat
+# load_start 18.79 21.07 22.03
+# stand-in memory cross m=5200 | dispatcher / pad-q = 1.012 x quiet pad-q 5.601 ms = 5.67 ms; pad-q arm 5.67 ms against its quiet anchor 5.60 ms (x1.01)
+# stand-in memory cross m=10400 | dispatcher / pad-q = 0.555 x quiet pad-q 21.056 ms = 11.68 ms; pad-q arm 20.75 ms against its quiet anchor 21.06 ms (x0.99)
+# stand-in memory cross m=10624 | dispatcher / pad-q = 0.532 x quiet pad-q 21.863 ms = 11.63 ms; pad-q arm 28.61 ms against its quiet anchor 21.86 ms (x1.31)
+# stand-in memory cross m=15584 | dispatcher / pad-q = 0.375 x quiet pad-q 46.836 ms = 17.58 ms (gate 20 ms: met); pad-q arm 55.95 ms against its quiet anchor 46.84 ms (x1.19)
+# stand-in memory cross m=36320 | dispatcher / pad-q = 0.155 x quiet pad-q 281.832 ms = 43.82 ms (gate 45 ms: met); pad-q arm 317.63 ms against its quiet anchor 281.83 ms (x1.13)
+# floor rule | FLASH_MIN_GROUPS = 512 by the sweep (current constant 384); valid only if the run's verdict is clean
+# load_end 18.69 20.10 21.55
+# verdict repeat
+attempt 2 exit=0 # verdict repeat
+# load_start 26.24 22.27 22.28
+# stand-in memory cross m=5200 | dispatcher / pad-q = 1.077 x quiet pad-q 5.601 ms = 6.03 ms; pad-q arm 7.24 ms against its quiet anchor 5.60 ms (x1.29)
+# stand-in memory cross m=10400 | dispatcher / pad-q = 0.547 x quiet pad-q 21.056 ms = 11.52 ms; pad-q arm 25.80 ms against its quiet anchor 21.06 ms (x1.23)
+# stand-in memory cross m=10624 | dispatcher / pad-q = 0.531 x quiet pad-q 21.863 ms = 11.60 ms; pad-q arm 27.49 ms against its quiet anchor 21.86 ms (x1.26)
+# stand-in memory cross m=15584 | dispatcher / pad-q = 0.381 x quiet pad-q 46.836 ms = 17.86 ms (gate 20 ms: met); pad-q arm 50.03 ms against its quiet anchor 46.84 ms (x1.07)
+# stand-in memory cross m=36320 | dispatcher / pad-q = 0.156 x quiet pad-q 281.832 ms = 43.90 ms (gate 45 ms: met); pad-q arm 323.10 ms against its quiet anchor 281.83 ms (x1.15)
+# floor rule | FLASH_MIN_GROUPS = 128 by the sweep (current constant 384); valid only if the run's verdict is clean
+# load_end 26.36 23.58 22.81
+# verdict repeat
+attempt 3 exit=0 # verdict repeat
+# load_start 18.37 21.81 22.20
+# stand-in memory cross m=5200 | dispatcher / pad-q = 1.004 x quiet pad-q 5.601 ms = 5.63 ms; pad-q arm 5.74 ms against its quiet anchor 5.60 ms (x1.03)
+# stand-in memory cross m=10400 | dispatcher / pad-q = 0.549 x quiet pad-q 21.056 ms = 11.55 ms; pad-q arm 21.46 ms against its quiet anchor 21.06 ms (x1.02)
+# stand-in memory cross m=10624 | dispatcher / pad-q = 0.532 x quiet pad-q 21.863 ms = 11.64 ms; pad-q arm 22.94 ms against its quiet anchor 21.86 ms (x1.05)
+# stand-in memory cross m=15584 | dispatcher / pad-q = 0.379 x quiet pad-q 46.836 ms = 17.73 ms (gate 20 ms: met); pad-q arm 52.66 ms against its quiet anchor 46.84 ms (x1.12)
+# stand-in memory cross m=36320 | dispatcher / pad-q = 0.158 x quiet pad-q 281.832 ms = 44.58 ms (gate 45 ms: met); pad-q arm 305.71 ms against its quiet anchor 281.83 ms (x1.08)
+# floor rule | FLASH_MIN_GROUPS = 56 by the sweep (current constant 384); valid only if the run's verdict is clean
+# load_end 13.06 19.45 21.27
+# verdict repeat
+attempt 4 exit=0 # verdict repeat
+# load_start 10.56 17.56 20.43
+# stand-in memory cross m=5200 | dispatcher / pad-q = 1.010 x quiet pad-q 5.601 ms = 5.66 ms; pad-q arm 5.69 ms against its quiet anchor 5.60 ms (x1.02)
+# stand-in memory cross m=10400 | dispatcher / pad-q = 0.547 x quiet pad-q 21.056 ms = 11.52 ms; pad-q arm 21.87 ms against its quiet anchor 21.06 ms (x1.04)
+# stand-in memory cross m=10624 | dispatcher / pad-q = 0.537 x quiet pad-q 21.863 ms = 11.75 ms; pad-q arm 21.41 ms against its quiet anchor 21.86 ms (x0.98)
+# stand-in memory cross m=15584 | dispatcher / pad-q = 0.382 x quiet pad-q 46.836 ms = 17.89 ms (gate 20 ms: met); pad-q arm 45.47 ms against its quiet anchor 46.84 ms (x0.97)
+# stand-in memory cross m=36320 | dispatcher / pad-q = 0.157 x quiet pad-q 281.832 ms = 44.38 ms (gate 45 ms: met); pad-q arm 270.43 ms against its quiet anchor 281.83 ms (x0.96)
+# floor rule | FLASH_MIN_GROUPS = 56 by the sweep (current constant 384); valid only if the run's verdict is clean
+# load_end 7.97 15.15 19.27
+# verdict repeat
+attempt 5 exit=0 # verdict repeat
+# load_start 6.20 13.32 18.30
+# stand-in memory cross m=5200 | dispatcher / pad-q = 1.002 x quiet pad-q 5.601 ms = 5.61 ms; pad-q arm 11.34 ms against its quiet anchor 5.60 ms (x2.03)
+# stand-in memory cross m=10400 | dispatcher / pad-q = 0.556 x quiet pad-q 21.056 ms = 11.70 ms; pad-q arm 51.19 ms against its quiet anchor 21.06 ms (x2.43)
+# stand-in memory cross m=10624 | dispatcher / pad-q = 0.544 x quiet pad-q 21.863 ms = 11.89 ms; pad-q arm 43.64 ms against its quiet anchor 21.86 ms (x2.00)
+# stand-in memory cross m=15584 | dispatcher / pad-q = 0.368 x quiet pad-q 46.836 ms = 17.25 ms (gate 20 ms: met); pad-q arm 137.41 ms against its quiet anchor 46.84 ms (x2.93)
+# stand-in memory cross m=36320 | dispatcher / pad-q = 0.104 x quiet pad-q 281.832 ms = 29.24 ms (gate 45 ms: met); pad-q arm 1066.07 ms against its quiet anchor 281.83 ms (x3.78)
+# floor rule | FLASH_MIN_GROUPS = 512 by the sweep (current constant 384); valid only if the run's verdict is clean
+# load_end 30.34 19.34 19.68
+# verdict repeat
+attempt 6 exit=0 # verdict repeat
+# load_start 21.20 18.85 19.48
+# stand-in memory cross m=5200 | dispatcher / pad-q = 1.022 x quiet pad-q 5.601 ms = 5.72 ms; pad-q arm 16.84 ms against its quiet anchor 5.60 ms (x3.01)
+# stand-in memory cross m=10400 | dispatcher / pad-q = 0.520 x quiet pad-q 21.056 ms = 10.96 ms; pad-q arm 54.75 ms against its quiet anchor 21.06 ms (x2.60)
+# stand-in memory cross m=10624 | dispatcher / pad-q = 0.555 x quiet pad-q 21.863 ms = 12.12 ms; pad-q arm 57.06 ms against its quiet anchor 21.86 ms (x2.61)
+# stand-in memory cross m=15584 | dispatcher / pad-q = 0.361 x quiet pad-q 46.836 ms = 16.91 ms (gate 20 ms: met); pad-q arm 138.45 ms against its quiet anchor 46.84 ms (x2.96)
+# stand-in memory cross m=36320 | dispatcher / pad-q = 0.159 x quiet pad-q 281.832 ms = 44.88 ms (gate 45 ms: met); pad-q arm 282.22 ms against its quiet anchor 281.83 ms (x1.00)
+# floor rule | FLASH_MIN_GROUPS = 128 by the sweep (current constant 384); valid only if the run's verdict is clean
+# load_end 27.21 22.04 20.63
+# verdict repeat
+transpose 'permute [1, 1024, 72, 72]' exit=0 # verdict repeat
+transpose 'permute [1, 72, 72, 1024]' exit=0 # verdict repeat
+transpose 'permute [256, 82944]' exit=0 # verdict repeat
+19:31:25 a-at3g-run exit=0

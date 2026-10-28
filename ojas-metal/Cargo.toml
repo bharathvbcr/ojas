@@ -47,6 +47,14 @@ name = "memory_bound_bench"
 required-features = ["metal"]
 
 [[example]]
+name = "attention_causal_rate_bench"
+required-features = ["metal"]
+
+[[example]]
+name = "attention_flash_bench"
+required-features = ["metal"]
+
+[[example]]
 name = "frame_ops_bench"
 required-features = ["metal"]
 
