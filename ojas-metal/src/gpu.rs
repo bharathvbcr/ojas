@@ -311,6 +311,10 @@ pub struct Session {
     rt: Arc<GpuRuntime>,
     /// Sum of tessl buckets for parameters still held by [`TinyState`]s.
     resident: Arc<AtomicU64>,
+    /// Held until the runtime above is gone: shared with every `TinyState`
+    /// and `GateBufs` that clones `rt`, so the last of them drops it.
+    #[cfg(test)]
+    _lease: Arc<crate::gauge::Lease>,
 }
 
 impl Session {
@@ -321,6 +325,8 @@ impl Session {
                 detail: err.to_string(),
             },
         )?;
+        #[cfg(test)]
+        let lease = Arc::new(crate::gauge::lease());
         let rt = GpuRuntime::new().map_err(metal)?;
         rt.set_pool_cache_cap_bytes(SESSION_POOL_CACHE_BYTES);
         rt.set_async_encode(true).map_err(metal)?;
@@ -342,6 +348,8 @@ impl Session {
         Ok(Self {
             rt,
             resident: Arc::new(AtomicU64::new(0)),
+            #[cfg(test)]
+            _lease: lease,
         })
     }
 
@@ -373,6 +381,9 @@ pub struct TinyState {
     m_q: Tensor,
     v_q: Tensor,
     step: u64,
+    /// The session's lease, dropped after `rt` and every tensor above.
+    #[cfg(test)]
+    _lease: Arc<crate::gauge::Lease>,
 }
 
 /// Host weights for [`TinyState::new`], row-major.
@@ -478,6 +489,8 @@ impl TinyState {
             m_q,
             v_q,
             step: 0,
+            #[cfg(test)]
+            _lease: Arc::clone(&session._lease),
         })
     }
 
@@ -1413,6 +1426,9 @@ struct GateBufs {
     n_head: usize,
     d_model: usize,
     head_dim: usize,
+    /// The session's lease, dropped after `rt` and every buffer above.
+    #[cfg(test)]
+    _lease: Arc<crate::gauge::Lease>,
 }
 
 /// Element counts of the buffers both gate directions upload.
@@ -1549,6 +1565,8 @@ fn gate_prep(
         n_head,
         d_model,
         head_dim,
+        #[cfg(test)]
+        _lease: Arc::clone(&session._lease),
     })
 }
 
@@ -1576,6 +1594,7 @@ fn gate_fwd_kernel(g: &GateBufs, out: &Tensor) -> Result<(), OjasError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gauge;
 
     fn session() -> Session {
         Session::open().expect("Metal device required; a missing device fails the test")
@@ -2120,6 +2139,8 @@ mod tests {
 
     #[test]
     fn scratch_cap_is_not_clamped() {
+        // The device's figure is process-wide: nothing else may hold a runtime.
+        let measuring = gauge::measuring();
         let session = session();
         let shape = shape();
         let d = D_MODEL as usize;
@@ -2140,7 +2161,7 @@ mod tests {
         )
         .unwrap();
         let need = scratch_bytes(&shape).unwrap();
-        let allocated = state.rt.current_allocated_bytes();
+        let allocated = gauge::live_bytes(&state.rt, &measuring);
         assert!(
             allocated > 0,
             "device reported no live bytes before the refusal"
@@ -2167,10 +2188,40 @@ mod tests {
         }
         assert_eq!(state.step_count(), 0);
         assert_eq!(
-            state.rt.current_allocated_bytes(),
+            gauge::live_bytes(&state.rt, &measuring),
             allocated,
             "a step whose bucketed bytes exceed byte_cap still allocated"
         );
+    }
+
+    /// A state clones the session's runtime, so it must keep the session's
+    /// lease: the device is in use until the state is gone, not the session.
+    #[test]
+    fn a_state_keeps_its_sessions_lease_after_the_session_is_dropped() {
+        let session = session();
+        assert_eq!(gauge::held_here(), 1);
+        let shape = shape();
+        let d = D_MODEL as usize;
+        let state = TinyState::new(
+            &session,
+            shape,
+            param_bytes(&shape).unwrap(),
+            tw(
+                &vec![1.0; d],
+                &pattern(d * d, 2),
+                &pattern(d * d, 3),
+                &pattern(d * d, 4),
+                &pattern(shape.vocab as usize * d, 5),
+                &vec![1.0; HEAD_DIM as usize],
+                &vec![1.0; HEAD_DIM as usize],
+                &vec![1.0; d * d],
+            ),
+        )
+        .unwrap();
+        drop(session);
+        assert_eq!(gauge::held_here(), 1, "the state's runtime has no lease");
+        drop(state);
+        assert_eq!(gauge::held_here(), 0);
     }
 
     #[test]

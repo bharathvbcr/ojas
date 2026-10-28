@@ -43,7 +43,13 @@ use crate::link::{
     ConvGeom, DeviceInfo, EmbedRows, EncAttnGeom, GdnArgs, GroupNormGeom, Lane, LceGeom, Msg,
     NewBuf, ReadAs, Reply, Res, RmsSide, RopeMode, SdpaGeom, Wait, Waits, SQ_OUT_WORDS, SQ_PIECE,
 };
+use crate::permute::{self, Plan};
 
+/// Threads of an `ojas_permute_tile` threadgroup (`PERMUTE_TILE_THREADS`).
+const PERMUTE_TILE_THREADS: usize = 256;
+/// The status word that tells `ojas_permute_runs` and `ojas_permute_tile` not
+/// to test what they read (`PERMUTE_NO_CHECK`): the caller has scanned it.
+const PERMUTE_NO_CHECK: u32 = u32::MAX;
 const ST_IN: u32 = 0;
 const ST_OUT: u32 = 1;
 const ST_WORDS: usize = 8;
@@ -142,6 +148,8 @@ const KERNELS: &[&str] = &[
     "ojas_cached_attn",
     "ojas_cached_attn_merge",
     "ojas_permute",
+    "ojas_permute_runs",
+    "ojas_permute_tile",
     "ojas_bcast_binary",
     "ojas_scale_fwd",
     "ojas_softmax_rows",
@@ -278,9 +286,13 @@ fn spawn_with(
 ) -> Res<(mpsc::Sender<Msg>, DeviceInfo)> {
     let (tx, rx) = mpsc::channel::<Msg>();
     let (ready_tx, ready_rx) = mpsc::sync_channel::<Res<DeviceInfo>>(1);
+    #[cfg(test)]
+    let acting = crate::gauge::inherit();
     let handle = thread::Builder::new()
         .name("ojas-metal-device".to_string())
         .spawn(move || {
+            #[cfg(test)]
+            acting.enter();
             let opened = catch_unwind(AssertUnwindSafe(open))
                 .unwrap_or_else(|_| Err(metal_err("Metal runtime start-up panicked")));
             let mut worker = match opened {
@@ -550,10 +562,15 @@ struct Worker {
     /// read-write binding of a dispatch on memory of its own.
     spare: GpuBuffer,
     book: RefCell<Book>,
+    /// Held until the runtime above is gone (last field, so dropped last).
+    #[cfg(test)]
+    _lease: crate::gauge::Lease,
 }
 
 impl Worker {
     fn open(waits: Arc<Waits>, budget_cap: u64) -> Res<Self> {
+        #[cfg(test)]
+        let lease = crate::gauge::lease();
         let rt = GpuRuntime::new().map_err(metal_err)?;
         // Before the first allocation, so no buffer is ever cached past it.
         let pool_cap = usize::try_from(pool_cache_cap(budget_cap)).unwrap_or(usize::MAX);
@@ -600,6 +617,8 @@ impl Worker {
             slab,
             spare,
             book: RefCell::new(book),
+            #[cfg(test)]
+            _lease: lease,
         })
     }
 
@@ -1094,11 +1113,13 @@ impl Worker {
 
     fn k1(&self, name: &str, n: usize, f: impl FnOnce(&mut Binder<'_>)) -> Res<()> {
         let p = self.rt.pipeline(name).map_err(metal_err)?;
+        self.waits.note_kernel(name);
         dispatch::dispatch_1d(&self.rt, &p, n, f).map_err(metal_err)
     }
 
     fn k2(&self, name: &str, nx: usize, ny: usize, f: impl FnOnce(&mut Binder<'_>)) -> Res<()> {
         let p = self.rt.pipeline(name).map_err(metal_err)?;
+        self.waits.note_kernel(name);
         dispatch::dispatch_2d(&self.rt, &p, nx, ny, f).map_err(metal_err)
     }
 
@@ -1111,6 +1132,7 @@ impl Worker {
         f: impl FnOnce(&mut Binder<'_>),
     ) -> Res<()> {
         let p = self.rt.pipeline(name).map_err(metal_err)?;
+        self.waits.note_kernel(name);
         dispatch::dispatch_2d_tg(&self.rt, &p, gx, gy, threads, f).map_err(metal_err)
     }
 
@@ -1442,7 +1464,8 @@ impl Worker {
                 rank,
                 oshape,
                 istride,
-            } => self.permute(x, rank, &oshape, &istride),
+                generic,
+            } => self.permute(x, rank, &oshape, &istride, generic),
             Cmd::LayerNorm {
                 x,
                 w,
@@ -1822,33 +1845,137 @@ impl Worker {
     }
 
     /// A bit copy. A NaN or infinity in the input is refused, as the CPU
-    /// reference refuses one; the output holds only copied finite bits, so
-    /// it needs no check of its own.
-    fn permute(&mut self, x: Arg, rank: u32, oshape: &[u32], istride: &[u32]) -> Res<Reply> {
+    /// reference refuses one; the output holds only copied bits of the input,
+    /// so it needs no check of its own. The row-copy and transpose kernels
+    /// test each word they read for the finite check; the generic kernel has
+    /// a scan dispatch before it, as it always had.
+    fn permute(
+        &mut self,
+        x: Arg,
+        rank: u32,
+        oshape: &[u32],
+        istride: &[u32],
+        generic: bool,
+    ) -> Res<Reply> {
         const OP: &str = "permute";
         let xv = self.view(x)?;
         let y = self.fresh(xv.n)?;
         let st = self.status(OP)?;
-        self.check(&st, &xv, ST_IN)?;
-        self.permute_into(&xv, &y, rank, oshape, istride)?;
+        let plan = if generic {
+            Plan::Generic
+        } else {
+            permute::plan(rank as usize, oshape, istride, xv.off, y.off)
+        };
+        let word = if plan == Plan::Generic {
+            self.check(&st, &xv, ST_IN)?;
+            PERMUTE_NO_CHECK
+        } else {
+            ST_IN
+        };
+        self.permute_planned(&xv, &y, rank, oshape, istride, plan, (&st, word))?;
         Ok(self.keep(vec![y]))
     }
 
-    /// `ojas_permute` into `y`, one thread per element of `y`: output axis
-    /// `a` has extent `oshape[a]` and reads `xv` at `istride[a]`. `y` may be
-    /// smaller than `xv` (a slice of it).
-    fn permute_into(&self, xv: &V, y: &V, rank: u32, oshape: &[u32], istride: &[u32]) -> Res<()> {
+    /// A permute into `y` for a caller that has scanned `xv` itself: the
+    /// kernel [`permute::plan`] picks, flagging nothing.
+    fn permute_into(
+        &self,
+        xv: &V,
+        y: &V,
+        rank: u32,
+        oshape: &[u32],
+        istride: &[u32],
+        st: &St,
+    ) -> Res<()> {
+        let plan = permute::plan(rank as usize, oshape, istride, xv.off, y.off);
+        self.permute_planned(xv, y, rank, oshape, istride, plan, (st, PERMUTE_NO_CHECK))
+    }
+
+    /// One dispatch of `plan`'s kernel: output axis `a` has extent
+    /// `oshape[a]` and reads `xv` at `istride[a]`. `y` may be smaller than
+    /// `xv` (a slice of it). `check` is a status slot and the word the
+    /// row-copy and transpose kernels flag in it when a word they read is a
+    /// NaN or infinity, or [`PERMUTE_NO_CHECK`]; `ojas_permute` never checks.
+    #[allow(clippy::too_many_arguments)]
+    fn permute_planned(
+        &self,
+        xv: &V,
+        y: &V,
+        rank: u32,
+        oshape: &[u32],
+        istride: &[u32],
+        plan: Plan,
+        (st, word): (&St, u32),
+    ) -> Res<()> {
         let n = u32_of(y.n)?;
-        let shape_bytes: Vec<u8> = oshape.iter().flat_map(|v| v.to_ne_bytes()).collect();
-        let stride_bytes: Vec<u8> = istride.iter().flat_map(|v| v.to_ne_bytes()).collect();
-        self.k1("ojas_permute", y.n, |b| {
-            bind(b, xv, 0);
-            bind(b, y, 1);
-            set_u32(b, n, 2);
-            set_u32(b, rank, 3);
-            b.bind_bytes(&shape_bytes, 4);
-            b.bind_bytes(&stride_bytes, 5);
-        })
+        // The kernels cover whole rows and tiles and have no tail: refuse a
+        // plan that does not tile the output exactly, rather than leave
+        // elements unwritten.
+        permute::check_covers(&plan, y.n).map_err(|why| metal_err(format!("permute: {why}")))?;
+        let words = |v: &[u32]| -> Vec<u8> { v.iter().flat_map(|w| w.to_ne_bytes()).collect() };
+        match plan {
+            Plan::Generic => {
+                let (shape_bytes, stride_bytes) = (words(oshape), words(istride));
+                self.k1("ojas_permute", y.n, |b| {
+                    bind(b, xv, 0);
+                    bind(b, y, 1);
+                    set_u32(b, n, 2);
+                    set_u32(b, rank, 3);
+                    b.bind_bytes(&shape_bytes, 4);
+                    b.bind_bytes(&stride_bytes, 5);
+                })
+            }
+            Plan::Runs { run, outer } => {
+                let stride4: Vec<u32> = outer.stride.iter().map(|s| s / permute::VECTOR).collect();
+                let (shape_bytes, stride_bytes) = (words(&outer.extent), words(&stride4));
+                let total4 = n / permute::VECTOR;
+                let threads = (total4 / permute::WORDS_PER_THREAD) as usize;
+                self.k1("ojas_permute_runs", threads, |b| {
+                    bind(b, xv, 0);
+                    bind(b, y, 1);
+                    set_u32(b, total4, 2);
+                    set_u32(b, run / permute::VECTOR, 3);
+                    set_u32(b, outer.len as u32, 4);
+                    b.bind_bytes(&shape_bytes, 5);
+                    b.bind_bytes(&stride_bytes, 6);
+                    bind_st(b, st, 7);
+                    set_u32(b, word, 8);
+                })
+            }
+            Plan::Transpose {
+                rows,
+                cols,
+                col_stride,
+                outer,
+            } => {
+                let (row_tiles, col_tiles) =
+                    (rows.div_ceil(permute::TILE), cols.div_ceil(permute::TILE));
+                let groups = permute::transpose_groups(rows, cols, outer.count());
+                let groups = u32::try_from(groups)
+                    .map_err(|_| metal_err("permute: transpose grid overflows"))?;
+                let (shape_bytes, stride_bytes) = (words(&outer.extent), words(&outer.stride));
+                self.ktg(
+                    "ojas_permute_tile",
+                    groups as usize,
+                    1,
+                    PERMUTE_TILE_THREADS,
+                    |b| {
+                        bind(b, xv, 0);
+                        bind(b, y, 1);
+                        set_u32(b, rows, 2);
+                        set_u32(b, cols, 3);
+                        set_u32(b, col_stride, 4);
+                        set_u32(b, col_tiles, 5);
+                        set_u32(b, outer.len as u32, 6);
+                        b.bind_bytes(&shape_bytes, 7);
+                        b.bind_bytes(&stride_bytes, 8);
+                        bind_st(b, st, 9);
+                        set_u32(b, word, 10);
+                        set_u32(b, row_tiles, 11);
+                    },
+                )
+            }
+        }
     }
 
     /// The gather; a `half` (bf16) table is scanned on its bits and each
@@ -2298,6 +2425,8 @@ impl Worker {
                 set_u32(b, g.rep, 8);
                 set_u32(b, g.window, 9);
                 set_f32(b, scale, 10);
+                set_u32(b, g.t, 11);
+                set_u32(b, 0, 12);
             })?;
         }
         self.check(&st, &o, ST_OUT)?;
@@ -2362,6 +2491,31 @@ impl Worker {
                 g.causal, g.window, g.d, g.splits, g.per_split, g.kv_len
             )));
         }
+        // The flash kernel runs the same call split-K or scalar would, but only
+        // where the TensorOps body covers it: head dim 32, non-causal, no
+        // window, bias or key lengths, and planes the matrix-unit views address.
+        if g.flash {
+            if tiled
+                || g.causal
+                || g.window != 0
+                || g.d != 32
+                || g.bias.is_some()
+                || g.has_lens
+                || g.kv_len == 0
+            {
+                return Err(metal_err(format!(
+                    "{op}: the flash kernel runs non-causal head dim 32 with no window, bias or key lengths, not causal {} window {} d {} bias {} lens {} splits {}",
+                    g.causal,
+                    g.window,
+                    g.d,
+                    g.bias.is_some(),
+                    g.has_lens,
+                    g.splits
+                )));
+            }
+            attn_plane_fits(op, g.q_len, g.d)?;
+            attn_plane_fits(op, g.kv_len, g.d)?;
+        }
         let o = self.fresh(qv.n)?;
         let lse = self.fresh(planes * q_len)?;
         // One (m, l, acc[D]) per split and row.
@@ -2382,7 +2536,34 @@ impl Worker {
         if let (Some(a), Some(b)) = (bias, bv.as_ref()) {
             self.check_operand(&st, a, b, ST_IN)?;
         }
-        if let (true, Some(part)) = (qv.n > 0, part.as_ref()) {
+        if g.flash {
+            if qv.n > 0 {
+                // One threadgroup per 32 query rows of a plane, four
+                // simdgroups, no partials: `ojas_attn_fwd_d32` with `cross`.
+                let scale = sdpa_scale(g.d)?;
+                self.ktg(
+                    "ojas_attn_fwd_d32",
+                    q_len.div_ceil(ATTN_ROWS),
+                    planes,
+                    ATTN_THREADS,
+                    |b| {
+                        bind(b, &qv, 0);
+                        bind(b, &kv, 1);
+                        bind(b, &vv, 2);
+                        bind(b, &o, 3);
+                        bind(b, &lse, 4);
+                        bind_st(b, &st, 5);
+                        set_u32(b, g.q_len, 6);
+                        set_u32(b, g.d, 7);
+                        set_u32(b, g.rep, 8);
+                        set_u32(b, 0, 9);
+                        set_f32(b, scale, 10);
+                        set_u32(b, g.kv_len, 11);
+                        set_u32(b, 1, 12);
+                    },
+                )?;
+            }
+        } else if let (true, Some(part)) = (qv.n > 0, part.as_ref()) {
             let flags = (u32::from(g.bias.is_some()) << 1) | (u32::from(g.has_lens) << 2);
             let [bias_b, bias_h, bias_q] = g.bias.unwrap_or([1, 1, 1]);
             let (bias_buf, lens_buf) = (bv.as_ref().unwrap_or(&qv), lv.as_ref().unwrap_or(&qv));
@@ -2939,6 +3120,7 @@ impl Worker {
             4,
             &[g.batch, h, wd, c],
             &[c * h * wd, wd, 1, h * wd],
+            &st,
         )?;
         self.gemm_lane(Lane::ExactF32)
             .nn(
@@ -3005,7 +3187,7 @@ impl Worker {
             self.check(&st, v, ST_IN)?;
         }
         if tq == t {
-            self.permute_into(&qv, &qt, 4, &to_bthd.0, &to_bthd.1)?;
+            self.permute_into(&qv, &qt, 4, &to_bthd.0, &to_bthd.1, &st)?;
         } else {
             self.k1("ojas_pad_q", nk, |bd| {
                 bind(bd, &qv, 0);
@@ -3018,7 +3200,7 @@ impl Worker {
             })?;
         }
         for (src, dst) in [(&kv, &kt), (&vv, &vt)] {
-            self.permute_into(src, dst, 4, &to_bthd.0, &to_bthd.1)?;
+            self.permute_into(src, dst, 4, &to_bthd.0, &to_bthd.1, &st)?;
         }
         encoder_attn(
             &self.rt,
@@ -3038,7 +3220,7 @@ impl Worker {
             },
         )
         .map_err(metal_err)?;
-        self.permute_into(&o, &y, 4, &to_bhtd.0, &to_bhtd.1)?;
+        self.permute_into(&o, &y, 4, &to_bhtd.0, &to_bhtd.1, &st)?;
         self.check(&st, &y, ST_OUT)?;
         Ok(self.keep(vec![y]))
     }
@@ -4741,6 +4923,7 @@ mod tests {
     /// against ones that are not allocation failures.
     #[test]
     fn classify_alloc_reads_tessls_failures() {
+        let _lease = crate::gauge::lease();
         let rt = GpuRuntime::new().expect("Metal device");
         let real = rt
             .alloc_buffer(usize::MAX)
