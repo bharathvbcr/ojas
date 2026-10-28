@@ -1663,9 +1663,25 @@ impl<B: Backend> Tape<B> {
     /// sum is one rounding of `old + grad`, and addition commutes, so the
     /// bits do not depend on which side is written. Before 2026-10-07 every
     /// fan-in built a new tensor with `residual_add_forward`.
+    ///
+    /// A gradient whose shape is not the forward value's is
+    /// [`OjasError::Backend`] and is not stored. [`Backend::accumulate_grad`]
+    /// only compares two gradients with each other, so two wrong gradients
+    /// of one shape would otherwise add and stay. A frozen node still drops
+    /// its gradient without consulting the shape: nothing is kept either way.
     fn acc(&mut self, id: usize, grad: Tensor) -> Result<(), OjasError> {
         if self.is_frozen(id) {
             return Ok(());
+        }
+        if grad.shape() != self.values[id].shape() {
+            let got = grad.shape().to_vec();
+            let want = self.values[id].shape().to_vec();
+            return Err(OjasError::Backend {
+                id: self.backend.id(),
+                detail: format!(
+                    "Tape::backward: gradient {got:?} does not match forward var {id} {want:?}"
+                ),
+            });
         }
         if let Some(old) = self.grads[id].take() {
             let (mut into, from) = if old.shares_allocation() && !grad.shares_allocation() {
