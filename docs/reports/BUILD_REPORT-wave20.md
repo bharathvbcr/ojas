@@ -76,7 +76,7 @@ A code-reader subagent (`01a17d4d-178e-7c40-92ac-fef9aaef2c4f`) stopped with HTT
 
 ## Cargo.lock
 
-Unlocked cargo rewrote the worktree lock (`gusset` 0.0.2 to 0.0.3). That file was restored. `Cargo.lock` is clean on this branch and `gusset` is `0.0.2`. Primary's lock was not touched.
+Unlocked cargo rewrote the worktree lock (`gusset` 0.0.2 to 0.0.3). That file was restored. `Cargo.lock` is clean on this branch and `gusset` is `0.0.2`. Primary's lock was not touched. (Superseded on gp/78-integrate: `Cargo.lock` locks `gusset` 0.0.3 and `libc` 0.2.191 since `2318ccb`, so the `0.0.2` here is stale.)
 
 ## Deferred this wave
 

@@ -170,7 +170,7 @@ impl Case {
 
 /// The 32768-row gated RMSNorm backward. Its per-row scratch is larger than
 /// `SLACK`, so this shape is gated on its own rather than inside `cases`.
-fn broken_cases() -> Vec<Case> {
+fn many_row_gated_rms_cases() -> Vec<Case> {
     let mut rng = SplitMix64(0x0b5e_55ee);
     // Many short rows: the backward keeps one rstd per row.
     let (x, z, w, gy) = (
@@ -705,7 +705,7 @@ fn every_op_heap_peak_stays_within_its_charged_peak() {
 #[test]
 fn gated_rms_norm_backward_many_rows_heap_peak_stays_within_its_charged_peak() {
     let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
-    let failures = heap_failures(&broken_cases());
+    let failures = heap_failures(&many_row_gated_rms_cases());
     assert!(
         failures.is_empty(),
         "uncharged heap growth:\n{}",
