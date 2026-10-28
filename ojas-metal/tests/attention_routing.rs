@@ -624,14 +624,24 @@ fn the_pad_ratio_bound_and_the_tiled_kernel_split_the_shape_classes() {
         let (dq, dk, dv) = (up(&m, &q), up(&m, &k), up(&m, &v));
         let dbias = bias.as_ref().map(|t| up(&m, t));
         let dlens = lens.as_ref().map(|t| up(&m, t));
+        // Dispatches of a call and the flash and scalar kernels it encoded
+        // (both are one dispatch, so only the kernel names tell them apart).
         let count = |f: &dyn Fn()| {
             ok("sync", m.sync());
             let before = m.dispatches();
+            let kernels = (
+                m.kernel_dispatches("ojas_attn_fwd_d32"),
+                m.kernel_dispatches("ojas_attn_gen_fwd"),
+            );
             f();
             ok("sync", m.sync());
-            m.dispatches() - before
+            (
+                m.dispatches() - before,
+                m.kernel_dispatches("ojas_attn_fwd_d32") - kernels.0,
+                m.kernel_dispatches("ojas_attn_gen_fwd") - kernels.1,
+            )
         };
-        let plain = count(&|| {
+        let (plain, plain_flash, plain_scalar) = count(&|| {
             drop(ok(
                 "inference",
                 m.attention_forward(&dq, &dk, &dv, opts(false, dbias.as_ref(), dlens.as_ref())),
@@ -641,7 +651,7 @@ fn the_pad_ratio_bound_and_the_tiled_kernel_split_the_shape_classes() {
             "inference",
             m.attention_forward(&dq, &dk, &dv, opts(false, dbias.as_ref(), dlens.as_ref())),
         );
-        let scalar = count(&|| {
+        let (scalar, _, _) = count(&|| {
             drop(ok(
                 "scalar",
                 m.attention_forward_saving(
@@ -652,7 +662,7 @@ fn the_pad_ratio_bound_and_the_tiled_kernel_split_the_shape_classes() {
                 ),
             ));
         });
-        let saving = count(&|| {
+        let (saving, saving_flash, saving_scalar) = count(&|| {
             drop(ok(
                 "saving",
                 m.attention_forward_saving(
@@ -693,6 +703,21 @@ fn the_pad_ratio_bound_and_the_tiled_kernel_split_the_shape_classes() {
                 if d == 64 || flash { scalar } else { scalar + 1 },
                 "{tag}"
             );
+            // The kernel names settle what the dispatch counts cannot: flash
+            // and scalar are both one dispatch, so a scalar misroute at a
+            // lowered floor would pass the counts alone.
+            assert_eq!(
+                (saving_flash, saving_scalar),
+                (u64::from(flash), u64::from(d == 64)),
+                "{tag}: the saving form's kernels (flash, scalar)"
+            );
+            if expected != Ran::Pad {
+                assert_eq!(
+                    (plain_flash, plain_scalar),
+                    (u64::from(flash), u64::from(expected == Ran::Scalar)),
+                    "{tag}: the inference form's kernels (flash, scalar)"
+                );
+            }
         }
         same_tensor(&tag, &out, &want, tol(tk), 1e-4);
     }

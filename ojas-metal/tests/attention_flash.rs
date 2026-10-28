@@ -437,10 +437,11 @@ fn a_budget_that_holds_only_the_outputs_still_runs_the_flash_kernel() {
     same_tensor("tight lse", &got_lse, &want_lse, tol(c.tk), 1e-4);
     drop((got, got_lse));
     assert_eq!(ok("live", tight.budget().live_bytes()), baseline);
-    // Where the dispatcher sends this call (split-K at 2 threadgroups, unless
-    // the floor is that low) the partials do not fit and the scalar kernel
-    // runs, as in stage 1; the first call's outputs are freed, so the budget
-    // has room for these.
+    // The dispatcher sends this call to split-K unless the floor is 4 or
+    // less: it is 4 flash threadgroups (two 32-row blocks of each of 2
+    // planes; split-K's own launch is 2 groups of 128 rows). Split-K's
+    // partials do not fit this budget, so the scalar kernel runs, as in stage
+    // 1; the first call's outputs are freed, so the budget has room for these.
     let ((got, got_lse), ran_auto) = call(&tight, &dev, Which::Auto);
     assert_eq!(
         ran_auto,

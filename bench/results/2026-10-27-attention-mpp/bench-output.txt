@@ -76,14 +76,14 @@ self-attention [1,8,36320,32]	encoder_attn (Tq = Tk, bidirectional)	342.488	347.
 # ---- a-at3g: the (b) gate bench of 2b14dca, six attempts (raw logs a-at3g/attempt-N.txt, digest a-at3g/STEPS.txt) ----
 # Reading of the gate (Fable wave 6), made in a results commit after e7b2e03 and not by rewriting it.
 # The reading is from attempts 1 to 4 only. Attempts 5 and 6 are excluded: their fc1 control read 3.91 and 1.99 TFLOP/s,
-# outside rules.md's 6.11 to 6.49 (attempt-5.txt:4, attempt-6.txt:4), so they count for nothing under the committed rules.
+# outside rules.md's 6.11 to 6.49 (attempt-5.txt:3, attempt-6.txt:3, the `control fc1` row; the `# control` verdict line is line 4), so they count for nothing under the committed rules.
 # e7b2e03's "the stand-in meets both gates in all six attempts" is wrong for that reason: attempt 5's 29.24 ms at m = 36320 is a
 # pad-q arm at 3.78x its quiet anchor with the flash / pad-q ratio compressed to 0.104 (0.155 to 0.158 in attempts 1 to 4).
 # No attempt was clean: no attempt had both 1-minute loads at 6.0 or less (starts 18.8, 26.2, 18.4, 10.6; the job polled once, then
 # waited 28 minutes for the lock with no re-check). The stand-in rule (rules.md) decides.
 # stand-in, flash / pad-q ratio x quiet pad-q median (attempts 1 2 3 4):
 #   m = 15584: 17.58 17.86 17.73 17.89 ms (gate 20): met
-#   m = 36320: 43.82 43.90 44.58 44.38 ms (gate 45): AT the gate (margin 0.4 to 1.2 ms, inside the stand-in's own spread of about 1.3%), not inside it
+#   m = 36320: 43.82 43.90 44.58 44.38 ms (gate 45): AT the gate (margin 0.4 to 1.2 ms, the four values span 0.76 ms, about 1.7% of 44.4 ms, so the margin is inside their own spread), not inside it
 # raw flash medians of the same attempts: m = 15584 21.005 19.075 19.932 17.366 ms; m = 36320 49.389 50.323 48.353 42.581 ms.
 #   Only attempt 4 (load 10.6 to 8.0, fc1 control 6.30 TFLOP/s, pad-q at 0.96 to 0.97 of its quiet anchor) has both raw medians inside the gates.
 # against the production route at m = 36320 in attempt 4: split-K 79.611 ms, pad-q 270.425 ms, flash 42.581 ms, faster than pad-q in 50/50 paired samples.
