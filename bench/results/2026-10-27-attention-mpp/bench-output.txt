@@ -88,7 +88,7 @@ self-attention [1,8,36320,32]	encoder_attn (Tq = Tk, bidirectional)	342.488	347.
 #   Only attempt 4 (load 10.6 to 8.0, fc1 control 6.30 TFLOP/s, pad-q at 0.96 to 0.97 of its quiet anchor) has both raw medians inside the gates.
 # against the production route at m = 36320 in attempt 4: split-K 79.611 ms, pad-q 270.425 ms, flash 42.581 ms, faster than pad-q in 50/50 paired samples.
 # correctness and dispatch gates: no CORRECTNESS FAIL or DISPATCH FAIL line in any attempt; parity against split-K 1.5e-7 output and 6.7e-6 lse
-#   at worst, against pad-q 3.5e-8; every flash row's dispatcher call encodes ojas_attn_fwd_d32 once (kernel counter) and is 36x faster than the forced scalar kernel.
+#   at worst, against pad-q 3.5e-8; every flash row's dispatcher call encodes ojas_attn_fwd_d32 once (kernel counter) and is 28.7x to 40.5x faster than the forced scalar kernel (attempts 1 to 4; floor 3x).
 # no-regression lines: the dispatcher against split-K reads "no regression" on every bias, D16 and sweep row of every attempt.
 # floor: FLASH_MIN_GROUPS stays 384, a documented default and not a measurement. The sweep's `# floor rule` line was 512, 128, 56, 56, 512, 128
 #   across the six attempts, and rules.md moves the constant only on a clean sweep, so none was applied.
