@@ -1137,6 +1137,12 @@ struct CeAtOffset {
     dh_slab: Tensor,
 }
 
+/// Cross-entropy of `hidden @ weightᵀ` through tessl's `cross_entropy_rows`
+/// (tessl `src/cross_entropy.rs`, `kernels/cross_entropy.metal`), with the
+/// head's `dh` written at a nonzero byte offset. This is not one of ojas's own
+/// target-excluded kernels (`ojas_ce_fused`, `ojas_lce_stats`, `ojas_lce_loss`,
+/// `ojas_lce_grad`): `tiny_train_step` never reaches them. tessl's walk keeps
+/// the target out of its running log-sum-exp itself.
 fn ce_at_offset(
     rt: &Arc<GpuRuntime>,
     hidden: &Tensor,
@@ -1781,8 +1787,12 @@ mod tests {
                     }
                 }
             }
-            // The target is not in the sum. When 1 + q rounds to 1 the loss
-            // stays q and the scale stays the exp, which is the f32 cliff.
+            // Host model of cross-entropy with the target left out of the sum
+            // (when 1 + q rounds to 1 the loss stays q and the scale stays the
+            // exp). `tiny_train_step` does not run ojas's `ojas_ce_fused` or
+            // `ojas_lce_*` kernels: its `ce_at_offset` calls tessl's
+            // `cross_entropy_rows`, which also leaves the target out. The
+            // kernels in this crate are covered by `tests/cross_entropy.rs`.
             let (row_loss, gscale) = if sum_o == 0.0 {
                 (0.0f32, 0.0f32)
             } else {
