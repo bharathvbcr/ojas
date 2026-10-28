@@ -152,8 +152,32 @@ pub const GEMM_FFMA: KernelModule = KernelModule {
 };
 
 #[cfg(feature = "harness")]
-/// Every module this crate compiles.
+/// Every module this crate compiles on the device smoke path (M0).
+/// The complete production list is [`all_modules`]; this slice stays the two
+/// modules `smoke::compile_checks` NVRTC-compiles.
 pub const ALL_MODULES: [&KernelModule; 2] = [&K0, &GEMM_FFMA];
+
+#[cfg(feature = "harness")]
+/// Every production [`KernelModule`] in this crate: the twelve consts declared
+/// at the top level of `src/*.rs`. The macOS `clang++ -fsyntax-only` check
+/// walks this list. [`ALL_MODULES`] and `crate::small_common::SMALL_MODULES`
+/// are device lanes and are subsets, not this registry.
+pub fn all_modules() -> [&'static KernelModule; 12] {
+    [
+        &K0,
+        &GEMM_FFMA,
+        &crate::k8_kernels::K8,
+        &crate::k11_kernels::K11,
+        &crate::gdn_kernels::GDN_PUBLISHED,
+        &crate::small_common::COL_SUM,
+        &crate::ce_rows::MODULE,
+        &crate::conv1d::MODULE,
+        &crate::embed::MODULE,
+        &crate::gates_published::MODULE,
+        &crate::qk_norm_rope::MODULE,
+        &crate::rmsnorm::MODULE,
+    ]
+}
 
 #[cfg(feature = "harness")]
 /// The FFMA GEMM entry point for a layout and operand rounding.
@@ -413,6 +437,161 @@ mod tests {
             }
         }
         out
+    }
+
+    /// `name` fields of column-0 `pub const _: KernelModule` in one file's
+    /// text. A `#[cfg(test)] mod tests` body is skipped by brace depth, so a
+    /// const after the tests is still seen and a const inside them is not.
+    #[cfg(feature = "harness")]
+    fn module_names_in(text: &str) -> Vec<String> {
+        let lines: Vec<&str> = text.lines().collect();
+        let mut names = Vec::new();
+        let mut depth: i32 = 0;
+        let mut skip_until: Option<i32> = None;
+        let mut prev_cfg_test = false;
+        for (i, line) in lines.iter().enumerate() {
+            let trimmed = line.trim();
+            let opens = line.matches('{').count() as i32;
+            let closes = line.matches('}').count() as i32;
+            if skip_until.is_none()
+                && prev_cfg_test
+                && (trimmed.starts_with("mod tests") || trimmed.starts_with("pub mod tests"))
+            {
+                skip_until = Some(depth);
+            }
+            if skip_until.is_none()
+                && line.starts_with("pub const ")
+                && line.contains(": KernelModule")
+            {
+                let window = lines[i..]
+                    .iter()
+                    .take(12)
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let key = "name: \"";
+                let at = window.find(key).unwrap_or_else(|| {
+                    panic!("KernelModule declaration without a string name near {line}")
+                });
+                let rest = &window[at + key.len()..];
+                let end = rest
+                    .find('"')
+                    .unwrap_or_else(|| panic!("unterminated module name near {line}"));
+                names.push(rest[..end].to_string());
+            }
+            depth += opens - closes;
+            if let Some(start) = skip_until {
+                if closes > 0 && depth <= start {
+                    skip_until = None;
+                }
+            }
+            prev_cfg_test = trimmed.starts_with("#[cfg(test)]");
+        }
+        names
+    }
+
+    /// `name` fields of column-0 `pub const _: KernelModule` in `src/**/*.rs`.
+    /// A module left out of [`super::all_modules`] fails the comparison.
+    #[cfg(feature = "harness")]
+    fn production_module_names() -> Vec<String> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        let mut stack = vec![root];
+        while let Some(dir) = stack.pop() {
+            let rd =
+                std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("read {}: {e}", dir.display()));
+            for entry in rd {
+                let entry = entry.unwrap_or_else(|e| panic!("{e}"));
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
+                    files.push(path);
+                }
+            }
+        }
+        files.sort();
+        let mut names = Vec::new();
+        for path in files {
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+            names.extend(module_names_in(&text));
+        }
+        names.sort();
+        names
+    }
+
+    #[cfg(feature = "harness")]
+    #[test]
+    fn a_const_after_the_test_module_is_still_required_and_one_inside_is_not() {
+        let text = "\
+pub const BEFORE: KernelModule = KernelModule {\n\
+    name: \"before_tests\",\n\
+};\n\
+#[cfg(test)]\n\
+mod tests {\n\
+pub const HIDDEN: KernelModule = KernelModule {\n\
+    name: \"hidden_by_tests\",\n\
+};\n\
+}\n\
+pub const AFTER: KernelModule = KernelModule {\n\
+    name: \"after_tests\",\n\
+};\n";
+        assert_eq!(
+            module_names_in(text),
+            vec!["before_tests".to_string(), "after_tests".to_string()]
+        );
+    }
+
+    #[cfg(feature = "harness")]
+    #[test]
+    fn all_modules_is_every_production_kernel_module() {
+        let mut registered: Vec<String> =
+            all_modules().iter().map(|m| m.name.to_string()).collect();
+        registered.sort();
+        let mut unique = registered.clone();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            registered.len(),
+            "duplicate module name in all_modules"
+        );
+        let declared = production_module_names();
+        assert_eq!(
+            declared, registered,
+            "a production KernelModule is missing from kernels::all_modules, or the registry names one the sources do not declare"
+        );
+        assert!(
+            registered.len() >= 12,
+            "the audit's twelve production modules shrank to {}",
+            registered.len()
+        );
+        for required in [
+            "k0_plumbing",
+            "k1_gemm_ffma",
+            "k8_swiglu",
+            "k11_adamw",
+            "k2_gdn_published_scan",
+        ] {
+            assert!(
+                registered.iter().any(|n| n == required),
+                "{required} is not in kernels::all_modules"
+            );
+        }
+        for module in crate::small_common::SMALL_MODULES {
+            assert!(
+                registered.iter().any(|n| n == module.name),
+                "{} is on the small lane but not in all_modules",
+                module.name
+            );
+        }
+        for module in ALL_MODULES {
+            assert!(
+                registered.iter().any(|n| n == module.name),
+                "{} is on the smoke lane but not in all_modules",
+                module.name
+            );
+        }
     }
 
     #[cfg(feature = "harness")]

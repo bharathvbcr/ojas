@@ -906,43 +906,58 @@ float __fadd_rn(float a, float b);
 float __fsub_rn(float a, float b);
 float __fmul_rn(float a, float b);
 float __fdiv_rn(float a, float b);
+float __fsqrt_rn(float x);
+float fmaf(float x, float y, float z);
+float rintf(float x);
+float fabsf(float x);
 "#;
 
-    /// **Syntax only; says nothing about numerics or execution.** Every module
-    /// of this lane parses and type-checks as host C++ (`clang++
-    /// -fsyntax-only -std=c++17`, NVRTC's default dialect, `-Werror`). Not a
-    /// CUDA compile: it cannot see NVRTC-specific errors. macOS only (the
-    /// system `clang++` of the lane's Mac; this host has no CUDA compiler);
-    /// on Linux it is compiled out, not failed. A missing `clang++` fails the
-    /// test: a check that could not run is not a pass.
+    /// **Syntax only; says nothing about numerics or execution.** Run `clang++
+    /// -fsyntax-only` on `source`. A missing `clang++` panics: a check that
+    /// could not run is not a pass. Not a CUDA compile.
+    #[cfg(target_os = "macos")]
+    fn clang_syntax(dir: &std::path::Path, name: &str, source: &str) -> std::process::Output {
+        let shim = dir.join("shim.h");
+        if !shim.exists() {
+            std::fs::write(&shim, HOST_CXX_SHIM).expect("write shim");
+        }
+        let src = dir.join(format!("{name}.cu.cpp"));
+        std::fs::write(&src, source).expect("write source");
+        std::process::Command::new("clang++")
+            .args([
+                "-fsyntax-only",
+                "-std=c++17",
+                "-ffp-contract=off",
+                "-Wall",
+                "-Werror",
+                "-Wno-unused-function",
+                "-x",
+                "c++",
+                "-include",
+            ])
+            .arg(&shim)
+            .arg(&src)
+            .output()
+            .unwrap_or_else(|e| {
+                panic!("clang++ could not be run ({e}); the host C++ check did not run")
+            })
+    }
+
+    /// **Syntax only; says nothing about numerics or execution.** Every
+    /// production module ([`crate::kernels::all_modules`]) parses and
+    /// type-checks as host C++ (`clang++ -fsyntax-only -std=c++17`, NVRTC's
+    /// default dialect, `-Werror`). Not a CUDA compile: it cannot see
+    /// NVRTC-specific errors. macOS only (the system `clang++` of the lane's
+    /// Mac; this host has no CUDA compiler); on Linux it is compiled out, not
+    /// failed. A missing `clang++` fails the test.
     #[cfg(target_os = "macos")]
     #[test]
-    fn syntax_only_every_small_module_parses_as_host_cxx_says_nothing_about_numerics() {
+    fn syntax_only_every_production_module_parses_as_host_cxx_says_nothing_about_numerics() {
         let dir = std::env::temp_dir().join(format!("qd-small-cxx-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
-        let shim = dir.join("shim.h");
-        std::fs::write(&shim, HOST_CXX_SHIM).expect("write shim");
-        for module in SMALL_MODULES {
-            let src = dir.join(format!("{}.cu.cpp", module.name));
-            std::fs::write(&src, module.source).expect("write source");
-            let out = std::process::Command::new("clang++")
-                .args([
-                    "-fsyntax-only",
-                    "-std=c++17",
-                    "-ffp-contract=off",
-                    "-Wall",
-                    "-Werror",
-                    "-Wno-unused-function",
-                    "-x",
-                    "c++",
-                    "-include",
-                ])
-                .arg(&shim)
-                .arg(&src)
-                .output()
-                .unwrap_or_else(|e| {
-                    panic!("clang++ could not be run ({e}); the host C++ check did not run")
-                });
+        assert_eq!(crate::kernels::all_modules().len(), 12);
+        for module in crate::kernels::all_modules() {
+            let out = clang_syntax(&dir, module.name, module.source);
             assert!(
                 out.status.success(),
                 "{} does not parse as host C++:\n{}",
@@ -951,5 +966,35 @@ float __fdiv_rn(float a, float b);
             );
         }
         std::fs::remove_dir_all(&dir).expect("remove temp dir");
+    }
+
+    /// A syntax error planted in the GDN module is a clang failure. The real
+    /// module is checked by the production-module test; this one proves the
+    /// check can fail.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_planted_gdn_typo_fails_the_host_cxx_syntax_check() {
+        let dir = std::env::temp_dir().join(format!("qd-gdn-typo-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let original = crate::gdn_kernels::GDN_PUBLISHED.source;
+        let needle = "extern \"C\"";
+        let at = original
+            .find(needle)
+            .expect("GDN source has an extern \"C\" kernel");
+        let mut planted = String::with_capacity(original.len() + 4);
+        planted.push_str(&original[..at + needle.len()]);
+        planted.push_str(" @@@");
+        planted.push_str(&original[at + needle.len()..]);
+        let out = clang_syntax(&dir, "k2_gdn_published_scan_typo", &planted);
+        std::fs::remove_dir_all(&dir).expect("remove temp dir");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !out.status.success(),
+            "a planted GDN typo parsed as host C++:\n{stderr}"
+        );
+        assert!(
+            stderr.contains("error"),
+            "clang failed without a diagnostic:\n{stderr}"
+        );
     }
 }
