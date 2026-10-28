@@ -1489,6 +1489,27 @@ impl WgpuContext {
         !lock(&self.inner.rec).scratch.is_empty()
     }
 
+    /// Reserve `bytes` of `budget`. A refusal for want of room, while the
+    /// recorder still holds an earlier call's scratch, submits that work (the
+    /// scratch returns to the pool and its charge drops) and retries once; a
+    /// second refusal is the error. Any other refusal, and a refusal with no
+    /// scratch pending, is returned as it is: a submit cannot make room for
+    /// it. This is the one reservation path for both scratch
+    /// ([`Job::scratch`]) and an op's output (`WgpuBackend::out`), because an
+    /// output charged while earlier scratch is pending would otherwise fail
+    /// where a scratch of the same size would have submitted and gone on.
+    /// Check the binding cap first ([`WgpuContext::check_bytes`]): a request
+    /// past it is not pressure and a submit does not help.
+    pub(crate) fn reserve(&self, budget: &Budget, bytes: u64) -> Result<Reservation, OjasError> {
+        match budget.try_reserve(bytes) {
+            Err(OjasError::CapacityExceeded { .. }) if self.recorder_holds_scratch() => {
+                self.flush_pending_scratch();
+                budget.try_reserve(bytes)
+            }
+            other => other,
+        }
+    }
+
     /// Submit the recorder when it holds scratch, so the charge drops and
     /// the buffers return to the pool. Does not wait: the next submission
     /// is ordered after this one. One call, no retry loop.
@@ -1992,29 +2013,9 @@ impl Job<'_> {
     /// second refusal is the error. The failing call has not committed, so
     /// its parameter is unchanged.
     pub fn scratch(&mut self, bytes: u64) -> Result<wgpu::Buffer, OjasError> {
-        match self.reserve_scratch(bytes) {
-            Ok(buf) => Ok(buf),
-            Err(err) => {
-                let tight = matches!(err, OjasError::CapacityExceeded { .. });
-                if !tight || !self.ctx.recorder_holds_scratch() {
-                    return Err(err);
-                }
-                self.ctx.flush_pending_scratch();
-                self.reserve_scratch(bytes)
-            }
-        }
-    }
-
-    fn reserve_scratch(&mut self, bytes: u64) -> Result<wgpu::Buffer, OjasError> {
         self.ctx.check_bytes(bytes, self.budget)?;
-        let charge = self.budget.try_reserve(bytes)?;
-        let buf = match self.ctx.alloc(bytes) {
-            Ok(buf) => buf,
-            Err(err) => {
-                drop(charge);
-                return Err(err);
-            }
-        };
+        let charge = self.ctx.reserve(self.budget, bytes)?;
+        let buf = self.ctx.alloc(bytes)?;
         self.scratch.push(Scratch {
             buf: buf.clone(),
             bytes,

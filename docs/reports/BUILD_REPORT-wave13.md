@@ -52,6 +52,8 @@ The first hopeless-step run failed in `download`: `CapacityExceeded { requested:
 
 The adversarial pass predicted the original linear-forward cap would die on call 4 of 8 inside `out()`, because an extra `widen / 4` let two scratches stay resident and the next output is not scratch. The cap is now the operands, the eight kept outputs, and exactly one widen. The rerun got 7 submits and 24 dispatches, under `FLUSH_AT` (64).
 
+> Correction on gp/78-integrate: this was not a test bug. The prediction was right: with the original cap, call 4 of 8 fails inside `out()`, a real gap in the code, because only `Job::scratch` retried and an output reservation refused while the recorder held pending scratch never submitted. Tightening the cap hid it. The original cap is restored in the test and `WgpuContext::reserve` now submits and retries for outputs too (see the commit that restores it).
+
 Not run: the full suite, `dev verify`, and a benchmark binary. The full suite was skipped because load stayed above the heavy-job bar (the 40-minute wait ended at load1 42 / load5 54, with other compilers still running).
 
 ## 2. Deferred or blocked
@@ -81,7 +83,7 @@ Written justification for the 5% bar: the default threshold is `u64::MAX`, so a 
 
 ## 4. New tasks filed
 
-None. The two test bugs (linear-forward cap, hopeless-step readback) were fixed on this card.
+None. One test bug (hopeless-step readback) was fixed on this card. The linear-forward cap change was not a test bug; see the correction under the adversarial pass above.
 
 ## 5. Fable's decisions (this wave)
 

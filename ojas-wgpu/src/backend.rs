@@ -681,7 +681,9 @@ impl WgpuBackend {
             .checked_mul(4)
             .ok_or_else(|| overflow(op, "byte length overflows"))?;
         self.ctx.check_bytes(bytes, &self.budget)?;
-        let charge = self.budget.try_reserve(bytes)?;
+        // Room is made by submitting earlier calls' pending scratch, as for a
+        // scratch of the same size ([`WgpuContext::reserve`]).
+        let charge = self.ctx.reserve(&self.budget, bytes)?;
         let wb = self
             .ctx
             .tensor_buffer(bytes)
