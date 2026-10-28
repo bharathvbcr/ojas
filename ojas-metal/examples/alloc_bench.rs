@@ -41,6 +41,8 @@ mod bench {
     const ATTEMPTS: usize = 3;
     /// Calls per sample of the sync-cost arms.
     const D_CALLS: usize = 8;
+    /// Swap-ins an attempt may see and still be clean (rules.md amendment; Pageouts must be zero).
+    const SWAPINS_CAP: u64 = 1000;
     /// Bytes the small churn frees per call: past the 1 GiB pool cap and memory cap.
     const SMALL_CHURN_BYTES: u64 = 5 << 28;
     /// Big-churn tensors, in f32 elements: 168, 172, 176 and 760 MB.
@@ -380,7 +382,7 @@ mod bench {
         }
         let load_ok = load_start[0] <= MAX_LOAD && load_end[0] <= MAX_LOAD;
         let control_ok = (control_tflops / CONTROL_TFLOPS - 1.0).abs() <= CONTROL_TOL;
-        let pressure = pageouts != 0 || swapins != 0;
+        let pressure = pageouts != 0 || swapins > SWAPINS_CAP;
         let clean = load_ok && control_ok && noisy_gating == 0 && !pressure;
         println!(
             "# attempt\t{label}\t{attempt}\tload_start {:.2} {:.2} {:.2}\tload_end {:.2} {:.2} {:.2}\tcontrol_tflops {control_tflops:.2}\tcontrol_ok {control_ok}\tnoisy_pairs_gating {noisy_gating}\tpageouts_delta {pageouts}\tswapins_delta {swapins}\tswap_before {}\tswap_after {}\tverdict {}",
