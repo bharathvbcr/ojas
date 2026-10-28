@@ -21,7 +21,7 @@ pub use backend::{WgpuBackend, WGPU_TOPK_MAX_K};
 pub use context::{
     drop_stats, CacheStats, DropStats, WgpuBuffer, WgpuContext, ALLOW_CPU_ADAPTER_ENV,
     BIND_CACHE_CAP, DROP_WAIT, FLUSH_AT, MAX_ELEMENTS, MAX_PARKED_DROPS, PARAM_SLOTS,
-    POOL_CAP_BYTES, READ_STAGING_BYTES, STAGING_CACHE_BYTES,
+    POOL_CAP_BYTES, READ_STAGING_BYTES, SCRATCH_FLUSH_AT, STAGING_CACHE_BYTES,
 };
 pub use memory::WgpuMemory;
 
