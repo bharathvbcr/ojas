@@ -23,6 +23,7 @@ use std::ops::Range;
 
 use ojas_core::{exp_exact, log_sum_exp_exact, sdpa_scale, Budget, Numerics, OjasError, SdpaDims};
 
+use crate::exp::exp_sub_store;
 use crate::pool::{scoped, Exec};
 use crate::validate::{nonfinite, product, room_for, shape};
 
@@ -332,37 +333,59 @@ pub(crate) fn score_rows(
     Ok(())
 }
 
+/// The CPU softmax row kernel: `dst[i] = e^(row[i] - max) / sum`, the
+/// weights summed in increasing `i` (`Fast`: in the fixed lane order of
+/// [`exp_sub_store`]) and divided once each. Returns `(max, sum)`, `max`
+/// being `NEG_INFINITY` for an empty row.
+///
+/// `Exact` is the attention softmax, the oracle the Metal parity tests
+/// compare against: [`exp_exact`] on `f32` operands. `Fast` is the vector
+/// exponential, used only by the encoder `softmax_forward`, which refuses a
+/// non-finite operand before a row reaches this function. The kernel does
+/// not check; [`softmax_range`] checks the sum it returns. The blocked
+/// `exp2` softmax of `flash.rs` is a different algorithm for `Fast`
+/// attention, not a copy of this one.
+pub(crate) fn softmax_row(numerics: Numerics, row: &[f32], dst: &mut [f32]) -> (f32, f32) {
+    let mut max = f32::NEG_INFINITY;
+    for &v in row {
+        if v > max {
+            max = v;
+        }
+    }
+    let sum = match numerics {
+        Numerics::Exact => {
+            let mut sum = 0.0f32;
+            for (out, &v) in dst.iter_mut().zip(row) {
+                let e = exp_exact(v - max);
+                *out = e;
+                sum += e;
+            }
+            sum
+        }
+        Numerics::Fast => exp_sub_store(row, max, dst),
+    };
+    for out in dst.iter_mut() {
+        *out /= sum;
+    }
+    (max, sum)
+}
+
 /// `probs[j] = softmax(scores)[j]` over `j` in `keys`, summed in increasing
 /// `j`. Returns the row's log-sum-exp, `max + ln(sum of e^(s - max))`
-/// ([`log_sum_exp_exact`]).
+/// ([`log_sum_exp_exact`]). A non-finite score, or an empty range, is
+/// [`OjasError::NonFinite`]: a NaN or infinite weight makes the sum
+/// non-finite, and a finite row always has a weight of 1 at its maximum.
 pub(crate) fn softmax_range(
     op: &'static str,
     scores: &[f32],
     probs: &mut [f32],
     keys: Range<usize>,
 ) -> Result<f32, OjasError> {
-    let mut max_score = f32::NEG_INFINITY;
-    for &score in &scores[keys.clone()] {
-        if score > max_score {
-            max_score = score;
-        }
-    }
-    let mut sum = 0.0f32;
-    for j in keys.clone() {
-        let e = exp_exact(scores[j] - max_score);
-        if !e.is_finite() {
-            return Err(nonfinite(op));
-        }
-        probs[j] = e;
-        sum += e;
-    }
+    let (max, sum) = softmax_row(Numerics::Exact, &scores[keys.clone()], &mut probs[keys]);
     if !(sum.is_finite() && sum > 0.0) {
         return Err(nonfinite(op));
     }
-    for p in &mut probs[keys] {
-        *p /= sum;
-    }
-    Ok(log_sum_exp_exact(max_score, sum))
+    Ok(log_sum_exp_exact(max, sum))
 }
 
 /// `out[d] += probs[j] * v[j, d]` for `j` in `keys` ascending and `d` from 0.

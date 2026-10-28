@@ -517,31 +517,12 @@ pub fn broadcast_scalar<B: Backend + ?Sized>(
     full.reshape(shape)
 }
 
-/// The refusal of a Qwen3.5 hybrid-layer op (causal conv1d, gated RMSNorm,
-/// partial RoPE, sigmoid, the GDN log decay) that backend `id` does not
-/// implement. There is no host
-/// fallback.
-fn unsupported_hybrid(id: BackendId, op: &'static str) -> OjasError {
-    OjasError::Unsupported {
-        op,
-        detail: format!("{id:?} backend does not implement {op}"),
-    }
-}
-
-/// The refusal of a forward-only inference op (LayerNorm, GELU, linear with
-/// bias, broadcast add and mul, scale, softmax) that backend `id` does not
-/// implement. There is no host fallback.
-fn unsupported_inference(id: BackendId, op: &'static str) -> OjasError {
-    OjasError::Unsupported {
-        op,
-        detail: format!("{id:?} backend does not implement {op}"),
-    }
-}
-
-/// The refusal of a spatial op (2D convolution, pooling, resampling,
-/// interleaved RoPE) that backend `id` does not implement. There is no host
-/// fallback.
-fn unsupported_spatial(id: BackendId, op: &'static str) -> OjasError {
+/// The refusal of an op that backend `id` does not implement: the default
+/// body of every provided `Backend` method that has no host fallback (the
+/// Qwen3.5 hybrid ops, the SAM encoder and spatial ops, attention, the KV
+/// cache). One helper, so the text a caller matches on cannot drift per
+/// op family.
+fn unsupported_op(id: BackendId, op: &'static str) -> OjasError {
     OjasError::Unsupported {
         op,
         detail: format!("{id:?} backend does not implement {op}"),
@@ -732,10 +713,7 @@ pub trait Backend {
     /// has not implemented it says so; there is no host fallback.
     fn permute(&self, input: &Tensor, dims: &[usize]) -> Result<Tensor, OjasError> {
         let _ = (input, dims);
-        Err(OjasError::Unsupported {
-            op: "permute",
-            detail: format!("{:?} backend does not implement permute", self.id()),
-        })
+        Err(unsupported_op(self.id(), "permute"))
     }
 
     /// The rows of `table` (`[vocab, dim]`) that `token_ids` pick, as an
@@ -848,6 +826,18 @@ pub trait Backend {
     /// log-sum-exp `ln sum_j e^(s_tj)` over the keys it attends to, `[B, H,
     /// T]`, which [`Self::causal_sdpa_backward`] consumes. A device may
     /// refuse `D` above its own limit.
+    ///
+    /// This and [`Self::causal_sdpa_backward`] stay separate methods beside
+    /// `attention_*` instead of defaulting to them, though
+    /// [`Self::attention_forward`] with `causal` set equals this bit for bit.
+    /// The causal pair is required: every backend implements it (CPU, Metal,
+    /// wgpu and CUDA) and the autograd tape and the model graph call it. The
+    /// `attention_*` methods have a refusing default and only the CPU and
+    /// Metal backends implement them (checked 2026-10-27 with
+    /// `rg 'fn attention_forward' ojas-{cpu,metal,wgpu,cuda}/src`), so a
+    /// causal pair wrapped over them would send wgpu and CUDA training to
+    /// that refusal. On the CPU the two share the score, softmax and value
+    /// kernels in `ojas-cpu/src/attn.rs`, so no arithmetic is duplicated.
     fn causal_sdpa_forward(
         &self,
         q: &Tensor,
@@ -914,7 +904,7 @@ pub trait Backend {
         opts: AttentionOpts<'_>,
     ) -> Result<Tensor, OjasError> {
         let _ = (q, k, v, opts);
-        Err(unsupported_inference(self.id(), "attention_forward"))
+        Err(unsupported_op(self.id(), "attention_forward"))
     }
 
     /// [`Self::attention_forward`] and each query row's log-sum-exp `ln
@@ -930,13 +920,7 @@ pub trait Backend {
         opts: AttentionOpts<'_>,
     ) -> Result<(Tensor, Tensor), OjasError> {
         let _ = (q, k, v, opts);
-        Err(OjasError::Unsupported {
-            op: "attention_forward_saving",
-            detail: format!(
-                "{:?} backend does not implement attention_forward_saving",
-                self.id()
-            ),
-        })
+        Err(unsupported_op(self.id(), "attention_forward_saving"))
     }
 
     /// The gradients of [`Self::attention_forward_saving`] from its `output`
@@ -958,13 +942,7 @@ pub trait Backend {
         bias_grad: bool,
     ) -> Result<AttentionGrad, OjasError> {
         let _ = (q, k, v, output, lse, grad_output, opts, bias_grad);
-        Err(OjasError::Unsupported {
-            op: "attention_backward",
-            detail: format!(
-                "{:?} backend does not implement attention_backward",
-                self.id()
-            ),
-        })
+        Err(unsupported_op(self.id(), "attention_backward"))
     }
 
     fn per_head_sigmoid_gate_forward(
@@ -1099,7 +1077,7 @@ pub trait Backend {
         weight: &Tensor,
     ) -> Result<Tensor, OjasError> {
         let _ = (input, weight);
-        Err(unsupported_hybrid(self.id(), "causal_conv1d_silu_forward"))
+        Err(unsupported_op(self.id(), "causal_conv1d_silu_forward"))
     }
 
     /// `(grad_input, grad_weight)` of [`Self::causal_conv1d_silu_forward`]
@@ -1111,7 +1089,7 @@ pub trait Backend {
         grad_output: &Tensor,
     ) -> Result<(Tensor, Tensor), OjasError> {
         let _ = (input, weight, grad_output);
-        Err(unsupported_hybrid(self.id(), "causal_conv1d_silu_backward"))
+        Err(unsupported_op(self.id(), "causal_conv1d_silu_backward"))
     }
 
     /// Gated RMSNorm (`Qwen3_5RMSNormGated`), elementwise in the gate:
@@ -1132,7 +1110,7 @@ pub trait Backend {
         eps: f32,
     ) -> Result<Tensor, OjasError> {
         let _ = (input, gate, weight, eps);
-        Err(unsupported_hybrid(self.id(), "gated_rms_norm_forward"))
+        Err(unsupported_op(self.id(), "gated_rms_norm_forward"))
     }
 
     /// Gradients of [`Self::gated_rms_norm_forward`] for `grad_output`
@@ -1146,7 +1124,7 @@ pub trait Backend {
         eps: f32,
     ) -> Result<GatedRmsGrad, OjasError> {
         let _ = (input, gate, weight, grad_output, eps);
-        Err(unsupported_hybrid(self.id(), "gated_rms_norm_backward"))
+        Err(unsupported_op(self.id(), "gated_rms_norm_backward"))
     }
 
     /// Partial half-split RoPE: the leading `R` values of each head rotate
@@ -1168,7 +1146,7 @@ pub trait Backend {
         sin: &Tensor,
     ) -> Result<Tensor, OjasError> {
         let _ = (x, cos, sin);
-        Err(unsupported_hybrid(self.id(), "rope_partial_forward"))
+        Err(unsupported_op(self.id(), "rope_partial_forward"))
     }
 
     /// Gradient of [`Self::rope_partial_forward`]: the rotation by `-angle`
@@ -1180,7 +1158,7 @@ pub trait Backend {
         sin: &Tensor,
     ) -> Result<Tensor, OjasError> {
         let _ = (grad_output, cos, sin);
-        Err(unsupported_hybrid(self.id(), "rope_partial_backward"))
+        Err(unsupported_op(self.id(), "rope_partial_backward"))
     }
 
     /// Elementwise logistic sigmoid `1 / (1 + e^-x)`: Qwen3.5's attention
@@ -1189,13 +1167,13 @@ pub trait Backend {
     /// refuses with [`OjasError::Unsupported`].
     fn sigmoid_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
         let _ = input;
-        Err(unsupported_hybrid(self.id(), "sigmoid_forward"))
+        Err(unsupported_op(self.id(), "sigmoid_forward"))
     }
 
     /// `grad_output * s * (1 - s)` with `s = sigmoid(input)`.
     fn sigmoid_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
         let _ = (input, grad_output);
-        Err(unsupported_hybrid(self.id(), "sigmoid_backward"))
+        Err(unsupported_op(self.id(), "sigmoid_backward"))
     }
 
     /// The gated delta rule's log decay (transformers
@@ -1217,7 +1195,7 @@ pub trait Backend {
         dt_bias: &Tensor,
     ) -> Result<Tensor, OjasError> {
         let _ = (a, a_log, dt_bias);
-        Err(unsupported_hybrid(self.id(), "gdn_log_decay_forward"))
+        Err(unsupported_op(self.id(), "gdn_log_decay_forward"))
     }
 
     /// Gradients of [`Self::gdn_log_decay_forward`] for `grad_output` shaped
@@ -1231,7 +1209,7 @@ pub trait Backend {
         grad_output: &Tensor,
     ) -> Result<GdnDecayGrad, OjasError> {
         let _ = (a, a_log, dt_bias, grad_output);
-        Err(unsupported_hybrid(self.id(), "gdn_log_decay_backward"))
+        Err(unsupported_op(self.id(), "gdn_log_decay_backward"))
     }
 
     /// 2D convolution over `NCHW` images: `input` `[N, C, H, W]`, `weight`
@@ -1251,7 +1229,7 @@ pub trait Backend {
         params: Conv2dParams,
     ) -> Result<Tensor, OjasError> {
         let _ = (input, weight, bias, params);
-        Err(unsupported_spatial(self.id(), "conv2d_forward"))
+        Err(unsupported_op(self.id(), "conv2d_forward"))
     }
 
     /// Transposed 2D convolution (`torch.nn.ConvTranspose2d`, one group):
@@ -1269,7 +1247,7 @@ pub trait Backend {
         params: ConvTranspose2dParams,
     ) -> Result<Tensor, OjasError> {
         let _ = (input, weight, bias, params);
-        Err(unsupported_spatial(self.id(), "conv_transpose2d_forward"))
+        Err(unsupported_op(self.id(), "conv_transpose2d_forward"))
     }
 
     /// `torch.nn.functional.max_pool2d` without padding or dilation over
@@ -1282,7 +1260,7 @@ pub trait Backend {
         stride: [usize; 2],
     ) -> Result<Tensor, OjasError> {
         let _ = (input, kernel, stride);
-        Err(unsupported_spatial(self.id(), "max_pool2d_forward"))
+        Err(unsupported_op(self.id(), "max_pool2d_forward"))
     }
 
     /// `torch.nn.functional.interpolate(mode="bilinear")` of `[N, C, H, W]`
@@ -1298,10 +1276,7 @@ pub trait Backend {
         align_corners: bool,
     ) -> Result<Tensor, OjasError> {
         let _ = (input, out_size, align_corners);
-        Err(unsupported_spatial(
-            self.id(),
-            "interpolate_bilinear_forward",
-        ))
+        Err(unsupported_op(self.id(), "interpolate_bilinear_forward"))
     }
 
     /// RoPE that rotates adjacent pairs `(x[2i], x[2i + 1])`, the complex
@@ -1324,7 +1299,7 @@ pub trait Backend {
         sin: &Tensor,
     ) -> Result<Tensor, OjasError> {
         let _ = (x, cos, sin);
-        Err(unsupported_spatial(self.id(), "rope_interleaved_forward"))
+        Err(unsupported_op(self.id(), "rope_interleaved_forward"))
     }
 
     /// Gradient of [`Self::rope_interleaved_forward`]: the rotation by
@@ -1336,7 +1311,7 @@ pub trait Backend {
         sin: &Tensor,
     ) -> Result<Tensor, OjasError> {
         let _ = (grad_output, cos, sin);
-        Err(unsupported_spatial(self.id(), "rope_interleaved_backward"))
+        Err(unsupported_op(self.id(), "rope_interleaved_backward"))
     }
 
     fn silu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError>;
@@ -1382,7 +1357,7 @@ pub trait Backend {
         eps: f32,
     ) -> Result<Tensor, OjasError> {
         let _ = (input, weight, bias, eps);
-        Err(unsupported_inference(self.id(), "layer_norm_forward"))
+        Err(unsupported_op(self.id(), "layer_norm_forward"))
     }
 
     /// LayerNorm across the channel axis of an image-shaped tensor:
@@ -1402,10 +1377,7 @@ pub trait Backend {
         eps: f32,
     ) -> Result<Tensor, OjasError> {
         let _ = (input, weight, bias, eps);
-        Err(unsupported_inference(
-            self.id(),
-            "channel_layer_norm_forward",
-        ))
+        Err(unsupported_op(self.id(), "channel_layer_norm_forward"))
     }
 
     /// GroupNorm over `input` `[N, C, H, W]`, torch's `nn.GroupNorm`: the `C`
@@ -1426,7 +1398,7 @@ pub trait Backend {
         eps: f32,
     ) -> Result<Tensor, OjasError> {
         let _ = (input, weight, bias, groups, eps);
-        Err(unsupported_inference(self.id(), "group_norm_forward"))
+        Err(unsupported_op(self.id(), "group_norm_forward"))
     }
 
     /// The exact GELU `x * Phi(x) = 0.5 * x * (1 + erf(x / sqrt(2)))`, torch's
@@ -1436,7 +1408,7 @@ pub trait Backend {
     /// [`OjasError::Unsupported`].
     fn gelu_erf_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
         let _ = input;
-        Err(unsupported_inference(self.id(), "gelu_erf_forward"))
+        Err(unsupported_op(self.id(), "gelu_erf_forward"))
     }
 
     /// `max(x, 0)`, torch's `F.relu`: `x` where `x >= 0` and `+0` where
@@ -1445,7 +1417,7 @@ pub trait Backend {
     /// with [`OjasError::Unsupported`].
     fn relu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
         let _ = input;
-        Err(unsupported_inference(self.id(), "relu_forward"))
+        Err(unsupported_op(self.id(), "relu_forward"))
     }
 
     /// Join `inputs` along `axis`, torch's `torch.cat(inputs, axis)`: every
@@ -1457,7 +1429,7 @@ pub trait Backend {
     /// default refuses with [`OjasError::Unsupported`].
     fn concat(&self, inputs: &[&Tensor], axis: usize) -> Result<Tensor, OjasError> {
         let _ = (inputs, axis);
-        Err(unsupported_inference(self.id(), "concat"))
+        Err(unsupported_op(self.id(), "concat"))
     }
 
     /// The rows `start..start + len` of `input` along `axis`, torch's
@@ -1473,7 +1445,7 @@ pub trait Backend {
         len: usize,
     ) -> Result<Tensor, OjasError> {
         let _ = (input, axis, start, len);
-        Err(unsupported_inference(self.id(), "slice"))
+        Err(unsupported_op(self.id(), "slice"))
     }
 
     /// A new tensor of `shape` and `dtype` with every element `value`, torch's
@@ -1486,7 +1458,7 @@ pub trait Backend {
     /// default refuses with [`OjasError::Unsupported`].
     fn fill(&self, shape: &[usize], dtype: DType, value: f32) -> Result<Tensor, OjasError> {
         let _ = (shape, dtype, value);
-        Err(unsupported_inference(self.id(), "fill"))
+        Err(unsupported_op(self.id(), "fill"))
     }
 
     /// `y = x @ W^T + b` for `x` `[..., in]`, `W` `[out, in]` and an `F32`
@@ -1502,7 +1474,7 @@ pub trait Backend {
         bias: &Tensor,
     ) -> Result<Tensor, OjasError> {
         let _ = (input, weight, bias);
-        Err(unsupported_inference(self.id(), "linear_bias_forward"))
+        Err(unsupported_op(self.id(), "linear_bias_forward"))
     }
 
     /// `a + b` with numpy broadcasting ([`crate::broadcast_shapes`]): shapes
@@ -1512,7 +1484,7 @@ pub trait Backend {
     /// differ. The default refuses with [`OjasError::Unsupported`].
     fn broadcast_add_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
         let _ = (a, b);
-        Err(unsupported_inference(self.id(), "broadcast_add_forward"))
+        Err(unsupported_op(self.id(), "broadcast_add_forward"))
     }
 
     /// `a * b` with numpy broadcasting, as [`Self::broadcast_add_forward`]:
@@ -1520,7 +1492,7 @@ pub trait Backend {
     /// [`OjasError::Unsupported`].
     fn broadcast_mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
         let _ = (a, b);
-        Err(unsupported_inference(self.id(), "broadcast_mul_forward"))
+        Err(unsupported_op(self.id(), "broadcast_mul_forward"))
     }
 
     /// `input * scale` into a new tensor, for a finite `scale`
@@ -1529,7 +1501,7 @@ pub trait Backend {
     /// refuses with [`OjasError::Unsupported`].
     fn scale_forward(&self, input: &Tensor, scale: f32) -> Result<Tensor, OjasError> {
         let _ = (input, scale);
-        Err(unsupported_inference(self.id(), "scale_forward"))
+        Err(unsupported_op(self.id(), "scale_forward"))
     }
 
     /// Softmax over the last axis of `input` (`[..., dim]`):
@@ -1542,7 +1514,7 @@ pub trait Backend {
     /// default refuses with [`OjasError::Unsupported`].
     fn softmax_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
         let _ = input;
-        Err(unsupported_inference(self.id(), "softmax_forward"))
+        Err(unsupported_op(self.id(), "softmax_forward"))
     }
 
     /// Scalar mean cross-entropy. Targets are `U32`.
@@ -1695,13 +1667,7 @@ pub trait Backend {
         grads: CeGrads,
     ) -> Result<LinearCe, OjasError> {
         let _ = (input, weight, targets, ignore_index, chunk, grads);
-        Err(OjasError::Unsupported {
-            op: "linear_cross_entropy_mean",
-            detail: format!(
-                "{:?} backend does not implement linear_cross_entropy_mean",
-                self.id()
-            ),
-        })
+        Err(unsupported_op(self.id(), "linear_cross_entropy_mean"))
     }
 
     /// Causal attention of `Tq` new queries against the `kv_len` positions
@@ -1730,13 +1696,7 @@ pub trait Backend {
         window: Option<usize>,
     ) -> Result<Tensor, OjasError> {
         let _ = (q, k_cache, v_cache, kv_len, window);
-        Err(OjasError::Unsupported {
-            op: "cached_attention_forward",
-            detail: format!(
-                "{:?} backend does not implement cached_attention_forward",
-                self.id()
-            ),
-        })
+        Err(unsupported_op(self.id(), "cached_attention_forward"))
     }
 
     /// Write `src` (`[B, Tn, Hkv, D]`) into `cache` (`[B, Tcap, Hkv, D]`) at
@@ -1747,10 +1707,7 @@ pub trait Backend {
     /// Validate with [`kv_cache_write_dims`].
     fn kv_cache_write(&self, cache: &mut Tensor, src: &Tensor, at: usize) -> Result<(), OjasError> {
         let _ = (cache, src, at);
-        Err(OjasError::Unsupported {
-            op: "kv_cache_write",
-            detail: format!("{:?} backend does not implement kv_cache_write", self.id()),
-        })
+        Err(unsupported_op(self.id(), "kv_cache_write"))
     }
 
     /// The column of each row's largest value: `x` `F32` `[rows, cols]` to

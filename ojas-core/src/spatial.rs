@@ -14,7 +14,7 @@
 //! calls it before it reserves budget or dispatches. A malformed call is
 //! refused with the same variant, op name and detail on every backend.
 
-use crate::shapes::{f32_operand, f32_operands, f32_product, refuse, same, too_large};
+use crate::shapes::{f32_operand, f32_operands, f32_product, rank4, refuse, same, too_large};
 use crate::{Backend, Budget, DType, OjasError, Tensor};
 
 const CONV2D: &str = "conv2d_forward";
@@ -196,16 +196,6 @@ pub struct InterleavedRopeDims {
     pub time: usize,
     pub heads: usize,
     pub dim: usize,
-}
-
-fn rank4(op: &'static str, what: &str, t: &Tensor) -> Result<[usize; 4], OjasError> {
-    match *t.shape() {
-        [a, b, c, d] => Ok([a, b, c, d]),
-        ref other => Err(refuse(
-            op,
-            format!("{what} rank {} != 4, shape {other:?}", other.len()),
-        )),
-    }
 }
 
 fn positive_pair(op: &'static str, what: &str, v: [usize; 2]) -> Result<(), OjasError> {
@@ -621,15 +611,7 @@ pub fn window_partition<B: Backend + ?Sized>(
 ) -> Result<Tensor, OjasError> {
     const OP: &str = WINDOW_PARTITION;
     f32_operand(OP, x)?;
-    let &[b, h, w, c] = x.shape() else {
-        return Err(refuse(
-            OP,
-            format!(
-                "input rank {} != 4 [batch, height, width, channels]",
-                x.shape().len()
-            ),
-        ));
-    };
+    let [b, h, w, c] = rank4(OP, "input [batch, height, width, channels]", x)?;
     let (nh, nw) = (
         divides(OP, "height", h, window)?,
         divides(OP, "width", w, window)?,
@@ -649,15 +631,7 @@ pub fn window_merge<B: Backend + ?Sized>(
 ) -> Result<Tensor, OjasError> {
     const OP: &str = WINDOW_MERGE;
     f32_operand(OP, windows)?;
-    let &[count, window, w2, c] = windows.shape() else {
-        return Err(refuse(
-            OP,
-            format!(
-                "windows rank {} != 4 [windows, window, window, channels]",
-                windows.shape().len()
-            ),
-        ));
-    };
+    let [count, window, w2, c] = rank4(OP, "windows [windows, window, window, channels]", windows)?;
     if window != w2 {
         return Err(refuse(
             OP,
@@ -685,12 +659,7 @@ pub fn pixel_shuffle<B: Backend + ?Sized>(
 ) -> Result<Tensor, OjasError> {
     const OP: &str = PIXEL_SHUFFLE;
     f32_operand(OP, x)?;
-    let &[n, ch, h, w] = x.shape() else {
-        return Err(refuse(
-            OP,
-            format!("input rank {} != 4 [N, C, H, W]", x.shape().len()),
-        ));
-    };
+    let [n, ch, h, w] = rank4(OP, "input [N, C, H, W]", x)?;
     let r2 = factor
         .checked_mul(factor)
         .ok_or_else(|| too_large(OP, "factor squared overflows"))?;
@@ -709,12 +678,7 @@ pub fn pixel_unshuffle<B: Backend + ?Sized>(
 ) -> Result<Tensor, OjasError> {
     const OP: &str = PIXEL_UNSHUFFLE;
     f32_operand(OP, x)?;
-    let &[n, c, hr, wr] = x.shape() else {
-        return Err(refuse(
-            OP,
-            format!("input rank {} != 4 [N, C, H, W]", x.shape().len()),
-        ));
-    };
+    let [n, c, hr, wr] = rank4(OP, "input [N, C, H, W]", x)?;
     let (h, w) = (
         divides(OP, "height", hr, factor)?,
         divides(OP, "width", wr, factor)?,
