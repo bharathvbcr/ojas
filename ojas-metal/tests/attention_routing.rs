@@ -579,8 +579,10 @@ fn opts<'a>(causal: bool, bias: Option<&'a Tensor>, lens: Option<&'a Tensor>) ->
 /// `Tk / Tq <= 2.25` at head dim 32 or 64 with no bias or lengths takes the
 /// pad route; beyond it, and at any ratio with a bias, key lengths or head
 /// dim 16, the inference form takes the split-K tiled kernel at head dim 16
-/// and 32 (one dispatch more than the scalar kernel) and the scalar kernel at
-/// head dim 64. Which one ran is read off the dispatches of the call against
+/// and 32 (one dispatch more than the scalar kernel; at head dim 32 with no
+/// bias or lengths, from `flash_min_groups` threadgroups on, the flash kernel,
+/// one dispatch, which the `Tiled` class stands for there) and the scalar
+/// kernel at head dim 64. Which one ran is read off the dispatches of the call against
 /// the same call made `causal` (always scalar) and against the saving form
 /// (never routed), and every call is checked against the CPU.
 #[test]
@@ -661,9 +663,20 @@ fn the_pad_ratio_bound_and_the_tiled_kernel_split_the_shape_classes() {
                 ),
             ));
         });
+        // Head dim 32 with no bias or lengths takes the flash kernel (one
+        // dispatch, as the scalar kernel) from `flash_min_groups` threadgroups
+        // of 32 query rows; these are B = 2, H = 2.
+        let flash = d == 32
+            && !with_bias
+            && !with_lens
+            && (tq.div_ceil(32) * 4) as u64 >= MetalBackend::flash_min_groups();
         if m.has_tensorops() {
             let ran = if plain == scalar {
-                Ran::Scalar
+                if flash {
+                    Ran::Tiled
+                } else {
+                    Ran::Scalar
+                }
             } else if plain == scalar + 1 {
                 Ran::Tiled
             } else {
@@ -675,7 +688,11 @@ fn the_pad_ratio_bound_and_the_tiled_kernel_split_the_shape_classes() {
             );
             // The saving form never routes: tiled at head dim 16 and 32,
             // scalar at 64.
-            assert_eq!(saving, if d == 64 { scalar } else { scalar + 1 }, "{tag}");
+            assert_eq!(
+                saving,
+                if d == 64 || flash { scalar } else { scalar + 1 },
+                "{tag}"
+            );
         }
         same_tensor(&tag, &out, &want, tol(tk), 1e-4);
     }

@@ -16,9 +16,12 @@
 //!
 //! Head dim 32 with no bias and no key lengths takes the TensorOps flash
 //! kernel instead of these (`flash_cross_route`) once a call launches
-//! `FLASH_MIN_GROUPS` threadgroups, 32 query rows of a plane each; every
-//! shape in this file is below that, so every call here is split-K, which the
-//! planned kernel is asserted to say. The flash route is `attention_flash.rs`.
+//! `FLASH_MIN_GROUPS` threadgroups, 32 query rows of a plane each. The shapes
+//! here are small (at most 14 groups), so they are split-K at the floor in
+//! force when this was written; `flash_dispatched` derives the route from
+//! `MetalBackend::flash_min_groups`, so a lower floor moves a case to the
+//! flash kernel and the planned kernel and the dispatch count are asserted for
+//! whichever kernel the floor gives it. The flash route is `attention_flash.rs`.
 
 #![cfg(target_os = "macos")]
 
@@ -108,6 +111,18 @@ impl Operands {
     }
 }
 
+/// Whether the dispatcher runs the flash kernel for `c`: head dim 32, no bias
+/// or key lengths, on a TensorOps device, with at least `flash_min_groups`
+/// threadgroups of 32 query rows.
+fn flash_dispatched(m: &MetalBackend, c: &Case) -> bool {
+    let groups = (c.tq.div_ceil(32) * c.b * c.h) as u64;
+    m.has_tensorops()
+        && c.d == 32
+        && c.bias.is_none()
+        && c.lens.is_none()
+        && groups >= MetalBackend::flash_min_groups()
+}
+
 /// Dispatches one `attention_forward_saving` call encodes.
 fn dispatches_of(m: &MetalBackend, o: &Operands, causal: bool) -> u64 {
     ok("sync", m.sync());
@@ -122,9 +137,9 @@ fn dispatches_of(m: &MetalBackend, o: &Operands, causal: bool) -> u64 {
 }
 
 /// The tiled kernel agrees with the CPU on the output and the log-sum-exp,
-/// ran (one dispatch more than the scalar kernel's, and planned as split-K:
-/// no case here has the threadgroups for the flash route), and repeats bit
-/// for bit.
+/// ran (one dispatch more than the scalar kernel's and planned as split-K, or
+/// as many and planned as flash where `flash_dispatched` says the floor gives
+/// the case to the flash kernel), and repeats bit for bit.
 fn check(m: &MetalBackend, c: &Case, seed: u64) {
     let cpu = cpu();
     let host = Operands::host(c, seed);
@@ -135,7 +150,11 @@ fn check(m: &MetalBackend, c: &Case, seed: u64) {
                 "planned",
                 m.attention_saving_kernel(&probe.q, &probe.k, &probe.v, probe.opts(false))
             ),
-            "splitk",
+            if flash_dispatched(m, c) {
+                "flash"
+            } else {
+                "splitk"
+            },
             "{c:?}: planned kernel"
         );
     }
@@ -168,8 +187,12 @@ fn check(m: &MetalBackend, c: &Case, seed: u64) {
     let scalar = dispatches_of(m, &host.up(m), true);
     assert_eq!(
         tiled,
-        scalar + 1,
-        "{tag}: the tiled kernel is two dispatches, the scalar one"
+        if flash_dispatched(m, c) {
+            scalar
+        } else {
+            scalar + 1
+        },
+        "{tag}: the tiled kernel is two dispatches, the scalar and the flash kernel one"
     );
 }
 
@@ -378,12 +401,21 @@ fn a_budget_without_room_for_the_partials_runs_the_scalar_kernel() {
 #[test]
 fn causal_and_other_head_dims_stay_on_the_scalar_kernel() {
     let m = metal();
-    let base = Operands::host(&Case::new(1, 2, 2, 40, 40, 32), 60).up(&m);
+    let base_case = Case::new(1, 2, 2, 40, 40, 32);
+    let base = Operands::host(&base_case, 60).up(&m);
     let causal = dispatches_of(&m, &base, true);
     let other = Operands::host(&Case::new(1, 2, 2, 40, 90, 64), 61).up(&m);
     let d64 = dispatches_of(&m, &other, false);
     let tiled = dispatches_of(&m, &base, false);
-    assert_eq!(tiled, causal + 1, "head dim 32 non-causal is tiled");
+    assert_eq!(
+        tiled,
+        if flash_dispatched(&m, &base_case) {
+            causal
+        } else {
+            causal + 1
+        },
+        "head dim 32 non-causal is tiled (one dispatch where the floor gives it to flash)"
+    );
     assert_eq!(
         d64, causal,
         "head dim 64 with Tq != Tk is the scalar kernel"
@@ -391,9 +423,11 @@ fn causal_and_other_head_dims_stay_on_the_scalar_kernel() {
 }
 
 /// The detector's bias case and the memory encoder's cross-attention, the
-/// tiled kernel (`attention_forward_saving`) against the pad route
-/// (`attention_forward`, which routes at these shapes): minimum of 5 after 2
-/// warm-up calls. Run with `--ignored --nocapture`.
+/// split-K tiled kernel (`attention_forward_saving_splitk`; the memory rows'
+/// dispatcher call is the flash kernel at these 1296 threadgroups, timed by
+/// `attention_flash_bench`) against the pad route (`attention_forward`, which
+/// routes at these shapes): minimum of 5 after 2 warm-up calls. Run with
+/// `--ignored --nocapture`.
 #[test]
 #[ignore = "timing, not a correctness check"]
 fn tiled_kernel_wall_clock() {
@@ -435,7 +469,7 @@ fn tiled_kernel_wall_clock() {
         let tiled = time(&|| {
             drop(ok(
                 "tiled",
-                m.attention_forward_saving(&mem.q, &mem.k, &mem.v, mem.opts(false)),
+                m.attention_forward_saving_splitk(&mem.q, &mem.k, &mem.v, mem.opts(false)),
             ));
         });
         let padded = time(&|| {

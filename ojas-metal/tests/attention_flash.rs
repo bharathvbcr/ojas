@@ -32,8 +32,9 @@ use ojas_metal::MetalBackend;
 
 const FLASH: &str = "ojas_attn_fwd_d32";
 const SCALAR: &str = "ojas_attn_gen_fwd";
-const PART: &str = "ojas_xattn_part_d32";
-const COMBINE: &str = "ojas_xattn_combine_d32";
+/// Split-K's pipelines, one per head dim it covers.
+const PART: [&str; 2] = ["ojas_xattn_part_d32", "ojas_xattn_part_d16"];
+const COMBINE: [&str; 2] = ["ojas_xattn_combine_d32", "ojas_xattn_combine_d16"];
 
 /// The attention kernels one call encoded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,8 +70,8 @@ fn snapshot(m: &MetalBackend) -> Ran {
     Ran {
         flash: m.kernel_dispatches(FLASH),
         scalar: m.kernel_dispatches(SCALAR),
-        part: m.kernel_dispatches(PART),
-        combine: m.kernel_dispatches(COMBINE),
+        part: PART.iter().map(|n| m.kernel_dispatches(n)).sum(),
+        combine: COMBINE.iter().map(|n| m.kernel_dispatches(n)).sum(),
     }
 }
 
@@ -436,11 +437,20 @@ fn a_budget_that_holds_only_the_outputs_still_runs_the_flash_kernel() {
     same_tensor("tight lse", &got_lse, &want_lse, tol(c.tk), 1e-4);
     drop((got, got_lse));
     assert_eq!(ok("live", tight.budget().live_bytes()), baseline);
-    // Where the dispatcher sends this call (split-K at 2 threadgroups) the
-    // partials do not fit and the scalar kernel runs, as in stage 1; the
-    // first call's outputs are freed, so the budget has room for these.
+    // Where the dispatcher sends this call (split-K at 2 threadgroups, unless
+    // the floor is that low) the partials do not fit and the scalar kernel
+    // runs, as in stage 1; the first call's outputs are freed, so the budget
+    // has room for these.
     let ((got, got_lse), ran_auto) = call(&tight, &dev, Which::Auto);
-    assert_eq!(ran_auto, Ran::SCALAR, "split-K's budget fallback");
+    assert_eq!(
+        ran_auto,
+        if dispatcher_flash(&tight, &c) {
+            Ran::FLASH
+        } else {
+            Ran::SCALAR
+        },
+        "split-K's budget fallback"
+    );
     same_tensor("fallback output", &got, &want, tol(c.tk), 1e-4);
     same_tensor("fallback lse", &got_lse, &want_lse, tol(c.tk), 1e-4);
     drop((got, got_lse));
@@ -484,7 +494,10 @@ fn attention_forward_beyond_the_pad_ratio_runs_the_flash_kernel() {
 fn the_dispatcher_routes_on_the_threadgroup_floor() {
     let m = metal();
     let floor = MetalBackend::flash_min_groups();
-    let planes = 8usize;
+    // Enough planes that a call one query block shorter still has a row, for
+    // any floor of 2 or more: 8 planes from a floor of 16, else 1.
+    assert!(floor >= 2, "a floor of {floor} leaves no call below it");
+    let planes = if floor >= 16 { 8usize } else { 1 };
     let over_rows = 32 * (floor as usize).div_ceil(planes);
     let under_rows = over_rows - 32;
     assert!(
@@ -523,18 +536,20 @@ fn the_dispatcher_routes_on_the_threadgroup_floor() {
         same_tensor(&format!("{what} lse"), &got_lse, &want_lse, tol(c.tk), 1e-4);
     }
     // The extreme the review named: one query row over 5184 keys is 8
-    // threadgroups, split-K's 384 are not matched, and it stays on split-K.
+    // threadgroups, split-K's 384 are not matched, and it stays on split-K
+    // (flash only for a floor of 8 or less).
     let c = Case::new(1, 8, 8, 1, 5184);
     let dev = Operands::host(&c, 970).up(&m);
+    let one_row = dispatcher_flash(&m, &c);
     assert_eq!(
         ok(
             "one row",
             m.attention_saving_kernel(&dev.q, &dev.k, &dev.v, opts())
         ),
-        "splitk"
+        if one_row { "flash" } else { "splitk" }
     );
     let (_, ran) = call(&m, &dev, Which::Auto);
-    assert_eq!(ran, Ran::SPLITK, "one query row: observed");
+    assert_eq!(ran, expected(one_row), "one query row: observed");
 }
 
 /// A NaN or infinity anywhere in an operand, including the ragged last key
@@ -596,80 +611,75 @@ fn a_non_finite_operand_faults_under_the_name_that_was_called() {
 /// A call the flash route does not cover stays on its kernel: a bias, key
 /// lengths and head dim 16 are split-K, causal and head dim 64 the scalar one,
 /// whatever its threadgroup count (the planner and the kernels encoded agree).
+/// The shapes are sized from the floor, so the covered call is at it.
 #[test]
 fn the_calls_the_route_does_not_cover_are_planned_and_run_elsewhere() {
     let m = metal();
-    // 1536 query rows x 8 planes = 384 threadgroups: enough for flash if the
+    // 8 planes of enough 32-row query blocks to reach the floor: flash if the
     // call were covered.
-    let big = Case::new(1, 8, 8, 1536, 64);
+    let rows = 32 * (MetalBackend::flash_min_groups() as usize).div_ceil(8);
+    let big = Case::new(1, 8, 8, rows, 64);
+    assert!(big.groups() >= MetalBackend::flash_min_groups());
     let host_ops = Operands::host(&big, 970);
     let dev = host_ops.up(&m);
-    let bias = up(&m, &rand(&[1, 8, 1536, 64], 971, 1.0));
+    let bias = up(&m, &rand(&[1, 8, rows, 64], 971, 1.0));
     let lens = up(&m, &host_u32(&[50], &[1]));
-    let kernel = |o: AttentionOpts<'_>| {
+    let kernel = |ops: &Operands, o: AttentionOpts<'_>| {
         ok(
             "kernel",
-            m.attention_saving_kernel(&dev.q, &dev.k, &dev.v, o),
+            m.attention_saving_kernel(&ops.q, &ops.k, &ops.v, o),
         )
     };
-    let observed = |o: AttentionOpts<'_>| {
+    let observed = |ops: &Operands, o: AttentionOpts<'_>| {
         ok("sync", m.sync());
         let before = snapshot(&m);
         let out = ok(
             "call",
-            m.attention_forward_saving(&dev.q, &dev.k, &dev.v, o),
+            m.attention_forward_saving(&ops.q, &ops.k, &ops.v, o),
         );
         ok("sync", m.sync());
         drop(out);
         since(&m, before)
     };
-    let plain = kernel(opts());
-    assert_eq!(plain, if m.has_tensorops() { "flash" } else { "splitk" });
     assert_eq!(
-        observed(opts()),
+        kernel(&dev, opts()),
+        if m.has_tensorops() { "flash" } else { "splitk" }
+    );
+    assert_eq!(
+        observed(&dev, opts()),
         expected(m.has_tensorops()),
-        "the covered call at 384 threadgroups"
+        "the covered call at the floor"
     );
     let with_bias = AttentionOpts {
         bias: Some(&bias),
         ..opts()
     };
-    assert_eq!(kernel(with_bias), "splitk");
-    assert_eq!(observed(with_bias), Ran::SPLITK);
+    assert_eq!(kernel(&dev, with_bias), "splitk");
+    assert_eq!(observed(&dev, with_bias), Ran::SPLITK);
     let with_lens = AttentionOpts {
         key_lens: Some(&lens),
         ..opts()
     };
-    assert_eq!(kernel(with_lens), "splitk");
-    assert_eq!(observed(with_lens), Ran::SPLITK);
+    assert_eq!(kernel(&dev, with_lens), "splitk");
+    assert_eq!(observed(&dev, with_lens), Ran::SPLITK);
     let causal = AttentionOpts {
         causal: true,
         ..opts()
     };
-    assert_eq!(kernel(causal), "scalar");
-    assert_eq!(observed(causal), Ran::SCALAR);
+    assert_eq!(kernel(&dev, causal), "scalar");
+    assert_eq!(observed(&dev, causal), Ran::SCALAR);
     let d16 = Operands {
-        q: up(&m, &rand(&[1, 8, 1536, 16], 972, 1.0)),
+        q: up(&m, &rand(&[1, 8, rows, 16], 972, 1.0)),
         k: up(&m, &rand(&[1, 8, 64, 16], 973, 1.0)),
         v: up(&m, &rand(&[1, 8, 64, 16], 974, 1.0)),
     };
-    assert_eq!(
-        ok(
-            "d16",
-            m.attention_saving_kernel(&d16.q, &d16.k, &d16.v, opts())
-        ),
-        "splitk"
-    );
+    assert_eq!(kernel(&d16, opts()), "splitk");
+    assert_eq!(observed(&d16, opts()), Ran::SPLITK, "head dim 16: observed");
     let d64 = Operands {
-        q: up(&m, &rand(&[1, 8, 1536, 64], 975, 1.0)),
+        q: up(&m, &rand(&[1, 8, rows, 64], 975, 1.0)),
         k: up(&m, &rand(&[1, 8, 90, 64], 976, 1.0)),
         v: up(&m, &rand(&[1, 8, 90, 64], 977, 1.0)),
     };
-    assert_eq!(
-        ok(
-            "d64",
-            m.attention_saving_kernel(&d64.q, &d64.k, &d64.v, opts())
-        ),
-        "scalar"
-    );
+    assert_eq!(kernel(&d64, opts()), "scalar");
+    assert_eq!(observed(&d64, opts()), Ran::SCALAR, "head dim 64: observed");
 }

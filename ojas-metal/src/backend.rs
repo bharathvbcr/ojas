@@ -313,8 +313,11 @@ impl MetalBackend {
     /// Dispatches of the kernel (pipeline) named `name` this backend's device
     /// thread has encoded since it opened, shared by every clone: what ran,
     /// where a planner query such as `attention_saving_kernel` says what would.
-    /// Counted when the kernel is encoded, so read it after `sync`. Telemetry
-    /// for tests and benches, not a stable API.
+    /// Counted when the kernel is encoded, so read it after `sync`. It counts
+    /// only Ojas's own pipelines, the ones the device thread's `k1`, `k2` and
+    /// `ktg` helpers dispatch; kernels tessl dispatches (`encoder_attn`, the
+    /// GEMMs) are not counted and read 0 here. Telemetry for tests and
+    /// benches, not a stable API.
     #[doc(hidden)]
     pub fn kernel_dispatches(&self, name: &str) -> u64 {
         self.link.kernel_dispatches(name)
