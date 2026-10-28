@@ -125,7 +125,9 @@ pub enum AutocastClass {
     /// Data movement: values are copied, never rounded, and the output is
     /// bf16-tagged only when every input is (`copy_tag`).
     Move,
-    /// An op with no tensor input (a constant): never rounded, tagged `F32`.
+    /// An op with no tensor input (a constant): never rounded, and the
+    /// output keeps whatever tag the inner backend gave it (a fresh
+    /// allocation is `F32`-tagged); `Autocast` does not set one.
     Source,
 }
 
