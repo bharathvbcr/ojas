@@ -2228,14 +2228,24 @@ fn row_max(row: &[f32], skip: usize, numerics: Numerics) -> (f32, bool) {
             let (chunks, rest) = row.as_chunks::<LANES>();
             let mut acc = [f32::NEG_INFINITY; LANES];
             let mut top = [0u32; LANES];
+            // Only the chunk holding `skip` tests the index per lane; the
+            // others keep the branch-free loop (see `exp::exp_sub_sum`).
             for (chunk_i, chunk) in chunks.iter().enumerate() {
-                for (lane, ((a, t), word)) in
-                    acc.iter_mut().zip(top.iter_mut()).zip(chunk).enumerate()
-                {
-                    if chunk_i * LANES + lane != skip {
-                        *a = a.max(*word);
+                if chunk_i == skip / LANES {
+                    let skipped = skip % LANES;
+                    for (lane, ((a, t), word)) in
+                        acc.iter_mut().zip(top.iter_mut()).zip(chunk).enumerate()
+                    {
+                        if lane != skipped {
+                            *a = a.max(*word);
+                        }
+                        *t = (*t).max(bits(word));
                     }
-                    *t = (*t).max(bits(word));
+                } else {
+                    for ((a, t), word) in acc.iter_mut().zip(top.iter_mut()).zip(chunk) {
+                        *a = a.max(*word);
+                        *t = (*t).max(bits(word));
+                    }
                 }
             }
             let mut max = acc.iter().fold(f32::NEG_INFINITY, |m, &v| m.max(v));
