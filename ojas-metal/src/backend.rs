@@ -3574,9 +3574,13 @@ mod tests {
             probe_system, Device, MemoryArchitecture, MemoryProbe, MemoryReport, ResourcePlan,
             ResourcePolicy,
         };
+        // The peak is this runtime's, the live figure the device's. Taken
+        // here, not in the closure: the wait for a quiet device is not part
+        // of the watchdog's budget. The closure's thread works for this test.
+        let _measuring = crate::gauge::measuring();
+        let acting = crate::gauge::inherit();
         watchdog(120, || {
-            // The peak is this runtime's, the live figure the device's.
-            let _measuring = crate::gauge::measuring();
+            acting.enter();
             let host = Budget::new(1 << 30);
             let m = MetalBackend::new(Budget::new(1 << 30)).expect("Metal device");
             let before = m.memory().expect("memory");
