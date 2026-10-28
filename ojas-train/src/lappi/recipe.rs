@@ -283,10 +283,16 @@ pub fn draw_position(module: &str) -> Result<(u64, usize), StepError> {
             continue;
         };
         let named_layers = before == "layers" || before.ends_with(".layers");
-        if named_layers && !index.is_empty() && index.bytes().all(|b| b.is_ascii_digit()) {
-            if let Ok(n) = index.parse::<u64>() {
-                return Ok((n, position));
-            }
+        let all_digits =
+            named_layers && !index.is_empty() && index.bytes().all(|b| b.is_ascii_digit());
+        // `parse` alone accepts a leading `+`, so the digit scan gates it.
+        let parsed = if all_digits {
+            index.parse::<u64>().ok()
+        } else {
+            None
+        };
+        if let Some(n) = parsed {
+            return Ok((n, position));
         }
     }
     Err(StepError::Contract(format!(
