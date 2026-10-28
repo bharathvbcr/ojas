@@ -14,8 +14,7 @@ mod common;
 
 use common::{bits, SplitMix64};
 use ojas_core::{
-    excluded_ce, exp_exact, AdamWConfig, Backend, Budget, MuonNs5Config, Numerics, OjasError,
-    Tensor,
+    exp_exact, AdamWConfig, Backend, Budget, MuonNs5Config, Numerics, OjasError, Tensor,
 };
 use ojas_cpu::CpuBackend;
 
@@ -177,11 +176,11 @@ fn ce_case(rows: usize, vocab: usize, scale: f32, seed: u64) -> Ce {
     }
 }
 
-/// The Exact contract: per valid row, the maximum over every class except
-/// the target, [`exp_exact`] of `x - max` summed in ascending order with the
-/// target left out, and [`excluded_ce`] for the loss and the scale. The
-/// target gradient is the negation of the other-class sum; the loss is the
-/// f32 sum of the terms in row order divided by the valid count.
+/// The reference contract, as `ojas-cpu` computed it before this lane: per
+/// valid row, the ascending maximum, libm `exp` of `x - max` summed in
+/// ascending order, `term = max + ln(sum) - x[target]`, the gradient
+/// `(e / sum) / valid` with `1 / valid` taken off at the target; the loss is
+/// the f32 sum of the terms in row order divided by the valid count.
 fn ce_exact_reference(c: &Ce) -> (f32, Vec<f32>) {
     let valid = c.targets.iter().filter(|&&t| Some(t) != c.ignore).count() as f32;
     let mut grad = vec![0.0f32; c.rows * c.vocab];
@@ -191,34 +190,24 @@ fn ce_exact_reference(c: &Ce) -> (f32, Vec<f32>) {
             continue;
         }
         let row = &c.logits[n * c.vocab..(n + 1) * c.vocab];
-        let class = c.targets[n] as usize;
         let mut max = f32::NEG_INFINITY;
-        for (col, &x) in row.iter().enumerate() {
-            if col != class && x > max {
+        for &x in row {
+            if x > max {
                 max = x;
             }
         }
         let mut sum = 0.0f32;
         let mut e = vec![0.0f32; c.vocab];
-        if max.is_finite() {
-            for (col, &x) in row.iter().enumerate() {
-                if col == class {
-                    continue;
-                }
-                e[col] = exp_exact(x - max);
-                sum += e[col];
-            }
+        for (col, &x) in row.iter().enumerate() {
+            e[col] = exp_exact(x - max);
+            sum += e[col];
         }
-        let ex = excluded_ce(max, sum, row[class]);
-        total += ex.loss;
-        let scale = ex.scale / valid;
+        let class = c.targets[n] as usize;
+        total += max + sum.ln() - row[class];
         for col in 0..c.vocab {
-            grad[n * c.vocab + col] = if col == class {
-                -sum * scale
-            } else {
-                e[col] * scale
-            };
+            grad[n * c.vocab + col] = (e[col] / sum) / valid;
         }
+        grad[n * c.vocab + class] -= 1.0 / valid;
     }
     (total / valid, grad)
 }

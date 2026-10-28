@@ -2112,33 +2112,15 @@ mod tests {
                     });
                 }
                 let sl = &logits_v[row * vocab..(row + 1) * vocab];
-                let class = target as usize;
-                let mut max = f32::NEG_INFINITY;
-                let mut finite = true;
-                for (i, &value) in sl.iter().enumerate() {
-                    if !value.is_finite() {
-                        finite = false;
-                    }
-                    if i != class && value > max {
-                        max = value;
-                    }
-                }
-                if !finite {
+                let max = sl.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+                if !max.is_finite() {
                     return Err(OjasError::NonFinite { op: OP });
                 }
-                let mut others = 0.0f32;
-                if max.is_finite() {
-                    for (i, &value) in sl.iter().enumerate() {
-                        if i != class {
-                            others += crate::exp_exact(value - max);
-                        }
-                    }
+                let mut lse = 0.0f32;
+                for value in sl {
+                    lse += (value - max).exp();
                 }
-                let ex = crate::excluded_ce(max, others, sl[class]);
-                if !ex.loss.is_finite() {
-                    return Err(OjasError::NonFinite { op: OP });
-                }
-                sum += ex.loss;
+                sum += max + lse.ln() - sl[target as usize];
                 count += 1;
             }
             if count == 0 {

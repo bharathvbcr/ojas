@@ -8,12 +8,10 @@
 //! three passes over the vocabulary, recomputing its tiles each time when
 //! the vocabulary takes more than one block:
 //!
-//! 1. the row maximum over every class except the target;
-//! 2. `sum exp(l - max)` of those classes, in ascending vocabulary order, and
-//!    the target logit;
-//! 3. with a gradient asked for, `G` formed in the tile in place (each other
-//!    class `exp(l - max) * scale / n_valid`, the target the negation of
-//!    their sum), then `grad_x[rows] += G · W_c` and/or
+//! 1. the row maximum;
+//! 2. `sum exp(l - max)` in ascending vocabulary order, and the target logit;
+//! 3. with a gradient asked for, `G = (softmax - onehot) / n_valid` formed in
+//!    the tile in place, then `grad_x[rows] += G · W_c` and/or
 //!    `grad_w[cols] += Gᵀ · x_c`, each only when its gradient is asked for
 //!    (a frozen tied head takes no `[V, d]` output and no `Gᵀ · x_c`).
 //!
@@ -50,8 +48,8 @@
 use std::ops::Range;
 
 use ojas_core::{
-    excluded_ce, exp_exact, linear_ce_dims, Budget, CeChunk, CeGrads, DType, LinearCe,
-    LinearCeDims, OjasError, Tensor,
+    exp_exact, linear_ce_dims, Budget, CeChunk, CeGrads, DType, LinearCe, LinearCeDims, OjasError,
+    Tensor,
 };
 
 use crate::gemm::{gemm, gemm_acc, scratch, Mat};
@@ -328,14 +326,7 @@ fn fused(
 
         for range in vocab_blocks() {
             let (logits, w_block) = logit_tile(exec, &x_block, w, range.clone(), d)?;
-            row_maxes(
-                exec,
-                &logits,
-                range.clone(),
-                block_targets,
-                ignore,
-                &mut maxes,
-            )?;
+            row_maxes(exec, &logits, range.len(), &mut maxes)?;
             if single {
                 kept = Some((logits, w_block));
             }
@@ -361,11 +352,11 @@ fn fused(
             if ignored(i) {
                 continue;
             }
-            let ex = excluded_ce(maxes[i], sums[i], picked[i]);
-            if !ex.loss.is_finite() {
+            let sum = sums[i];
+            if !(sum.is_finite() && sum > 0.0) {
                 return Err(nonfinite(OP));
             }
-            total += ex.loss;
+            total += maxes[i] + sum.ln() - picked[i];
         }
 
         if !grads.any() {
@@ -382,7 +373,7 @@ fn fused(
                 ignore,
                 maxes: &maxes,
             };
-            softmax_grad(exec, &mut g, range.clone(), rows, &sums, &picked, denom)?;
+            softmax_grad(exec, &mut g, range.clone(), rows, &sums, denom)?;
             let g = Mat::row_major(&g, r, width);
             let w_block = Mat::row_major(w_block.values(), width, d);
             if let Some(gx) = gx.as_deref_mut() {
@@ -420,34 +411,20 @@ impl Rows<'_> {
     }
 }
 
-/// Pass 1: each row's running maximum over this tile, skipping the target
-/// column when the row is not ignored. Rows split across [`scoped`] threads;
-/// a row's maximum is the same whichever thread scans it. An ignored target
-/// may lie outside the vocabulary and is never used as an index.
+/// Pass 1: each row's running maximum over this tile (`width` columns).
+/// Rows split across [`scoped`] threads; a row's maximum is the same
+/// whichever thread scans it.
 fn row_maxes(
     exec: Exec<'_>,
     logits: &[f32],
-    range: Range<usize>,
-    targets: &[u32],
-    ignore: Option<u32>,
+    width: usize,
     maxes: &mut [f32],
 ) -> Result<(), OjasError> {
-    let width = range.len();
     let r = maxes.len();
-    scoped::chunks_into(exec, maxes, r, 1, min_rows(width), |span, part| {
-        let tile = &logits[span.start * width..span.end * width];
-        for (offset, (max, row)) in part.iter_mut().zip(tile.chunks_exact(width)).enumerate() {
-            let i = span.start + offset;
-            let class = targets[i] as usize;
-            let skip = if ignore != Some(targets[i]) && range.contains(&class) {
-                Some(class - range.start)
-            } else {
-                None
-            };
-            for (col, &value) in row.iter().enumerate() {
-                if Some(col) == skip {
-                    continue;
-                }
+    scoped::chunks_into(exec, maxes, r, 1, min_rows(width), |rows, part| {
+        let tile = &logits[rows.start * width..rows.end * width];
+        for (max, row) in part.iter_mut().zip(tile.chunks_exact(width)) {
+            for &value in row {
                 if value > *max {
                     *max = value;
                 }
@@ -459,11 +436,9 @@ fn row_maxes(
 }
 
 /// Pass 2: each valid row's `sum exp(l - max)` continued over this tile in
-/// ascending vocabulary order, excluding the target column, and its target
-/// logit if the tile holds it. Rows split across [`scoped`] threads; each
-/// row's sum is one thread's sequence, so the bits do not depend on the
-/// split. A row whose other-set is empty has a non-finite max and adds
-/// nothing.
+/// ascending vocabulary order, and its target logit if the tile holds it.
+/// Rows split across [`scoped`] threads; each row's sum is one thread's
+/// sequence, so the bits do not depend on the split.
 fn exp_sums(
     exec: Exec<'_>,
     logits: &[f32],
@@ -485,22 +460,16 @@ fn exp_sums(
                     continue;
                 }
                 let row = &logits[i * width..(i + 1) * width];
-                let class = rows.targets[i] as usize;
-                let local_class = class.checked_sub(range.start).filter(|c| *c < width);
-                if rows.maxes[i].is_finite() {
-                    for (col, &value) in row.iter().enumerate() {
-                        if Some(col) == local_class {
-                            continue;
-                        }
-                        let e = exp_exact(value - rows.maxes[i]);
-                        if !e.is_finite() {
-                            return Err(nonfinite(OP));
-                        }
-                        sums[local] += e;
+                for &value in row {
+                    let e = exp_exact(value - rows.maxes[i]);
+                    if !e.is_finite() {
+                        return Err(nonfinite(OP));
                     }
+                    sums[local] += e;
                 }
-                if let Some(col) = local_class {
-                    picked[local] = row[col];
+                let class = rows.targets[i] as usize;
+                if range.contains(&class) {
+                    picked[local] = row[class - range.start];
                 }
             }
             Ok(())
@@ -509,19 +478,15 @@ fn exp_sums(
     Ok(())
 }
 
-/// Pass 3: the logit tile turned in place into the target-excluded gradient
-/// divided by `denom`. The target column, when this tile holds it, is the
-/// negation of the other-class sum; every other column is
-/// `exp(logit - max) * scale`. An empty other-set writes zeros and does not
-/// exponentiate against a non-finite max. Ignored rows are zero. Rows split
-/// across [`scoped`] threads; every value is computed alone.
+/// Pass 3: the logit tile turned in place into `G = (softmax - onehot) /
+/// denom`, zero rows for ignored targets. Rows split across [`scoped`]
+/// threads; every value is computed alone.
 fn softmax_grad(
     exec: Exec<'_>,
     g: &mut [f32],
     range: Range<usize>,
     rows: Rows<'_>,
     sums: &[f32],
-    picked: &[f32],
     denom: f32,
 ) -> Result<(), OjasError> {
     let (r, width) = (sums.len(), range.len());
@@ -532,16 +497,13 @@ fn softmax_grad(
                 continue;
             }
             let (max, sum) = (rows.maxes[i], sums[i]);
+            for value in row.iter_mut() {
+                let p = exp_exact(*value - max) / sum;
+                *value = p / denom;
+            }
             let class = rows.targets[i] as usize;
-            let scale = excluded_ce(max, sum, picked[i]).scale / denom;
-            for (col, value) in row.iter_mut().enumerate() {
-                if range.start + col == class {
-                    *value = -sum * scale;
-                } else if sum > 0.0 {
-                    *value = exp_exact(*value - max) * scale;
-                } else {
-                    *value = 0.0;
-                }
+            if range.contains(&class) {
+                row[class - range.start] -= 1.0 / denom;
             }
         }
         Ok(())

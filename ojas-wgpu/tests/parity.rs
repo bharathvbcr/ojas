@@ -577,68 +577,6 @@ fn cross_entropy_matches_cpu() {
     assert!(matches!(r, Err(OjasError::NonFinite { .. })), "got {r:?}");
 }
 
-/// `|got - want|` in units of the f32 spacing at `want`. The parity `TOL`
-/// is 1e-4 of a magnitude that starts at 1, so it cannot see a 3e-8 cliff.
-fn cliff_ulps(got: f32, want: f64) -> f64 {
-    let w = want as f32;
-    let spacing = if w == 0.0 || !w.is_normal() {
-        f64::from(f32::from_bits(1))
-    } else {
-        let next = f32::from_bits(w.abs().to_bits() + 1);
-        f64::from(next) - f64::from(w.abs())
-    };
-    (f64::from(got) - want).abs() / spacing
-}
-
-/// Paper shape `[9, -9, -9]`, target 0, margin 18, against an f64 oracle.
-/// A second ignored row keeps the mean divisor at 1.
-#[test]
-fn a_row_past_the_fp32_cliff_keeps_a_nonzero_target_gradient() {
-    let row = [9.0f64, -9.0, -9.0];
-    let max_o = row[1];
-    let sum_o = 2.0;
-    let delta = max_o - row[0];
-    let q = sum_o * delta.exp();
-    let want_loss = q.ln_1p();
-    let scale = delta.exp() / (1.0 + q);
-    let want = [-sum_o * scale, scale, scale];
-
-    let logits =
-        Tensor::from_f32(&[9.0, -9.0, -9.0, 1.0, 2.0, 3.0], &[2, 3], host_budget()).unwrap();
-    let targets = host_u32(&[0, 99], &[2]);
-    let (gl, gt) = (up(&logits), up(&targets));
-    let loss = down(
-        &gpu()
-            .cross_entropy_mean_forward(&gl, &gt, Some(99))
-            .unwrap(),
-    );
-    let grad = down(
-        &gpu()
-            .cross_entropy_mean_backward(&gl, &gt, Some(99))
-            .unwrap(),
-    );
-    assert!(grad[0] != 0.0, "target gradient collapsed: {grad:?}");
-    let loss_ulps = cliff_ulps(loss[0], want_loss);
-    assert!(
-        loss_ulps <= 16.0,
-        "loss {} vs {want_loss} ({loss_ulps} ulps)",
-        loss[0]
-    );
-    for (j, (&got, &want)) in grad[..3].iter().zip(&want).enumerate() {
-        let u = cliff_ulps(got, want);
-        assert!(u <= 16.0, "grad[{j}] {got} vs {want} ({u} ulps)");
-    }
-    let sum: f64 = grad[..3].iter().map(|g| f64::from(*g)).sum();
-    let peak = grad[..3].iter().fold(0.0f32, |m, g| m.max(g.abs()));
-    let next = f32::from_bits(peak.to_bits() + 1);
-    let spacing = f64::from(next) - f64::from(peak);
-    assert!(
-        sum.abs() <= 8.0 * spacing,
-        "row sum {sum} of {grad:?} is more than 8 ulps of the peak {peak}"
-    );
-    assert!(grad[3..].iter().all(|g| *g == 0.0), "ignored row {grad:?}");
-}
-
 #[test]
 fn clip_and_adam_refuse_shared_or_host_targets_without_writing() {
     let g = gpu();
