@@ -508,12 +508,15 @@ pub(crate) enum Cmd {
     InlineUploads {
         on: bool,
     },
-    /// Set the byte cap the device thread compares against: bytes allocated
-    /// since the last waited commit (`WaitCounts::mem_cap`) and bytes freed
-    /// since it (`WaitCounts::freed`). For before/after wait measurements;
-    /// `bytes` is non-zero (the caller checks).
-    SetMemCap {
-        bytes: u64,
+    /// Read the byte cap the device thread compares against (`set` is `None`),
+    /// or replace it first (`Some(bytes)`, which must be non-zero and at most
+    /// the opening backend's budget: the device refuses anything else as
+    /// `OutOfRange` and leaves the cap as it was). The reply is the cap in
+    /// force before the call. The cap is what bytes allocated since the last
+    /// waited commit (`WaitCounts::mem_cap`) and bytes freed since it
+    /// (`WaitCounts::freed`) are compared with.
+    MemCap {
+        set: Option<u64>,
     },
     /// Test hook: encode a dispatch, then panic on the device thread, as a
     /// bug mid-op would.
@@ -539,7 +542,6 @@ pub(crate) enum Cmd {
     #[cfg(test)]
     Tune {
         overlap: Option<usize>,
-        mem_cap: Option<u64>,
         ws_limit: Option<u64>,
         fail_allocs: (u32, u32),
     },
@@ -1032,6 +1034,8 @@ pub(crate) enum Reply {
     Bytes(Vec<u8>),
     Norm(f32),
     Memory(crate::MetalMemory),
+    /// The memory cap in force before a [`Cmd::MemCap`].
+    Cap(u64),
     Done,
 }
 

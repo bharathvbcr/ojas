@@ -43,14 +43,14 @@ mod bench {
     const D_CALLS: usize = 8;
     /// Swap-ins an attempt may see and still be clean (rules.md amendment; Pageouts must be zero).
     const SWAPINS_CAP: u64 = 1000;
-    /// The memory cap a 24 GiB backend opens with: min(1 GiB, budget / 4), device.rs:88 and :587.
-    const DEFAULT_MEM_CAP: u64 = 1 << 30;
-    /// The raised cap of the `Mraise` arm: above the 8 conv calls' ~6.8 GB between waits.
+    /// The raised cap of the `Mraise` arm: above the 8 conv calls' ~6.8 GB between waits, and inside
+    /// the 24 GiB budget (`set_mem_cap` refuses a cap above the opening backend's budget).
     const RAISED_MEM_CAP: u64 = 8 << 30;
     /// Bytes the small churn frees per call: past the 1 GiB pool cap and memory cap.
     const SMALL_CHURN_BYTES: u64 = 5 << 28;
     /// Big-churn tensors, in f32 elements: 168, 172, 176 and 760 MB.
     const BIG_CHURN: [usize; 4] = [42_000_000, 43_000_000, 44_000_000, 190_000_000];
+    const MIB: f64 = (1u64 << 20) as f64;
     const FC1: (usize, usize, usize) = (5184, 1024, 4736);
 
     #[derive(Clone, Copy)]
@@ -176,6 +176,10 @@ mod bench {
         waits: f64,
         dispatches: f64,
         by: [f64; 9],
+        /// `memory()` allocated after minus before the timed region (bytes, per sample).
+        alloc: f64,
+        /// `memory()` peak over the timed region minus allocated before it (bytes, per sample).
+        peak: f64,
     }
 
     const TRIGGERS: [&str; 9] = [
@@ -221,6 +225,7 @@ mod bench {
 
     fn sample(arm: &Arm<'_>) -> Sample {
         (arm.prep)();
+        let m0 = arm.mb.memory_and_reset_peak().expect("memory");
         let (w0, d0, c0) = (arm.mb.waits(), arm.mb.dispatches(), arm.mb.wait_counts());
         let start = Instant::now();
         for _ in 0..arm.reps {
@@ -232,6 +237,7 @@ mod bench {
         arm.mb.sync().expect("sync");
         let ms = start.elapsed().as_secs_f64() * 1e3;
         let (w1, d1, c1) = (arm.mb.waits(), arm.mb.dispatches(), arm.mb.wait_counts());
+        let m1 = arm.mb.memory().expect("memory");
         let n = arm.reps as f64;
         (arm.post)();
         let (b0, b1) = (by_trigger(&c0), by_trigger(&c1));
@@ -244,6 +250,8 @@ mod bench {
             waits: (w1 - w0) as f64 / n,
             dispatches: (d1 - d0) as f64 / n,
             by,
+            alloc: m1.allocated as f64 - m0.allocated as f64,
+            peak: m1.peak_allocated as f64 - m0.allocated as f64,
         }
     }
 
@@ -322,7 +330,7 @@ mod bench {
                     })
                     .collect();
                 println!(
-                    "{label}\t{attempt}\t{}{tag}\t{}\t{:.4}\t{:.4}\t{:.4}\t{:.4}\t{gap:.4}\t{spread:.4}\t{}\twaits_mean {waits:.2}\twaits_max {wmax:.0}\tdispatches_mean {disp:.2}\t{}",
+                    "{label}\t{attempt}\t{}{tag}\t{}\t{:.4}\t{:.4}\t{:.4}\t{:.4}\t{gap:.4}\t{spread:.4}\t{}\twaits_mean {waits:.2}\twaits_max {wmax:.0}\tdispatches_mean {disp:.2}\t{}\talloc_delta_mib {:.1}\tpeak_over_start_mib {:.1}",
                     arm.name,
                     arm.bytes,
                     r.min,
@@ -330,7 +338,9 @@ mod bench {
                     r.med,
                     r.p90,
                     if ok { "ok" } else if arm.gates { "NOISY" } else { "noisy (not gating)" },
-                    trig.join(" ")
+                    trig.join(" "),
+                    mean(ss.iter().map(|s| s.alloc)) / MIB,
+                    mean(ss.iter().map(|s| s.peak)) / MIB
                 );
             }
         }
@@ -342,12 +352,14 @@ mod bench {
                         .map(|t| format!("{}={:.2}", TRIGGERS[t], s.by[t]))
                         .collect();
                     println!(
-                        "# sample\t{label}\t{attempt}\t{}\t{pass}\t{round}\t{:.4}\t{:.2}\t{:.2}\t{}",
+                        "# sample\t{label}\t{attempt}\t{}\t{pass}\t{round}\t{:.4}\t{:.2}\t{:.2}\t{}\t{:.1}\t{:.1}",
                         arm.name,
                         s.ms,
                         s.waits,
                         s.dispatches,
-                        trig.join(" ")
+                        trig.join(" "),
+                        s.alloc / MIB,
+                        s.peak / MIB
                     );
                 }
             }
@@ -562,6 +574,8 @@ mod bench {
             let call_main_e = op_call(main, row.kind, &t);
             let call_main_ds = op_call(main, row.kind, &t);
             let call_main_dn = op_call(main, row.kind, &t);
+            // The cap in force before the raised arm, read from the backend and put back after.
+            let saved_cap = std::cell::Cell::new(0u64);
             let call_main_md = op_call(main, row.kind, &t);
             let call_main_mr = op_call(main, row.kind, &t);
             let call_28 = op_call(b28, row.kind, &t28);
@@ -636,11 +650,14 @@ mod bench {
                     name: format!("Mraise x{D_CALLS} (mem_cap 8 GiB)"),
                     bytes,
                     mb: main,
-                    prep: Box::new(|| main.set_mem_cap(RAISED_MEM_CAP).expect("set_mem_cap")),
+                    prep: Box::new(|| {
+                        saved_cap.set(main.mem_cap().expect("mem_cap"));
+                        main.set_mem_cap(RAISED_MEM_CAP).expect("set_mem_cap")
+                    }),
                     call: call_main_mr,
                     reps: D_CALLS,
                     sync_each: false,
-                    post: Box::new(|| main.set_mem_cap(DEFAULT_MEM_CAP).expect("set_mem_cap")),
+                    post: Box::new(|| main.set_mem_cap(saved_cap.get()).expect("set_mem_cap")),
                     gates: false,
                 },
                 Arm {
