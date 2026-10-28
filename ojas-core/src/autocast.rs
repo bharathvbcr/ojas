@@ -132,7 +132,9 @@ pub enum AutocastClass {
 }
 
 /// The class of every op added for the SAM encoder (the attention, encoder
-/// and spatial ops), the one statement of the policy. `rope_interleaved_*`
+/// and spatial ops): the specification of the policy. The methods of
+/// [`Autocast`] implement it and nothing reads this table at run time; the
+/// test named below is what keeps the two in agreement. `rope_interleaved_*`
 /// gate on the data operand only; the cos and sin tables do not. The
 /// convolutions round their bias with the other operands; `linear_bias_forward`
 /// keeps its bias `F32`. Attention rounds its bias and leaves the saved
