@@ -231,3 +231,105 @@ fn a_nan_in_an_ignored_row_is_refused() {
         );
     }
 }
+
+/// Textbook cross-entropy of one row in f64: `max + ln(sum exp(z - max)) - z_t`
+/// and `softmax - onehot`. The target is in the sum, and nothing here shares a
+/// formula with the target-excluded oracle above, so a mistake in that
+/// formulation shows as a disagreement between the two. Accurate in f64 up to
+/// a margin of about 36 (`1 + exp(-margin)` rounds to 1 in f64 past that), far
+/// beyond the f32 cliff.
+fn standard_f64(row: &[f32], target: usize) -> (f64, Vec<f64>) {
+    let z: Vec<f64> = row.iter().copied().map(f64::from).collect();
+    let max = z.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let sum: f64 = z.iter().map(|v| (v - max).exp()).sum();
+    let loss = max + sum.ln() - z[target];
+    let grad = z
+        .iter()
+        .enumerate()
+        .map(|(j, v)| (v - max).exp() / sum - if j == target { 1.0 } else { 0.0 })
+        .collect();
+    (loss, grad)
+}
+
+/// A row of `vocab` classes in `[-3, 3)` from a fixed integer sequence, with
+/// the target's logit set `margin` above the largest other logit.
+fn margin_row(vocab: usize, target: usize, margin: f32) -> Vec<f32> {
+    let mut state = 0x2545_f491u32 ^ (vocab as u32) << 8 ^ target as u32;
+    let mut row: Vec<f32> = (0..vocab)
+        .map(|_| {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (state >> 8) as f32 / (1u32 << 24) as f32 * 6.0 - 3.0
+        })
+        .collect();
+    let max_other = row
+        .iter()
+        .enumerate()
+        .filter(|(j, _)| *j != target)
+        .fold(f32::NEG_INFINITY, |m, (_, &v)| m.max(v));
+    row[target] = max_other + margin;
+    row
+}
+
+fn assert_matches_standard(what: &str, loss: f32, grad: &[f32], row: &[f32], target: usize) {
+    let (want_loss, want_grad) = standard_f64(row, target);
+    let loss_ulps = ulps(loss, want_loss);
+    assert!(
+        loss_ulps <= 16.0,
+        "{what}: loss {loss} vs standard f64 {want_loss} ({loss_ulps} ulps)"
+    );
+    for (j, (&got, &want)) in grad.iter().zip(&want_grad).enumerate() {
+        let u = ulps(got, want);
+        assert!(
+            u <= 16.0,
+            "{what}: grad[{j}] {got} vs standard f64 {want} ({u} ulps)"
+        );
+    }
+}
+
+/// At margins up to 18, where f64 standard cross-entropy is still accurate,
+/// the target-excluded kernels agree with it: a wrong excluded formulation
+/// could not pass both this and the oracle above. Vocabulary 40 with targets
+/// in lane 0 of the first chunk (0), in a later chunk's lane (21: chunk 1,
+/// lane 5), at a chunk edge (16, 31), in the tail past the last whole chunk
+/// (37, 39), reaching the lane-chunk skip in `exp_sub_sum` and `exp_sub_store`
+/// (Fast), and the fused path with a tile narrower than the vocabulary so the
+/// target sits in a later column tile.
+#[test]
+fn excluded_cross_entropy_matches_standard_f64_up_to_margin_18_at_any_target_lane() {
+    let vocab = 40usize;
+    for target in [0usize, 5, 16, 21, 31, 37, 39] {
+        for margin in [-4.0f32, 0.0, 1.0, 8.0, 16.0, 18.0] {
+            let row = margin_row(vocab, target, margin);
+            for numerics in [Numerics::Exact, Numerics::Fast] {
+                let tag = format!("{numerics:?} target {target} margin {margin}");
+                let (loss, grad) = unfused(numerics, &row, vocab, &[target as u32], None);
+                assert_matches_standard(&format!("{tag} unfused"), loss, &grad, &row, target);
+                assert_matches(&format!("{tag} unfused vs excluded"), loss, &grad, &row, target);
+
+                let x = f32_tensor(&[1.0], &[1, 1]);
+                let w = f32_tensor(&row, &[vocab, 1]);
+                let tt = u32_tensor(&[target as u32], &[1]);
+                for cols in [7usize, vocab] {
+                    let be = backend(numerics);
+                    let out = be
+                        .linear_cross_entropy_mean(
+                            &x,
+                            &w,
+                            &tt,
+                            None,
+                            CeChunk { rows: 1, cols },
+                            CeGrads {
+                                input: false,
+                                weight: true,
+                            },
+                        )
+                        .unwrap();
+                    let loss = out.loss.to_f32_vec().unwrap()[0];
+                    let dw = out.grad_weight.unwrap().to_f32_vec().unwrap();
+                    let tag = format!("{tag} fused cols {cols}");
+                    assert_matches_standard(&tag, loss, &dw, &row, target);
+                }
+            }
+        }
+    }
+}
