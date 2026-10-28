@@ -536,7 +536,9 @@ fn softmax_grad(
             let scale = excluded_ce(max, sum, picked[i]).scale / denom;
             for (col, value) in row.iter_mut().enumerate() {
                 if range.start + col == class {
-                    *value = -sum * scale;
+                    // 0.0 - x, not -x: positive zero for a one-class row, as the
+                    // GPU kernels write.
+                    *value = 0.0 - sum * scale;
                 } else if sum > 0.0 {
                     *value = exp_exact(*value - max) * scale;
                 } else {
