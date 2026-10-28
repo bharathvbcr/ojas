@@ -220,8 +220,8 @@ pub fn check_tensors(
             ));
         }
         let rel = normwise_rel(&format!("{check} {}", w.name), &g.data, &w.data)?;
-        // `!(rel <= tol)` rejects NaN. `rel > tol` does not: a NaN comparison is false.
-        if !(rel <= tol) {
+        // `rel > tol` alone accepts NaN (a NaN comparison is false), so NaN is refused first.
+        if rel.is_nan() || rel > tol {
             return Err(fail(
                 check,
                 format!("{}: normwise relative error {rel:e} > {tol:e}", w.name),
@@ -357,7 +357,7 @@ fn check_forward(
     if !want_loss.is_finite() {
         return Err(fail(check, "torch loss is not finite"));
     }
-    // Identical zeros are a match. 0/0 is NaN, and `!(NaN <= tol)` would
+    // Identical zeros are a match. 0/0 is NaN, and the NaN refusal below would
     // reject a model that agrees with torch on a zero loss. A zero torch
     // loss with a non-zero model loss stays a non-finite ratio and fails below.
     let rel = if loss == 0.0 && want_loss == 0.0 {
@@ -365,7 +365,7 @@ fn check_forward(
     } else {
         (f64::from(loss) - f64::from(want_loss)).abs() / f64::from(want_loss).abs()
     };
-    if !(rel <= gates.forward_loss_rel) {
+    if rel.is_nan() || rel > gates.forward_loss_rel {
         return Err(fail(
             check,
             format!(
@@ -375,7 +375,7 @@ fn check_forward(
         ));
     }
     let lrel = normwise_rel(&format!("{check} logits"), logits, want_logits)?;
-    if !(lrel <= gates.logits_normwise_rel) {
+    if lrel.is_nan() || lrel > gates.logits_normwise_rel {
         return Err(fail(
             check,
             format!(
