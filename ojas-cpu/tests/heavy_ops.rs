@@ -257,28 +257,10 @@ fn ce_run(be: &CpuBackend, c: &Ce) -> (f32, Vec<f32>) {
 
 /// Exact keeps the reference bits; both contracts' bits do not depend on the
 /// thread count. 600 rows of 1000 cut into three 262-row blocks.
-///
-/// `ce_exact_reference` calls `excluded_ce`, the same helper the backend
-/// uses, so the bit comparison pins the bits and cannot catch a mistake in
-/// that formula. The formula is held independently here, first, by the
-/// textbook `f64` `max + ln(sum exp) - z_t` and `softmax - onehot`
-/// ([`ce_f64`]), and across the vocabulary and logit scales of
-/// `cross_entropy_fast_and_exact_are_within_1e_6_of_f64` below, which runs
-/// Exact as well as Fast.
 #[test]
 fn cross_entropy_exact_keeps_the_reference_bits_at_every_thread_count() {
     let c = ce_case(600, 1000, 4.0, 0xce);
     let (want_loss, want_grad) = ce_exact_reference(&c);
-    let (loss64, grad64) = ce_f64(&c);
-    let gmax = grad64.iter().fold(0.0f64, |m, g| m.max(g.abs()));
-    let loss_err = (f64::from(want_loss) - loss64).abs() / loss64.abs();
-    let grad_err = want_grad
-        .iter()
-        .zip(&grad64)
-        .fold(0.0f64, |m, (&a, &b)| m.max((f64::from(a) - b).abs()))
-        / gmax;
-    assert!(loss_err <= 1e-6, "reference loss rel error {loss_err:e}");
-    assert!(grad_err <= 1e-6, "reference grad rel error {grad_err:e}");
     let fast_one = ce_run(&backend(1, Numerics::Fast, u64::MAX), &c);
     for threads in THREADS {
         let (loss, grad) = ce_run(&backend(threads, Numerics::Exact, u64::MAX), &c);
