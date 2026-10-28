@@ -287,12 +287,12 @@ fn spawn_with(
     let (tx, rx) = mpsc::channel::<Msg>();
     let (ready_tx, ready_rx) = mpsc::sync_channel::<Res<DeviceInfo>>(1);
     #[cfg(test)]
-    let measuring = crate::gauge::inherit();
+    let acting = crate::gauge::inherit();
     let handle = thread::Builder::new()
         .name("ojas-metal-device".to_string())
         .spawn(move || {
             #[cfg(test)]
-            measuring.enter();
+            acting.enter();
             let opened = catch_unwind(AssertUnwindSafe(open))
                 .unwrap_or_else(|_| Err(metal_err("Metal runtime start-up panicked")));
             let mut worker = match opened {

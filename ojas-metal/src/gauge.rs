@@ -13,44 +13,74 @@
 //! - [`Measuring`]: held by every test that reads the figure. It waits for
 //!   every lease to drop and admits no new one until it drops, and
 //!   [`live_bytes`] takes it by reference, so a figure read cannot compile
-//!   without it.
+//!   without it. Take it before opening a runtime; a thread that already
+//!   holds a lease is refused at once, since it would wait on itself.
 //!
-//! The thread that holds `Measuring` opens its own runtimes under it, and a
-//! device thread it starts ([`inherit`]) does too. A runtime opened that way
-//! is still counted, so a later measurement waits for it. The pattern is
-//! `heap_limit::measuring()` in ojas-device's bandwidth tests (D7/C17), but
-//! those few tests can share one mutex. Here a plain mutex would run every
-//! device test one at a time, and deadlock a test that opens two runtimes.
+//! A lease belongs to the test thread that asked for it, even when a device
+//! thread takes it: [`inherit`] hands the test's identity to a thread it
+//! starts. That identity decides who waits:
+//!
+//! - The measuring test and its device threads open runtimes under their own
+//!   guard. Those runtimes are counted, so a later measurement waits for
+//!   them.
+//! - A test that holds a lease opens its next runtime without waiting, since
+//!   a waiting measurement is waiting on it. A test that holds none queues
+//!   behind a measurement that is waiting, or a stream of tests opening
+//!   runtimes could keep the count above zero for good.
+//!
+//! The pattern is `heap_limit::measuring()` in ojas-device's bandwidth tests
+//! (D7/C17), but those few tests can share one mutex. Here a plain mutex
+//! would run every device test one at a time, and deadlock a test that opens
+//! two runtimes.
 
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::marker::PhantomData;
-use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Condvar, LazyLock, Mutex, MutexGuard, PoisonError};
+use std::thread::{self, ThreadId};
 use std::time::{Duration, Instant};
 
 use tessl::runtime::GpuRuntime;
 
 struct State {
-    /// Runtimes alive in this process.
-    leases: usize,
-    /// A test is reading the figure.
-    measuring: bool,
+    /// Live runtimes by the test that owns them.
+    leases: HashMap<ThreadId, usize>,
+    /// The test reading the figure.
+    measuring: Option<ThreadId>,
+    /// Tests waiting to read it.
+    pending: usize,
 }
 
-static GAUGE: (Mutex<State>, Condvar) = (
-    Mutex::new(State {
-        leases: 0,
-        measuring: false,
-    }),
-    Condvar::new(),
-);
+impl State {
+    fn held(&self, owner: ThreadId) -> usize {
+        self.leases.get(&owner).copied().unwrap_or(0)
+    }
+}
 
-/// A wait that outlasts every test in the suite is a deadlock: a test that
-/// holds a runtime and then asks to measure, say. Fail it with the state.
-const WAIT_LIMIT: Duration = Duration::from_secs(900);
+static GAUGE: LazyLock<(Mutex<State>, Condvar)> = LazyLock::new(|| {
+    (
+        Mutex::new(State {
+            leases: HashMap::new(),
+            measuring: None,
+            pending: 0,
+        }),
+        Condvar::new(),
+    )
+});
+
+/// A wait that outlasts every test in the suite is a deadlock: a thread the
+/// test started without [`inherit`], say. Fail it with the state.
+const WAIT_LIMIT: Duration = Duration::from_secs(300);
 
 thread_local! {
-    /// This thread holds [`Measuring`], or was started by a thread that does.
-    static UNDER_MEASURING: Cell<bool> = const { Cell::new(false) };
+    /// The test this thread works for, when it is not the thread itself.
+    static ACTING_FOR: Cell<Option<ThreadId>> = const { Cell::new(None) };
+}
+
+fn owner() -> ThreadId {
+    ACTING_FOR
+        .with(Cell::get)
+        .unwrap_or_else(|| thread::current().id())
 }
 
 /// A panicking holder must not fail the tests after it.
@@ -58,87 +88,114 @@ fn state() -> MutexGuard<'static, State> {
     GAUGE.0.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-fn wait_until(what: &str, ready: impl Fn(&State) -> bool) -> MutexGuard<'static, State> {
+fn wait_until(
+    what: &str,
+    queued: bool,
+    ready: impl Fn(&State) -> bool,
+) -> MutexGuard<'static, State> {
     let deadline = Instant::now() + WAIT_LIMIT;
-    let mut s = state();
-    while !ready(&s) {
+    let mut g = state();
+    while !ready(&g) {
         let Some(left) = deadline.checked_duration_since(Instant::now()) else {
-            let (leases, measuring) = (s.leases, s.measuring);
-            drop(s);
+            if queued {
+                g.pending -= 1;
+            }
+            let leases = g.leases.values().sum::<usize>();
+            let (measuring, pending) = (g.measuring.is_some(), g.pending);
+            drop(g);
+            GAUGE.1.notify_all();
             panic!(
-                "gauge: {what} waited {WAIT_LIMIT:?} (leases {leases}, measuring {measuring}); \
-                 a test that holds a runtime must not ask to measure"
+                "gauge: {what} waited {WAIT_LIMIT:?} (leases {leases}, measuring {measuring}, \
+                 pending {pending}); a thread the test started needs `gauge::inherit`"
             );
         };
-        s = GAUGE
+        g = GAUGE
             .1
-            .wait_timeout(s, left)
+            .wait_timeout(g, left)
             .unwrap_or_else(PoisonError::into_inner)
             .0;
     }
-    s
+    g
 }
 
 /// One live runtime. Taken before the device is touched, dropped after it
 /// is released.
-pub(crate) struct Lease(());
+pub(crate) struct Lease(ThreadId);
 
 pub(crate) fn lease() -> Lease {
-    let under = UNDER_MEASURING.with(Cell::get);
-    let mut s = if under {
-        // The measuring test's own runtime: no wait, but still counted.
-        state()
+    let me = owner();
+    let g = state();
+    let mut g = if g.measuring == Some(me) || g.held(me) > 0 {
+        g
     } else {
-        wait_until("a runtime open", |s| !s.measuring)
+        drop(g);
+        wait_until("a runtime open", false, |s| {
+            s.measuring.is_none() && s.pending == 0
+        })
     };
-    s.leases += 1;
-    Lease(())
+    *g.leases.entry(me).or_insert(0) += 1;
+    Lease(me)
 }
 
 impl Drop for Lease {
     fn drop(&mut self) {
-        state().leases -= 1;
+        let mut g = state();
+        if let Some(n) = g.leases.get_mut(&self.0) {
+            *n -= 1;
+            if *n == 0 {
+                g.leases.remove(&self.0);
+            }
+        }
+        drop(g);
         GAUGE.1.notify_all();
     }
 }
 
 /// Exclusive use of the device's figure. Not `Send`: the thread that took
-/// it is the one marked as measuring.
+/// it is the one that works for it.
 pub(crate) struct Measuring(PhantomData<*const ()>);
 
 pub(crate) fn measuring() -> Measuring {
-    assert!(
-        !UNDER_MEASURING.with(Cell::get),
-        "gauge: this thread is already measuring"
-    );
-    let mut s = wait_until("a measurement", |s| !s.measuring && s.leases == 0);
-    s.measuring = true;
-    drop(s);
-    UNDER_MEASURING.with(|u| u.set(true));
+    let me = owner();
+    {
+        let mut g = state();
+        assert!(
+            g.measuring != Some(me),
+            "gauge: this test is already measuring"
+        );
+        assert!(
+            g.held(me) == 0,
+            "gauge: this test holds a runtime, so a measurement would wait on it; \
+             measure before opening one"
+        );
+        g.pending += 1;
+    }
+    let mut g = wait_until("a measurement", true, |s| {
+        s.measuring.is_none() && s.leases.is_empty()
+    });
+    g.pending -= 1;
+    g.measuring = Some(me);
     Measuring(PhantomData)
 }
 
 impl Drop for Measuring {
     fn drop(&mut self) {
-        UNDER_MEASURING.with(|u| u.set(false));
-        state().measuring = false;
+        state().measuring = None;
         GAUGE.1.notify_all();
     }
 }
 
-/// What this thread's measuring status is, to hand to a thread it starts.
-pub(crate) struct Inherit(bool);
+/// The test a thread works for, to hand to a thread it starts.
+pub(crate) struct Inherit(ThreadId);
 
 pub(crate) fn inherit() -> Inherit {
-    Inherit(UNDER_MEASURING.with(Cell::get))
+    Inherit(owner())
 }
 
 impl Inherit {
     /// Call first on the new thread, before it opens a runtime.
     pub(crate) fn enter(self) {
-        if self.0 {
-            UNDER_MEASURING.with(|u| u.set(true));
-        }
+        ACTING_FOR.with(|a| a.set(Some(self.0)));
     }
 }
 
@@ -153,9 +210,17 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc;
     use std::sync::Arc;
-    use std::thread;
 
     const SETTLE: Duration = Duration::from_millis(250);
+
+    /// Until some measurement is waiting.
+    fn queued() {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while state().pending == 0 {
+            assert!(Instant::now() < deadline, "no measurement queued");
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
 
     #[test]
     fn a_measurement_holds_every_lease_out_until_it_drops() {
@@ -179,13 +244,21 @@ mod tests {
     }
 
     #[test]
-    fn a_measurement_waits_for_every_lease() {
+    fn a_measurement_waits_for_every_lease_and_holds_new_ones_out() {
         let (taken_tx, taken_rx) = mpsc::channel();
+        let (second_tx, second_rx) = mpsc::channel::<()>();
+        let (second_done_tx, second_done_rx) = mpsc::channel::<()>();
         let (release_tx, release_rx) = mpsc::channel::<()>();
         let holder = thread::spawn(move || {
-            let _lease = lease();
+            let first = lease();
             taken_tx.send(()).unwrap();
+            second_rx.recv().unwrap();
+            // A measurement is waiting on this thread: its next runtime must
+            // not wait on the measurement.
+            let second = lease();
+            second_done_tx.send(()).unwrap();
             release_rx.recv().unwrap();
+            drop((first, second));
         });
         taken_rx.recv().unwrap();
         let measured = Arc::new(AtomicBool::new(false));
@@ -196,15 +269,34 @@ mod tests {
                 measured.store(true, Ordering::SeqCst);
             })
         };
-        thread::sleep(SETTLE);
+        queued();
+        let fresh_opened = Arc::new(AtomicBool::new(false));
+        let fresh = {
+            let fresh_opened = Arc::clone(&fresh_opened);
+            thread::spawn(move || {
+                let _lease = lease();
+                fresh_opened.store(true, Ordering::SeqCst);
+            })
+        };
+        thread::sleep(2 * SETTLE);
         assert!(
             !measured.load(Ordering::SeqCst),
             "a measurement began while a runtime was open"
         );
+        assert!(
+            !fresh_opened.load(Ordering::SeqCst),
+            "a new runtime opened ahead of a waiting measurement"
+        );
+        second_tx.send(()).unwrap();
+        second_done_rx
+            .recv_timeout(Duration::from_secs(60))
+            .expect("a lease holder's second runtime waited on the measurement");
         release_tx.send(()).unwrap();
         holder.join().unwrap();
         reader.join().unwrap();
+        fresh.join().unwrap();
         assert!(measured.load(Ordering::SeqCst));
+        assert!(fresh_opened.load(Ordering::SeqCst));
     }
 
     #[test]
@@ -229,9 +321,9 @@ mod tests {
         let held = measuring();
         // The same thread, and a device thread it starts.
         let first = lease();
-        let hand_over = inherit();
+        let acting = inherit();
         let device = thread::spawn(move || {
-            hand_over.enter();
+            acting.enter();
             lease()
         });
         let second = device.join().unwrap();
@@ -251,5 +343,51 @@ mod tests {
         drop(first);
         drop(second);
         next.join().unwrap();
+    }
+
+    #[test]
+    fn a_device_thread_of_a_lease_holder_is_not_held_out_by_a_waiting_measurement() {
+        // A backend's lease is taken on its device thread. A test that opens
+        // a second backend while a measurement waits must get it.
+        let acting = inherit();
+        let first = thread::spawn(move || {
+            acting.enter();
+            lease()
+        })
+        .join()
+        .unwrap();
+        let (queued_tx, queued_rx) = mpsc::channel::<()>();
+        let reader = thread::spawn(move || {
+            queued_tx.send(()).unwrap();
+            drop(measuring());
+        });
+        queued_rx.recv().unwrap();
+        queued();
+        let acting = inherit();
+        let (opened_tx, opened_rx) = mpsc::channel::<()>();
+        let device = thread::spawn(move || {
+            acting.enter();
+            let _second = lease();
+            opened_tx.send(()).unwrap();
+        });
+        let opened = opened_rx.recv_timeout(Duration::from_secs(60));
+        drop(first);
+        reader.join().unwrap();
+        device.join().unwrap();
+        opened.expect("a second runtime waited on a measurement that waits on its test");
+    }
+
+    #[test]
+    fn a_lease_taken_by_a_device_thread_is_released_for_its_test() {
+        let acting = inherit();
+        let taken = thread::spawn(move || {
+            acting.enter();
+            lease()
+        })
+        .join()
+        .unwrap();
+        assert_eq!(state().held(owner()), 1);
+        drop(taken);
+        assert_eq!(state().held(owner()), 0);
     }
 }
