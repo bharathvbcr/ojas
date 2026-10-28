@@ -251,7 +251,8 @@ fn op_generate(input: &[u8]) -> Result<Vec<u8>, String> {
             let n = usize::try_from(r.u32()?).map_err(|_| "generate: shape: n".to_string())?;
             let logits = r.values(n, f32::from_le_bytes)?;
             r.finish()?;
-            generate::argmax(&logits).map(|t| t.to_le_bytes().to_vec())
+            // Admission already ran in `dispatch_bytes`; the bench's probe=0 arm is this call.
+            generate::generate_argmax(&logits, false).map(|t| t.to_le_bytes().to_vec())
         }
         other => Err(format!("generate: shape: unknown mode {other}")),
     }

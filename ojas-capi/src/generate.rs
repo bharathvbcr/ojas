@@ -27,12 +27,14 @@ pub fn argmax(logits: &[f32]) -> Result<u32, String> {
     argmax_token(logits).map_err(|e| crate::ojas_error("generate", &e))
 }
 
-/// Argmax of caller logits, the body of GENERATE mode [`GEN_LOGITS`].
-///
-/// `probe` is the admission `dispatch` runs before `op_generate`: ask the
-/// kernel, and refuse when it reports critical pressure. The session lookup
-/// and the wire parse are in neither arm, so the two arms differ by that
-/// probe alone.
+/// Argmax of caller logits: the body of GENERATE mode [`GEN_LOGITS`], which
+/// `engine::op_generate` calls with `probe == false`. `dispatch_bytes` runs
+/// the memory-pressure admission before `op_generate` ever starts, so the
+/// `probe == true` arm is that same `engine::admit` call followed by the same
+/// body. It exists so `benches/generate_pressure.rs` times the two arms
+/// without a session lookup or a wire parse in either; it is not part of the
+/// API (`#[doc(hidden)]`) and has no other caller.
+#[doc(hidden)]
 pub fn generate_argmax(logits: &[f32], probe: bool) -> Result<u32, String> {
     if probe {
         crate::engine::admit(crate::OP_GENERATE, ojas_device::probe_pressure())?;

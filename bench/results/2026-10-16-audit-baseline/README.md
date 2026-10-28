@@ -6,7 +6,11 @@ The lines are in `rows.txt` (49 `OJAS_OP` rows, copied from the group logs). `en
 
 `mac_heavy.sh` was not used. That script lives outside this repo. Runs were serial, one release test process at a time. A group started only after two samples, 30 seconds apart, with load1 under 12, load5 under 18, and no `yes` processes. Every group below met that bar. `quiet=true` for all of them.
 
-These files are untracked. Criterion 5 also says committed. That commit was not made. It waits on the owner.
+These files were untracked when written. They are committed now, in the merge of `gp/w19-audit-baseline` into `gp/78-integrate`, as recorded; none of the numbers was re-measured in that merge.
+
+**Do not read these rows as describing the merged code.** They were measured at `105e203`. The `audit_gated_rms_bwd_qwen` and `audit_fused_ce_*` rows predate the gated-RMSNorm rstd change (`gp/w20-gated-rstd`) and the target-excluded cross-entropy merge, which change the code those rows time. Re-measure before citing them for either.
+
+**There is no noise floor behind the 18-thread conclusions.** Each group started at load1 about 9 to 11 (see `env.md`, not the quiet machine the gate name suggests). CPU rows are `n=3` to `n=5` timed calls, one run per arm, no repeats of the whole process, so a row's spread says how that single run varied and says nothing about run-to-run noise. The statement at the end that some ops are slower at 18 threads than at one rests on that, and is a lead to re-run with interleaved repeats, not a finding.
 
 ## How to read a row
 
