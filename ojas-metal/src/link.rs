@@ -477,6 +477,13 @@ pub(crate) enum Cmd {
     InlineUploads {
         on: bool,
     },
+    /// Set the byte cap the device thread compares against: bytes allocated
+    /// since the last waited commit (`WaitCounts::mem_cap`) and bytes freed
+    /// since it (`WaitCounts::freed`). For before/after wait measurements;
+    /// `bytes` is non-zero (the caller checks).
+    SetMemCap {
+        bytes: u64,
+    },
     /// Test hook: encode a dispatch, then panic on the device thread, as a
     /// bug mid-op would.
     #[cfg(test)]

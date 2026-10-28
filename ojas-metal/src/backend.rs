@@ -325,6 +325,31 @@ impl MetalBackend {
         }
     }
 
+    /// Set the byte cap past which the device thread waits for a commit:
+    /// bytes allocated since the last waited commit (counted as
+    /// [`WaitCounts::mem_cap`]) and bytes freed since it ([`WaitCounts::freed`]).
+    /// The cap a backend opens with is the smaller of 1 GiB and a quarter of
+    /// its budget; this replaces it for every handle that shares the device
+    /// thread, until the next call. For before/after wait measurements: it
+    /// changes nothing else, and no default changes with it. A zero cap
+    /// would wait after every command and is refused as
+    /// [`OjasError::OutOfRange`]. Not a stable API.
+    #[doc(hidden)]
+    pub fn set_mem_cap(&self, bytes: u64) -> Result<(), OjasError> {
+        if bytes == 0 {
+            return Err(OjasError::OutOfRange {
+                op: "set_mem_cap",
+                detail: "a zero memory cap would wait after every command".into(),
+            });
+        }
+        match self.link.call(Cmd::SetMemCap { bytes })? {
+            Reply::Done => Ok(()),
+            other => Err(metal_err(format!(
+                "set_mem_cap: device returned {other:?}"
+            ))),
+        }
+    }
+
     /// Another handle on this backend's device that charges `budget`
     /// instead: it accepts this backend's tensors and shares its device
     /// thread, faults and `sync`, as wgpu's `WgpuBackend::with_context`

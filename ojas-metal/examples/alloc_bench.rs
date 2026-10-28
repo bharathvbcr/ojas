@@ -43,6 +43,10 @@ mod bench {
     const D_CALLS: usize = 8;
     /// Swap-ins an attempt may see and still be clean (rules.md amendment; Pageouts must be zero).
     const SWAPINS_CAP: u64 = 1000;
+    /// The memory cap a 24 GiB backend opens with: min(1 GiB, budget / 4), device.rs:88 and :587.
+    const DEFAULT_MEM_CAP: u64 = 1 << 30;
+    /// The raised cap of the `Mraise` arm: above the 8 conv calls' ~6.8 GB between waits.
+    const RAISED_MEM_CAP: u64 = 8 << 30;
     /// Bytes the small churn frees per call: past the 1 GiB pool cap and memory cap.
     const SMALL_CHURN_BYTES: u64 = 5 << 28;
     /// Big-churn tensors, in f32 elements: 168, 172, 176 and 760 MB.
@@ -204,8 +208,10 @@ mod bench {
         name: String,
         bytes: u64,
         mb: &'a MetalBackend,
-        /// Untimed, before the timed region (churn, trim).
+        /// Untimed, before the timed region (churn, trim, a cap change).
         prep: Box<dyn Fn() + 'a>,
+        /// Untimed, after the timed region and its counters (undoes `prep`).
+        post: Box<dyn Fn() + 'a>,
         call: Box<dyn Fn() + 'a>,
         reps: usize,
         sync_each: bool,
@@ -227,6 +233,7 @@ mod bench {
         let ms = start.elapsed().as_secs_f64() * 1e3;
         let (w1, d1, c1) = (arm.mb.waits(), arm.mb.dispatches(), arm.mb.wait_counts());
         let n = arm.reps as f64;
+        (arm.post)();
         let (b0, b1) = (by_trigger(&c0), by_trigger(&c1));
         let mut by = [0.0; 9];
         for i in 0..9 {
@@ -505,6 +512,7 @@ mod bench {
             }),
             reps: 1,
             sync_each: true,
+            post: Box::new(|| {}),
             gates: true,
         };
         let big: Vec<Tensor> = BIG_CHURN
@@ -554,6 +562,8 @@ mod bench {
             let call_main_e = op_call(main, row.kind, &t);
             let call_main_ds = op_call(main, row.kind, &t);
             let call_main_dn = op_call(main, row.kind, &t);
+            let call_main_md = op_call(main, row.kind, &t);
+            let call_main_mr = op_call(main, row.kind, &t);
             let call_28 = op_call(b28, row.kind, &t28);
             let arms: Vec<Arm<'_>> = vec![
                 Arm {
@@ -564,6 +574,7 @@ mod bench {
                     call: call_main,
                     reps: 1,
                     sync_each: true,
+                    post: Box::new(|| {}),
                     gates: true,
                 },
                 Arm {
@@ -574,6 +585,7 @@ mod bench {
                     call: call_main_b,
                     reps: 1,
                     sync_each: true,
+                    post: Box::new(|| {}),
                     gates: false,
                 },
                 Arm {
@@ -584,6 +596,7 @@ mod bench {
                     call: call_main_b2,
                     reps: 1,
                     sync_each: true,
+                    post: Box::new(|| {}),
                     gates: false,
                 },
                 Arm {
@@ -594,6 +607,7 @@ mod bench {
                     call: call_28,
                     reps: 1,
                     sync_each: true,
+                    post: Box::new(|| {}),
                     gates: false,
                 },
                 Arm {
@@ -604,6 +618,29 @@ mod bench {
                     call: call_main_e,
                     reps: 1,
                     sync_each: true,
+                    post: Box::new(|| {}),
+                    gates: false,
+                },
+                Arm {
+                    name: format!("Mdef x{D_CALLS}"),
+                    bytes,
+                    mb: main,
+                    prep: Box::new(|| {}),
+                    call: call_main_md,
+                    reps: D_CALLS,
+                    sync_each: false,
+                    post: Box::new(|| {}),
+                    gates: false,
+                },
+                Arm {
+                    name: format!("Mraise x{D_CALLS} (mem_cap 8 GiB)"),
+                    bytes,
+                    mb: main,
+                    prep: Box::new(|| main.set_mem_cap(RAISED_MEM_CAP).expect("set_mem_cap")),
+                    call: call_main_mr,
+                    reps: D_CALLS,
+                    sync_each: false,
+                    post: Box::new(|| main.set_mem_cap(DEFAULT_MEM_CAP).expect("set_mem_cap")),
                     gates: false,
                 },
                 Arm {
@@ -614,6 +651,7 @@ mod bench {
                     call: call_main_ds,
                     reps: D_CALLS,
                     sync_each: true,
+                    post: Box::new(|| {}),
                     gates: false,
                 },
                 Arm {
@@ -624,6 +662,7 @@ mod bench {
                     call: call_main_dn,
                     reps: D_CALLS,
                     sync_each: false,
+                    post: Box::new(|| {}),
                     gates: false,
                 },
             ];

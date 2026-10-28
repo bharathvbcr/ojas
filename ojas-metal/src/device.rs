@@ -1390,6 +1390,10 @@ impl Worker {
                 self.book.borrow_mut().inline_uploads = on;
                 Ok(Reply::Done)
             }
+            Cmd::SetMemCap { bytes } => {
+                self.book.borrow_mut().mem_cap = bytes;
+                Ok(Reply::Done)
+            }
             Cmd::Upload { src } => self.upload(&src),
             #[cfg(test)]
             Cmd::InjectPanic => {
