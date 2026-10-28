@@ -311,6 +311,9 @@ pub struct Session {
     rt: Arc<GpuRuntime>,
     /// Sum of tessl buckets for parameters still held by [`TinyState`]s.
     resident: Arc<AtomicU64>,
+    /// Held until the runtime above is gone (last field, so dropped last).
+    #[cfg(test)]
+    _lease: crate::gauge::Lease,
 }
 
 impl Session {
@@ -321,6 +324,8 @@ impl Session {
                 detail: err.to_string(),
             },
         )?;
+        #[cfg(test)]
+        let lease = crate::gauge::lease();
         let rt = GpuRuntime::new().map_err(metal)?;
         rt.set_pool_cache_cap_bytes(SESSION_POOL_CACHE_BYTES);
         rt.set_async_encode(true).map_err(metal)?;
@@ -342,6 +347,8 @@ impl Session {
         Ok(Self {
             rt,
             resident: Arc::new(AtomicU64::new(0)),
+            #[cfg(test)]
+            _lease: lease,
         })
     }
 
@@ -1576,6 +1583,7 @@ fn gate_fwd_kernel(g: &GateBufs, out: &Tensor) -> Result<(), OjasError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gauge;
 
     fn session() -> Session {
         Session::open().expect("Metal device required; a missing device fails the test")
@@ -2120,6 +2128,8 @@ mod tests {
 
     #[test]
     fn scratch_cap_is_not_clamped() {
+        // The device's figure is process-wide: nothing else may hold a runtime.
+        let measuring = gauge::measuring();
         let session = session();
         let shape = shape();
         let d = D_MODEL as usize;
@@ -2140,7 +2150,7 @@ mod tests {
         )
         .unwrap();
         let need = scratch_bytes(&shape).unwrap();
-        let allocated = state.rt.current_allocated_bytes();
+        let allocated = gauge::live_bytes(&state.rt, &measuring);
         assert!(
             allocated > 0,
             "device reported no live bytes before the refusal"
@@ -2167,7 +2177,7 @@ mod tests {
         }
         assert_eq!(state.step_count(), 0);
         assert_eq!(
-            state.rt.current_allocated_bytes(),
+            gauge::live_bytes(&state.rt, &measuring),
             allocated,
             "a step whose bucketed bytes exceed byte_cap still allocated"
         );
