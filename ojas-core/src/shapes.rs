@@ -2262,11 +2262,21 @@ fn causal_sdpa_grad_shape_for(
     Ok(())
 }
 
-fn rank4(op: &'static str, name: &str, tensor: &Tensor) -> Result<[usize; 4], OjasError> {
-    f32_operand(op, tensor)?;
-    match tensor.shape() {
-        [a, b, c, d] => Ok([*a, *b, *c, *d]),
-        other => Err(refuse(op, format!("{name} must be rank 4, got {other:?}"))),
+/// The four extents of a rank-4 `tensor`, or a shape refusal naming `what`
+/// (which may carry its layout, `"input [N, C, H, W]"`). Dtype is not
+/// checked: callers run [`f32_operand`] where, and in the order, their
+/// contract refuses a dtype before a shape.
+pub(crate) fn rank4(
+    op: &'static str,
+    what: &str,
+    tensor: &Tensor,
+) -> Result<[usize; 4], OjasError> {
+    match *tensor.shape() {
+        [a, b, c, d] => Ok([a, b, c, d]),
+        ref other => Err(refuse(
+            op,
+            format!("{what} rank {} != 4, shape {other:?}", other.len()),
+        )),
     }
 }
 
@@ -2285,8 +2295,11 @@ pub fn cached_attention_dims(
     window: Option<usize>,
 ) -> Result<KvDims, OjasError> {
     const OP: &str = "cached_attention_forward";
+    f32_operand(OP, q)?;
     let [batch, tq, heads, head_dim] = rank4(OP, "q", q)?;
+    f32_operand(OP, k_cache)?;
     let k = rank4(OP, "k_cache", k_cache)?;
+    f32_operand(OP, v_cache)?;
     let v = rank4(OP, "v_cache", v_cache)?;
     if k != v {
         return Err(refuse(OP, format!("k_cache {k:?} != v_cache {v:?}")));
@@ -2352,7 +2365,9 @@ pub fn cached_attention_dims(
 /// past `Tcap` is a plain prefix.
 pub fn kv_cache_write_dims(cache: &Tensor, src: &Tensor, at: usize) -> Result<KvDims, OjasError> {
     const OP: &str = "kv_cache_write";
+    f32_operand(OP, cache)?;
     let [batch, capacity, kv_heads, head_dim] = rank4(OP, "cache", cache)?;
+    f32_operand(OP, src)?;
     let [sb, tn, sh, sd] = rank4(OP, "src", src)?;
     if [sb, sh, sd] != [batch, kv_heads, head_dim] {
         return Err(refuse(
