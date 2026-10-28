@@ -1,0 +1,2 @@
+20:00:19 CDT launched b7-run.sh pid 23134
+22:03:41 CDT smoke ran; fallback not needed
