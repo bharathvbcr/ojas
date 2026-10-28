@@ -23,16 +23,22 @@
 //! their own guard. Those runtimes are counted, so a later measurement waits
 //! for them.
 //!
-//! A measurement that is waiting does not hold new leases out. Doing so
+//! A measurement that is queued does not hold new leases out. Doing so
 //! bounds its wait by the longest running holder, but it would also stall
 //! every test that opens a runtime inside a `watchdog(60)` or `watchdog(120)`
 //! for that long, charging one test's wait to another's budget. Without it a
-//! measurement waits for a moment with no runtime anywhere, which a finite
-//! suite reaches at the latest when its queue empties (the lib suite takes
-//! 12 to 24 s at 8 threads under load 8 to 25, measured; the two gdn tests
-//! behind the 600 s watchdogs take 1 to 2 s alone), and a measurement
-//! blocks leases only while it runs, which is milliseconds. The cost is that
+//! queued measurement waits for a moment with no runtime anywhere, which a
+//! finite suite reaches at the latest when its queue empties (the lib suite
+//! takes 12 to 24 s at 8 threads under load 8 to 25, measured; the two gdn
+//! tests behind the 600 s watchdogs take 1 to 2 s alone). The cost is that
 //! the measuring tests run late, not that they can be starved.
+//!
+//! That covers the queued phase only. A running measurement is held for the
+//! whole body of its test (a probe, a train step, a 300 ms sibling check),
+//! and a test that opens a runtime meanwhile waits for it: seconds today,
+//! charged to that test's own watchdog. A queued measurement can also win the
+//! wakeup ahead of a waiting lease when the last runtime drops. Keep a
+//! measuring test short, and take `measuring()` outside any watchdog.
 //!
 //! The pattern is `heap_limit::measuring()` in ojas-device's bandwidth tests
 //! (D7/C17), but those few tests can share one mutex. Here a plain mutex
