@@ -22,11 +22,11 @@ mod shapes;
 mod spatial;
 mod tensor;
 
-#[doc(hidden)]
-pub use autocast::{AutocastClass, SAM_AUTOCAST_POLICY};
 pub use autocast::{
     bf16_to_f32, f32_to_bf16, round_f32_to_bf16, Autocast, AutocastGuard, AutocastMode,
 };
+#[doc(hidden)]
+pub use autocast::{AutocastClass, SAM_AUTOCAST_POLICY};
 pub use backend::{
     broadcast_scalar, check_adamw, clip_scale, next_step, pow_u64, rank_logits,
     refuse_bf16_operands, refuse_bf16_table, refuse_unsupported_metal_gdn,
