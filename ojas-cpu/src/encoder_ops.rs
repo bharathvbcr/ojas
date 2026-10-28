@@ -23,16 +23,19 @@
 //!   `weight` and `bias` indexed by the channel.
 //! - GELU is [`ojas_core::gelu_erf_exact`], the same bits on every platform.
 //! - Softmax subtracts the row maximum, exponentiates with
-//!   [`ojas_core::exp_exact`] under [`Numerics::Exact`] and with the vector
-//!   exponential of [`crate::exp`] under [`Numerics::Fast`], sums ascending
-//!   (Fast: in the fixed lane order of [`exp_sub_store`]) and divides.
+//!   [`ojas_core::exp_exact`] under [`ojas_core::Numerics::Exact`] and with
+//!   the vector exponential of [`crate::exp`] under
+//!   [`ojas_core::Numerics::Fast`], sums ascending
+//!   (Fast: in the fixed lane order of [`crate::exp::exp_sub_store`]) and
+//!   divides. The row kernel is [`crate::attn::softmax_row`], the one the
+//!   attention softmax uses.
 
 use ojas_core::{
-    exp_exact, gelu_erf_exact, BroadcastDims, Budget, ChannelNormDims, GroupNormDims, Numerics,
-    OjasError, RmsDims, Tensor,
+    gelu_erf_exact, BroadcastDims, Budget, ChannelNormDims, GroupNormDims, OjasError, RmsDims,
+    Tensor,
 };
 
-use crate::exp::exp_sub_store;
+use crate::attn::softmax_row;
 use crate::pool::Exec;
 use crate::validate::{fill_rows, nonfinite, product, room_for, shape};
 
@@ -384,26 +387,6 @@ pub(crate) fn scale_forward(
     })
 }
 
-/// One softmax row into `dst`.
-fn softmax_row(numerics: Numerics, row: &[f32], dst: &mut [f32]) {
-    let max = row.iter().fold(f32::NEG_INFINITY, |m, &v| m.max(v));
-    let sum = match numerics {
-        Numerics::Exact => {
-            let mut sum = 0.0f32;
-            for (out, &v) in dst.iter_mut().zip(row) {
-                let e = exp_exact(v - max);
-                *out = e;
-                sum += e;
-            }
-            sum
-        }
-        Numerics::Fast => exp_sub_store(row, max, dst),
-    };
-    for out in dst.iter_mut() {
-        *out /= sum;
-    }
-}
-
 /// Softmax over the last axis. `dims` comes from
 /// [`ojas_core::softmax_forward_dims`].
 pub(crate) fn softmax_forward(
@@ -422,7 +405,7 @@ pub(crate) fn softmax_forward(
     fill_rows(op, budget, exec, out_shape, rows, dim, |range, y| {
         let src = &x[range.start * dim..range.end * dim];
         for (dst, row) in y.chunks_exact_mut(dim).zip(src.chunks_exact(dim)) {
-            softmax_row(numerics, row, dst);
+            let _ = softmax_row(numerics, row, dst);
         }
         Ok(())
     })
