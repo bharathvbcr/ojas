@@ -286,9 +286,13 @@ fn spawn_with(
 ) -> Res<(mpsc::Sender<Msg>, DeviceInfo)> {
     let (tx, rx) = mpsc::channel::<Msg>();
     let (ready_tx, ready_rx) = mpsc::sync_channel::<Res<DeviceInfo>>(1);
+    #[cfg(test)]
+    let acting = crate::gauge::inherit();
     let handle = thread::Builder::new()
         .name("ojas-metal-device".to_string())
         .spawn(move || {
+            #[cfg(test)]
+            acting.enter();
             let opened = catch_unwind(AssertUnwindSafe(open))
                 .unwrap_or_else(|_| Err(metal_err("Metal runtime start-up panicked")));
             let mut worker = match opened {
@@ -558,10 +562,15 @@ struct Worker {
     /// read-write binding of a dispatch on memory of its own.
     spare: GpuBuffer,
     book: RefCell<Book>,
+    /// Held until the runtime above is gone (last field, so dropped last).
+    #[cfg(test)]
+    _lease: crate::gauge::Lease,
 }
 
 impl Worker {
     fn open(waits: Arc<Waits>, budget_cap: u64) -> Res<Self> {
+        #[cfg(test)]
+        let lease = crate::gauge::lease();
         let rt = GpuRuntime::new().map_err(metal_err)?;
         // Before the first allocation, so no buffer is ever cached past it.
         let pool_cap = usize::try_from(pool_cache_cap(budget_cap)).unwrap_or(usize::MAX);
@@ -608,6 +617,8 @@ impl Worker {
             slab,
             spare,
             book: RefCell::new(book),
+            #[cfg(test)]
+            _lease: lease,
         })
     }
 
@@ -4908,6 +4919,7 @@ mod tests {
     /// against ones that are not allocation failures.
     #[test]
     fn classify_alloc_reads_tessls_failures() {
+        let _lease = crate::gauge::lease();
         let rt = GpuRuntime::new().expect("Metal device");
         let real = rt
             .alloc_buffer(usize::MAX)

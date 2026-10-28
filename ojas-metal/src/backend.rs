@@ -3846,7 +3846,13 @@ mod tests {
             probe_system, Device, MemoryArchitecture, MemoryProbe, MemoryReport, ResourcePlan,
             ResourcePolicy,
         };
+        // The peak is this runtime's, the live figure the device's. Taken
+        // here, not in the closure: the wait for a quiet device is not part
+        // of the watchdog's budget. The closure's thread works for this test.
+        let _measuring = crate::gauge::measuring();
+        let acting = crate::gauge::inherit();
         watchdog(120, || {
+            acting.enter();
             let host = Budget::new(1 << 30);
             let m = MetalBackend::new(Budget::new(1 << 30)).expect("Metal device");
             let before = m.memory().expect("memory");
@@ -3860,17 +3866,16 @@ mod tests {
                 after.recommended_working_set,
                 before.recommended_working_set
             );
-            // `allocated` is the device's process-wide figure, and other
-            // tests in this binary allocate and free beside this one, so a
-            // before/after delta is not this test's to assert. A lower bound
-            // is: while `x` lives, its 16 MiB are part of the figure.
+            // `allocated` is the device's process-wide figure. The guard
+            // above keeps other tests' runtimes out, so only this test's
+            // buffers move it; a lower bound is all it needs: while `x`
+            // lives, its 16 MiB are part of the figure.
             assert!(
                 after.allocated >= 16 << 20,
                 "a live 16 MiB upload is not counted: {after:?}"
             );
             // The peak covers the live upload, survives its free, and
-            // restarts from what is allocated at a reset (other tests move
-            // the process-wide figure too, so only bounds are asserted).
+            // restarts from what is allocated at a reset.
             assert!(after.peak_allocated >= after.allocated, "{after:?}");
             let y = m
                 .upload(&Tensor::from_f32(&vals, &[4 << 20], &host).expect("host"))

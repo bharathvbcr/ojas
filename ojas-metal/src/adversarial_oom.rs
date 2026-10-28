@@ -5,6 +5,7 @@
 //! Each test asserts a property the card or the doc comments promise.
 
 use super::*;
+use crate::gauge;
 use crate::link::Waits;
 
 /// xorshift64*, seeded: the same sequence on every run.
@@ -295,18 +296,19 @@ fn a_different_error_between_attempts_decides_the_outcome() {
     assert_eq!(w.rt.memory_info().pool_cache_cap, cap);
 }
 
-/// Partial failure, as `GdnTrainWorkspace::new` makes it (run alone, with
-/// `--test-threads=1`: the device's allocated figure is process-wide, so a
+/// Partial failure, as `GdnTrainWorkspace::new` makes it (under
+/// `gauge::measuring`: the device's allocated figure is process-wide, so a
 /// sibling test's buffers would move it): buffers allocated
 /// before the refused one are dropped. They go back to the pool at the next
 /// waited commit, so after a recycle and a pool trim the device holds what
 /// it held before.
 #[test]
 fn partial_allocations_are_released_after_the_final_refusal() {
+    let measuring = gauge::measuring();
     let (w, _waits) = worker();
     w.recycle().unwrap();
     w.drop_pool();
-    let base = w.rt.current_allocated_bytes();
+    let base = gauge::live_bytes(&w.rt, &measuring);
     let r: Res<()> = w.retrying(3 << 20, || {
         let _a = w.rt.alloc_buffer(1 << 20)?;
         let _b = w.rt.alloc_buffer(2 << 20)?;
@@ -319,10 +321,45 @@ fn partial_allocations_are_released_after_the_final_refusal() {
     w.recycle().unwrap();
     w.drop_pool();
     assert_eq!(
-        w.rt.current_allocated_bytes(),
+        gauge::live_bytes(&w.rt, &measuring),
         base,
         "partial buffers leaked on the device"
     );
+}
+
+/// What the figure's lock promises, on the real device: a runtime a sibling
+/// test tries to open while one is measuring waits, so the measured figure
+/// does not move, and the sibling gets its runtime once the measurement is
+/// over. Before the lock, a sibling's `Worker::open` inside the window moved
+/// the figure by its slab, spare and buffers, as the two tests that read it
+/// failed 2 of 10 parallel runs.
+#[test]
+fn a_sibling_runtime_cannot_open_inside_a_measurement() {
+    let measuring = gauge::measuring();
+    let (w, _waits) = worker();
+    w.recycle().unwrap();
+    w.drop_pool();
+    let base = gauge::live_bytes(&w.rt, &measuring);
+    let (opened_tx, opened_rx) = mpsc::channel::<()>();
+    let sibling = thread::spawn(move || {
+        let (s, _) = worker();
+        let held = s.rt.alloc_buffer(8 << 20).expect("8 MiB");
+        opened_tx.send(()).unwrap();
+        drop(held);
+    });
+    assert!(
+        opened_rx
+            .recv_timeout(std::time::Duration::from_millis(300))
+            .is_err(),
+        "a sibling opened a runtime and allocated inside the measurement"
+    );
+    assert_eq!(gauge::live_bytes(&w.rt, &measuring), base);
+    drop(w);
+    drop(measuring);
+    opened_rx
+        .recv_timeout(std::time::Duration::from_secs(120))
+        .expect("the sibling runs once the measurement is over");
+    sibling.join().unwrap();
 }
 
 /// The device's documented bound for what the budget does not charge counts
@@ -343,6 +380,7 @@ fn partial_allocations_are_released_after_the_final_refusal() {
 /// counted.
 #[test]
 fn dropped_partial_buffers_count_toward_a_wait_trigger() {
+    let measuring = gauge::measuring();
     let (w, _waits) = worker();
     w.recycle().unwrap();
     w.drop_pool();
@@ -356,10 +394,10 @@ fn dropped_partial_buffers_count_toward_a_wait_trigger() {
         attempt += 1;
         // 4 + 8 MiB, then 16 + 32 MiB, then 64 + 128 MiB: no bucket repeats.
         let small = 1usize << (20 + 2 * attempt);
-        let start = w.rt.current_allocated_bytes();
+        let start = gauge::live_bytes(&w.rt, &measuring);
         let _a = w.rt.alloc_buffer(small)?;
         let _b = w.rt.alloc_buffer(small * 2)?;
-        last_growth = w.rt.current_allocated_bytes().saturating_sub(start);
+        last_growth = gauge::live_bytes(&w.rt, &measuring).saturating_sub(start);
         Err("newBuffer(1048576) failed".to_string())
     });
     let after = {
