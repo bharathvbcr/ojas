@@ -266,9 +266,63 @@ fn is_target(module: &str) -> bool {
         .any(|s| module == *s || module.ends_with(&format!(".{s}")))
 }
 
-/// The adapted modules of a LoRA plan, in the order their `A` leaf was given (which must be
-/// `model.named_modules()` order, as `lora_parameters` lists them): `(module, in_features)` and
-/// the one rank every adapter shares. Refuses what [`lora_param_groups`] refuses.
+/// A module's place in the canonical LoRA-A draw order: `(layer index, position in
+/// [`LORA_TARGET_SUFFIXES`])`, read from `<prefix>layers.<n>.<suffix>`. Any other name is refused;
+/// there is no fallback order. The place is the `layers` component directly before the suffix.
+/// [`layer_index`] answers a different question (the first `layers.<n>` in a name, for the
+/// learning-rate split) and is not this order.
+pub fn draw_position(module: &str) -> Result<(u64, usize), StepError> {
+    for (position, suffix) in LORA_TARGET_SUFFIXES.iter().enumerate() {
+        let Some(head) = module
+            .strip_suffix(suffix)
+            .and_then(|h| h.strip_suffix('.'))
+        else {
+            continue;
+        };
+        let Some((before, index)) = head.rsplit_once('.') else {
+            continue;
+        };
+        let named_layers = before == "layers" || before.ends_with(".layers");
+        if named_layers && !index.is_empty() && index.bytes().all(|b| b.is_ascii_digit()) {
+            if let Ok(n) = index.parse::<u64>() {
+                return Ok((n, position));
+            }
+        }
+    }
+    Err(StepError::Contract(format!(
+        "{module:?} is not '<prefix>layers.<layer index>.<suffix>' for a suffix in D6's target \
+         table: the LoRA-A draw order is (layer index, suffix-table position) and a module with \
+         neither has no place in it"
+    )))
+}
+
+/// `names` sorted into the canonical draw order (layer index ascending, then the suffix table),
+/// as indices into `names`. Refuses a name with no draw position and two names that share one.
+pub fn canonical_draw_order(names: &[&str]) -> Result<Vec<usize>, StepError> {
+    let mut keyed = Vec::with_capacity(names.len());
+    for (i, name) in names.iter().enumerate() {
+        keyed.push((draw_position(name)?, i));
+    }
+    keyed.sort_unstable();
+    for pair in keyed.windows(2) {
+        if pair[0].0 == pair[1].0 {
+            let first = names[pair[0].1];
+            let second = names[pair[1].1];
+            let layer = pair[0].0.0;
+            let suffix = LORA_TARGET_SUFFIXES[pair[0].0.1];
+            return Err(StepError::Contract(format!(
+                "{first:?} and {second:?} are both layer {layer} {suffix:?}: the draw order is \
+                 ambiguous"
+            )));
+        }
+    }
+    Ok(keyed.into_iter().map(|(_, i)| i).collect())
+}
+
+/// The adapted modules of a LoRA plan in the canonical draw order (layer index ascending, then
+/// D6's suffix table), whatever order the provider listed the `A` leaves in: `(module,
+/// in_features)` and the one rank every adapter shares. Refuses what [`lora_param_groups`]
+/// refuses, and a module that has no layer index or shares a draw position with another.
 pub fn lora_adapter_layout(
     entries: &[ParamSpec],
 ) -> Result<(usize, Vec<(String, usize)>), StepError> {
@@ -343,7 +397,16 @@ pub fn lora_adapter_layout(
     if let Some(m) = b_of.keys().find(|m| !a_of.iter().any(|(a, _, _)| a == *m)) {
         return refuse(format!("{m} has a lora_B and no lora_A"));
     }
-    Ok((rank, a_of.into_iter().map(|(m, _, i)| (m, i)).collect()))
+    // The draw order is canonical (layer index, then D6's suffix table), not the provider's.
+    let names: Vec<&str> = a_of.iter().map(|(m, _, _)| m.as_str()).collect();
+    let order = canonical_draw_order(&names)?;
+    Ok((
+        rank,
+        order
+            .into_iter()
+            .map(|i| (a_of[i].0.clone(), a_of[i].2))
+            .collect(),
+    ))
 }
 
 /// The host-entry names a LoRA plan recognises, passed by the caller so this crate holds no
@@ -360,8 +423,9 @@ pub struct LoraHostNames<'a> {
 /// then `"d17"` and `"span_head"` (each [`HEAD_LR_SCALE`]) when the host holds them, all at
 /// [`LORA_WEIGHT_DECAY`]. `names` says which host entries are D17 and which are span-head
 /// tensors. Refused: no adapter, an adapter outside D6's table (the GDN gates included), half
-/// an adapter, a trainable base parameter, a host entry that is neither D17 nor a span-head
-/// tensor, and any name given twice.
+/// an adapter, a module with no draw position, two modules at one draw position, a trainable
+/// base parameter, a host entry that is neither D17 nor a span-head tensor, and any name given
+/// twice.
 pub fn lora_param_groups(
     entries: &[ParamSpec],
     host: &[ParamSpec],
