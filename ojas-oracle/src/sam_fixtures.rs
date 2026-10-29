@@ -730,7 +730,8 @@ pub fn layer_norm_affine_recovered<B: Backend + ?Sized>(
 //  - every transposed convolution here has kernel == stride (2x2, stride 2),
 //    so its taps never overlap; overlapping taps are untested against torch;
 //  - the window cut is 72 / 24 = 3 windows a side, so `window_partition`'s
-//    padding (there is none) is untested;
+//    padding is not exercised by these rows; it is held to torch by
+//    `fixtures/window_pad/golden.txt` instead;
 //  - the real `attn.proj` is the one square weight ([1024, 1024]), so a
 //    transposed copy of it would not fail on shape; the synthetic tests
 //    carry that negative, the real rows rely on the other weights' shapes.

@@ -585,25 +585,72 @@ pub fn axial_rope_2d_tables(
     Ok((cos, sin))
 }
 
+/// `size / by` for a `size` that `by` divides exactly; a zero `by` or a
+/// remainder is refused. For the callers whose cut has no padding to fall
+/// back on: the pixel shuffles and [`window_merge`]'s window count.
 fn divides(op: &'static str, what: &str, size: usize, by: usize) -> Result<usize, OjasError> {
     if by == 0 || !size.is_multiple_of(by) {
         Err(refuse(
             op,
-            format!(
-                "{what} {size} is not a multiple of {by}; padding is not implemented, \
-                 so the caller pads"
-            ),
+            format!("{what} {size} is not a multiple of {by}"),
         ))
     } else {
         Ok(size / by)
     }
 }
 
+/// How `size` rows or columns split into windows of `window`: the window
+/// count a side and the extent they cover, `count * window`, which is `size`
+/// itself exactly when `window` divides it. A zero `window` is refused, and so
+/// is an extent whose rounded-up cover would pass `usize`.
+fn window_cover(
+    op: &'static str,
+    what: &str,
+    size: usize,
+    window: usize,
+) -> Result<(usize, usize), OjasError> {
+    if window == 0 {
+        return Err(refuse(op, format!("window is 0, cannot cut {what} {size}")));
+    }
+    let covered = size.checked_next_multiple_of(window).ok_or_else(|| {
+        too_large(
+            op,
+            format!("{what} {size} rounded up to a multiple of {window} overflows"),
+        )
+    })?;
+    Ok((covered / window, covered))
+}
+
+/// A padding or cropping step that the backend does not implement, refused
+/// under the window op's own name so a caller sees which op needs it. Every
+/// other error passes through unchanged.
+fn windowed<T>(op: &'static str, step: &str, result: Result<T, OjasError>) -> Result<T, OjasError> {
+    result.map_err(|e| match e {
+        OjasError::Unsupported { op: inner, detail } => OjasError::Unsupported {
+            op,
+            detail: format!(
+                "{op} on a height or width that is not a multiple of the window needs \
+                 {inner} to {step}: {detail}"
+            ),
+        },
+        other => other,
+    })
+}
+
 /// Splits `x` `[B, H, W, C]` into non-overlapping `window x window` windows:
-/// `[B * (H / window) * (W / window), window, window, C]`, windows in
-/// row-major grid order within each batch element. A reshape (a view), one
-/// [`Backend::permute`] and a reshape. `H` and `W` must be multiples of
-/// `window`; there is no padding. Inverse of [`window_merge`].
+/// `[B * ceil(H / window) * ceil(W / window), window, window, C]`, windows in
+/// row-major grid order within each batch element.
+///
+/// An `H` or `W` that `window` does not divide is zero-padded at the bottom
+/// and the right to the next multiple, as SAM's `window_partition` does with
+/// `F.pad(x, (0, 0, 0, pad_w, 0, pad_h))`. When both divide, nothing is
+/// padded: a reshape (a view), one [`Backend::permute`] and a reshape, with no
+/// [`Backend::fill`], [`Backend::concat`] or [`Backend::slice`] call, so a
+/// backend without those ops runs it. Padding adds one `fill` and one
+/// `concat` per padded axis (up to two copies besides the permute's); a
+/// backend that lacks either refuses with [`OjasError::Unsupported`] naming
+/// `window_partition`. The copy count is the permute plus those concats, not
+/// torch's. Inverse of [`window_merge`], which crops the padding.
 pub fn window_partition<B: Backend + ?Sized>(
     backend: &B,
     x: &Tensor,
@@ -612,17 +659,60 @@ pub fn window_partition<B: Backend + ?Sized>(
     const OP: &str = WINDOW_PARTITION;
     f32_operand(OP, x)?;
     let [b, h, w, c] = rank4(OP, "input [batch, height, width, channels]", x)?;
-    let (nh, nw) = (
-        divides(OP, "height", h, window)?,
-        divides(OP, "width", w, window)?,
+    let ((nh, padded_h), (nw, padded_w)) = (
+        window_cover(OP, "height", h, window)?,
+        window_cover(OP, "width", w, window)?,
     );
-    let split = x.reshape(&[b, nh, window, nw, window, c])?;
+    let mut padded = None;
+    if padded_h != h {
+        let zeros = windowed(
+            OP,
+            "make the bottom padding",
+            backend.fill(&[b, padded_h - h, w, c], DType::F32, 0.0),
+        )?;
+        padded = Some(windowed(
+            OP,
+            "pad the bottom",
+            backend.concat(&[x, &zeros], 1),
+        )?);
+    }
+    if padded_w != w {
+        let zeros = windowed(
+            OP,
+            "make the right padding",
+            backend.fill(&[b, padded_h, padded_w - w, c], DType::F32, 0.0),
+        )?;
+        let rows = padded.as_ref().unwrap_or(x);
+        padded = Some(windowed(
+            OP,
+            "pad the right",
+            backend.concat(&[rows, &zeros], 2),
+        )?);
+    }
+    let grid = padded.as_ref().unwrap_or(x);
+    let split = grid.reshape(&[b, nh, window, nw, window, c])?;
     let grouped = backend.permute(&split, &[0, 1, 3, 2, 4, 5])?;
-    grouped.reshape(&[b * nh * nw, window, window, c])
+    let count = nh
+        .checked_mul(nw)
+        .and_then(|n| n.checked_mul(b))
+        .ok_or_else(|| too_large(OP, "window count overflows"))?;
+    grouped.reshape(&[count, window, window, c])
 }
 
-/// Merges `windows` `[B * (H / window) * (W / window), window, window, C]`
-/// back into `[B, H, W, C]`. Inverse of [`window_partition`].
+/// Merges `windows` `[B * ceil(H / window) * ceil(W / window), window, window,
+/// C]` back into `[B, height, width, C]`. The window grid is derived from
+/// `height`, `width` and the windows' size, so a `height` or `width` that
+/// `window` does not divide is the padded grid cropped back to its top-left
+/// `height x width`, as SAM's `window_unpartition` does with
+/// `x[:, :H, :W, :].contiguous()`. Several sizes in `(padded - window,
+/// padded]` share one grid, so the caller supplies the true one. When both
+/// divide there is no crop: a reshape (a view), one [`Backend::permute`] and a
+/// reshape, with no [`Backend::slice`] call. A crop adds one `slice` per
+/// cropped axis after the permute; a backend without `slice` refuses with
+/// [`OjasError::Unsupported`] naming `window_merge`. A zero `height` or
+/// `width` is refused, as every op refuses an empty tensor. Inverse of
+/// [`window_partition`]; the cropped region is whatever the windows hold, so
+/// the padding is dropped, not checked.
 pub fn window_merge<B: Backend + ?Sized>(
     backend: &B,
     windows: &Tensor,
@@ -638,15 +728,37 @@ pub fn window_merge<B: Backend + ?Sized>(
             format!("windows {window} x {w2} are not square"),
         ));
     }
-    let (nh, nw) = (
-        divides(OP, "height", height, window)?,
-        divides(OP, "width", width, window)?,
+    if height == 0 || width == 0 {
+        return Err(refuse(OP, format!("empty output {height} x {width}")));
+    }
+    let ((nh, padded_h), (nw, padded_w)) = (
+        window_cover(OP, "height", height, window)?,
+        window_cover(OP, "width", width, window)?,
     );
-    let per_image = nh * nw;
+    let per_image = nh
+        .checked_mul(nw)
+        .ok_or_else(|| too_large(OP, "windows per image overflow"))?;
     let b = divides(OP, "window count", count, per_image)?;
     let split = windows.reshape(&[b, nh, nw, window, window, c])?;
     let grouped = backend.permute(&split, &[0, 1, 3, 2, 4, 5])?;
-    grouped.reshape(&[b, height, width, c])
+    let grid = grouped.reshape(&[b, padded_h, padded_w, c])?;
+    let mut cropped = None;
+    if padded_h != height {
+        cropped = Some(windowed(
+            OP,
+            "crop the bottom padding",
+            backend.slice(&grid, 1, 0, height),
+        )?);
+    }
+    if padded_w != width {
+        let rows = cropped.as_ref().unwrap_or(&grid);
+        cropped = Some(windowed(
+            OP,
+            "crop the right padding",
+            backend.slice(rows, 2, 0, width),
+        )?);
+    }
+    Ok(cropped.unwrap_or(grid))
 }
 
 /// `torch.nn.functional.pixel_shuffle`: `x` `[N, C * r * r, H, W]` to
