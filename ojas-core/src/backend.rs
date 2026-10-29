@@ -7,7 +7,7 @@
 use crate::autocast::{bf16_to_f32, f32_to_bf16, round_f32_to_bf16, AutocastGuard, AutocastMode};
 use crate::budget::Budget;
 use crate::dtype::DType;
-use crate::spatial::{Conv2dParams, ConvTranspose2dParams};
+use crate::spatial::{Conv2dParams, ConvGrad, ConvTranspose2dParams};
 use crate::tensor::Tensor;
 use crate::OjasError;
 
@@ -1263,6 +1263,58 @@ pub trait Backend {
         Err(unsupported_op(self.id(), "max_pool2d_forward"))
     }
 
+    /// The gradients of [`Self::conv2d_forward`] for `grad_output` shaped
+    /// like its output, from the forward's operands. `bias` is read only to
+    /// check it as the forward does, and the bias gradient is `Some` exactly
+    /// when it is given. Every sum has a fixed order (no scatter), so the
+    /// bits do not depend on the thread count.
+    /// [`crate::conv2d_backward_dims`] validates the shapes. The default
+    /// refuses with [`OjasError::Unsupported`].
+    fn conv2d_backward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: Option<&Tensor>,
+        grad_output: &Tensor,
+        params: Conv2dParams,
+    ) -> Result<ConvGrad, OjasError> {
+        let _ = (input, weight, bias, grad_output, params);
+        Err(unsupported_op(self.id(), "conv2d_backward"))
+    }
+
+    /// The gradients of [`Self::conv_transpose2d_forward`], as
+    /// [`Self::conv2d_backward`] gives them for the convolution.
+    /// [`crate::conv_transpose2d_backward_dims`] validates the shapes. The
+    /// default refuses with [`OjasError::Unsupported`].
+    fn conv_transpose2d_backward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: Option<&Tensor>,
+        grad_output: &Tensor,
+        params: ConvTranspose2dParams,
+    ) -> Result<ConvGrad, OjasError> {
+        let _ = (input, weight, bias, grad_output, params);
+        Err(unsupported_op(self.id(), "conv_transpose2d_backward"))
+    }
+
+    /// The input gradient of [`Self::max_pool2d_forward`]: each window's
+    /// `grad_output` goes to the first input of the window, in `(kh, kw)`
+    /// order, that holds its maximum (`torch`'s choice on a tie). An input
+    /// sums the windows that chose it in ascending output order.
+    /// [`crate::max_pool2d_backward_dims`] validates the shapes. The
+    /// default refuses with [`OjasError::Unsupported`].
+    fn max_pool2d_backward(
+        &self,
+        input: &Tensor,
+        grad_output: &Tensor,
+        kernel: [usize; 2],
+        stride: [usize; 2],
+    ) -> Result<Tensor, OjasError> {
+        let _ = (input, grad_output, kernel, stride);
+        Err(unsupported_op(self.id(), "max_pool2d_backward"))
+    }
+
     /// `torch.nn.functional.interpolate(mode="bilinear")` of `[N, C, H, W]`
     /// to `out_size = [out_h, out_w]`, without antialiasing. With
     /// `align_corners` false, source coordinate `(dst + 0.5) * in / out -
@@ -2003,6 +2055,9 @@ macro_rules! with_backend_methods {
             op fn conv2d_forward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: Option<&$crate::Tensor>, params: $crate::Conv2dParams) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn conv_transpose2d_forward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: Option<&$crate::Tensor>, params: $crate::ConvTranspose2dParams) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn max_pool2d_forward(&self, input: &$crate::Tensor, kernel: [usize; 2], stride: [usize; 2]) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn conv2d_backward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: Option<&$crate::Tensor>, grad_output: &$crate::Tensor, params: $crate::Conv2dParams) -> Result<$crate::ConvGrad, $crate::OjasError>;
+            op fn conv_transpose2d_backward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: Option<&$crate::Tensor>, grad_output: &$crate::Tensor, params: $crate::ConvTranspose2dParams) -> Result<$crate::ConvGrad, $crate::OjasError>;
+            op fn max_pool2d_backward(&self, input: &$crate::Tensor, grad_output: &$crate::Tensor, kernel: [usize; 2], stride: [usize; 2]) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn interpolate_bilinear_forward(&self, input: &$crate::Tensor, out_size: [usize; 2], align_corners: bool) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn rope_interleaved_forward(&self, x: &$crate::Tensor, cos: &$crate::Tensor, sin: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn rope_interleaved_backward(&self, grad_output: &$crate::Tensor, cos: &$crate::Tensor, sin: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
@@ -2812,6 +2867,13 @@ pub(crate) mod tests {
             op(backend.conv2d_forward(&t, &t, None, Conv2dParams::new())),
             op(backend.conv_transpose2d_forward(&t, &t, None, ConvTranspose2dParams::new())),
             op(backend.max_pool2d_forward(&t, [2, 2], [2, 2])),
+            op(backend
+                .conv2d_backward(&t, &t, None, &t, Conv2dParams::new())
+                .map(drop)),
+            op(backend
+                .conv_transpose2d_backward(&t, &t, None, &t, ConvTranspose2dParams::new())
+                .map(drop)),
+            op(backend.max_pool2d_backward(&t, &t, [2, 2], [2, 2])),
             op(backend.interpolate_bilinear_forward(&t, [2, 2], false)),
             op(backend.rope_interleaved_forward(&t, &t, &t)),
             op(backend.rope_interleaved_backward(&t, &t, &t)),
@@ -2895,6 +2957,9 @@ pub(crate) mod tests {
             "conv2d_forward",
             "conv_transpose2d_forward",
             "max_pool2d_forward",
+            "conv2d_backward",
+            "conv_transpose2d_backward",
+            "max_pool2d_backward",
             "interpolate_bilinear_forward",
             "rope_interleaved_forward",
             "rope_interleaved_backward",
@@ -3126,6 +3191,24 @@ pub(crate) mod tests {
         refused(
             backend.max_pool2d_forward(&x, [2, 2], [2, 2]).map(drop),
             "max_pool2d_forward",
+        );
+        refused(
+            backend
+                .conv2d_backward(&x, &x, None, &x, Conv2dParams::new())
+                .map(drop),
+            "conv2d_backward",
+        );
+        refused(
+            backend
+                .conv_transpose2d_backward(&x, &x, None, &x, ConvTranspose2dParams::new())
+                .map(drop),
+            "conv_transpose2d_backward",
+        );
+        refused(
+            backend
+                .max_pool2d_backward(&x, &x, [2, 2], [2, 2])
+                .map(drop),
+            "max_pool2d_backward",
         );
         refused(
             backend

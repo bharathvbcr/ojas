@@ -12,13 +12,13 @@
 //! validators before these run.
 
 use ojas_core::{
-    BilinearDims, Budget, Conv2dDims, ConvTranspose2dDims, InterleavedRopeDims, MaxPool2dDims,
-    OjasError, Scratch, Tensor,
+    BilinearDims, Budget, Conv2dDims, Conv2dParams, ConvGrad, ConvTranspose2dDims,
+    InterleavedRopeDims, MaxPool2dDims, OjasError, Scratch, Tensor,
 };
 
-use crate::gemm::{gemm_out, scratch, Mat};
+use crate::gemm::{gemm_acc, gemm_out, scratch, Mat};
 use crate::pool::{scoped, Exec};
-use crate::validate::{check_f32s, fill_out, fill_rows, product, room_for};
+use crate::validate::{check_f32s, fill_out, fill_outs, fill_rows, product, room_for};
 
 /// A convolution's checked `input`, `weight` and optional `bias` values.
 pub(crate) type ConvOperands<'t> = (&'t [f32], &'t [f32], Option<&'t [f32]>);
@@ -319,11 +319,299 @@ pub(crate) fn conv_transpose2d_forward(
 
 /// The input index whose tap `k` lands on output `o` of a transposed
 /// convolution: `i * stride + k = o + pad` with `i` inside `0..size`.
+///
+/// It is also [`tap`] inverted: the output index of a convolution whose tap
+/// `j` reads input `o` is `source(o, j * dilation, stride, pad, out_size)`.
 fn source(o: usize, k: usize, stride: usize, pad: usize, size: usize) -> Option<usize> {
     let at = (o + pad).checked_sub(k)?;
     (at % stride == 0)
         .then_some(at / stride)
         .filter(|&i| i < size)
+}
+
+/// [`ojas_core::Backend::conv2d_backward`].
+///
+/// Per image and group, with `K = cg * kh * kw` and `P = Ho * Wo`: the
+/// weight gradient accumulates `dY[Og, P] . cols^T[P, K]` over the images in
+/// ascending order ([`gemm_acc`], so under Exact each weight is one
+/// ascending sum over `(image, p)`), and the column gradient `dcols[K, P] =
+/// W^T[K, Og] . dY[Og, P]` is gathered back onto the image ([`col2im`]):
+/// an input value sums the entries of its taps in ascending `(kh, kw)`. A
+/// 1x1 stride-1 unpadded convolution reads the image in place as `cols` and
+/// writes `dcols` straight into the input gradient. The bias gradient sums
+/// `dY` over `(image, p)` in ascending order.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn conv2d_backward(
+    op: &'static str,
+    budget: &Budget,
+    exec: Exec<'_>,
+    d: Conv2dDims,
+    x: &[f32],
+    w: &[f32],
+    dy: &[f32],
+    with_bias: bool,
+) -> Result<ConvGrad, OjasError> {
+    let Conv2dDims {
+        batch,
+        in_channels,
+        height,
+        width,
+        out_channels,
+        kernel: [kh, kw],
+        params,
+        out_height,
+        out_width,
+    } = d;
+    let (cg, og) = (d.in_per_group(), d.out_per_group());
+    let p = out_height * out_width;
+    let plane = height * width;
+    let k = product(op, &[cg, kh, kw])?;
+    let in_place = [kh, kw] == [1, 1] && params.stride == [1, 1] && params.padding == [0, 0];
+    let x_shape = [batch, in_channels, height, width];
+    let w_shape = [out_channels, cg, kh, kw];
+    let [input, weight] = fill_outs(op, budget, exec, [&x_shape, &w_shape], |[gx, gw]| {
+        let (mut cols, mut dcols) = if in_place {
+            (None, None)
+        } else {
+            let len = product(op, &[k, p])?;
+            (
+                Some(Scratch::<f32>::try_alloc(len, budget)?),
+                Some(Scratch::<f32>::try_alloc(len, budget)?),
+            )
+        };
+        // The two products run one after the other; the accumulating one
+        // also holds an `og * k` copy of its output when it is split.
+        let _gemm = room_for(
+            op,
+            budget,
+            scratch(op, exec, og, p, k)?
+                .saturating_add(og * k)
+                .max(scratch(op, exec, k, og, p)?),
+        )?;
+        for b in 0..batch {
+            for g in 0..params.groups {
+                let at = (b * in_channels + g * cg) * plane;
+                let xs = &x[at..at + cg * plane];
+                if let Some(cols) = cols.as_mut() {
+                    im2col(exec, &d, xs, cols.as_mut_slice())?;
+                }
+                let patches = Mat::row_major(cols.as_ref().map_or(xs, Scratch::as_slice), k, p);
+                let from = (b * out_channels + g * og) * p;
+                let grads = Mat::row_major(&dy[from..from + og * p], og, p);
+                let taps = g * og * k..(g + 1) * og * k;
+                gemm_acc(op, exec, &grads, &patches.t(), &mut gw[taps.clone()])?;
+                let weights = Mat::row_major(&w[taps], og, k).t();
+                let dst = &mut gx[at..at + cg * plane];
+                match dcols.as_mut() {
+                    None => gemm_out(op, exec, &weights, &grads, dst)?,
+                    Some(dcols) => {
+                        gemm_out(op, exec, &weights, &grads, dcols.as_mut_slice())?;
+                        col2im(exec, &d, dcols.as_slice(), dst)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    })?;
+    let bias = with_bias
+        .then(|| channel_sums(op, budget, exec, dy, batch, out_channels, p))
+        .transpose()?;
+    Ok(ConvGrad {
+        input,
+        weight,
+        bias,
+    })
+}
+
+/// [`im2col`]'s adjoint as a gather: one group's input-gradient planes `dx`
+/// (`[cg, H, W]`) from its column gradient `dcols` (`[cg * kh * kw, Ho *
+/// Wo]`). Input `(c, ih, iw)` sums `dcols[(c, i, j), (oh, ow)]` over the
+/// taps `(i, j)` that read it, in ascending `(i, j)`; a value no tap reads
+/// is zero. No two threads write one value.
+fn col2im(exec: Exec<'_>, d: &Conv2dDims, dcols: &[f32], dx: &mut [f32]) -> Result<(), OjasError> {
+    let Conv2dDims {
+        height,
+        width,
+        kernel: [kh, kw],
+        params,
+        out_height,
+        out_width,
+        ..
+    } = *d;
+    let p = out_height * out_width;
+    let plane = height * width;
+    let [sh, sw] = params.stride;
+    let [dh, dw] = params.dilation;
+    let [ph, pw] = params.padding;
+    scoped::rows_into(exec, dx, d.in_per_group(), plane, |range, part| {
+        for (local, c) in range.enumerate() {
+            let dst = &mut part[local * plane..(local + 1) * plane];
+            for ih in 0..height {
+                for iw in 0..width {
+                    let mut acc = 0.0f32;
+                    for i in 0..kh {
+                        let Some(oh) = source(ih, i * dh, sh, ph, out_height) else {
+                            continue;
+                        };
+                        for j in 0..kw {
+                            if let Some(ow) = source(iw, j * dw, sw, pw, out_width) {
+                                acc += dcols[((c * kh + i) * kw + j) * p + oh * out_width + ow];
+                            }
+                        }
+                    }
+                    dst[ih * width + iw] = acc;
+                }
+            }
+        }
+        Ok(())
+    })?;
+    Ok(())
+}
+
+/// The bias gradient `[channels]` of an `NCHW` output gradient `dy`
+/// (`[batch, channels, p]`): channel `c` sums `dy[b, c, ..]` over `b` and then
+/// the plane, both ascending.
+fn channel_sums(
+    op: &'static str,
+    budget: &Budget,
+    exec: Exec<'_>,
+    dy: &[f32],
+    batch: usize,
+    channels: usize,
+    p: usize,
+) -> Result<Tensor, OjasError> {
+    fill_rows(op, budget, exec, &[channels], channels, 1, |range, out| {
+        for (local, c) in range.enumerate() {
+            let mut acc = 0.0f32;
+            for b in 0..batch {
+                let at = (b * channels + c) * p;
+                for &v in &dy[at..at + p] {
+                    acc += v;
+                }
+            }
+            out[local] = acc;
+        }
+        Ok(())
+    })
+}
+
+/// [`ojas_core::Backend::conv_transpose2d_backward`].
+///
+/// The column gradient `dcols[(oc, i, j), (ih, iw)] = dY[oc, ih * stride + i
+/// - pad, iw * stride + j - pad]` (zero off the output) is [`im2col`] of
+/// `dY` with this layer's stride and padding, read back onto the input's
+/// grid. Per image, the input gradient is `W[C, O * kh * kw] . dcols` and
+/// the weight gradient accumulates `x[C, H * W] . dcols^T` over the images
+/// in ascending order ([`gemm_acc`]). The bias gradient sums `dY` over
+/// `(image, p)` in ascending order.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn conv_transpose2d_backward(
+    op: &'static str,
+    budget: &Budget,
+    exec: Exec<'_>,
+    d: ConvTranspose2dDims,
+    x: &[f32],
+    w: &[f32],
+    dy: &[f32],
+    with_bias: bool,
+) -> Result<ConvGrad, OjasError> {
+    let ConvTranspose2dDims {
+        batch,
+        in_channels,
+        height,
+        width,
+        out_channels,
+        kernel: [kh, kw],
+        params,
+        out_height,
+        out_width,
+    } = d;
+    let hw = height * width;
+    let p = out_height * out_width;
+    let okk = product(op, &[out_channels, kh, kw])?;
+    // `dY` as the input of a convolution whose output grid is this layer's
+    // input: tap `(i, j)` of output `(ih, iw)` reads `dY` at `ih * stride +
+    // i - pad`, exactly where the forward put `x[.., ih, iw]`'s tap.
+    let unfold = Conv2dDims {
+        batch,
+        in_channels: out_channels,
+        height: out_height,
+        width: out_width,
+        out_channels: in_channels,
+        kernel: [kh, kw],
+        params: Conv2dParams {
+            stride: params.stride,
+            padding: params.padding,
+            dilation: [1, 1],
+            groups: 1,
+        },
+        out_height: height,
+        out_width: width,
+    };
+    let x_shape = [batch, in_channels, height, width];
+    let w_shape = [in_channels, out_channels, kh, kw];
+    let [input, weight] = fill_outs(op, budget, exec, [&x_shape, &w_shape], |[gx, gw]| {
+        let mut cols = Scratch::<f32>::try_alloc(product(op, &[okk, hw])?, budget)?;
+        let _gemm = room_for(
+            op,
+            budget,
+            scratch(op, exec, in_channels, okk, hw)?
+                .max(scratch(op, exec, in_channels, hw, okk)?.saturating_add(in_channels * okk)),
+        )?;
+        let weights = Mat::row_major(w, in_channels, okk);
+        for b in 0..batch {
+            im2col(
+                exec,
+                &unfold,
+                &dy[b * out_channels * p..(b + 1) * out_channels * p],
+                cols.as_mut_slice(),
+            )?;
+            let columns = Mat::row_major(cols.as_slice(), okk, hw);
+            let at = b * in_channels * hw;
+            gemm_out(
+                op,
+                exec,
+                &weights,
+                &columns,
+                &mut gx[at..at + in_channels * hw],
+            )?;
+            let image = Mat::row_major(&x[at..at + in_channels * hw], in_channels, hw);
+            gemm_acc(op, exec, &image, &columns.t(), gw)?;
+        }
+        Ok(())
+    })?;
+    let bias = with_bias
+        .then(|| channel_sums(op, budget, exec, dy, batch, out_channels, p))
+        .transpose()?;
+    Ok(ConvGrad {
+        input,
+        weight,
+        bias,
+    })
+}
+
+/// The index in `plane` of the first input of window `(oh, ow)`, in `(kh,
+/// kw)` order, that holds the window's maximum. The forward reads its value
+/// and the backward credits it, so the two agree on every tie.
+fn window_argmax(plane: &[f32], d: &MaxPool2dDims, oh: usize, ow: usize) -> usize {
+    let [kh, kw] = d.kernel;
+    let [sh, sw] = d.stride;
+    let mut best = (oh * sh) * d.width + ow * sw;
+    for i in 0..kh {
+        let row = (oh * sh + i) * d.width + ow * sw;
+        for (j, &v) in plane[row..row + kw].iter().enumerate() {
+            if v > plane[best] {
+                best = row + j;
+            }
+        }
+    }
+    best
+}
+
+/// The windows `lo..hi` on one pooling axis that cover input index `i`:
+/// `o * stride <= i < o * stride + kernel` with `o < count`.
+fn covering(i: usize, kernel: usize, stride: usize, count: usize) -> std::ops::Range<usize> {
+    (i + 1).saturating_sub(kernel).div_ceil(stride)..(i / stride + 1).min(count)
 }
 
 /// [`ojas_core::Backend::max_pool2d_forward`].
@@ -339,10 +627,9 @@ pub(crate) fn max_pool2d_forward(
         channels,
         height,
         width,
-        kernel: [kh, kw],
-        stride: [sh, sw],
         out_height,
         out_width,
+        ..
     } = d;
     let p = out_height * out_width;
     fill_rows(
@@ -357,16 +644,64 @@ pub(crate) fn max_pool2d_forward(
                 let plane = &x[plane_index * height * width..(plane_index + 1) * height * width];
                 for oh in 0..out_height {
                     for ow in 0..out_width {
-                        let mut best = f32::NEG_INFINITY;
-                        for i in 0..kh {
-                            let row = (oh * sh + i) * width + ow * sw;
-                            for &v in &plane[row..row + kw] {
-                                if v > best {
-                                    best = v;
+                        out[local * p + oh * out_width + ow] =
+                            plane[window_argmax(plane, &d, oh, ow)];
+                    }
+                }
+            }
+            Ok(())
+        },
+    )
+}
+
+/// [`ojas_core::Backend::max_pool2d_backward`]: a gather. Input `(ih, iw)`
+/// visits the windows that cover it in ascending `(oh, ow)` and sums the
+/// `grad_output` of those whose [`window_argmax`] it is. Each window's
+/// argmax is found again from `x` rather than stored by the forward.
+pub(crate) fn max_pool2d_backward(
+    op: &'static str,
+    budget: &Budget,
+    exec: Exec<'_>,
+    d: MaxPool2dDims,
+    x: &[f32],
+    dy: &[f32],
+) -> Result<Tensor, OjasError> {
+    let MaxPool2dDims {
+        batch,
+        channels,
+        height,
+        width,
+        kernel: [kh, kw],
+        stride: [sh, sw],
+        out_height,
+        out_width,
+    } = d;
+    let (p, plane_len) = (out_height * out_width, height * width);
+    fill_rows(
+        op,
+        budget,
+        exec,
+        &[batch, channels, height, width],
+        batch * channels,
+        plane_len,
+        |range, out| {
+            for (local, plane_index) in range.enumerate() {
+                let plane = &x[plane_index * plane_len..(plane_index + 1) * plane_len];
+                let grads = &dy[plane_index * p..(plane_index + 1) * p];
+                let dst = &mut out[local * plane_len..(local + 1) * plane_len];
+                for ih in 0..height {
+                    let rows = covering(ih, kh, sh, out_height);
+                    for iw in 0..width {
+                        let at = ih * width + iw;
+                        let mut acc = 0.0f32;
+                        for oh in rows.clone() {
+                            for ow in covering(iw, kw, sw, out_width) {
+                                if window_argmax(plane, &d, oh, ow) == at {
+                                    acc += grads[oh * out_width + ow];
                                 }
                             }
                         }
-                        out[local * p + oh * out_width + ow] = best;
+                        dst[at] = acc;
                     }
                 }
             }

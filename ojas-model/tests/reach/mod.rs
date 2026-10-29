@@ -177,6 +177,13 @@ pub fn call<B: Backend + ?Sized>(b: &B, name: &str) -> Option<Result<(), OjasErr
             .conv_transpose2d_forward(&t, &t, None, ConvTranspose2dParams::new())
             .map(|_| ()),
         "max_pool2d_forward" => b.max_pool2d_forward(&t, [2, 2], [2, 2]).map(|_| ()),
+        "conv2d_backward" => b
+            .conv2d_backward(&t, &t, None, &t, Conv2dParams::new())
+            .map(|_| ()),
+        "conv_transpose2d_backward" => b
+            .conv_transpose2d_backward(&t, &t, None, &t, ConvTranspose2dParams::new())
+            .map(|_| ()),
+        "max_pool2d_backward" => b.max_pool2d_backward(&t, &t, [2, 2], [2, 2]).map(|_| ()),
         "interpolate_bilinear_forward" => b
             .interpolate_bilinear_forward(&t, [2, 2], false)
             .map(|_| ()),

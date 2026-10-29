@@ -36,7 +36,7 @@ use crate::backend::{
 use crate::budget::Budget;
 use crate::dtype::DType;
 use crate::error::OjasError;
-use crate::spatial::{Conv2dParams, ConvTranspose2dParams};
+use crate::spatial::{Conv2dParams, ConvGrad, ConvTranspose2dParams};
 use crate::tensor::{Tensor, COMPUTE_BF16, COMPUTE_F32};
 use std::collections::HashMap;
 use std::ops::Deref;
@@ -138,7 +138,10 @@ pub enum AutocastClass {
 /// gate on the data operand only; the cos and sin tables do not. The
 /// convolutions round their bias with the other operands; `linear_bias_forward`
 /// keeps its bias `F32`. Attention rounds its bias and leaves the saved
-/// log-sum-exp `F32`, as the causal pair does.
+/// log-sum-exp `F32`, as the causal pair does. The convolution backwards read
+/// their bias for its shape only, so it is not rounded, and keep the weight
+/// and bias gradients `F32`, as `linear_backward` keeps its weight gradient.
+/// `max_pool2d_backward` gates on the incoming gradient, not the input.
 ///
 /// `ojas-cpu/tests/autocast_sam_policy.rs` runs each entry against
 /// `Autocast<CpuBackend>`, so an op added to the `Backend` trait or changed
@@ -188,6 +191,20 @@ pub const SAM_AUTOCAST_POLICY: &[(&str, AutocastClass)] = &[
         },
     ),
     (
+        "conv2d_backward",
+        AutocastClass::Matmul {
+            f32_operands: &[2],
+            f32_outputs: &[1, 2],
+        },
+    ),
+    (
+        "conv_transpose2d_backward",
+        AutocastClass::Matmul {
+            f32_operands: &[2],
+            f32_outputs: &[1, 2],
+        },
+    ),
+    (
         "gelu_erf_forward",
         AutocastClass::Pointwise { tag_from: &[0] },
     ),
@@ -204,6 +221,10 @@ pub const SAM_AUTOCAST_POLICY: &[(&str, AutocastClass)] = &[
     (
         "max_pool2d_forward",
         AutocastClass::Pointwise { tag_from: &[0] },
+    ),
+    (
+        "max_pool2d_backward",
+        AutocastClass::Pointwise { tag_from: &[1] },
     ),
     (
         "interpolate_bilinear_forward",
@@ -1182,6 +1203,65 @@ impl<B: Backend> Backend for Autocast<B> {
         let on = self.region()?;
         let tagged = input.compute_tag() == COMPUTE_BF16;
         let out = self.inner.max_pool2d_forward(input, kernel, stride)?;
+        self.promote(on, tagged, out)
+    }
+
+    /// As [`Backend::linear_backward`]: the operands rounded, the input
+    /// gradient emitted rounded, the weight and bias gradients kept f32.
+    fn conv2d_backward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: Option<&Tensor>,
+        grad_output: &Tensor,
+        params: Conv2dParams,
+    ) -> Result<ConvGrad, OjasError> {
+        let input = self.prep(input)?;
+        let weight = self.prep(weight)?;
+        let grad_output = self.prep(grad_output)?;
+        let grad = self
+            .inner
+            .conv2d_backward(&input, &weight, bias, &grad_output, params)?;
+        Ok(ConvGrad {
+            input: self.emit(grad.input)?,
+            weight: self.keep_f32(grad.weight),
+            bias: grad.bias.map(|b| self.keep_f32(b)),
+        })
+    }
+
+    fn conv_transpose2d_backward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: Option<&Tensor>,
+        grad_output: &Tensor,
+        params: ConvTranspose2dParams,
+    ) -> Result<ConvGrad, OjasError> {
+        let input = self.prep(input)?;
+        let weight = self.prep(weight)?;
+        let grad_output = self.prep(grad_output)?;
+        let grad =
+            self.inner
+                .conv_transpose2d_backward(&input, &weight, bias, &grad_output, params)?;
+        Ok(ConvGrad {
+            input: self.emit(grad.input)?,
+            weight: self.keep_f32(grad.weight),
+            bias: grad.bias.map(|b| self.keep_f32(b)),
+        })
+    }
+
+    fn max_pool2d_backward(
+        &self,
+        input: &Tensor,
+        grad_output: &Tensor,
+        kernel: [usize; 2],
+        stride: [usize; 2],
+    ) -> Result<Tensor, OjasError> {
+        let on = self.region()?;
+        let tagged = grad_output.compute_tag() == COMPUTE_BF16;
+        let out = self
+            .inner
+            .max_pool2d_backward(input, grad_output, kernel, stride)?;
         self.promote(on, tagged, out)
     }
 

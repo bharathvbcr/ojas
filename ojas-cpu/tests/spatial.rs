@@ -874,3 +874,486 @@ fn a_budget_too_small_for_the_bilinear_axis_tables_is_refused() {
     let x = x.to_host(tight.budget()).unwrap();
     common::assert_capacity(tight.interpolate_bilinear_forward(&x, [1, 4096], false));
 }
+
+// ---- backward --------------------------------------------------------------
+//
+// A convolution is linear in its input and, separately, in its weight, so
+// the gradient of `L = <f(x, w), gy>` with respect to `x[i]` is exactly
+// `<f(e_i, w), gy>` with `e_i` the i-th unit tensor (and likewise for `w`).
+// The references below take those adjoints from the f64 forward
+// references above, one unit tensor at a time: they share nothing with the
+// gathers and GEMMs under test.
+
+fn dot(a: &[f64], b: &[f64]) -> f64 {
+    a.iter().zip(b).map(|(x, y)| x * y).sum()
+}
+
+fn unit(n: usize, i: usize) -> Vec<f64> {
+    let mut e = vec![0.0; n];
+    e[i] = 1.0;
+    e
+}
+
+/// `gy` summed over images and plane, per channel.
+fn bias_ref(gy: &[f64], n: usize, o: usize, plane: usize) -> Vec<f64> {
+    (0..o)
+        .map(|oc| {
+            (0..n)
+                .map(|b| {
+                    gy[(b * o + oc) * plane..(b * o + oc + 1) * plane]
+                        .iter()
+                        .sum::<f64>()
+                })
+                .sum()
+        })
+        .collect()
+}
+
+#[test]
+fn conv2d_backward_is_the_adjoint_of_the_reference() {
+    // (name, N, C, H, W, O, kernel, params, bias)
+    let cases = [
+        (
+            "patch embed 4x4 s4",
+            2,
+            3,
+            8,
+            12,
+            4,
+            [4, 4],
+            params(4, 0, 1, 1),
+            true,
+        ),
+        (
+            "1x1 in place",
+            2,
+            5,
+            4,
+            3,
+            3,
+            [1, 1],
+            params(1, 0, 1, 1),
+            true,
+        ),
+        ("1x1 s2", 1, 3, 5, 5, 2, [1, 1], params(2, 0, 1, 1), false),
+        ("3x3 s2 p1", 2, 4, 7, 6, 5, [3, 3], params(2, 1, 1, 1), true),
+        (
+            "3x3 s1 p1",
+            1,
+            3,
+            5,
+            5,
+            4,
+            [3, 3],
+            params(1, 1, 1, 1),
+            false,
+        ),
+        (
+            "3x3 dilated 2 p2",
+            1,
+            2,
+            7,
+            7,
+            3,
+            [3, 3],
+            params(1, 2, 2, 1),
+            true,
+        ),
+        ("grouped 2", 2, 4, 5, 6, 6, [3, 3], params(1, 1, 1, 2), true),
+        (
+            "depthwise 7x7 p3",
+            1,
+            3,
+            8,
+            8,
+            3,
+            [7, 7],
+            params(1, 3, 1, 3),
+            true,
+        ),
+        (
+            "depthwise x2 multiplier",
+            1,
+            2,
+            5,
+            5,
+            4,
+            [3, 3],
+            params(2, 1, 1, 2),
+            false,
+        ),
+        (
+            "2x3 stride 2x1",
+            1,
+            2,
+            6,
+            5,
+            3,
+            [2, 3],
+            Conv2dParams {
+                stride: [2, 1],
+                padding: [0, 1],
+                dilation: [1, 1],
+                groups: 1,
+            },
+            true,
+        ),
+    ];
+    for (name, n, c, h, w, o, k, p, with_bias) in cases {
+        let cv = Conv {
+            n,
+            c,
+            h,
+            w,
+            o,
+            k,
+            p,
+        };
+        let (nx, nw) = (n * c * h * w, o * (c / p.groups) * k[0] * k[1]);
+        let x = rounded(40, nx);
+        let wt = rounded(41, nw);
+        let bias = with_bias.then(|| rounded(42, o));
+        let y = conv_ref(&cv, &x, &wt, bias.as_deref());
+        let gy = rounded(43, y.len());
+        let plane = y.len() / (n * o);
+        let want_x: Vec<f64> = (0..nx)
+            .map(|i| dot(&conv_ref(&cv, &unit(nx, i), &wt, None), &gy))
+            .collect();
+        let want_w: Vec<f64> = (0..nw)
+            .map(|i| dot(&conv_ref(&cv, &x, &unit(nw, i), None), &gy))
+            .collect();
+        let mut first: Option<Vec<Vec<u32>>> = None;
+        for numerics in [Numerics::Exact, Numerics::Fast] {
+            for threads in [1, 3] {
+                let be = cpu(threads, numerics);
+                let wshape = [o, c / p.groups, k[0], k[1]];
+                let bias_t = bias.as_ref().map(|b| t(&be, b, &[o]));
+                let g = be
+                    .conv2d_backward(
+                        &t(&be, &x, &[n, c, h, w]),
+                        &t(&be, &wt, &wshape),
+                        bias_t.as_ref(),
+                        &t(&be, &gy, &conv_out_shape(&cv)),
+                        p,
+                    )
+                    .unwrap();
+                assert_eq!(g.input.shape(), &[n, c, h, w], "{name}");
+                assert_eq!(g.weight.shape(), &wshape, "{name}");
+                close(
+                    &format!("{name} grad x"),
+                    &host(&g.input),
+                    &want_x,
+                    2e-5,
+                    1e-5,
+                );
+                close(
+                    &format!("{name} grad w"),
+                    &host(&g.weight),
+                    &want_w,
+                    2e-5,
+                    1e-5,
+                );
+                assert_eq!(
+                    g.bias.is_some(),
+                    with_bias,
+                    "{name}: bias gradient presence"
+                );
+                if let Some(gb) = &g.bias {
+                    assert_eq!(gb.shape(), &[o]);
+                    close(
+                        &format!("{name} grad b"),
+                        &host(gb),
+                        &bias_ref(&gy, n, o, plane),
+                        2e-5,
+                        1e-5,
+                    );
+                }
+                let mut all = vec![bits(&host(&g.input)), bits(&host(&g.weight))];
+                all.extend(g.bias.as_ref().map(|b| bits(&host(b))));
+                // The thread count never changes a bit, under either numerics.
+                if threads == 1 {
+                    first = Some(all);
+                } else {
+                    assert_eq!(
+                        Some(all),
+                        first,
+                        "{name} {numerics:?}: threads changed the bits"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// `[N, O, Ho, Wo]` of [`conv_ref`].
+fn conv_out_shape(cv: &Conv) -> [usize; 4] {
+    [
+        cv.n,
+        cv.o,
+        out_len(
+            cv.h,
+            cv.p.padding[0],
+            cv.k[0],
+            cv.p.dilation[0],
+            cv.p.stride[0],
+        ),
+        out_len(
+            cv.w,
+            cv.p.padding[1],
+            cv.k[1],
+            cv.p.dilation[1],
+            cv.p.stride[1],
+        ),
+    ]
+}
+
+#[test]
+fn conv_transpose2d_backward_is_the_adjoint_of_the_scatter_reference() {
+    // (name, N, C, H, W, O, kernel, params, bias)
+    let tp = |stride: usize, pad: usize, out_pad: usize| ConvTranspose2dParams {
+        stride: [stride, stride],
+        padding: [pad, pad],
+        output_padding: [out_pad, out_pad],
+    };
+    let cases = [
+        (
+            "kernel == stride 2",
+            2,
+            3,
+            4,
+            5,
+            4,
+            [2, 2],
+            tp(2, 0, 0),
+            true,
+        ),
+        ("3x3 s2 p1 op1", 1, 2, 4, 3, 3, [3, 3], tp(2, 1, 1), true),
+        ("3x3 s1 p1", 1, 3, 4, 4, 2, [3, 3], tp(1, 1, 0), false),
+        ("4x4 s2 p1", 2, 2, 3, 3, 2, [4, 4], tp(2, 1, 0), true),
+        (
+            "2x3 stride 3x2",
+            1,
+            2,
+            3,
+            4,
+            2,
+            [2, 3],
+            ConvTranspose2dParams {
+                stride: [3, 2],
+                padding: [0, 1],
+                output_padding: [2, 1],
+            },
+            false,
+        ),
+    ];
+    for (name, n, c, h, w, o, k, p, with_bias) in cases {
+        let (nx, nw) = (n * c * h * w, c * o * k[0] * k[1]);
+        let x = rounded(50, nx);
+        let wt = rounded(51, nw);
+        let bias = with_bias.then(|| rounded(52, o));
+        let (y, [ho, wo]) = conv_transpose_ref((n, c, h, w), o, k, p, &x, &wt, bias.as_deref());
+        let gy = rounded(53, y.len());
+        let fwd = |x: &[f64], wt: &[f64]| conv_transpose_ref((n, c, h, w), o, k, p, x, wt, None).0;
+        let want_x: Vec<f64> = (0..nx).map(|i| dot(&fwd(&unit(nx, i), &wt), &gy)).collect();
+        let want_w: Vec<f64> = (0..nw).map(|i| dot(&fwd(&x, &unit(nw, i)), &gy)).collect();
+        let mut first: Option<Vec<Vec<u32>>> = None;
+        for numerics in [Numerics::Exact, Numerics::Fast] {
+            for threads in [1, 3] {
+                let be = cpu(threads, numerics);
+                let bias_t = bias.as_ref().map(|b| t(&be, b, &[o]));
+                let g = be
+                    .conv_transpose2d_backward(
+                        &t(&be, &x, &[n, c, h, w]),
+                        &t(&be, &wt, &[c, o, k[0], k[1]]),
+                        bias_t.as_ref(),
+                        &t(&be, &gy, &[n, o, ho, wo]),
+                        p,
+                    )
+                    .unwrap();
+                assert_eq!(g.input.shape(), &[n, c, h, w], "{name}");
+                assert_eq!(g.weight.shape(), &[c, o, k[0], k[1]], "{name}");
+                close(
+                    &format!("{name} grad x"),
+                    &host(&g.input),
+                    &want_x,
+                    2e-5,
+                    1e-5,
+                );
+                close(
+                    &format!("{name} grad w"),
+                    &host(&g.weight),
+                    &want_w,
+                    2e-5,
+                    1e-5,
+                );
+                assert_eq!(
+                    g.bias.is_some(),
+                    with_bias,
+                    "{name}: bias gradient presence"
+                );
+                if let Some(gb) = &g.bias {
+                    close(
+                        &format!("{name} grad b"),
+                        &host(gb),
+                        &bias_ref(&gy, n, o, ho * wo),
+                        2e-5,
+                        1e-5,
+                    );
+                }
+                let mut all = vec![bits(&host(&g.input)), bits(&host(&g.weight))];
+                all.extend(g.bias.as_ref().map(|b| bits(&host(b))));
+                if threads == 1 {
+                    first = Some(all);
+                } else {
+                    assert_eq!(
+                        Some(all),
+                        first,
+                        "{name} {numerics:?}: threads changed the bits"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Max pooling's gradient the scatter way: each window, in ascending
+/// order, adds its `gy` to the first input (in `(kh, kw)` order) holding
+/// its maximum.
+fn max_pool_backward_ref(
+    (n, c, h, w): (usize, usize, usize, usize),
+    k: [usize; 2],
+    s: [usize; 2],
+    x: &[f64],
+    gy: &[f64],
+) -> Vec<f64> {
+    let (ho, wo) = ((h - k[0]) / s[0] + 1, (w - k[1]) / s[1] + 1);
+    let mut gx = vec![0.0; n * c * h * w];
+    for plane in 0..n * c {
+        for oh in 0..ho {
+            for ow in 0..wo {
+                let mut best = (plane * h + oh * s[0]) * w + ow * s[1];
+                for i in 0..k[0] {
+                    for j in 0..k[1] {
+                        let at = (plane * h + oh * s[0] + i) * w + ow * s[1] + j;
+                        if x[at] > x[best] {
+                            best = at;
+                        }
+                    }
+                }
+                gx[best] += gy[(plane * ho + oh) * wo + ow];
+            }
+        }
+    }
+    gx
+}
+
+#[test]
+fn max_pool2d_backward_matches_the_scatter_reference() {
+    for (n, c, h, w, k, s) in [
+        (2, 3, 8, 6, [2, 2], [2, 2]),
+        (1, 2, 9, 7, [2, 2], [2, 2]),
+        (1, 2, 9, 9, [3, 3], [2, 2]),
+        (1, 2, 7, 7, [3, 3], [1, 1]),
+        (1, 1, 5, 6, [2, 3], [1, 2]),
+    ] {
+        let x = rounded(60, n * c * h * w);
+        let (ho, wo) = ((h - k[0]) / s[0] + 1, (w - k[1]) / s[1] + 1);
+        let gy = rounded(61, n * c * ho * wo);
+        let want = max_pool_backward_ref((n, c, h, w), k, s, &x, &gy);
+        let mut first = None;
+        for threads in [1, 3] {
+            let be = cpu(threads, Numerics::Exact);
+            let gx = be
+                .max_pool2d_backward(
+                    &t(&be, &x, &[n, c, h, w]),
+                    &t(&be, &gy, &[n, c, ho, wo]),
+                    k,
+                    s,
+                )
+                .unwrap();
+            assert_eq!(gx.shape(), &[n, c, h, w]);
+            close("max pool backward", &host(&gx), &want, 1e-6, 0.0);
+            let got = bits(&host(&gx));
+            if let Some(first) = &first {
+                assert_eq!(&got, first, "threads changed the bits");
+            } else {
+                first = Some(got);
+            }
+        }
+    }
+}
+
+#[test]
+fn max_pool2d_backward_credits_the_first_maximum_of_a_tie() {
+    // Every value ties: each 2x2 window's gradient goes to its top-left
+    // input, as torch's `max_pool2d` picks the first maximum; with stride 1
+    // the overlapping windows of a tied row add up on their shared inputs.
+    let be = cpu(1, Numerics::Exact);
+    let x = t(&be, &[0.5; 9], &[1, 1, 3, 3]);
+    let gy = t(&be, &[1.0, 2.0, 4.0, 8.0], &[1, 1, 2, 2]);
+    let gx = be.max_pool2d_backward(&x, &gy, [2, 2], [1, 1]).unwrap();
+    assert_eq!(host(&gx), [1.0, 2.0, 0.0, 4.0, 8.0, 0.0, 0.0, 0.0, 0.0]);
+    // The forward reads the same element.
+    let x = t(&be, &[3.0, 3.0, 1.0, 3.0], &[1, 1, 2, 2]);
+    let gy = t(&be, &[1.0], &[1, 1, 1, 1]);
+    assert_eq!(
+        host(&be.max_pool2d_forward(&x, [2, 2], [2, 2]).unwrap()),
+        [3.0]
+    );
+    let gx = be.max_pool2d_backward(&x, &gy, [2, 2], [2, 2]).unwrap();
+    assert_eq!(host(&gx), [1.0, 0.0, 0.0, 0.0]);
+}
+
+#[test]
+fn spatial_backwards_refuse_a_malformed_or_nonfinite_gradient() {
+    let be = cpu(1, Numerics::Exact);
+    let x = t(&be, &rounded(70, 2 * 4 * 4), &[1, 2, 4, 4]);
+    let w = t(&be, &rounded(71, 3 * 2 * 3 * 3), &[3, 2, 3, 3]);
+    let p = params(1, 1, 1, 1);
+    let good = t(&be, &rounded(72, 3 * 4 * 4), &[1, 3, 4, 4]);
+    let short = t(&be, &rounded(72, 3 * 4 * 3), &[1, 3, 4, 3]);
+    let mut nan = rounded(72, 3 * 4 * 4);
+    nan[5] = f64::NAN;
+    let nan = t(&be, &nan, &[1, 3, 4, 4]);
+    be.conv2d_backward(&x, &w, None, &good, p).unwrap();
+    assert_shape(be.conv2d_backward(&x, &w, None, &short, p));
+    assert_nonfinite(be.conv2d_backward(&x, &w, None, &nan, p));
+    let wrong_bias = t(&be, &[0.0; 2], &[2]);
+    assert_shape(be.conv2d_backward(&x, &w, Some(&wrong_bias), &good, p));
+
+    let wt = t(&be, &rounded(73, 2 * 3 * 2 * 2), &[2, 3, 2, 2]);
+    let tp = ConvTranspose2dParams {
+        stride: [2, 2],
+        ..ConvTranspose2dParams::new()
+    };
+    let up = t(&be, &rounded(74, 3 * 8 * 8), &[1, 3, 8, 8]);
+    be.conv_transpose2d_backward(&x, &wt, None, &up, tp)
+        .unwrap();
+    assert_shape(be.conv_transpose2d_backward(&x, &wt, None, &good, tp));
+
+    let pooled = t(&be, &rounded(75, 2 * 2 * 2), &[1, 2, 2, 2]);
+    be.max_pool2d_backward(&x, &pooled, [2, 2], [2, 2]).unwrap();
+    assert_shape(be.max_pool2d_backward(&x, &good, [2, 2], [2, 2]));
+    let mut bad = rounded(75, 2 * 2 * 2);
+    bad[0] = f64::INFINITY;
+    assert_nonfinite(be.max_pool2d_backward(&x, &t(&be, &bad, &[1, 2, 2, 2]), [2, 2], [2, 2]));
+}
+
+#[test]
+fn a_budget_too_small_for_the_conv2d_backward_columns_is_refused() {
+    // The operands and both gradients fit; the two 18 x 16 column matrices
+    // of the 3x3 padded convolution do not.
+    let big = cpu(1, Numerics::Exact);
+    let x = t(&big, &rounded(80, 2 * 4 * 4), &[1, 2, 4, 4]);
+    let w = t(&big, &rounded(81, 2 * 2 * 3 * 3), &[2, 2, 3, 3]);
+    let gy = t(&big, &rounded(82, 2 * 4 * 4), &[1, 2, 4, 4]);
+    let held = (2 * 4 * 4 + 2 * 2 * 3 * 3 + 2 * 4 * 4) * 4;
+    let grads = (2 * 4 * 4 + 2 * 2 * 3 * 3) * 4;
+    let tight = CpuBackend::with_threads(Budget::new((held + grads + 64) as u64), 1).unwrap();
+    let (x, w, gy) = (
+        x.to_host(tight.budget()).unwrap(),
+        w.to_host(tight.budget()).unwrap(),
+        gy.to_host(tight.budget()).unwrap(),
+    );
+    common::assert_capacity(tight.conv2d_backward(&x, &w, None, &gy, params(1, 1, 1, 1)));
+}

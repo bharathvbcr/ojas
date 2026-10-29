@@ -20,6 +20,9 @@ use crate::{Backend, Budget, DType, OjasError, Tensor};
 const CONV2D: &str = "conv2d_forward";
 const CONV_TRANSPOSE2D: &str = "conv_transpose2d_forward";
 const MAX_POOL2D: &str = "max_pool2d_forward";
+const CONV2D_BACKWARD: &str = "conv2d_backward";
+const CONV_TRANSPOSE2D_BACKWARD: &str = "conv_transpose2d_backward";
+const MAX_POOL2D_BACKWARD: &str = "max_pool2d_backward";
 const BILINEAR: &str = "interpolate_bilinear_forward";
 const ROPE_INTERLEAVED_FORWARD: &str = "rope_interleaved_forward";
 const ROPE_INTERLEAVED_BACKWARD: &str = "rope_interleaved_backward";
@@ -169,6 +172,16 @@ impl MaxPool2dDims {
     }
 }
 
+/// Gradients of [`Backend::conv2d_forward`] or
+/// [`Backend::conv_transpose2d_forward`], each shaped like its operand.
+/// `bias` is `Some` exactly when the forward had a bias.
+#[derive(Clone, Debug)]
+pub struct ConvGrad {
+    pub input: Tensor,
+    pub weight: Tensor,
+    pub bias: Option<Tensor>,
+}
+
 /// Validated dimensions of [`Backend::interpolate_bilinear_forward`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BilinearDims {
@@ -252,16 +265,46 @@ pub fn conv2d_forward_dims(
     bias: Option<&Tensor>,
     params: Conv2dParams,
 ) -> Result<Conv2dDims, OjasError> {
-    const OP: &str = CONV2D;
-    f32_operands(OP, &[input, weight])?;
-    let [batch, in_channels, height, width] = rank4(OP, "input", input)?;
-    let [out_channels, per_group, kh, kw] = rank4(OP, "weight", weight)?;
-    positive_pair(OP, "stride", params.stride)?;
-    positive_pair(OP, "dilation", params.dilation)?;
+    conv2d_dims(CONV2D, input, weight, bias, params)
+}
+
+/// [`Backend::conv2d_backward`]: the operands of
+/// [`conv2d_forward_dims`], refused under this op's name, and a
+/// `grad_output` `F32` shaped like the forward's output.
+pub fn conv2d_backward_dims(
+    input: &Tensor,
+    weight: &Tensor,
+    bias: Option<&Tensor>,
+    grad_output: &Tensor,
+    params: Conv2dParams,
+) -> Result<Conv2dDims, OjasError> {
+    let dims = conv2d_dims(CONV2D_BACKWARD, input, weight, bias, params)?;
+    output_gradient(CONV2D_BACKWARD, grad_output, &dims.out_shape())?;
+    Ok(dims)
+}
+
+/// A backward's `grad_output`: `F32` and shaped `out`.
+fn output_gradient(op: &'static str, grad_output: &Tensor, out: &[usize]) -> Result<(), OjasError> {
+    f32_operand(op, grad_output)?;
+    same(op, grad_output.shape(), out)
+}
+
+fn conv2d_dims(
+    op: &'static str,
+    input: &Tensor,
+    weight: &Tensor,
+    bias: Option<&Tensor>,
+    params: Conv2dParams,
+) -> Result<Conv2dDims, OjasError> {
+    f32_operands(op, &[input, weight])?;
+    let [batch, in_channels, height, width] = rank4(op, "input", input)?;
+    let [out_channels, per_group, kh, kw] = rank4(op, "weight", weight)?;
+    positive_pair(op, "stride", params.stride)?;
+    positive_pair(op, "dilation", params.dilation)?;
     let groups = params.groups;
     if groups == 0 || in_channels % groups != 0 || out_channels % groups != 0 {
         return Err(refuse(
-            OP,
+            op,
             format!(
                 "groups {groups} must be at least 1 and divide the input channels \
                  {in_channels} and the output channels {out_channels}"
@@ -270,19 +313,19 @@ pub fn conv2d_forward_dims(
     }
     if per_group != in_channels / groups {
         return Err(refuse(
-            OP,
+            op,
             format!(
                 "weight in-channels {per_group} != input channels {in_channels} / groups {groups}"
             ),
         ));
     }
-    bias_vector(OP, bias, out_channels)?;
+    bias_vector(op, bias, out_channels)?;
     let span = |k: usize, d: usize| d.checked_mul(k - 1).and_then(|s| s.checked_add(1));
     let (span_h, span_w) = span(kh, params.dilation[0])
         .zip(span(kw, params.dilation[1]))
-        .ok_or_else(|| too_large(OP, "dilated kernel extent overflows"))?;
-    let out_height = window_count(OP, height, params.padding[0], span_h, params.stride[0])?;
-    let out_width = window_count(OP, width, params.padding[1], span_w, params.stride[1])?;
+        .ok_or_else(|| too_large(op, "dilated kernel extent overflows"))?;
+    let out_height = window_count(op, height, params.padding[0], span_h, params.stride[0])?;
+    let out_width = window_count(op, width, params.padding[1], span_w, params.stride[1])?;
     let dims = Conv2dDims {
         batch,
         in_channels,
@@ -294,9 +337,9 @@ pub fn conv2d_forward_dims(
         out_height,
         out_width,
     };
-    f32_product(OP, &dims.out_shape())?;
+    f32_product(op, &dims.out_shape())?;
     // The im2col matrix of one group, `[in / groups * kh * kw, Ho * Wo]`.
-    f32_product(OP, &[per_group, kh, kw, out_height, out_width])?;
+    f32_product(op, &[per_group, kh, kw, out_height, out_width])?;
     Ok(dims)
 }
 
@@ -311,21 +354,45 @@ pub fn conv_transpose2d_forward_dims(
     bias: Option<&Tensor>,
     params: ConvTranspose2dParams,
 ) -> Result<ConvTranspose2dDims, OjasError> {
-    const OP: &str = CONV_TRANSPOSE2D;
-    f32_operands(OP, &[input, weight])?;
-    let [batch, in_channels, height, width] = rank4(OP, "input", input)?;
-    let [w_in, out_channels, kh, kw] = rank4(OP, "weight", weight)?;
-    positive_pair(OP, "stride", params.stride)?;
+    conv_transpose2d_dims(CONV_TRANSPOSE2D, input, weight, bias, params)
+}
+
+/// [`Backend::conv_transpose2d_backward`]: the operands of
+/// [`conv_transpose2d_forward_dims`], refused under this op's name, and a
+/// `grad_output` `F32` shaped like the forward's output.
+pub fn conv_transpose2d_backward_dims(
+    input: &Tensor,
+    weight: &Tensor,
+    bias: Option<&Tensor>,
+    grad_output: &Tensor,
+    params: ConvTranspose2dParams,
+) -> Result<ConvTranspose2dDims, OjasError> {
+    let dims = conv_transpose2d_dims(CONV_TRANSPOSE2D_BACKWARD, input, weight, bias, params)?;
+    output_gradient(CONV_TRANSPOSE2D_BACKWARD, grad_output, &dims.out_shape())?;
+    Ok(dims)
+}
+
+fn conv_transpose2d_dims(
+    op: &'static str,
+    input: &Tensor,
+    weight: &Tensor,
+    bias: Option<&Tensor>,
+    params: ConvTranspose2dParams,
+) -> Result<ConvTranspose2dDims, OjasError> {
+    f32_operands(op, &[input, weight])?;
+    let [batch, in_channels, height, width] = rank4(op, "input", input)?;
+    let [w_in, out_channels, kh, kw] = rank4(op, "weight", weight)?;
+    positive_pair(op, "stride", params.stride)?;
     if w_in != in_channels {
         return Err(refuse(
-            OP,
+            op,
             format!("weight in-channels {w_in} != input channels {in_channels}"),
         ));
     }
     for axis in 0..2 {
         if params.output_padding[axis] >= params.stride[axis] {
             return Err(refuse(
-                OP,
+                op,
                 format!(
                     "output_padding {:?} must be below stride {:?}",
                     params.output_padding, params.stride
@@ -333,13 +400,13 @@ pub fn conv_transpose2d_forward_dims(
             ));
         }
     }
-    bias_vector(OP, bias, out_channels)?;
+    bias_vector(op, bias, out_channels)?;
     let extent = |size: usize, k: usize, axis: usize| {
         (size - 1)
             .checked_mul(params.stride[axis])
             .and_then(|v| v.checked_add(k))
             .and_then(|v| v.checked_add(params.output_padding[axis]))
-            .ok_or_else(|| too_large(OP, "output extent overflows"))
+            .ok_or_else(|| too_large(op, "output extent overflows"))
             .and_then(|full| {
                 params.padding[axis]
                     .checked_mul(2)
@@ -347,7 +414,7 @@ pub fn conv_transpose2d_forward_dims(
                     .filter(|&n| n > 0)
                     .ok_or_else(|| {
                         refuse(
-                            OP,
+                            op,
                             format!(
                                 "padding {} leaves no output on axis {axis} (full extent {full})",
                                 params.padding[axis]
@@ -369,9 +436,9 @@ pub fn conv_transpose2d_forward_dims(
         out_height,
         out_width,
     };
-    f32_product(OP, &dims.out_shape())?;
+    f32_product(op, &dims.out_shape())?;
     // The column matrix, `[O * kh * kw, H * W]`.
-    f32_product(OP, &[out_channels, kh, kw, height, width])?;
+    f32_product(op, &[out_channels, kh, kw, height, width])?;
     Ok(dims)
 }
 
@@ -384,13 +451,35 @@ pub fn max_pool2d_forward_dims(
     kernel: [usize; 2],
     stride: [usize; 2],
 ) -> Result<MaxPool2dDims, OjasError> {
-    const OP: &str = MAX_POOL2D;
-    f32_operand(OP, input)?;
-    let [batch, channels, height, width] = rank4(OP, "input", input)?;
-    positive_pair(OP, "kernel", kernel)?;
-    positive_pair(OP, "stride", stride)?;
-    let out_height = window_count(OP, height, 0, kernel[0], stride[0])?;
-    let out_width = window_count(OP, width, 0, kernel[1], stride[1])?;
+    max_pool2d_dims(MAX_POOL2D, input, kernel, stride)
+}
+
+/// [`Backend::max_pool2d_backward`]: the operands of
+/// [`max_pool2d_forward_dims`], refused under this op's name, and a
+/// `grad_output` `F32` shaped like the forward's output.
+pub fn max_pool2d_backward_dims(
+    input: &Tensor,
+    grad_output: &Tensor,
+    kernel: [usize; 2],
+    stride: [usize; 2],
+) -> Result<MaxPool2dDims, OjasError> {
+    let dims = max_pool2d_dims(MAX_POOL2D_BACKWARD, input, kernel, stride)?;
+    output_gradient(MAX_POOL2D_BACKWARD, grad_output, &dims.out_shape())?;
+    Ok(dims)
+}
+
+fn max_pool2d_dims(
+    op: &'static str,
+    input: &Tensor,
+    kernel: [usize; 2],
+    stride: [usize; 2],
+) -> Result<MaxPool2dDims, OjasError> {
+    f32_operand(op, input)?;
+    let [batch, channels, height, width] = rank4(op, "input", input)?;
+    positive_pair(op, "kernel", kernel)?;
+    positive_pair(op, "stride", stride)?;
+    let out_height = window_count(op, height, 0, kernel[0], stride[0])?;
+    let out_width = window_count(op, width, 0, kernel[1], stride[1])?;
     let dims = MaxPool2dDims {
         batch,
         channels,
@@ -401,7 +490,7 @@ pub fn max_pool2d_forward_dims(
         out_height,
         out_width,
     };
-    f32_product(OP, &dims.out_shape())?;
+    f32_product(op, &dims.out_shape())?;
     Ok(dims)
 }
 
