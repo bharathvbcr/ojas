@@ -61,3 +61,7 @@ required-features = ["metal"]
 [[example]]
 name = "alloc_bench"
 required-features = ["metal"]
+
+[[example]]
+name = "attention_spiketrack_bench"
+required-features = ["metal"]
