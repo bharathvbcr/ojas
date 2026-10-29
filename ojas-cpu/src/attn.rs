@@ -346,12 +346,10 @@ pub(crate) fn score_rows(
 /// `exp2` softmax of `flash.rs` is a different algorithm for `Fast`
 /// attention, not a copy of this one.
 pub(crate) fn softmax_row(numerics: Numerics, row: &[f32], dst: &mut [f32]) -> (f32, f32) {
-    let mut max = f32::NEG_INFINITY;
-    for &v in row {
-        if v > max {
-            max = v;
-        }
-    }
+    // The `f32::max` fold vectorizes; an `if v > max` loop does not (a
+    // branchy scalar pass, 1.1-1.6x on `softmax_forward`). Both skip a NaN
+    // and give the same maximum; see `row_max_matches_the_comparison_loop`.
+    let max = row.iter().fold(f32::NEG_INFINITY, |m, &v| m.max(v));
     let sum = match numerics {
         Numerics::Exact => {
             let mut sum = 0.0f32;
@@ -776,5 +774,108 @@ impl Dims {
             scale: sdpa_scale(dim_u32)?,
             window,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The row maximum `softmax_row` took before the `f32::max` fold: the
+    /// first strictly greater value wins, NaN never does.
+    fn max_by_comparison(row: &[f32]) -> f32 {
+        let mut max = f32::NEG_INFINITY;
+        for &v in row {
+            if v > max {
+                max = v;
+            }
+        }
+        max
+    }
+
+    fn rows() -> Vec<Vec<f32>> {
+        let nan = f32::NAN;
+        let inf = f32::INFINITY;
+        let mut rows = vec![
+            vec![],
+            vec![nan],
+            vec![nan, nan, nan],
+            vec![-inf],
+            vec![-inf, -inf],
+            vec![inf],
+            vec![1.0, inf, 2.0],
+            vec![inf, -inf],
+            vec![0.0],
+            vec![-0.0],
+            vec![0.0, -0.0],
+            vec![-0.0, 0.0],
+            vec![-0.0, -0.0, -3.0],
+            vec![-1.0, -0.0, -2.0, 0.0, -5.0],
+            vec![nan, -1.0, nan, -0.0, 0.0, nan],
+            vec![-inf, nan, -2.5, nan],
+            vec![f32::MIN, f32::MAX, f32::MIN_POSITIVE, -f32::MIN_POSITIVE],
+        ];
+        // Longer than a vector chunk, with the maximum at every offset of a
+        // 37-element row (the tail and the chunked body both).
+        for at in 0..37 {
+            let mut row: Vec<f32> = (0..37).map(|i| (i as f32 * 0.37).sin() - 2.0).collect();
+            row[at] = 1.5;
+            rows.push(row.clone());
+            row[(at + 5) % 37] = nan;
+            rows.push(row);
+        }
+        rows
+    }
+
+    /// The fold and the comparison loop take the same row maximum, up to the
+    /// sign of a zero, and the sign of a zero maximum does not reach any
+    /// output bit: `v - max` differs only for `v = -0` (`-0` against `+0`),
+    /// `e^(+-0)` is `1` either way, and the log-sum-exp adds `ln(sum)` to the
+    /// maximum with `sum >= 1`. Checked on the outputs of both numerics.
+    #[test]
+    fn row_max_matches_the_comparison_loop() {
+        for row in rows() {
+            let fold = row.iter().fold(f32::NEG_INFINITY, |m, &v| m.max(v));
+            let cmp = max_by_comparison(&row);
+            assert!(fold == cmp || (fold.is_nan() && cmp.is_nan()), "{row:?}");
+            // The reference runs with the maximum as the loop found it and,
+            // for a zero maximum, with the other zero too.
+            let mut maxes = vec![cmp];
+            if cmp == 0.0 {
+                maxes.push(-cmp);
+            }
+            for numerics in [Numerics::Exact, Numerics::Fast] {
+                let mut got = vec![0.0f32; row.len()];
+                let (max, sum) = softmax_row(numerics, &row, &mut got);
+                assert_eq!(max, cmp, "{numerics:?} {row:?}");
+                for &m in &maxes {
+                    let mut want = vec![0.0f32; row.len()];
+                    let want_sum = match numerics {
+                        Numerics::Exact => {
+                            let mut sum = 0.0f32;
+                            for (out, &v) in want.iter_mut().zip(&row) {
+                                let e = exp_exact(v - m);
+                                *out = e;
+                                sum += e;
+                            }
+                            sum
+                        }
+                        Numerics::Fast => exp_sub_store(&row, m, &mut want),
+                    };
+                    for out in want.iter_mut() {
+                        *out /= want_sum;
+                    }
+                    assert_eq!(sum.to_bits(), want_sum.to_bits(), "{numerics:?} {row:?}");
+                    let got_bits: Vec<u32> = got.iter().map(|p| p.to_bits()).collect();
+                    let want_bits: Vec<u32> = want.iter().map(|p| p.to_bits()).collect();
+                    assert_eq!(got_bits, want_bits, "{numerics:?} {row:?} max {m:?}");
+                    if m.is_finite() && sum.is_finite() && sum > 0.0 {
+                        let lse = log_sum_exp_exact(max, sum);
+                        let want_lse = log_sum_exp_exact(m, want_sum);
+                        assert_eq!(lse.to_bits(), want_lse.to_bits(), "{row:?} max {m:?}");
+                    }
+                }
+            }
+        }
     }
 }
