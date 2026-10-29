@@ -270,3 +270,71 @@ jobs:
         # hip/hip_runtime_api.h is absent, so the hip feature is not built.
         working-directory: ${{ env.OJAS }}
         run: cargo check -p ojas-hip --all-targets
+
+  msrv:
+    name: MSRV (rust-version 1.97)
+    # Cargo.toml declares rust-version = "1.97" (gusset's floor). This job is
+    # what holds the workspace to it: a newer language or std feature fails
+    # here instead of on a user's 1.97 toolchain.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: code/research/ojas
+      - uses: actions/checkout@v7
+        with:
+          repository: bharathvbcr/gusset
+          ref: ${{ env.GUSSET_REF }}
+          path: code/devtools/gusset
+      - uses: actions/checkout@v7
+        with:
+          repository: bharathvbcr/tessl
+          ref: ${{ env.TESSL_REF }}
+          path: code/research/tessl
+      - name: Point the absolute tessl path at the checkout
+        run: |
+          abs=$(sed -n 's/^tessl = { path = "\(\/[^"]*\)".*/\1/p' "$OJAS/ojas-metal/Cargo.toml")
+          if [ -n "$abs" ] && [ ! -e "$abs" ]; then
+            sudo mkdir -p "$(dirname "$abs")"
+            sudo ln -s "$GITHUB_WORKSPACE/code/research/tessl" "$abs"
+          fi
+          echo "tessl path: ${abs:-relative}"
+      - name: Rust toolchain at the declared rust-version
+        working-directory: ${{ env.OJAS }}
+        run: |
+          msrv=$(sed -n 's/^rust-version = "\([0-9.]*\)"/\1/p' Cargo.toml)
+          test -n "$msrv"
+          rustup toolchain install "$msrv" --profile minimal
+          rustup default "$msrv"
+          rustc --version
+      - name: check (every target, cuda feature included)
+        working-directory: ${{ env.OJAS }}
+        run: |
+          cargo check --workspace --all-targets
+          cargo check -p ojas-cuda --features cuda --all-targets
+
+  deny:
+    name: cargo-deny (licenses, advisories, bans, sources)
+    # deny.toml is the policy. The path dependencies (gusset, tessl) are
+    # checked out beside ojas so cargo metadata can resolve the graph.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: code/research/ojas
+      - uses: actions/checkout@v7
+        with:
+          repository: bharathvbcr/gusset
+          ref: ${{ env.GUSSET_REF }}
+          path: code/devtools/gusset
+      - uses: actions/checkout@v7
+        with:
+          repository: bharathvbcr/tessl
+          ref: ${{ env.TESSL_REF }}
+          path: code/research/tessl
+      - uses: EmbarkStudios/cargo-deny-action@v2.1.1
+        with:
+          manifest-path: code/research/ojas/Cargo.toml
+          command: check

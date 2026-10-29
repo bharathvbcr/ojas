@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use ojas in your research, please cite it as below."
+type: software
+title: "ojas: a deterministic Rust deep learning engine"
+abstract: >-
+  ojas is a Rust deep learning engine with bit-identical reductions under its
+  Exact numerics, explicit memory budgets, no silent CPU fallback from a GPU
+  backend, reverse-mode autodiff, and CPU, Apple Silicon Metal and wgpu
+  backends, driven in process from Go.
+authors:
+  - given-names: Bharath Chandra
+    family-names: Vaddaram
+repository-code: "https://github.com/bharathvbcr/ojas"
+url: "https://ojas.vbcr.dev"
+license:
+  - MIT
+  - Apache-2.0
+keywords:
+  - deep-learning
+  - machine-learning
+  - autograd
+  - tensor
+  - rust

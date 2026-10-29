@@ -16,6 +16,13 @@ echo "==> cargo target sources are tracked"
 echo "==> clippy"
 cargo clippy --workspace --all-targets -- -D warnings
 
+echo "==> cargo-deny (deny.toml)"
+if ! command -v cargo-deny >/dev/null 2>&1; then
+  echo "ERROR: cargo-deny is not installed (cargo install cargo-deny --locked); the deny gate cannot be skipped" >&2
+  exit 1
+fi
+cargo deny check
+
 echo "==> cuda check"
 # cudarc loads the driver dynamically. This host can compile the feature
 # without a CUDA toolkit. It does not execute a kernel. The lib-only lints
