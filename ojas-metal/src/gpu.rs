@@ -601,7 +601,8 @@ pub fn tiny_train_step(
     adam: AdamWConfig,
 ) -> Result<TinyStep, OjasError> {
     validate_tiny_shape(&state.shape)?;
-    validate_adam(&adam)?;
+    // The checks every `adamw_step` runs, here before any GPU work.
+    check_adamw(adam, state.step)?;
     let rows_u = state.shape.rows()?;
     let rows = rows_u as usize;
     let d = state.shape.d_model as usize;
@@ -766,36 +767,6 @@ fn check_targets(vocab: u32, targets: &[i32]) -> Result<(), OjasError> {
                 detail: format!("token id {t} at row {i} is past vocab {vocab}"),
             });
         }
-    }
-    Ok(())
-}
-
-fn validate_adam(cfg: &AdamWConfig) -> Result<(), OjasError> {
-    if !(cfg.lr.is_finite() && cfg.lr >= 0.0) {
-        return Err(OjasError::OutOfRange {
-            op: "adamw",
-            detail: format!("lr {}", cfg.lr),
-        });
-    }
-    for (name, b) in [("beta1", cfg.beta1), ("beta2", cfg.beta2)] {
-        if !(0.0..1.0).contains(&b) {
-            return Err(OjasError::OutOfRange {
-                op: "adamw",
-                detail: format!("{name} {b}"),
-            });
-        }
-    }
-    if !(cfg.eps.is_finite() && cfg.eps > 0.0) {
-        return Err(OjasError::OutOfRange {
-            op: "adamw",
-            detail: format!("eps {}", cfg.eps),
-        });
-    }
-    if !(cfg.weight_decay.is_finite() && cfg.weight_decay >= 0.0) {
-        return Err(OjasError::OutOfRange {
-            op: "adamw",
-            detail: format!("weight_decay {}", cfg.weight_decay),
-        });
     }
     Ok(())
 }
@@ -2095,6 +2066,83 @@ mod tests {
         assert_eq!(state.step_count(), 0);
         assert_eq!(state.lm_head().unwrap(), before);
         assert_eq!(state.q_projection().unwrap(), before_q);
+    }
+
+    /// The tiny step refuses a config, or a step count, with the error
+    /// `check_adamw` gives every `Backend::adamw_step`, variant, op and
+    /// detail, and refuses it before any weight moves.
+    #[test]
+    fn tiny_step_refuses_a_bad_adamw_config_as_check_adamw_does() {
+        let session = session();
+        let shape = shape();
+        let cap = param_bytes(&shape).unwrap();
+        let d = D_MODEL as usize;
+        let mut state = TinyState::new(
+            &session,
+            shape,
+            cap,
+            tw(
+                &vec![1.0; d],
+                &pattern(d * d, 2),
+                &pattern(d * d, 3),
+                &pattern(d * d, 4),
+                &pattern(shape.vocab as usize * d, 5),
+                &vec![1.0; HEAD_DIM as usize],
+                &vec![1.0; HEAD_DIM as usize],
+                &vec![1.0; d * d],
+            ),
+        )
+        .unwrap();
+        let before = state.lm_head().unwrap();
+        let before_q = state.q_projection().unwrap();
+        let rows = (shape.batch * shape.seq) as usize;
+        let base = AdamWConfig::nanolab(1e-2, 0.01);
+        let bad = [
+            ("negative lr", 0, AdamWConfig { lr: -1e-2, ..base }),
+            (
+                "nan lr",
+                0,
+                AdamWConfig {
+                    lr: f64::NAN,
+                    ..base
+                },
+            ),
+            (
+                "nan beta1",
+                0,
+                AdamWConfig {
+                    beta1: f64::NAN,
+                    ..base
+                },
+            ),
+            ("beta2 of 1", 0, AdamWConfig { beta2: 1.0, ..base }),
+            ("zero eps", 0, AdamWConfig { eps: 0.0, ..base }),
+            (
+                "negative weight decay",
+                0,
+                AdamWConfig {
+                    weight_decay: -0.1,
+                    ..base
+                },
+            ),
+            ("last step", u64::MAX, base),
+        ];
+        for (what, step, cfg) in bad {
+            state.step = step;
+            let want = check_adamw(cfg, step).expect_err(what);
+            let err = tiny_train_step(
+                &mut state,
+                &pattern(rows * d, 9),
+                &vec![1i32; rows],
+                scratch_bytes(&shape).unwrap(),
+                cfg,
+            )
+            .expect_err(what);
+            assert_eq!(format!("{err:?}"), format!("{want:?}"), "{what}");
+            assert_eq!(state.step_count(), step, "{what}");
+            assert_eq!(state.lm_head().unwrap(), before, "{what}");
+            assert_eq!(state.q_projection().unwrap(), before_q, "{what}");
+        }
     }
 
     #[test]
