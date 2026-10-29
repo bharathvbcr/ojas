@@ -90,7 +90,9 @@ fn inline_upload_fits(len: usize, used: usize) -> bool {
 }
 
 /// Ceiling of the bytes allocated between waited commits; the default cap is
-/// the smaller of this and a quarter of the backend's budget.
+/// the smaller of this and a quarter of the backend's budget. Two caps (of
+/// frees and of temporaries) are uncharged, so [`crate::MetalMemory`]
+/// reports them and the plan sets them aside from the device's room.
 const MEM_CAP_CEILING: u64 = 1 << 30;
 /// Ceiling of the freed buffers tessl's pool keeps for reuse. tessl's own
 /// default is 2 GiB whatever the backend's budget, outside it.
@@ -699,6 +701,7 @@ impl Worker {
             peak_allocated: self.rt.peak_allocated_bytes(),
             has_unified_memory: info.has_unified_memory,
             pool_cache_cap: info.pool_cache_cap as u64,
+            mem_cap: self.book.borrow().mem_cap,
         }
     }
 

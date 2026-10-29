@@ -80,7 +80,9 @@ pub enum Field {
     DeviceMemoryBytes,
     /// [`MemoryProbe::resident_bytes`]: what the process holds there.
     DeviceResidentBytes,
-    /// [`MemoryProbe::pool_cache_bytes`]: the uncharged pool cap.
+    /// [`MemoryProbe::pool_cache_bytes`]: the most memory the device may
+    /// hold outside the session budget. Metal: the pool cap plus two
+    /// memory caps; wgpu: the pool cap plus its staging cache.
     DevicePoolCacheBytes,
     /// The plan's room for the device.
     DeviceRoomBytes,
@@ -444,7 +446,11 @@ mod tests {
         let memory = field(Field::DeviceMemoryBytes).expect("the working set");
         let room = field(Field::DeviceRoomBytes).expect("a reporting device has a room");
         let pool = field(Field::DevicePoolCacheBytes).expect("the pool cap");
-        assert_eq!(pool, 1 << 28, "a quarter of the 1 GiB budget");
+        assert_eq!(
+            pool,
+            3 << 28,
+            "the pool cap and two memory caps, each a quarter of the 1 GiB budget"
+        );
         assert!(
             room <= memory - pool,
             "room {room} of {memory} with pool {pool}"

@@ -25,8 +25,17 @@ pub struct MetalMemory {
     /// The most freed buffers tessl's pool keeps for reuse on this device,
     /// set when the backend opened from its budget (a quarter of it, at
     /// most 1 GiB). Cached buffers are not charged to the budget; the plan
-    /// sets this much aside from the device's room.
+    /// sets this much aside from the device's room, with `mem_cap` below
+    /// (see [`MemoryProbe::pool_cache_bytes`]).
     pub pool_cache_cap: u64,
+    /// The memory cap in force when this reading was taken: the bytes
+    /// freed since the last waited commit, and the bytes allocated since it,
+    /// that the device thread lets build up before it waits. A backend
+    /// opens with a quarter of its budget, at most 1 GiB;
+    /// [`crate::MetalBackend::set_mem_cap`] moves it. Read by the device
+    /// thread itself, so it is the cap in force, and reading it is no
+    /// command.
+    pub mem_cap: u64,
 }
 
 impl MemoryProbe for MetalMemory {
@@ -45,8 +54,17 @@ impl MemoryProbe for MetalMemory {
         MemoryReport::Known(self.allocated)
     }
 
+    /// The device memory this backend can hold outside its budget: the pool
+    /// cache cap, plus two memory caps. Dropped buffers return to the pool
+    /// only at a waited commit, and the device thread lets up to one cap of
+    /// them build up before it waits; the temporaries of ops (charged while
+    /// they run, uncharged once dropped) build up under another cap before
+    /// the same wait. The one command that passes the cap is not counted.
     fn pool_cache_bytes(&self) -> MemoryReport {
-        MemoryReport::Known(self.pool_cache_cap)
+        MemoryReport::Known(
+            self.pool_cache_cap
+                .saturating_add(self.mem_cap.saturating_mul(2)),
+        )
     }
 
     /// From the device itself rather than the host profile, so a device
@@ -73,18 +91,34 @@ mod tests {
             peak_allocated: 7,
             has_unified_memory: true,
             pool_cache_cap: 3,
+            mem_cap: 5,
         };
         assert_eq!(m.kind(), Device::Metal);
         assert_eq!(m.memory_bytes(), MemoryReport::Unknown);
         assert_eq!(m.resident_bytes(), MemoryReport::Known(7));
-        assert_eq!(m.pool_cache_bytes(), MemoryReport::Known(3));
+        assert_eq!(
+            m.pool_cache_bytes(),
+            MemoryReport::Known(3 + 2 * 5),
+            "the pool cap and two memory caps"
+        );
         assert_eq!(m.architecture(), MemoryArchitecture::Unified);
+        let huge = MetalMemory {
+            pool_cache_cap: u64::MAX,
+            mem_cap: u64::MAX,
+            ..m
+        };
+        assert_eq!(
+            huge.pool_cache_bytes(),
+            MemoryReport::Known(u64::MAX),
+            "saturates rather than wraps"
+        );
         let m = MetalMemory {
             recommended_working_set: 48 << 30,
             allocated: 0,
             peak_allocated: 0,
             has_unified_memory: false,
             pool_cache_cap: 0,
+            mem_cap: 0,
         };
         assert_eq!(m.memory_bytes(), MemoryReport::Known(48 << 30));
         assert_eq!(m.architecture(), MemoryArchitecture::Discrete);
@@ -114,6 +148,7 @@ mod tests {
                     peak_allocated: 1 << 30,
                     has_unified_memory: unified,
                     pool_cache_cap: 1 << 28,
+                    mem_cap: 1 << 28,
                 };
                 let plan = ResourcePlan::derive(&policy, &profile, &[m]);
                 assert_eq!(plan.device_shares_host[0], unified, "{host_arch:?}");
@@ -123,8 +158,8 @@ mod tests {
                     MemoryReport::Unknown => panic!("a reporting device has a room"),
                 };
                 assert!(
-                    room <= (24 << 30) - (1 << 30) - (1 << 28),
-                    "pool not set aside"
+                    room <= (24 << 30) - (1 << 30) - 3 * (1 << 28),
+                    "pool and memory caps not set aside"
                 );
                 if unified {
                     assert!(room <= plan.budget_bytes);

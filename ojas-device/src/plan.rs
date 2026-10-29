@@ -45,9 +45,11 @@ pub trait MemoryProbe {
     fn resident_bytes(&self) -> MemoryReport {
         MemoryReport::Unknown
     }
-    /// The most freed buffers the runtime keeps for reuse. That memory is
-    /// not charged to a [`ojas_core::Budget`], so the plan sets it aside
-    /// from the device's room.
+    /// The most memory the runtime may hold on the device outside a
+    /// [`ojas_core::Budget`]: the freed buffers it keeps for reuse, and
+    /// anything else it holds uncharged under a cap of its own (wgpu's read
+    /// staging cache; Metal's dropped buffers and temporaries that wait for
+    /// a commit). The plan sets it aside from the device's room.
     fn pool_cache_bytes(&self) -> MemoryReport {
         MemoryReport::Unknown
     }

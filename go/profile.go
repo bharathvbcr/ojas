@@ -26,8 +26,9 @@ type Profile struct {
 	// could read no limit (an unbounded budget is never reported as a
 	// number); SetMemoryCeiling refuses 0, so check before forwarding it. The ceiling
 	// counts the logical bytes of tensors: a Metal model's resident memory can
-	// pass that by tessl's rounding and its pool cache (SetMemoryCeiling has
-	// the bounds), so leave headroom rather than setting the ceiling to all of
+	// pass that by tessl's rounding and its uncharged pool cache and
+	// commit-pending buffers (SetMemoryCeiling has the bounds), so leave
+	// headroom rather than setting the ceiling to all of
 	// AvailableBytes.
 	BudgetBytes    uint64
 	TotalBytes     Reading
@@ -98,9 +99,14 @@ type Profile struct {
 	// process), or wgpu's allocator report where its HAL keeps one (Vulkan,
 	// DX12; not Metal).
 	DeviceResidentBytes Reading
-	// DevicePoolCacheBytes is the most idle memory the runtime keeps for
-	// reuse on a session opened with this budget: freed buffers, and on
-	// wgpu its read staging cache too. That memory is not charged to the
+	// DevicePoolCacheBytes is the most memory the runtime may hold on the
+	// device outside the session budget, on a session opened with this
+	// budget. On wgpu: the freed buffers it keeps for reuse and its read
+	// staging cache. On Metal: the freed buffers it keeps for reuse (a
+	// quarter of the budget, at most 1 GiB), plus two memory caps (each a
+	// quarter of the budget, at most 1 GiB), one for dropped buffers
+	// waiting for a commit to recycle them and one for the temporaries of
+	// ops waiting for the same commit. That memory is not charged to the
 	// session budget, so the room below already sets it aside.
 	DevicePoolCacheBytes Reading
 	// DeviceRoomBytes is DeviceMemoryBytes less DeviceResidentBytes and

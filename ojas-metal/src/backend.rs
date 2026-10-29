@@ -22,7 +22,9 @@
 //!   The cache is capped when the backend opens, at a quarter of its budget
 //!   and at most 1 GiB (tessl's own default was 2 GiB whatever the budget),
 //!   reported as [`crate::MetalMemory::pool_cache_cap`] and set aside from
-//!   the device's room by `ojas_device::ResourcePlan`. [`MetalBackend::trim_pool`]
+//!   the device's room by `ojas_device::ResourcePlan`, together with the
+//!   two memory caps below (`MetalMemory`'s `pool_cache_bytes` is the sum
+//!   the plan reads). [`MetalBackend::trim_pool`]
 //!   releases it, and a failed allocation does so before it gives up.
 //! - Buffers dropped and not yet recycled. A dropped tensor's charge comes
 //!   off the budget at once, but tessl returns its buffer to the pool only
@@ -41,7 +43,10 @@
 //! So the device holds at most the budget's live bytes, plus the rounding
 //! above, plus the pool cap, plus the backend's status slab (128 KiB), plus
 //! dropped buffers awaiting a commit: under one memory cap of frees, and
-//! under another of temporaries plus the last command's own.
+//! under another of temporaries plus the last command's own. The plan sets
+//! the pool cap and both memory caps aside, at the cap in force when the
+//! probe is read ([`MetalBackend::memory`]); the rounding, the slab and the
+//! last command's own are not in that figure.
 //!
 //! Numerics are [`Numerics::Fast`]: GEMMs are tessl TensorOps with their own
 //! reduction order, and reductions are threadgroup trees, not ascending f32.
@@ -4656,7 +4661,12 @@ mod tests {
             let m = MetalBackend::new(Budget::new(1 << 30)).expect("Metal device");
             let mem = m.memory().expect("memory");
             assert_eq!(mem.pool_cache_cap, 1 << 28, "{mem:?}");
-            assert_eq!(mem.pool_cache_bytes(), MemoryReport::Known(1 << 28));
+            assert_eq!(mem.mem_cap, 1 << 28, "{mem:?}");
+            assert_eq!(
+                mem.pool_cache_bytes(),
+                MemoryReport::Known(3 << 28),
+                "the pool cap and two memory caps, each a quarter of the budget"
+            );
             let x = put(&m, &vec![0.5; 1 << 20], &[1 << 20]);
             drop(m.silu_forward(&x).expect("silu"));
             let before = m.wait_counts().recycle;
