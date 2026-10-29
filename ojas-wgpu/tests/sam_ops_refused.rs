@@ -91,6 +91,33 @@ fn every_sam_op_is_the_refusing_default_on_wgpu() {
             )
             .map(drop),
         ),
+        refusal(
+            "conv2d_backward",
+            g.conv2d_backward(
+                &dev(21, &[1, 2, 6, 6]),
+                &dev(22, &[4, 2, 3, 3]),
+                None,
+                &dev(23, &[1, 4, 4, 4]),
+                Conv2dParams::new(),
+            )
+            .map(drop),
+        ),
+        refusal(
+            "conv_transpose2d_backward",
+            g.conv_transpose2d_backward(
+                &dev(24, &[1, 2, 3, 3]),
+                &dev(25, &[2, 4, 2, 2]),
+                None,
+                &dev(26, &[1, 4, 4, 4]),
+                ConvTranspose2dParams::new(),
+            )
+            .map(drop),
+        ),
+        refusal(
+            "max_pool2d_backward",
+            g.max_pool2d_backward(&img, &dev(27, &[1, 4, 2, 2]), [2, 2], [2, 2])
+                .map(drop),
+        ),
         refusal("gelu_erf_forward", g.gelu_erf_forward(&x).map(drop)),
         refusal("relu_forward", g.relu_forward(&x).map(drop)),
         refusal("scale_forward", g.scale_forward(&x, 2.0).map(drop)),
