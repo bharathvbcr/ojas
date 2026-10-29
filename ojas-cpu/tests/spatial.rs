@@ -697,8 +697,16 @@ fn window_split_and_merge_follow_the_grid_and_invert_each_other() {
         window_partition(&be, &big, 24).unwrap().shape(),
         &[9, 24, 24, 2]
     );
-    // No padding is done; the caller pads.
-    assert_shape(window_partition(&be, &x, 4));
+    // A width the window does not divide is padded, not refused: x is
+    // [2, 4, 6, 3], so a window of 4 pads the width to 8 and cuts 2 windows
+    // per image.
+    assert_eq!(
+        window_partition(&be, &x, 4).unwrap().shape(),
+        &[b * 2, 4, 4, c]
+    );
+    // What stays refused: a window of 0, and a window count that the grid
+    // derived from the size does not divide (12 windows, 2 x 4 per image).
+    assert_shape(window_partition(&be, &x, 0));
     assert_shape(window_merge(&be, &win, 4, 8));
 }
 
