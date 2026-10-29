@@ -508,15 +508,14 @@ pub(crate) enum Cmd {
     InlineUploads {
         on: bool,
     },
-    /// Read the byte cap the device thread compares against (`set` is `None`),
-    /// or replace it first (`Some(bytes)`, which must be non-zero and at most
-    /// the opening backend's budget: the device refuses anything else as
-    /// `OutOfRange` and leaves the cap as it was). The reply is the cap in
-    /// force before the call. The cap is what bytes allocated since the last
-    /// waited commit (`WaitCounts::mem_cap`) and bytes freed since it
-    /// (`WaitCounts::freed`) are compared with.
-    MemCap {
-        set: Option<u64>,
+    /// Replace the byte cap the device thread compares against. The caller
+    /// has already run [`check_mem_cap`]: `bytes` is non-zero and at most the
+    /// opening backend's budget. The cap is what bytes allocated since the
+    /// last waited commit (`WaitCounts::mem_cap`) and bytes freed since it
+    /// (`WaitCounts::freed`) are compared with. Reading it is no command: it
+    /// is `MetalMemory::mem_cap`, answered with [`Cmd::Memory`].
+    SetMemCap {
+        bytes: u64,
     },
     /// Test hook: encode a dispatch, then panic on the device thread, as a
     /// bug mid-op would.
@@ -1034,8 +1033,6 @@ pub(crate) enum Reply {
     Bytes(Vec<u8>),
     Norm(f32),
     Memory(crate::MetalMemory),
-    /// The memory cap in force before a [`Cmd::MemCap`].
-    Cap(u64),
     Done,
 }
 
@@ -1050,6 +1047,36 @@ pub(crate) struct Link {
     tx: mpsc::Sender<Msg>,
     device: DeviceInfo,
     waits: Arc<Waits>,
+    /// The opening backend's budget: the upper bound of a memory cap
+    /// ([`check_mem_cap`]). Fixed when the device opens, so it is read
+    /// here, on the host, without a command.
+    budget_cap: u64,
+}
+
+/// Whether `bytes` may be the memory cap of a device opened with a budget of
+/// `budget_cap`. A zero cap is meaningless (a cap of 1 already waits after
+/// every allocating command). A cap above the budget would void the
+/// residency bound in the backend docs: what the device holds past the
+/// budget's live bytes stays under one memory cap of frees, one of
+/// temporaries, and the pool cap. It runs on the host, before any command,
+/// so a refused cap costs the device nothing and a poisoned backend refuses
+/// it the same way.
+pub(crate) fn check_mem_cap(bytes: u64, budget_cap: u64) -> Res<()> {
+    if bytes == 0 {
+        return Err(OjasError::OutOfRange {
+            op: "set_mem_cap",
+            detail: "a zero memory cap is meaningless: give a positive byte count".into(),
+        });
+    }
+    if bytes > budget_cap {
+        return Err(OjasError::OutOfRange {
+            op: "set_mem_cap",
+            detail: format!(
+                "a memory cap of {bytes} bytes is above the backend's budget of {budget_cap}; the residency bound would not hold"
+            ),
+        });
+    }
+    Ok(())
 }
 
 /// What the device thread reports once its runtime is up.
@@ -1061,8 +1088,23 @@ pub(crate) struct DeviceInfo {
 }
 
 impl Link {
-    pub(crate) fn new(tx: mpsc::Sender<Msg>, device: DeviceInfo, waits: Arc<Waits>) -> Self {
-        Self { tx, device, waits }
+    pub(crate) fn new(
+        tx: mpsc::Sender<Msg>,
+        device: DeviceInfo,
+        waits: Arc<Waits>,
+        budget_cap: u64,
+    ) -> Self {
+        Self {
+            tx,
+            device,
+            waits,
+            budget_cap,
+        }
+    }
+
+    /// The budget the device opened with, the bound of a memory cap.
+    pub(crate) fn budget_cap(&self) -> u64 {
+        self.budget_cap
     }
 
     pub(crate) fn device_name(&self) -> &str {

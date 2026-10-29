@@ -38,7 +38,7 @@
 //!   ([`WaitCounts::mem_cap`]). The memory cap starts at a quarter of the
 //!   budget the backend opened with, at most 1 GiB, and
 //!   [`MetalBackend::set_mem_cap`] moves it anywhere from 1 byte to that
-//!   budget.
+//!   budget ([`MetalBackend::mem_cap`] reads it, as no command).
 //!
 //! So the device holds at most the budget's live bytes, plus the rounding
 //! above, plus the pool cap, plus the backend's status slab (128 KiB), plus
@@ -113,10 +113,10 @@ use ojas_core::{
 };
 
 use crate::link::{
-    cached_attn_origin, cached_attn_part, metal_err, norm_chunks, rms_w_chunks, Arg, AttnGeom,
-    BilinearGeom, Cmd, Conv1dGeom, ConvGeom, EmbedRows, EncAttnGeom, GdnArgs, GroupNormGeom, Lane,
-    LceGeom, Link, ReadAs, Reply, Res, RmsSide, RopeMode, SdpaGeom, WaitCounts, Waits,
-    SQ_OUT_WORDS,
+    cached_attn_origin, cached_attn_part, check_mem_cap, metal_err, norm_chunks, rms_w_chunks, Arg,
+    AttnGeom, BilinearGeom, Cmd, Conv1dGeom, ConvGeom, EmbedRows, EncAttnGeom, GdnArgs,
+    GroupNormGeom, Lane, LceGeom, Link, ReadAs, Reply, Res, RmsSide, RopeMode, SdpaGeom,
+    WaitCounts, Waits, SQ_OUT_WORDS,
 };
 use crate::permute;
 
@@ -205,7 +205,7 @@ impl MetalBackend {
         let waits = Arc::new(Waits::default());
         let (tx, device) = crate::device::spawn(Arc::clone(&waits), budget.cap_bytes())?;
         Ok(Self {
-            link: Arc::new(Link::new(tx, device, waits)),
+            link: Arc::new(Link::new(tx, device, waits, budget.cap_bytes())),
             budget,
         })
     }
@@ -502,43 +502,55 @@ impl MetalBackend {
         }
     }
 
-    /// The byte cap past which the device thread waits for a commit: bytes
-    /// allocated since the last waited commit (counted as
-    /// [`WaitCounts::mem_cap`]) and bytes freed since it
+    /// The memory cap in force: the byte count past which the device thread
+    /// waits for a commit. Bytes allocated since the last waited commit
+    /// (counted as [`WaitCounts::mem_cap`]) and bytes freed since it
     /// ([`WaitCounts::freed`]) are compared with it. A backend opens with the
-    /// smaller of 1 GiB and a quarter of its budget. Telemetry for tests and
-    /// benches, on the pattern of [`Self::set_inline_uploads`]; not a stable
-    /// API.
-    #[doc(hidden)]
+    /// smaller of 1 GiB and a quarter of its budget, and
+    /// [`Self::set_mem_cap`] moves it for every handle on the device.
+    ///
+    /// This is [`crate::MetalMemory::mem_cap`], the same reading the
+    /// resource plan sets aside twice (see the module docs). It is not a
+    /// device command: it neither waits nor commits, does not count toward
+    /// the commit triggers, and is answered on a poisoned backend too. Like
+    /// [`Self::memory`] it is queued behind work already submitted, so it
+    /// returns once the device thread reaches it, and it sees every
+    /// [`Self::set_mem_cap`] that has returned.
     pub fn mem_cap(&self) -> Result<u64, OjasError> {
-        match self.link.call(Cmd::MemCap { set: None })? {
-            Reply::Cap(cap) => Ok(cap),
-            other => Err(metal_err(format!("mem_cap: device returned {other:?}"))),
-        }
+        self.read_memory(false).map(|m| m.mem_cap)
     }
 
-    /// Replace the cap [`Self::mem_cap`] reads, for every handle that shares
-    /// the device thread (`with_budget` handles included), until the next
-    /// call. For before/after wait measurements; no default changes with it.
+    /// Move the memory cap, for every handle that shares the device thread
+    /// (`with_budget` handles included), until the next call. The new cap
+    /// takes effect for the next trigger check; [`Self::mem_cap`] and
+    /// [`Self::memory`] report it from then on, so a plan made after this
+    /// call sets aside two of the new caps. A plan made before it keeps the
+    /// figure it was given: probe again to re-plan.
     ///
-    /// It is a device command, not a field write: the device runs its
-    /// freed-bytes check at the old cap, installs the new one, then runs its
-    /// commit triggers at the new one. Lowering the cap below the bytes
-    /// allocated since the last waited commit, with work recorded, therefore
-    /// makes this call wait for a commit once (counted as
-    /// [`WaitCounts::mem_cap`]); it returns after that commit.
+    /// A cap is refused as [`OjasError::OutOfRange`], on the host and before
+    /// anything reaches the device, when it is zero (a cap of 1 already waits
+    /// after every allocating command, so zero prevents nothing it would
+    /// stall) or above the budget the backend opened with (a larger cap would
+    /// void the residency bound in the module docs). A refused cap runs no
+    /// device command: it recycles nothing, waits for nothing, and leaves the
+    /// cap as it was, on a poisoned backend as on a healthy one.
     ///
-    /// A zero cap is refused as [`OjasError::OutOfRange`] as meaningless (a
-    /// cap of 1 already waits after every allocating command). So is a cap
-    /// above the budget the backend opened with, which would void the
-    /// residency bound in the module docs: what the device holds past the
-    /// budget's live bytes stays under one memory cap of frees, one of
-    /// temporaries, and the pool cap. A refused cap leaves the cap as it was.
-    /// Not a stable API.
-    #[doc(hidden)]
+    /// A cap in range is a device command: the device runs its freed-bytes
+    /// check at the old cap, installs the new one, then runs its commit
+    /// triggers at the new one. Lowering the cap below the bytes allocated
+    /// since the last waited commit, with work recorded, therefore makes this
+    /// call wait for a commit once (counted as [`WaitCounts::mem_cap`]); it
+    /// returns after that commit. On a poisoned backend it is
+    /// [`OjasError::Poisoned`].
+    ///
+    /// A lower cap trades resident memory for more waited commits; a higher
+    /// one the reverse, and the device may then hold up to twice the
+    /// increase more outside the budget. The default does not change with
+    /// this call.
     pub fn set_mem_cap(&self, bytes: u64) -> Result<(), OjasError> {
-        match self.link.call(Cmd::MemCap { set: Some(bytes) })? {
-            Reply::Cap(_) => Ok(()),
+        check_mem_cap(bytes, self.link.budget_cap())?;
+        match self.link.call(Cmd::SetMemCap { bytes })? {
+            Reply::Done => Ok(()),
             other => Err(metal_err(format!("set_mem_cap: device returned {other:?}"))),
         }
     }
@@ -4857,6 +4869,42 @@ mod tests {
                 let r = m.kv_cache_write(&mut cache, &src, at);
                 assert!(matches!(r, Err(OjasError::Poisoned)), "at {at}: {r:?}");
             }
+        });
+    }
+
+    /// `set_mem_cap` validates its argument on the host, before any command
+    /// (ft-580e6c40): on a poisoned backend, where every command that reaches
+    /// the device answers `Poisoned`, a zero or over-budget cap is still
+    /// `OutOfRange`. A cap in range reaches the device and is `Poisoned`,
+    /// which shows the probe can tell. Reading the cap is no command either,
+    /// so a poisoned backend still reports the one it had.
+    #[test]
+    fn a_refused_mem_cap_is_out_of_range_on_a_poisoned_backend_too() {
+        watchdog(60, || {
+            let m = MetalBackend::new(Budget::new(1 << 20)).expect("Metal device");
+            let opened = 1u64 << 18;
+            assert_eq!(m.mem_cap().expect("mem_cap"), opened);
+            let injected = m.link.call(Cmd::InjectPanic);
+            assert!(injected.is_err(), "{injected:?}");
+            for bytes in [0u64, (1 << 20) + 1, u64::MAX] {
+                let r = m.set_mem_cap(bytes);
+                assert!(
+                    matches!(
+                        r,
+                        Err(OjasError::OutOfRange {
+                            op: "set_mem_cap",
+                            ..
+                        })
+                    ),
+                    "{bytes}: {r:?}"
+                );
+            }
+            let r = m.set_mem_cap(1 << 19);
+            assert!(matches!(r, Err(OjasError::Poisoned)), "{r:?}");
+            assert_eq!(
+                m.mem_cap().expect("a poisoned backend reports its cap"),
+                opened
+            );
         });
     }
 
