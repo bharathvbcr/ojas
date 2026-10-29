@@ -90,7 +90,9 @@ fn inline_upload_fits(len: usize, used: usize) -> bool {
 }
 
 /// Ceiling of the bytes allocated between waited commits; the default cap is
-/// the smaller of this and a quarter of the backend's budget.
+/// the smaller of this and a quarter of the backend's budget. Two caps (of
+/// frees and of temporaries) are uncharged, so [`crate::MetalMemory`]
+/// reports them and the plan sets them aside from the device's room.
 const MEM_CAP_CEILING: u64 = 1 << 30;
 /// Ceiling of the freed buffers tessl's pool keeps for reuse. tessl's own
 /// default is 2 GiB whatever the backend's budget, outside it.
@@ -456,8 +458,6 @@ struct Book {
     /// Work has been encoded since the last waited commit.
     dirty: bool,
     since_overlap: usize,
-    /// The opening backend's budget, the upper bound of a [`Cmd::MemCap`] set.
-    budget_cap: u64,
     alloc_since_wait: u64,
     /// Bytes of buffers freed ([`Cmd::Free`]) since the last waited
     /// commit. tessl returns a dropped buffer to its pool only once a
@@ -604,7 +604,6 @@ impl Worker {
             clean: HashMap::new(),
             overlap: OVERLAP_DISPATCHES,
             mem_cap: MEM_CAP_CEILING.min(budget_cap / 4),
-            budget_cap,
             ws_limit: ws / WS_DEN * WS_NUM,
             #[cfg(test)]
             fail_allocs: (0, 0),
@@ -699,6 +698,7 @@ impl Worker {
             peak_allocated: self.rt.peak_allocated_bytes(),
             has_unified_memory: info.has_unified_memory,
             pool_cache_cap: info.pool_cache_cap as u64,
+            mem_cap: self.book.borrow().mem_cap,
         }
     }
 
@@ -1415,29 +1415,10 @@ impl Worker {
                 self.book.borrow_mut().inline_uploads = on;
                 Ok(Reply::Done)
             }
-            Cmd::MemCap { set } => {
-                let mut book = self.book.borrow_mut();
-                let before = book.mem_cap;
-                if let Some(bytes) = set {
-                    if bytes == 0 {
-                        return Err(OjasError::OutOfRange {
-                            op: "set_mem_cap",
-                            detail: "a zero memory cap is meaningless: give a positive byte count"
-                                .into(),
-                        });
-                    }
-                    if bytes > book.budget_cap {
-                        return Err(OjasError::OutOfRange {
-                            op: "set_mem_cap",
-                            detail: format!(
-                                "a memory cap of {bytes} bytes is above the backend's budget of {}; the residency bound would not hold",
-                                book.budget_cap
-                            ),
-                        });
-                    }
-                    book.mem_cap = bytes;
-                }
-                Ok(Reply::Cap(before))
+            // Validated on the host (`check_mem_cap`) before it is sent.
+            Cmd::SetMemCap { bytes } => {
+                self.book.borrow_mut().mem_cap = bytes;
+                Ok(Reply::Done)
             }
             Cmd::Upload { src } => self.upload(&src),
             #[cfg(test)]

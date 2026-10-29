@@ -149,6 +149,75 @@ fn lowering_the_cap_with_work_pending_waits_once_and_does_not_hang() {
     ok("sync", m.sync());
 }
 
+/// A 12 MiB budget (memory cap 3 MiB) with eight 1 MiB tensors dropped since
+/// the last waited commit: 8 MiB of frees past the cap, so the next device
+/// command waits first (`WaitCounts::freed`). Returns the backend, a small
+/// tensor to run a command on, and the counts at that point.
+fn with_frees_past_the_cap() -> (MetalBackend, Tensor, WaitCounts) {
+    let m = ok("Metal", MetalBackend::new(Budget::new(12 * MIB)));
+    let x = up(&m, &rand(&[64], 1, 1.0));
+    let big: Vec<Tensor> = (0..8)
+        .map(|j| up(&m, &rand(&[(MIB / 4) as usize], 2 + j, 1.0)))
+        .collect();
+    drop(ok("silu", m.silu_forward(&x)));
+    // A waited commit zeroes the bytes freed since one: the drop below is the
+    // only reason the next command would wait.
+    ok("sync", m.sync());
+    drop(big);
+    let counts = m.wait_counts();
+    (m, x, counts)
+}
+
+/// What the next device command does with those frees: one `freed` wait.
+fn the_frees_are_still_pending(m: &MetalBackend, x: &Tensor, since: &WaitCounts) {
+    drop(ok("silu", m.silu_forward(x)));
+    assert_eq!(
+        m.wait_counts().since(since),
+        WaitCounts {
+            freed: 1,
+            ..WaitCounts::default()
+        },
+        "the 8 MiB of frees were still waiting for the next command"
+    );
+}
+
+/// Reading the cap is not a device command (ft-580e6c40): it does not run the
+/// freed-bytes check or the commit triggers, so it neither waits nor
+/// dispatches, and the frees it left alone are still pending afterwards.
+#[test]
+fn reading_the_cap_issues_no_device_command() {
+    let (m, x, counts) = with_frees_past_the_cap();
+    let dispatches = m.dispatches();
+    for _ in 0..3 {
+        assert_eq!(ok("mem_cap", m.mem_cap()), 3 * MIB);
+    }
+    assert_eq!(
+        m.wait_counts(),
+        counts,
+        "a read of the cap waited for a commit"
+    );
+    assert_eq!(m.dispatches(), dispatches);
+    the_frees_are_still_pending(&m, &x, &counts);
+}
+
+/// A refused cap is refused at the boundary (ft-580e6c40): before the device
+/// runs its freed-bytes check, so it recycles nothing and waits for nothing,
+/// and the cap stays what it was.
+#[test]
+fn a_refused_cap_runs_no_recycle() {
+    let (m, x, counts) = with_frees_past_the_cap();
+    assert!(refused_out_of_range(m.set_mem_cap(0)));
+    assert!(refused_out_of_range(m.set_mem_cap(12 * MIB + 1)));
+    assert!(refused_out_of_range(m.set_mem_cap(u64::MAX)));
+    assert_eq!(
+        m.wait_counts(),
+        counts,
+        "a refused set waited for a commit before it refused"
+    );
+    assert_eq!(ok("mem_cap", m.mem_cap()), 3 * MIB);
+    the_frees_are_still_pending(&m, &x, &counts);
+}
+
 /// The cap belongs to the device thread, so every `with_budget` handle reads
 /// and moves the same one, and the bound is the opening backend's budget, not
 /// the handle's.

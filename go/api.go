@@ -179,7 +179,8 @@ type LoadOptions struct {
 	// GiB: raise the ceiling first. On DeviceMetal and DeviceWgpu the budget
 	// is then planned against what the device reports, as DeviceProfile
 	// shows: a budget past the device's room (its memory less what the
-	// process holds and the runtime's pool cache), or on shared memory past
+	// process holds and the memory the runtime may hold outside the
+	// budget, DevicePoolCacheBytes), or on shared memory past
 	// what the host can spare, is cut to that, never raised; a device with
 	// no room at all is ErrCapacity. LoadModelInfo, NewModelInfo and
 	// ResumeInfo return the budget the model got.
@@ -680,10 +681,11 @@ const DefaultMemoryCeiling uint64 = 1 << 30
 // The ceiling counts tensors' logical bytes. On unified memory (Apple
 // silicon) a Metal model's resident memory can exceed its charge by tessl's
 // rounding (under 16 KiB per buffer past 1 MiB, under 512 KiB per smaller
-// one) plus its uncharged pool cache (a quarter of the model's budget, at
-// most 1 GiB; DeviceProfile's DevicePoolCacheBytes), and comes out of the
-// same RAM, so size the ceiling from SystemProfile with headroom, not equal
-// to free memory.
+// one) plus its uncharged pool cache and the dropped buffers and temporaries
+// that wait for a commit, each up to a quarter of the model's budget and at
+// most 1 GiB (DeviceProfile's DevicePoolCacheBytes sums the three), and comes
+// out of the same RAM, so size the ceiling from SystemProfile with headroom,
+// not equal to free memory.
 func SetMemoryCeiling(ctx context.Context, bytes uint64) error {
 	_, err := callEngine(ctx, opSetCeiling, binary.LittleEndian.AppendUint64(nil, bytes))
 	return err
