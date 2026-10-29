@@ -1,0 +1,51 @@
+# cargo-deny policy for the ojas workspace: licenses, advisories, bans and
+# sources of every crate the workspace builds, with all features (so the
+# cuda and hip probes' dependencies are checked too).
+# Invoke: cargo deny check
+# CI runs it in the `deny` job of .github/workflows/test.yml.
+
+[graph]
+all-features = true
+
+[advisories]
+# RustSec advisories against any crate in the graph fail the check. A
+# yanked version fails too: Cargo.lock should never pin one.
+yanked = "deny"
+ignore = []
+
+[licenses]
+# ojas ships as MIT OR Apache-2.0, so every dependency must be usable under
+# one of those. These are the licenses the graph carries today (cargo deny
+# --all-features list -l license, 2026-10-28); a new one fails the check
+# until it is reviewed and added here.
+allow = [
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+[licenses.private]
+# The ojas crates are publish = false; their own license is checked by
+# review, not here.
+ignore = true
+
+[bans]
+# hashbrown, libloading and syn come in two versions each today; duplicates
+# are reported, not refused.
+multiple-versions = "warn"
+# A crates.io dependency must name a version. Path dependencies between
+# workspace crates and to the sibling tessl and gusset checkouts are allowed,
+# since none of these crates is published.
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+# crates.io only. tessl and gusset are path dependencies, not git sources.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
