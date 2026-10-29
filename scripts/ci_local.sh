@@ -54,4 +54,10 @@ cargo test --workspace --release -- --test-threads=1
 # HIP is not compile-checked here. hip-runtime-sys 0.1.2 panics in its
 # build script when hip/hip_runtime_api.h is absent, which it is on this Mac.
 
+echo "==> rustdoc (intra-doc links resolve; no link to a private item)"
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+
+echo "==> ojas-metal without the metal feature (stub build, every target)"
+cargo clippy -p ojas-metal --no-default-features --all-targets -- -D warnings
+
 echo "ci:local OK"

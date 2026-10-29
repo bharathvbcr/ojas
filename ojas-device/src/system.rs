@@ -191,7 +191,7 @@ fn on_pci_bus_zero(target: &Path) -> bool {
 ///
 /// macOS: `kern.memorystatus_vm_pressure_level`: 1 normal, 2 warning,
 /// 4 critical (`DISPATCH_MEMORYPRESSURE_*`); other values are unknown.
-/// Linux: pressure stall information ([`linux_pressure`]). Every other OS
+/// Linux: pressure stall information (`linux_pressure`). Every other OS
 /// is unknown. Cheap enough to ask before each call that allocates: one
 /// sysctl, or a few small `/proc` and cgroup reads.
 pub fn probe_pressure() -> MemoryPressure {

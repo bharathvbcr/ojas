@@ -1656,7 +1656,7 @@ pub trait Backend {
     /// all-ignored batch is [`OjasError::NonFinite`]. Logit scratch must stay
     /// within `chunk.rows * chunk.cols` elements: an implementation that
     /// allocates `N * V` logits does not meet this contract. Validate with
-    /// [`linear_ce_dims`].
+    /// [`linear_ce_dims`](crate::linear_ce_dims).
     fn linear_cross_entropy_mean(
         &self,
         input: &Tensor,
@@ -1685,8 +1685,9 @@ pub trait Backend {
     /// Scale is [`sdpa_scale`]`(D)`. Returns `[B, Tq, H, D]`. With `kv_len
     /// == Tq` and `H == Hkv` this equals [`Backend::causal_sdpa_forward`]
     /// with the same window after the layout permute. Validate with
-    /// [`cached_attention_dims`], which refuses a read the ring no longer
-    /// holds; [`KvDims::visible`] gives each query's positions.
+    /// [`cached_attention_dims`](crate::cached_attention_dims), which refuses a
+    /// read the ring no longer holds; [`KvDims::visible`](crate::KvDims::visible)
+    /// gives each query's positions.
     fn cached_attention_forward(
         &self,
         q: &Tensor,
@@ -1704,7 +1705,7 @@ pub trait Backend {
     /// so `Tn <= Tcap` and the cache is a ring.
     ///
     /// `cache` must be uniquely owned. On any error the cache is unchanged.
-    /// Validate with [`kv_cache_write_dims`].
+    /// Validate with [`kv_cache_write_dims`](crate::kv_cache_write_dims).
     fn kv_cache_write(&self, cache: &mut Tensor, src: &Tensor, at: usize) -> Result<(), OjasError> {
         let _ = (cache, src, at);
         Err(unsupported_op(self.id(), "kv_cache_write"))

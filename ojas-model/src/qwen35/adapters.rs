@@ -502,7 +502,7 @@ fn check_base(base: &BaseIdentity) -> Result<(), AdapterError> {
 /// last component, so a Hugging Face snapshot link is judged by the link's
 /// name, not its blob's) and the sha256 `expected.sha256`.
 ///
-/// `expected` is first held to the layout's own rules ([`check_base`]): a
+/// `expected` is first held to the layout's own rules (`check_base`): a
 /// shard or index name is [`AdapterError::ShardedBase`], so a pin never names
 /// more than one file, and one-of-one (`-00001-of-00001`) is fine. The name is
 /// compared before any byte is read. The file is then read once, start to

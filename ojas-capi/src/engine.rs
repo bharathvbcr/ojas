@@ -69,7 +69,7 @@ pub const OP_INSPECT: u32 = 14;
 /// open.
 pub const OP_SET_MEMORY_CEILING: u32 = 15;
 /// Read the host profile and the plan for a caller budget
-/// ([`crate::profile::profile_request`]). Reads only.
+/// (`crate::profile::profile_request`). Reads only.
 pub const OP_SYSTEM_PROFILE: u32 = 16;
 
 const OPCODES: [u32; 15] = [
@@ -107,7 +107,7 @@ pub fn install_engine() -> Result<(), String> {
 }
 
 /// Errors cross unchanged. A kind prefix, when there is one, was added where
-/// the typed error was produced ([`crate::ojas_error`], [`crate::kinded`]).
+/// the typed error was produced (`crate::ojas_error`, `crate::kinded`).
 pub fn dispatch(ctx: &JobContext, input: &[u8]) -> Result<JobOutput, String> {
     dispatch_bytes(ctx, input).map(stage)
 }

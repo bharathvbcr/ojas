@@ -510,8 +510,6 @@ pub fn encode_safetensors(
     w.finish()
 }
 
-/// [`layout`] for `items`, plus the check that each item's data is exactly
-/// its declared size. Runs before anything is written.
 /// Length of the file [`SafeTensorsWriter::new`] would write for `tensors`
 /// and `metadata`, with the same refusals, before anything is written. It is
 /// [`SafeTensorsWriter::file_len`] without the writer.
@@ -522,6 +520,8 @@ pub fn safetensors_file_len(
     layout(tensors, metadata).map(|l| l.file_len)
 }
 
+/// `layout` for `items`, plus the check that each item's data is exactly its
+/// declared size. Runs before anything is written.
 fn layout_items(items: &[TensorOut<'_>], metadata: &[(&str, &str)]) -> Result<Layout, IoError> {
     let specs: Vec<TensorSpec<'_>> = items.iter().map(TensorOut::spec).collect();
     let layout = layout(&specs, metadata)?;

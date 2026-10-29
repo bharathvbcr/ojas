@@ -461,8 +461,8 @@ fn tower<G: Graph>(
 const MAX_FLAT_ROWS: u64 = u32::MAX as u64;
 
 /// How long each row of a right-padded batch really is, out of `seq`
-/// columns. Only right padding is representable: row `b` holds its `lengths[b]
-/// >= 1` tokens in columns `0..lengths[b]` and padding after them, which the
+/// columns. Only right padding is representable: row `b` holds its
+/// `lengths[b] >= 1` tokens in columns `0..lengths[b]` and padding after them, which the
 /// causal tower cannot carry into the row's own positions as long as the
 /// padding is finite ([`forward_hidden`] says what non-finite padding does). Left padding shifts a row's tokens to other
 /// positions, and a hole or a packed row lets one segment read another, so

@@ -15,7 +15,7 @@ use crate::model::ModelState;
 pub const SESSION_CAP: usize = 64;
 
 /// The process-wide memory ceiling when nothing raised it: 1 GiB, or the
-/// machine's hard limit ([`hard_memory_limit`]) when that is smaller.
+/// machine's hard limit (`hard_memory_limit`) when that is smaller.
 ///
 /// Every session's budget is a child of one root [`Budget`] with this cap,
 /// so all sessions together account at most this many bytes, whatever each
@@ -102,7 +102,7 @@ pub fn session_budget(bytes: u64) -> Result<(Budget, Lease), String> {
 /// Replace the process-wide memory ceiling with `bytes`.
 ///
 /// Refused when `bytes` is 0, above the machine's memory
-/// ([`hard_memory_limit`]: physical RAM or a tighter cgroup limit; kind
+/// (`hard_memory_limit`: physical RAM or a tighter cgroup limit; kind
 /// `E_CAPACITY`), and while any model holds the ceiling: a session in the
 /// table, one still being built, or one freed while a call was inside it.
 /// Free every model first. Nothing is changed on a refusal. This is the

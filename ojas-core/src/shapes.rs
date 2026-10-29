@@ -1422,7 +1422,7 @@ pub fn layer_norm_forward_dims(
     })
 }
 
-/// [`crate::Backend::channel_layer_norm_forward`]: `input`
+/// For [`crate::Backend::channel_layer_norm_forward`]: `input`
 /// `[batch, channels, *spatial]` of rank 2 or more (`[N, C]`, `[N, C, L]`,
 /// `[N, C, H, W]`), `weight` and `bias` `[channels]`, all `F32`.
 pub fn channel_layer_norm_forward_dims(

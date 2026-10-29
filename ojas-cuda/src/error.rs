@@ -167,7 +167,7 @@ impl CudaError {
     /// `CUDA_ERROR_OUT_OF_MEMORY` is 2: that status is [`CudaError::Capacity`],
     /// every other failing status is [`CudaError::Driver`]. This crate's one
     /// driver-code mapping: every driver error goes through it
-    /// ([`crate::runtime::driver_error`]).
+    /// (`crate::runtime::driver_error`).
     pub fn from_driver_code(op: impl Into<String>, code: u32, detail: impl Into<String>) -> Self {
         if code == CUDA_ERROR_OUT_OF_MEMORY {
             Self::capacity(op, detail)
