@@ -192,6 +192,22 @@ fn arguments(op: &str) -> Vec<Tensor> {
             tensor(&[3], 27, 1.0),
         ],
         "max_pool2d_forward" => vec![tensor(&[1, 2, 6, 6], 28, 2.0)],
+        "conv2d_backward" => vec![
+            tensor(&[1, 4, 6, 6], 22, 1.0),
+            tensor(&[4, 2, 3, 3], 23, 1.0),
+            tensor(&[4], 24, 1.0),
+            tensor(&[1, 4, 4, 4], 36, 1.0),
+        ],
+        "conv_transpose2d_backward" => vec![
+            tensor(&[1, 4, 4, 4], 25, 1.0),
+            tensor(&[4, 3, 3, 3], 26, 1.0),
+            tensor(&[3], 27, 1.0),
+            tensor(&[1, 3, 6, 6], 37, 1.0),
+        ],
+        "max_pool2d_backward" => vec![
+            tensor(&[1, 2, 6, 6], 28, 2.0),
+            tensor(&[1, 2, 3, 3], 38, 2.0),
+        ],
         "interpolate_bilinear_forward" => vec![tensor(&[1, 2, 4, 4], 29, 2.0)],
         "rope_interleaved_forward" | "rope_interleaved_backward" => vec![
             tensor(&[1, 3, 2, 8], 30, 1.0),
@@ -257,6 +273,29 @@ fn call<B: Backend>(op: &str, backend: &B, a: &[Tensor]) -> Vec<Tensor> {
             ConvTranspose2dParams::new(),
         )),
         "max_pool2d_forward" => one(backend.max_pool2d_forward(&a[0], [2, 2], [2, 2])),
+        "conv2d_backward" => {
+            let params = Conv2dParams {
+                groups: 2,
+                ..Conv2dParams::new()
+            };
+            let g = backend
+                .conv2d_backward(&a[0], &a[1], Some(&a[2]), &a[3], params)
+                .unwrap();
+            vec![g.input, g.weight, g.bias.unwrap()]
+        }
+        "conv_transpose2d_backward" => {
+            let g = backend
+                .conv_transpose2d_backward(
+                    &a[0],
+                    &a[1],
+                    Some(&a[2]),
+                    &a[3],
+                    ConvTranspose2dParams::new(),
+                )
+                .unwrap();
+            vec![g.input, g.weight, g.bias.unwrap()]
+        }
+        "max_pool2d_backward" => one(backend.max_pool2d_backward(&a[0], &a[1], [2, 2], [2, 2])),
         "interpolate_bilinear_forward" => {
             one(backend.interpolate_bilinear_forward(&a[0], [6, 6], false))
         }

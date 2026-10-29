@@ -62,9 +62,11 @@ fn the_call_table_covers_every_op() {
     for name in &ops {
         assert!(listed.contains(name));
     }
+    // 83 since conv2d_backward, conv_transpose2d_backward and
+    // max_pool2d_backward: polled ops, admitted like every other compute op.
     assert_eq!(
         ops.len(),
-        80,
+        83,
         "op count changed: pin the new op's admission"
     );
 }
@@ -156,7 +158,8 @@ fn a_tripped_gate_refuses_polling_ops_without_repolling_and_keeps_commit_ops_ope
         );
         refused += usize::from(was_refused);
     }
-    assert_eq!(refused, 76);
+    // 83 ops less the four commit ops; 79 since the three spatial backwards.
+    assert_eq!(refused, 79);
     assert_eq!(
         polls.load(Ordering::SeqCst),
         1,

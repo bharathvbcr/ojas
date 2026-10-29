@@ -75,11 +75,12 @@ pub use shapes::{
     MAX_BROADCAST_RANK, MAX_PERMUTE_RANK,
 };
 pub use spatial::{
-    axial_rope_2d_tables, conv2d_forward_dims, conv_transpose2d_forward_dims,
-    interpolate_bilinear_forward_dims, max_pool2d_forward_dims, pixel_shuffle, pixel_unshuffle,
-    rope_interleaved_backward_dims, rope_interleaved_forward_dims, window_merge, window_partition,
-    BilinearDims, Conv2dDims, Conv2dParams, ConvTranspose2dDims, ConvTranspose2dParams,
-    InterleavedRopeDims, MaxPool2dDims,
+    axial_rope_2d_tables, conv2d_backward_dims, conv2d_forward_dims,
+    conv_transpose2d_backward_dims, conv_transpose2d_forward_dims,
+    interpolate_bilinear_forward_dims, max_pool2d_backward_dims, max_pool2d_forward_dims,
+    pixel_shuffle, pixel_unshuffle, rope_interleaved_backward_dims, rope_interleaved_forward_dims,
+    window_merge, window_partition, BilinearDims, Conv2dDims, Conv2dParams, ConvGrad,
+    ConvTranspose2dDims, ConvTranspose2dParams, InterleavedRopeDims, MaxPool2dDims,
 };
 pub use tensor::{
     device_readbacks, f32_all_finite, DeviceBuffer, HostElement, Tensor, LE_READ_CHUNK_BYTES,

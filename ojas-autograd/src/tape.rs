@@ -11,7 +11,7 @@
 
 use ojas_core::{
     inverse_permutation, permute_output_shape, AttentionOpts, Backend, BackendId, CeChunk, CeGrads,
-    GdnInputs, OjasError, Tensor,
+    Conv2dParams, ConvGrad, ConvTranspose2dParams, GdnInputs, OjasError, Tensor,
 };
 use ojas_cpu::CpuBackend;
 
@@ -140,6 +140,25 @@ enum Rec {
     Add {
         x: usize,
         y: usize,
+    },
+    /// 2D convolution of `x` by `w`, plus `b` when there is one.
+    Conv2d {
+        x: usize,
+        w: usize,
+        b: Option<usize>,
+        params: Conv2dParams,
+    },
+    /// Transposed 2D convolution of `x` by `w`, plus `b` when there is one.
+    ConvTranspose2d {
+        x: usize,
+        w: usize,
+        b: Option<usize>,
+        params: ConvTranspose2dParams,
+    },
+    MaxPool2d {
+        x: usize,
+        kernel: [usize; 2],
+        stride: [usize; 2],
     },
     Ce {
         logits: usize,
@@ -290,6 +309,23 @@ impl Rec {
             Rec::RopePartial { x, cos, sin } => Rec::RopePartial { x: m(x), cos, sin },
             Rec::Mul { a, b } => Rec::Mul { a: m(a), b: m(b) },
             Rec::Add { x, y } => Rec::Add { x: m(x), y: m(y) },
+            Rec::Conv2d { x, w, b, params } => Rec::Conv2d {
+                x: m(x),
+                w: m(w),
+                b: b.map(m),
+                params,
+            },
+            Rec::ConvTranspose2d { x, w, b, params } => Rec::ConvTranspose2d {
+                x: m(x),
+                w: m(w),
+                b: b.map(m),
+                params,
+            },
+            Rec::MaxPool2d { x, kernel, stride } => Rec::MaxPool2d {
+                x: m(x),
+                kernel,
+                stride,
+            },
             Rec::Ce {
                 logits,
                 targets,
@@ -694,6 +730,48 @@ impl<B: Backend> Tape<B> {
         self.record(Rec::Silu { x })
     }
 
+    /// 2D convolution ([`Backend::conv2d_forward`]): `x` `[N, C, H, W]`, `w`
+    /// `[O, C / groups, kh, kw]` and an optional bias `b` `[O]`.
+    pub fn conv2d(
+        &mut self,
+        x: Var,
+        w: Var,
+        b: Option<Var>,
+        params: Conv2dParams,
+    ) -> Result<Var, OjasError> {
+        const OP: &str = "Tape::conv2d";
+        let (x, w) = (self.index(x, OP)?, self.index(w, OP)?);
+        let b = b.map(|b| self.index(b, OP)).transpose()?;
+        self.record(Rec::Conv2d { x, w, b, params })
+    }
+
+    /// Transposed 2D convolution ([`Backend::conv_transpose2d_forward`]):
+    /// `x` `[N, C, H, W]`, `w` `[C, O, kh, kw]` and an optional bias `b`
+    /// `[O]`.
+    pub fn conv_transpose2d(
+        &mut self,
+        x: Var,
+        w: Var,
+        b: Option<Var>,
+        params: ConvTranspose2dParams,
+    ) -> Result<Var, OjasError> {
+        const OP: &str = "Tape::conv_transpose2d";
+        let (x, w) = (self.index(x, OP)?, self.index(w, OP)?);
+        let b = b.map(|b| self.index(b, OP)).transpose()?;
+        self.record(Rec::ConvTranspose2d { x, w, b, params })
+    }
+
+    /// Max pooling ([`Backend::max_pool2d_forward`]) of `x` `[N, C, H, W]`.
+    pub fn max_pool2d(
+        &mut self,
+        x: Var,
+        kernel: [usize; 2],
+        stride: [usize; 2],
+    ) -> Result<Var, OjasError> {
+        let x = self.index(x, "Tape::max_pool2d")?;
+        self.record(Rec::MaxPool2d { x, kernel, stride })
+    }
+
     pub fn mul(&mut self, a: Var, b: Var) -> Result<Var, OjasError> {
         let a = self.index(a, "Tape::mul")?;
         let b = self.index(b, "Tape::mul")?;
@@ -1046,6 +1124,17 @@ impl<B: Backend> Tape<B> {
                 ref cos,
                 ref sin,
             } => (be.rope_partial_forward(&v[x], cos, sin)?, rec),
+            Rec::Conv2d { x, w, b, params } => (
+                be.conv2d_forward(&v[x], &v[w], b.map(|b| &v[b]), params)?,
+                rec,
+            ),
+            Rec::ConvTranspose2d { x, w, b, params } => (
+                be.conv_transpose2d_forward(&v[x], &v[w], b.map(|b| &v[b]), params)?,
+                rec,
+            ),
+            Rec::MaxPool2d { x, kernel, stride } => {
+                (be.max_pool2d_forward(&v[x], kernel, stride)?, rec)
+            }
             Rec::Mul { a, b } => (be.mul_forward(&v[a], &v[b])?, rec),
             Rec::Add { x, y } => (be.residual_add_forward(&v[x], &v[y])?, rec),
             Rec::Ce {
@@ -1544,6 +1633,29 @@ impl<B: Backend> Tape<B> {
                 self.acc(a, ga)?;
                 self.acc(b, gb)
             }
+            Rec::Conv2d { x, w, b, params } => {
+                let (xv, wv) = (self.values[x].clone(), self.values[w].clone());
+                let bv = b.map(|b| self.values[b].clone());
+                let g = self
+                    .backend
+                    .conv2d_backward(&xv, &wv, bv.as_ref(), grad, params)?;
+                self.conv_grads(x, w, b, g)
+            }
+            Rec::ConvTranspose2d { x, w, b, params } => {
+                let (xv, wv) = (self.values[x].clone(), self.values[w].clone());
+                let bv = b.map(|b| self.values[b].clone());
+                let g =
+                    self.backend
+                        .conv_transpose2d_backward(&xv, &wv, bv.as_ref(), grad, params)?;
+                self.conv_grads(x, w, b, g)
+            }
+            Rec::MaxPool2d { x, kernel, stride } => {
+                let xv = self.values[x].clone();
+                let gx = self
+                    .backend
+                    .max_pool2d_backward(&xv, grad, kernel, stride)?;
+                self.acc(x, gx)
+            }
             Rec::Add { x, y } => {
                 // Both gradients of `x + y` are `grad` itself, so both inputs
                 // share its allocation: no copy and no charge (before
@@ -1652,6 +1764,27 @@ impl<B: Backend> Tape<B> {
         self.grads.push(None);
         self.ops.push(op);
         Var(id)
+    }
+
+    /// A convolution's gradients into its input, weight and bias nodes. The
+    /// backend returns a bias gradient exactly when it was given the bias.
+    fn conv_grads(
+        &mut self,
+        x: usize,
+        w: usize,
+        b: Option<usize>,
+        g: ConvGrad,
+    ) -> Result<(), OjasError> {
+        self.acc(x, g.input)?;
+        self.acc(w, g.weight)?;
+        match (b, g.bias) {
+            (Some(b), Some(gb)) => self.acc(b, gb),
+            (None, None) => Ok(()),
+            _ => Err(OjasError::Backend {
+                id: self.backend.id(),
+                detail: "conv backward's bias gradient does not match its bias".to_string(),
+            }),
+        }
     }
 
     /// Add `grad` into node `id`'s gradient. The first gradient is kept as

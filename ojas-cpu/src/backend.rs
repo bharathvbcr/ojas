@@ -28,9 +28,10 @@ use ojas_core::{
     AttentionDims, AttentionGrad, AttentionOpts, RmsDims,
 };
 use ojas_core::{
-    conv2d_forward_dims, conv_transpose2d_forward_dims, interpolate_bilinear_forward_dims,
+    conv2d_backward_dims, conv2d_forward_dims, conv_transpose2d_backward_dims,
+    conv_transpose2d_forward_dims, interpolate_bilinear_forward_dims, max_pool2d_backward_dims,
     max_pool2d_forward_dims, rope_interleaved_backward_dims, rope_interleaved_forward_dims,
-    Conv2dParams, ConvTranspose2dParams,
+    Conv2dParams, ConvGrad, ConvTranspose2dParams,
 };
 
 use crate::attn::general::{self, Extras, Geom};
@@ -59,8 +60,9 @@ use crate::pointwise::{
 };
 use crate::pool::{Exec, Pool};
 use crate::spatial::{
-    conv2d_forward, conv_transpose2d_forward, interpolate_bilinear_forward, max_pool2d_forward,
-    operands_with_bias, rope_interleaved,
+    conv2d_backward, conv2d_forward, conv_transpose2d_backward, conv_transpose2d_forward,
+    interpolate_bilinear_forward, max_pool2d_backward, max_pool2d_forward, operands_with_bias,
+    rope_interleaved,
 };
 use crate::validate::{
     alloc_f32, check_f32s, f32_checked, f32_layouts, f32_operands, f32_values, fill_out, fill_outs,
@@ -1132,6 +1134,52 @@ impl Backend for CpuBackend {
         let exec = self.exec();
         let [x] = f32_operands(OP, exec, [input])?;
         max_pool2d_forward(OP, &self.budget, exec, dims, x)
+    }
+
+    fn conv2d_backward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: Option<&Tensor>,
+        grad_output: &Tensor,
+        params: Conv2dParams,
+    ) -> Result<ConvGrad, OjasError> {
+        const OP: &str = "conv2d_backward";
+        let dims = conv2d_backward_dims(input, weight, bias, grad_output, params)?;
+        let exec = self.exec();
+        let (x, w, _) = operands_with_bias(OP, exec, input, weight, bias)?;
+        let [dy] = f32_operands(OP, exec, [grad_output])?;
+        conv2d_backward(OP, &self.budget, exec, dims, x, w, dy, bias.is_some())
+    }
+
+    fn conv_transpose2d_backward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: Option<&Tensor>,
+        grad_output: &Tensor,
+        params: ConvTranspose2dParams,
+    ) -> Result<ConvGrad, OjasError> {
+        const OP: &str = "conv_transpose2d_backward";
+        let dims = conv_transpose2d_backward_dims(input, weight, bias, grad_output, params)?;
+        let exec = self.exec();
+        let (x, w, _) = operands_with_bias(OP, exec, input, weight, bias)?;
+        let [dy] = f32_operands(OP, exec, [grad_output])?;
+        conv_transpose2d_backward(OP, &self.budget, exec, dims, x, w, dy, bias.is_some())
+    }
+
+    fn max_pool2d_backward(
+        &self,
+        input: &Tensor,
+        grad_output: &Tensor,
+        kernel: [usize; 2],
+        stride: [usize; 2],
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "max_pool2d_backward";
+        let dims = max_pool2d_backward_dims(input, grad_output, kernel, stride)?;
+        let exec = self.exec();
+        let [x, dy] = f32_operands(OP, exec, [input, grad_output])?;
+        max_pool2d_backward(OP, &self.budget, exec, dims, x, dy)
     }
 
     fn interpolate_bilinear_forward(
