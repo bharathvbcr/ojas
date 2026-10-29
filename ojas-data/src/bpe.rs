@@ -229,7 +229,7 @@ impl Bpe {
     /// that is not a vocabulary piece is an error. This split is one Unicode
     /// scalar per piece. GPT-2 regex splitting is [`Self::encode_ordinary`].
     /// Cost is O(n log n) in the character count. `text` longer than
-    /// [`HF_TEXT_CAP`] is refused: each character keeps a few words of
+    /// `HF_TEXT_CAP` is refused: each character keeps a few words of
     /// bookkeeping, and the file loaders already stop at that size.
     pub fn encode(&self, text: &str) -> Result<Vec<u32>, DataError> {
         refuse_encode_len(text)?;
@@ -324,7 +324,7 @@ impl Bpe {
     }
 
     /// The pieces of `ids` concatenated as written in the vocabulary. An id
-    /// outside the vocabulary, or output over [`HF_TEXT_CAP`] bytes, is an
+    /// outside the vocabulary, or output over `HF_TEXT_CAP` bytes, is an
     /// error; the length is summed before anything is allocated.
     pub fn decode(&self, ids: &[u32]) -> Result<String, DataError> {
         let mut len = 0usize;
@@ -399,7 +399,7 @@ impl Bpe {
     /// The bytes [`Self::encode_ordinary`] read: each piece through the
     /// inverse byte alphabet, with no UTF-8 check, so ids that stop inside a
     /// character still decode. An id outside the vocabulary, a piece
-    /// character outside the alphabet, or output over [`HF_TEXT_CAP`] bytes
+    /// character outside the alphabet, or output over `HF_TEXT_CAP` bytes
     /// is an error; the length is summed before anything is allocated.
     pub fn decode_bytes(&self, ids: &[u32]) -> Result<Vec<u8>, DataError> {
         let mut len = 0usize;
@@ -500,7 +500,7 @@ const CACHE_PIECE_BYTES: usize = 64;
 /// GPT-2 pre-tokenizer pieces, in order, without collecting them.
 ///
 /// Pattern: `'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+`.
-/// The optional space is one U+0020. The classes are in [`crate::gpt2_class`].
+/// The optional space is one U+0020. The classes are in `crate::gpt2_class`.
 pub fn gpt2_split(text: &str) -> impl Iterator<Item = &str> {
     let mut i = 0;
     std::iter::from_fn(move || {
@@ -647,7 +647,7 @@ const TOKENIZER_JSON_LIMITS: JsonLimits = JsonLimits {
 ///
 /// Also refused: a path that is not a regular file once symlinks are followed
 /// (a FIFO would block `open`), malformed JSON (duplicate keys included) and
-/// a file over [`HF_TEXT_CAP`]. Nothing else in the file is read: the added tokens, the
+/// a file over `HF_TEXT_CAP`. Nothing else in the file is read: the added tokens, the
 /// post-processor and the decoder do not change what `encode_ordinary`
 /// returns.
 pub fn check_gpt2_pre_tokenizer(tokenizer_json: &Path) -> Result<(), DataError> {

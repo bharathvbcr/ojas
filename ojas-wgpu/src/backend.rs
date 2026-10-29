@@ -1897,7 +1897,7 @@ impl Backend for WgpuBackend {
 
     /// `argmax_rows` in `reduce.wgsl`: one workgroup per row, the grid
     /// folded past the per-dimension limit. A non-finite input raises
-    /// [`ARGMAX`]'s fault bit, reported at the next sync. The result has no
+    /// `ARGMAX`'s fault bit, reported at the next sync. The result has no
     /// host shadow; its values are bounded below `cols`, so it can feed
     /// `embedding_forward` with no readback.
     fn argmax_rows(&self, x: &Tensor) -> Result<Tensor, OjasError> {
@@ -1934,7 +1934,7 @@ impl Backend for WgpuBackend {
     /// over the row, the grid folded past the per-dimension limit. The
     /// kernel's cost grows as `k * cols / 256` reads per lane, so `k` past
     /// [`WGPU_TOPK_MAX_K`] is [`OjasError::Unsupported`]. A NaN or `+inf`
-    /// input raises [`TOPK`]'s fault bit, reported at the next sync. The ids
+    /// input raises `TOPK`'s fault bit, reported at the next sync. The ids
     /// have no host shadow; they are bounded below `cols`, so they can feed
     /// `embedding_forward` with no readback.
     fn topk_rows(&self, x: &Tensor, k: usize) -> Result<(Tensor, Tensor), OjasError> {
@@ -2309,7 +2309,7 @@ impl Backend for WgpuBackend {
         })
     }
 
-    /// Device round under its own fault bit ([`CAST`], in the high mask
+    /// Device round under its own fault bit (`CAST`, in the high mask
     /// word). `round_bf16` never raises: a NaN stays a value, as the CPU's
     /// cast keeps it. A host tensor is [`OjasError::Placement`].
     fn cast_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
@@ -2549,7 +2549,7 @@ impl Backend for WgpuBackend {
         Ok(y)
     }
 
-    /// The global norm in one read of every gradient ([`Self::global_norm`]:
+    /// The global norm in one read of every gradient (`Self::global_norm`:
     /// `ceil(len / k)` fused dispatches and a finish), then four words read
     /// back (the norm and a non-finite flag), then, when the norm is over
     /// `max_norm`, every gradient scaled in place in `ceil(len / k)` more

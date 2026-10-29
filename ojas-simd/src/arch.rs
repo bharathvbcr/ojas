@@ -792,7 +792,7 @@ impl<'band> NanolabCallerBand<'band> {
     }
 
     /// Store this band on the calling thread. The 8x8 body is
-    /// [`transpose_8x8_block`].
+    /// `transpose_8x8_block`.
     pub fn write(self) -> NanolabBandWritten<'band> {
         // SAFETY: the brand ties this band to `body`, which
         // `with_nanolab_token_bands` runs while it holds the `&mut Vec`

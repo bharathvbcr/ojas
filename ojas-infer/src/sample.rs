@@ -84,8 +84,8 @@ pub struct GenerateConfig {
 }
 
 /// One token id from `logits`. A refused call does not advance `rng`; a
-/// greedy call never reads it. The same draw as [`draw`] over
-/// [`ranked_candidates`]`(logits, cfg.top_k)`.
+/// greedy call never reads it. The same draw as `draw` over
+/// `ranked_candidates(logits, cfg.top_k)`.
 pub fn sample_token(
     logits: &[f32],
     cfg: &SamplingConfig,

@@ -432,7 +432,7 @@ impl Backend for CpuBackend {
     }
 
     /// A `Bf16` operand is widened into charged `f32` scratch for the
-    /// duration of the op ([`crate::validate::matmul_operands`]); the kernels
+    /// duration of the op (`crate::validate::matmul_operands`); the kernels
     /// and their bits are the `F32` ones. The tied table is read in place:
     /// the gather widens each picked row, and the fused head one vocabulary
     /// block at a time.
@@ -1484,7 +1484,7 @@ impl Backend for CpuBackend {
     }
 
     /// AdamW updates in place and charges nothing beyond its operands; Muon
-    /// charges [`CpuBackend::muon_headroom`], the figure its step reserves.
+    /// charges `CpuBackend::muon_headroom`, the figure its step reserves.
     fn optimizer_scratch_bytes(
         &self,
         kind: OptimizerKind,

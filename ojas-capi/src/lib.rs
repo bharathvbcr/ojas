@@ -1,6 +1,6 @@
 //! In-process load, train, save, resume, tokenize, sample and free for the
 //! Go API (`docs/framework-design.md` §7; the opcode table is in
-//! [`engine`]).
+//! `engine`).
 //!
 //! Each session holds a nanolab model on its device: a CPU session on
 //! [`ojas_cpu::CpuBackend`], a Metal session on its own

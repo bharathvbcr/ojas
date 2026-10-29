@@ -66,7 +66,7 @@ pub struct BlockParams<V> {
     pub ffn_down: V,
 }
 
-/// Fields per block. [`BlockParams::from_iter`] and [`BlockParams::push_into`]
+/// Fields per block. `BlockParams::from_iter` and `BlockParams::push_into`
 /// read and write exactly this many, in field order.
 pub const BLOCK_PARAMS: usize = 14;
 

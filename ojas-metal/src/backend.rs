@@ -1979,7 +1979,7 @@ impl Backend for MetalBackend {
 
     /// `ojas_argmax_rows`: one threadgroup per row. A non-finite input is a
     /// deferred fault, reported at the next sync. The result stays on the
-    /// device and carries [`Ids::Below`]`(cols)`, so it can feed
+    /// device and carries `Ids::Below(cols)`, so it can feed
     /// `embedding_forward` with no readback and no host copy.
     fn argmax_rows(&self, x: &Tensor) -> Result<Tensor, OjasError> {
         const OP: &str = "argmax_rows";
@@ -2018,7 +2018,7 @@ impl Backend for MetalBackend {
     /// row, so the kernel's cost is `k * cols / 256` reads per lane; `k` past
     /// [`METAL_TOPK_MAX_K`] is [`OjasError::Unsupported`]. A NaN or `+inf` input
     /// is a deferred fault, reported at the next sync. Both results stay on
-    /// the device; the ids carry [`Ids::Below`]`(cols)`, so they can feed
+    /// the device; the ids carry `Ids::Below(cols)`, so they can feed
     /// `embedding_forward` with no readback and no host copy.
     fn topk_rows(&self, x: &Tensor, k: usize) -> Result<(Tensor, Tensor), OjasError> {
         const OP: &str = "topk_rows";
@@ -3411,7 +3411,7 @@ impl Backend for MetalBackend {
     /// One command: tessl GEMMs make each `[rows, cols]` logits tile, and
     /// this crate's kernels turn tiles into the loss and gradients (see
     /// `Worker::linear_ce`). The budget is charged for the outputs and for
-    /// [`LceGeom::scratch`], whose only logits buffer is one tile, so a call
+    /// `LceGeom::scratch`, whose only logits buffer is one tile, so a call
     /// runs under a budget far below `N * V * 4` bytes. A `Bf16` weight stays
     /// at 2 bytes: each `[cols, d]` tile is widened on the device into the
     /// one staged tile that scratch charges, never the whole table.
@@ -3662,7 +3662,7 @@ impl Backend for MetalBackend {
     }
 
     /// AdamW runs in place with no scratch; Muon reserves
-    /// [`muon_scratch_elems`] f32 values, the figure its step charges.
+    /// `muon_scratch_elems` f32 values, the figure its step charges.
     fn optimizer_scratch_bytes(
         &self,
         kind: OptimizerKind,

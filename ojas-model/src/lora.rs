@@ -16,7 +16,7 @@
 //! multiplies the input of the low-rank branch only, scaled by `1/(1-p)`.
 //!
 //! The scaling reaches the graph as a constant factor on `B`
-//! ([`LoraSite::scaled_b`]), so `dB` carries it by the chain rule. At
+//! ([`scaled_b`]), so `dB` carries it by the chain rule. At
 //! `alpha == r` the factor is exactly 1 and no op is recorded.
 //!
 //! A host-side [`LoraLinear`] holds the tensors and folds the adapter into

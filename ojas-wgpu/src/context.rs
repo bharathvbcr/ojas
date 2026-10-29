@@ -83,7 +83,7 @@ pub const STAGING_CACHE_BYTES: u64 = 64 << 20;
 
 /// Largest staging buffer one read uses. A staging buffer is a power of two
 /// holding the span and 16 fault bytes, so a longer read (or one past what
-/// the device's `max_buffer_size` allows, [`read_piece`]) is copied out in
+/// the device's `max_buffer_size` allows, `read_piece`) is copied out in
 /// pieces, one submission and wait each. A read in flight holds one staging
 /// buffer of at most this size, uncharged; half of [`STAGING_CACHE_BYTES`],
 /// so the cache keeps two.
@@ -110,7 +110,7 @@ pub const POOL_CAP_BYTES: u64 = 512 << 20;
 
 /// Parked context drops allowed at once: drops that returned before the
 /// GPU finished, so their thread still holds the queue, the device, that
-/// device's memory and itself ([`Inner`]'s `Drop`). At this many,
+/// device's memory and itself (`Inner`'s `Drop`). At this many,
 /// [`WgpuContext::open`] refuses a new context rather than park another, so
 /// what timed-out drops hold is bounded; [`drop_stats`] reports them. A drop
 /// that finishes within its wait never parks and never counts.

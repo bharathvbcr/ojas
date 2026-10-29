@@ -7,7 +7,7 @@
 //!   Hugging Face `config.json` and converts into it.
 //! - [`load_hf`] reads a Hugging Face checkpoint into [`Qwen35Params`],
 //!   splitting the fused tensors; [`fuse_grads`] is the inverse for
-//!   gradients ([`params`]'s docs say how each fused tensor splits).
+//!   gradients (`params`'s docs say how each fused tensor splits).
 //!   [`load_hf_pinned`] is `load_hf` of a single file that must match an
 //!   adapter checkpoint's [`adapters::BaseIdentity`] (name and sha256).
 //! - [`forward_loss`]: the tower to the fused tied-head cross-entropy, each

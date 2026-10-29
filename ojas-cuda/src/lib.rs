@@ -21,10 +21,11 @@
 //!   with `Unsupported` until its kernels are wired and run on a device.
 //! - [`error`]: [`CudaError`], the crate's one error enum, and its one
 //!   mapping to `OjasError` and `DeviceError`.
-//! - Behind `cuda`, what [`CudaBackend::with_runtime`] and
-//!   [`CudaBackend::runtime`] hand over: [`runtime`] ([`CudaRuntime`], its
-//!   [`DeviceInfo`] and [`RuntimeConfig`]) and [`buffer`] ([`CudaBuffer`],
-//!   [`CudaDeviceBuffer`]).
+//! - Behind `cuda`, what `CudaBackend::with_runtime` and
+//!   `CudaBackend::runtime` hand over: `runtime` (`CudaRuntime`, its
+//!   `DeviceInfo` and `RuntimeConfig`) and `buffer` (`CudaBuffer`,
+//!   `CudaDeviceBuffer`). They are plain names here because rustdoc without
+//!   the feature does not see them.
 //!
 //! The C ABI (`ojas-capi`) does not link this crate yet: device 5 is refused
 //! by name there until the provider lands (`go/api.go`), so it needs nothing

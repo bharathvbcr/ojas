@@ -44,8 +44,8 @@ const EPOCH_STEP: u64 = 0xD1B5_4A32_D192_ED03;
 pub const RNG_STATE_VERSION: u32 = 1;
 
 /// Generator tag of the permutation [`BatchSampler`] runs today:
-/// [`ROUNDS`]-round Feistel, SplitMix64 ([`CounterRng`]) round function and
-/// keys, [`EPOCH_STEP`] epoch spacing, cycle-walked into `0..W`. Any change
+/// `ROUNDS`-round Feistel, SplitMix64 ([`CounterRng`]) round function and
+/// keys, `EPOCH_STEP` epoch spacing, cycle-walked into `0..W`. Any change
 /// that moves a window start for the same `(seed, W, epoch, ordinal)` needs
 /// a new tag; `permutation_is_pinned` in the tests holds this one fixed.
 pub const RNG_GENERATOR_FEISTEL4_SPLITMIX64: u32 = 1;

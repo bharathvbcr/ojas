@@ -809,7 +809,7 @@ impl Tensor {
     }
 
     /// An `F32` tensor that [`crate::Autocast`] rounded: every element is a
-    /// bf16 value widened back to f32 ([`COMPUTE_BF16`]). An in-place write
+    /// bf16 value widened back to f32 (`COMPUTE_BF16`). An in-place write
     /// clears it. A backend may multiply two such operands on a bf16 lane:
     /// each product of two bf16 values is exact in f32, so only the order
     /// of the f32 sums differs from the same product on f32 operands.

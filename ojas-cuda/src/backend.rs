@@ -16,7 +16,7 @@ use crate::runtime::{CudaRuntime, RuntimeConfig};
 
 /// Device-resident [`Backend`] over NVIDIA CUDA.
 ///
-/// Its [`Backend::budget`] is its runtime's ([`CudaRuntime::budget`]): the
+/// Its [`Backend::budget`] is its runtime's (`CudaRuntime::budget`): the
 /// tensors it uploads, the runtime's kernel buffers and the cuBLAS workspace
 /// are charged to one [`Budget`], so together they never pass its cap.
 #[derive(Clone)]
@@ -41,11 +41,11 @@ impl std::fmt::Debug for CudaBackend {
 impl CudaBackend {
     /// Open CUDA device 0, charging `budget` for every device allocation,
     /// the runtime's 32 MiB cuBLAS workspace included
-    /// ([`CudaRuntime::open_with`]).
+    /// (`CudaRuntime::open_with`).
     ///
     /// A failure keeps its kind (`impl From<CudaError> for DeviceError`):
     /// missing libraries or no device are [`DeviceError::NoDevice`], a
-    /// compute capability other than [`crate::kernels::REQUIRED_CC`] is
+    /// compute capability other than `crate::kernels::REQUIRED_CC` is
     /// [`DeviceError::Unsupported`], a budget too small for the workspace or
     /// a device out of memory is [`DeviceError::Capacity`], an NVRTC failure
     /// is [`DeviceError::Compile`], and a cuBLAS, stream or first-sync
