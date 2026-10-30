@@ -339,6 +339,91 @@ impl MetalBackend {
         self.one("permute", &out, 0, cmd)
     }
 
+    /// [`Backend::conv2d_forward`] through im2col whatever the shape: the
+    /// route a 1 x 1 stride 1 unpadded convolution took before it skipped
+    /// im2col, the reference arm of the pointwise tests and the conv bench.
+    /// Not a stable API.
+    #[doc(hidden)]
+    pub fn conv2d_via_im2col(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: Option<&Tensor>,
+        params: Conv2dParams,
+    ) -> Result<Tensor, OjasError> {
+        self.conv2d_routed(input, weight, bias, params, false)
+    }
+
+    /// [`Backend::conv2d_forward`], taking the pointwise route where
+    /// `allow_pointwise` and [`pointwise_conv`] agree.
+    fn conv2d_routed(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: Option<&Tensor>,
+        params: Conv2dParams,
+        allow_pointwise: bool,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "conv2d_forward";
+        let dims = conv2d_forward_dims(input, weight, bias, params)?;
+        refuse_unsupported_conv2d(OP, &dims)?;
+        let lane = self.link.lane(input.bf16_exact(), weight.bf16_exact());
+        let (input, weight) = (self.widened(input)?, self.widened(weight)?);
+        let bias = bias.map(|b| self.widened(b)).transpose()?;
+        let (x, w) = (self.f32(OP, &input)?, self.f32(OP, &weight)?);
+        let bias_arg = bias.as_ref().map(|b| self.f32(OP, b)).transpose()?;
+        let geom = conv_geom(OP, &dims)?;
+        if dims.params.groups > 1 {
+            // Depthwise: one direct kernel, no im2col matrix and no scratch.
+            u32_dim(OP, product(OP, &dims.out_shape())?)?;
+            let cmd = Cmd::DepthwiseConv2d {
+                op: OP,
+                x,
+                w,
+                bias: bias_arg,
+                geom,
+            };
+            return self.one(OP, &dims.out_shape(), 0, cmd);
+        }
+        let pointwise = allow_pointwise && pointwise_conv(&dims, x);
+        let scratch = if pointwise {
+            // No im2col matrix and no product: the GEMM writes the output.
+            // tessl's bf16 lane narrows the input of each image and the
+            // weight on every call, and the copies live until the command
+            // ends.
+            plus(
+                OP,
+                copied_elems(OP, ReadAs::Matrix, &[w])?,
+                lane_copies(OP, lane, x.n, product(OP, &[w.n, dims.batch])?)?,
+            )?
+        } else {
+            let rows = product(OP, &[dims.batch, dims.out_height, dims.out_width])?;
+            let width = product(OP, &[dims.in_channels, dims.kernel[0], dims.kernel[1]])?;
+            let cols = product(OP, &[rows, width])?;
+            let prod = product(OP, &[rows, dims.out_channels])?;
+            u32_dim(OP, cols)?;
+            plus(
+                OP,
+                plus(
+                    OP,
+                    plus(OP, cols, prod)?,
+                    copied_elems(OP, ReadAs::Matrix, &[w])?,
+                )?,
+                lane_copies(OP, lane, cols, w.n)?,
+            )?
+        };
+        let cmd = Cmd::Conv2d {
+            op: OP,
+            x,
+            w,
+            bias: bias_arg,
+            geom,
+            lane,
+            pointwise,
+        };
+        self.one(OP, &dims.out_shape(), scratch, cmd)
+    }
+
     /// [`Backend::attention_forward_saving`] on the split-K tiled kernels
     /// (the scalar kernel where they cannot run) whatever the dispatcher
     /// would pick: the split-K reference arm of the flash tests and bench.
@@ -1381,6 +1466,31 @@ fn refuse_unsupported_conv2d(op: &'static str, d: &Conv2dDims) -> Res<()> {
             d.kernel, p.stride, p.padding, p.dilation, p.groups, d.in_channels, d.out_channels
         ),
     })
+}
+
+/// Whether a one-group convolution of `dims` on input window `x` runs as one
+/// GEMM per image with no im2col: a 1 x 1 kernel at stride 1 without padding,
+/// so output image `n` is `W [o, c] @ X_n [c, pixels]`, already in NCHW. The
+/// GEMM reads each image in place, which tessl requires to start on 16
+/// bytes: the input window must (a misaligned one is copied for a linear, but
+/// not here) and, past one image, so must every image after the first (`c`
+/// times the pixels, and `o` times them for the output, a multiple of 4).
+/// Anything else takes im2col, which reads any window.
+fn pointwise_conv(d: &Conv2dDims, x: Arg) -> bool {
+    let p = d.params;
+    if d.kernel != [1, 1] || p.stride != [1, 1] || p.padding != [0, 0] || p.groups != 1 {
+        return false;
+    }
+    if x.copied(ReadAs::Matrix) {
+        return false;
+    }
+    let pixels = d.out_height.checked_mul(d.out_width);
+    let aligned = |channels: usize| {
+        pixels
+            .and_then(|px| px.checked_mul(channels))
+            .is_some_and(|n| n.is_multiple_of(4))
+    };
+    d.batch == 1 || (aligned(d.in_channels) && aligned(d.out_channels))
 }
 
 /// One bilinear axis's source-index scale, in f32 with the CPU's own
@@ -2723,8 +2833,11 @@ impl Backend for MetalBackend {
     /// A convolution as im2col, a GEMM and a layout pass, at any stride and
     /// padding (the patch embedding, 1x1 and 3x3 convolutions, the strided
     /// downsampler); a depthwise one (`groups == in == out`) on its own
-    /// direct kernel. Dilation above 1 and other grouped convolutions are
-    /// [`OjasError::Unsupported`].
+    /// direct kernel. The GEMM runs on the bf16 lane when both operands are
+    /// bf16-exact, as a linear's does. A 1 x 1, stride 1, unpadded
+    /// convolution whose views the GEMM reads in place (`pointwise_conv`)
+    /// skips im2col and the layout pass. Dilation above 1 and other grouped
+    /// convolutions are [`OjasError::Unsupported`].
     fn conv2d_forward(
         &self,
         input: &Tensor,
@@ -2732,44 +2845,7 @@ impl Backend for MetalBackend {
         bias: Option<&Tensor>,
         params: Conv2dParams,
     ) -> Result<Tensor, OjasError> {
-        const OP: &str = "conv2d_forward";
-        let dims = conv2d_forward_dims(input, weight, bias, params)?;
-        refuse_unsupported_conv2d(OP, &dims)?;
-        let (input, weight) = (self.widened(input)?, self.widened(weight)?);
-        let bias = bias.map(|b| self.widened(b)).transpose()?;
-        let (x, w) = (self.f32(OP, &input)?, self.f32(OP, &weight)?);
-        let bias_arg = bias.as_ref().map(|b| self.f32(OP, b)).transpose()?;
-        let geom = conv_geom(OP, &dims)?;
-        if dims.params.groups > 1 {
-            // Depthwise: one direct kernel, no im2col matrix and no scratch.
-            u32_dim(OP, product(OP, &dims.out_shape())?)?;
-            let cmd = Cmd::DepthwiseConv2d {
-                op: OP,
-                x,
-                w,
-                bias: bias_arg,
-                geom,
-            };
-            return self.one(OP, &dims.out_shape(), 0, cmd);
-        }
-        let rows = product(OP, &[dims.batch, dims.out_height, dims.out_width])?;
-        let width = product(OP, &[dims.in_channels, dims.kernel[0], dims.kernel[1]])?;
-        let cols = product(OP, &[rows, width])?;
-        let prod = product(OP, &[rows, dims.out_channels])?;
-        u32_dim(OP, cols)?;
-        let scratch = plus(
-            OP,
-            plus(OP, cols, prod)?,
-            copied_elems(OP, ReadAs::Matrix, &[w])?,
-        )?;
-        let cmd = Cmd::Conv2d {
-            op: OP,
-            x,
-            w,
-            bias: bias_arg,
-            geom,
-        };
-        self.one(OP, &dims.out_shape(), scratch, cmd)
+        self.conv2d_routed(input, weight, bias, params, true)
     }
 
     /// A transposed convolution whose kernel equals its stride (the SAM

@@ -693,14 +693,20 @@ pub(crate) enum Cmd {
         lens: Option<Arg>,
         geom: AttnGeom,
     },
-    /// `conv2d_forward` as im2col, a GEMM and a layout pass; replies with the
-    /// NCHW output. `op` names a fault, and `bias` is read when present.
+    /// `conv2d_forward` as im2col, a GEMM on `lane` and a layout pass; replies
+    /// with the NCHW output. `pointwise` (1 x 1, stride 1, no padding, views
+    /// the GEMM reads in place; the backend decides) takes each image as the
+    /// GEMM's `[c, pixels]` operand and writes the output layout directly, so
+    /// neither im2col nor the layout pass runs. `op` names a fault, and `bias`
+    /// is read when present.
     Conv2d {
         op: &'static str,
         x: Arg,
         w: Arg,
         bias: Option<Arg>,
         geom: ConvGeom,
+        lane: Lane,
+        pointwise: bool,
     },
     /// `conv_transpose2d_forward` with kernel == stride: a permute to NHWC, a
     /// GEMM and a layout pass; `geom` holds the input extents, the output
