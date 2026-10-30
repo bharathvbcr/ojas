@@ -1208,8 +1208,7 @@ inline float ce_log1p(float x)
 /// finiteness checks folded in rather than run as separate passes:
 /// 1. every row, ignored or not, is read once: a NaN or infinity sets ST_IN,
 ///    and each lane keeps an online (max, sum of exp) that the threadgroup
-///    merges, plus the same sum over every class but the target; the loss row
-///    is max + log(sum) - logit[target];
+///    merges; the loss row is max + log(sum) - logit[target];
 /// 2. with `write_grad`, the gradient row (softmax / n_valid, minus
 ///    1 / n_valid at the target, the same arithmetic as before) is written,
 ///    and a value that is not finite sets ST_OUT.
@@ -1219,7 +1218,10 @@ inline float ce_log1p(float x)
 /// the sum over the other classes of exp(x - max): loss log1p(S), the target
 /// gradient -(S / (1 + S)) / n_valid and each other class
 /// (exp(x - max) / (1 + S)) / n_valid. Every other row is the form above, bit
-/// for bit.
+/// for bit, and pays nothing for it in the loop or the tree: S is summed in a
+/// second pass over the row (a plain tree reduction) only behind the
+/// threadgroup-uniform test `picked == max && sum == 1.0`, so the barriers in
+/// that pass are legal.
 /// An ignored or out-of-range row writes loss 0 and a zero gradient row.
 /// n_valid, the rows neither ignored nor out of range, is counted on the
 /// host from its copy of the targets.
@@ -1238,7 +1240,7 @@ kernel void ojas_ce_fused(
     uint r [[threadgroup_position_in_grid]],
     uint lane [[thread_index_in_threadgroup]])
 {
-    threadgroup float3 sh[CE_TG];
+    threadgroup float2 sh[CE_TG];
     if (r >= rows) return;
     const uint t = targets[r];
     const bool skip = (has_ignore != 0u && t == ignore) || t >= vocab;
@@ -1246,7 +1248,6 @@ kernel void ojas_ce_fused(
     bool bad = false;
     float m = -INFINITY;
     float s = 0.0f;
-    float so = 0.0f;
     for (uint c = lane; c < vocab; c += CE_TG) {
         const float x = logits[base + c];
         if (!isfinite(x)) {
@@ -1254,14 +1255,10 @@ kernel void ojas_ce_fused(
             continue;
         }
         if (x > m) {
-            const float k = precise::exp(m - x);
-            s = s * k + 1.0f;
-            so = so * k + (c == t ? 0.0f : 1.0f);
+            s = s * precise::exp(m - x) + 1.0f;
             m = x;
         } else {
-            const float e = precise::exp(x - m);
-            s += e;
-            if (c != t) so += e;
+            s += precise::exp(x - m);
         }
     }
     if (bad) atomic_store_explicit(&st[ST_IN], 1u, memory_order_relaxed);
@@ -1272,18 +1269,42 @@ kernel void ojas_ce_fused(
         }
         return;
     }
-    sh[lane] = float3(m, s, so);
+    sh[lane] = float2(m, s);
     threadgroup_barrier(mem_flags::mem_threadgroup);
     for (uint off = CE_TG / 2u; off > 0u; off >>= 1u) {
-        if (lane < off) sh[lane] = ce_merge3(sh[lane], sh[lane + off]);
+        if (lane < off) sh[lane] = ce_merge(sh[lane], sh[lane + off]);
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
     const float mx = sh[0].x;
     const float sum = sh[0].y;
-    const float other = sh[0].z;
     const float picked = logits[base + t];
-    const bool collapsed = picked == mx && sum == 1.0f && other > 0.0f;
-    if (lane == 0u) loss_rows[r] = collapsed ? ce_log1p(other) : mx + precise::log(sum) - picked;
+    // Uniform across the threadgroup: every lane reads the same sh[0] and the
+    // row's one target. Only such a row can collapse.
+    const bool maybe = picked == mx && sum == 1.0f;
+    float other = 0.0f;
+    if (maybe) {
+        // Every lane has read sh[0]; the second pass reuses sh[].y.
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        float acc = 0.0f;
+        for (uint c = lane; c < vocab; c += CE_TG) {
+            const float x = logits[base + c];
+            if (c != t && isfinite(x)) acc += precise::exp(x - mx);
+        }
+        sh[lane].y = acc;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint off = CE_TG / 2u; off > 0u; off >>= 1u) {
+            if (lane < off) sh[lane].y += sh[lane + off].y;
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+        other = sh[0].y;
+    }
+    const bool collapsed = maybe && other > 0.0f;
+    // The standard expression first and unconditionally, then replaced for a
+    // collapsed row, so a fast-math compile cannot reassociate it away from the
+    // bits every other row has always had.
+    float loss = mx + precise::log(sum) - logits[base + t];
+    if (collapsed) loss = ce_log1p(other);
+    if (lane == 0u) loss_rows[r] = loss;
     if (write_grad == 0u) return;
     const float denom = (float)n_valid;
     const float at_target = precise::divide(1.0f, denom);
