@@ -29,9 +29,9 @@
 //! [`Backend`]: crate::Backend
 
 use crate::backend::{
-    AdamWConfig, AttentionGrad, AttentionOpts, Backend, BackendId, CeChunk, CeGrads, GatedRmsGrad,
-    GdnDecayGrad, GdnForward, GdnGrad, GdnInputs, LinearCe, MuonNs5Config, PerHeadGateGrad,
-    ValueResidualGrad,
+    AdamWConfig, AffineGrad, AttentionGrad, AttentionOpts, Backend, BackendId, CeChunk, CeGrads,
+    GatedRmsGrad, GdnDecayGrad, GdnForward, GdnGrad, GdnInputs, LinearCe, MuonNs5Config,
+    PerHeadGateGrad, ValueResidualGrad,
 };
 use crate::budget::Budget;
 use crate::dtype::DType;
@@ -140,8 +140,11 @@ pub enum AutocastClass {
 /// keeps its bias `F32`. Attention rounds its bias and leaves the saved
 /// log-sum-exp `F32`, as the causal pair does. The convolution backwards read
 /// their bias for its shape only, so it is not rounded, and keep the weight
-/// and bias gradients `F32`, as `linear_backward` keeps its weight gradient.
-/// `max_pool2d_backward` gates on the incoming gradient, not the input.
+/// and bias gradients `F32`, as `linear_backward` keeps its weight gradient;
+/// `linear_bias_backward` does the same. `max_pool2d_backward` gates on the
+/// incoming gradient, not the input. The norm and softmax backwards are
+/// reductions like their forwards: `F32` whatever the tags. The pointwise
+/// backwards gate on every operand they read, as `silu_backward` does.
 ///
 /// `ojas-cpu/tests/autocast_sam_policy.rs` runs each entry against
 /// `Autocast<CpuBackend>`, so an op added to the `Backend` trait or changed
@@ -205,8 +208,19 @@ pub const SAM_AUTOCAST_POLICY: &[(&str, AutocastClass)] = &[
         },
     ),
     (
+        "linear_bias_backward",
+        AutocastClass::Matmul {
+            f32_operands: &[2],
+            f32_outputs: &[1, 2],
+        },
+    ),
+    (
         "gelu_erf_forward",
         AutocastClass::Pointwise { tag_from: &[0] },
+    ),
+    (
+        "gelu_erf_backward",
+        AutocastClass::Pointwise { tag_from: &[0, 1] },
     ),
     ("relu_forward", AutocastClass::Pointwise { tag_from: &[0] }),
     ("scale_forward", AutocastClass::Pointwise { tag_from: &[0] }),
@@ -215,8 +229,20 @@ pub const SAM_AUTOCAST_POLICY: &[(&str, AutocastClass)] = &[
         AutocastClass::Pointwise { tag_from: &[0, 1] },
     ),
     (
+        "broadcast_add_backward",
+        AutocastClass::Pointwise {
+            tag_from: &[0, 1, 2],
+        },
+    ),
+    (
         "broadcast_mul_forward",
         AutocastClass::Pointwise { tag_from: &[0, 1] },
+    ),
+    (
+        "broadcast_mul_backward",
+        AutocastClass::Pointwise {
+            tag_from: &[0, 1, 2],
+        },
     ),
     (
         "max_pool2d_forward",
@@ -239,9 +265,12 @@ pub const SAM_AUTOCAST_POLICY: &[(&str, AutocastClass)] = &[
         AutocastClass::Pointwise { tag_from: &[0] },
     ),
     ("layer_norm_forward", AutocastClass::Reduction),
+    ("layer_norm_backward", AutocastClass::Reduction),
     ("channel_layer_norm_forward", AutocastClass::Reduction),
+    ("channel_layer_norm_backward", AutocastClass::Reduction),
     ("group_norm_forward", AutocastClass::Reduction),
     ("softmax_forward", AutocastClass::Reduction),
+    ("softmax_backward", AutocastClass::Reduction),
     ("concat", AutocastClass::Move),
     ("slice", AutocastClass::Move),
     ("fill", AutocastClass::Source),
@@ -490,6 +519,15 @@ impl<B: Backend> Autocast<B> {
     fn keep_f32(&self, tensor: Tensor) -> Tensor {
         tensor.set_compute_tag(COMPUTE_F32);
         tensor
+    }
+
+    /// [`Self::keep_f32`] on each gradient of an input, weight and bias.
+    fn keep_affine_f32(&self, grad: AffineGrad) -> AffineGrad {
+        AffineGrad {
+            input: self.keep_f32(grad.input),
+            weight: self.keep_f32(grad.weight),
+            bias: self.keep_f32(grad.bias),
+        }
     }
 
     fn copy_tag(&self, src: &Tensor, dst: Tensor) -> Tensor {
@@ -1482,6 +1520,111 @@ impl<B: Backend> Backend for Autocast<B> {
         self.pass()?;
         let out = self.inner.softmax_forward(input)?;
         Ok(self.keep_f32(out))
+    }
+
+    /// A reduction like the forward: the dot stays `f32` and the gradient is
+    /// not rounded to the compute dtype.
+    fn softmax_backward(&self, output: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self.inner.softmax_backward(output, grad_output)?;
+        Ok(self.keep_f32(out))
+    }
+
+    /// Reductions like [`Backend::layer_norm_forward`]: the statistics and
+    /// the three sums stay `f32` and no gradient is rounded.
+    fn layer_norm_backward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        grad_output: &Tensor,
+        eps: f32,
+    ) -> Result<AffineGrad, OjasError> {
+        self.pass()?;
+        let grad = self
+            .inner
+            .layer_norm_backward(input, weight, bias, grad_output, eps)?;
+        Ok(self.keep_affine_f32(grad))
+    }
+
+    fn channel_layer_norm_backward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        grad_output: &Tensor,
+        eps: f32,
+    ) -> Result<AffineGrad, OjasError> {
+        self.pass()?;
+        let grad = self
+            .inner
+            .channel_layer_norm_backward(input, weight, bias, grad_output, eps)?;
+        Ok(self.keep_affine_f32(grad))
+    }
+
+    /// Pointwise, like [`Backend::silu_backward`]: rounded and tagged only
+    /// when the input and the incoming gradient are both bf16-tagged.
+    fn gelu_erf_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        let on = self.region()?;
+        let tagged =
+            input.compute_tag() == COMPUTE_BF16 && grad_output.compute_tag() == COMPUTE_BF16;
+        let out = self.inner.gelu_erf_backward(input, grad_output)?;
+        self.promote(on, tagged, out)
+    }
+
+    /// As [`Backend::linear_backward`]: the operands rounded, the input
+    /// gradient emitted rounded, the weight and bias gradients kept `f32`.
+    /// The bias is read for its shape only, so it is not rounded.
+    fn linear_bias_backward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<AffineGrad, OjasError> {
+        let input = self.prep(input)?;
+        let weight = self.prep(weight)?;
+        let grad_output = self.prep(grad_output)?;
+        let grad = self
+            .inner
+            .linear_bias_backward(&input, &weight, bias, &grad_output)?;
+        Ok(AffineGrad {
+            input: self.emit(grad.input)?,
+            weight: self.keep_f32(grad.weight),
+            bias: self.keep_f32(grad.bias),
+        })
+    }
+
+    /// Pointwise, like [`Backend::residual_add_backward`]: rounded and
+    /// tagged only when both operands and the incoming gradient are
+    /// bf16-tagged.
+    fn broadcast_add_backward(
+        &self,
+        a: &Tensor,
+        b: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        let on = self.region()?;
+        let tagged = a.compute_tag() == COMPUTE_BF16
+            && b.compute_tag() == COMPUTE_BF16
+            && grad_output.compute_tag() == COMPUTE_BF16;
+        let (ga, gb) = self.inner.broadcast_add_backward(a, b, grad_output)?;
+        Ok((self.promote(on, tagged, ga)?, self.promote(on, tagged, gb)?))
+    }
+
+    /// Pointwise, like [`Backend::mul_backward`].
+    fn broadcast_mul_backward(
+        &self,
+        a: &Tensor,
+        b: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        let on = self.region()?;
+        let tagged = a.compute_tag() == COMPUTE_BF16
+            && b.compute_tag() == COMPUTE_BF16
+            && grad_output.compute_tag() == COMPUTE_BF16;
+        let (ga, gb) = self.inner.broadcast_mul_backward(a, b, grad_output)?;
+        Ok((self.promote(on, tagged, ga)?, self.promote(on, tagged, gb)?))
     }
 
     fn residual_add_backward(

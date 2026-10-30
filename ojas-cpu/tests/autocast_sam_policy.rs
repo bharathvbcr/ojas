@@ -192,6 +192,31 @@ fn arguments(op: &str) -> Vec<Tensor> {
             tensor(&[3], 27, 1.0),
         ],
         "max_pool2d_forward" => vec![tensor(&[1, 2, 6, 6], 28, 2.0)],
+        "layer_norm_backward" => vec![
+            tensor(&[3, 8], 10, 2.0),
+            positive(&[8], 11),
+            tensor(&[8], 12, 0.5),
+            tensor(&[3, 8], 39, 1.0),
+        ],
+        "channel_layer_norm_backward" => vec![
+            tensor(&[2, 4, 3, 3], 13, 2.0),
+            positive(&[4], 14),
+            tensor(&[4], 15, 0.5),
+            tensor(&[2, 4, 3, 3], 40, 1.0),
+        ],
+        "gelu_erf_backward" => vec![tensor(&[3, 8], 16, 2.0), tensor(&[3, 8], 41, 1.0)],
+        "softmax_backward" => vec![tensor(&[3, 8], 42, 1.0), tensor(&[3, 8], 43, 1.0)],
+        "broadcast_add_backward" | "broadcast_mul_backward" => vec![
+            tensor(&[3, 8], 17, 2.0),
+            tensor(&[8], 18, 2.0),
+            tensor(&[3, 8], 44, 1.0),
+        ],
+        "linear_bias_backward" => vec![
+            tensor(&[3, 8], 19, 1.0),
+            tensor(&[5, 8], 20, 1.0),
+            tensor(&[5], 21, 1.0),
+            tensor(&[3, 5], 45, 1.0),
+        ],
         "conv2d_backward" => vec![
             tensor(&[1, 4, 6, 6], 22, 1.0),
             tensor(&[4, 2, 3, 3], 23, 1.0),
@@ -273,6 +298,34 @@ fn call<B: Backend>(op: &str, backend: &B, a: &[Tensor]) -> Vec<Tensor> {
             ConvTranspose2dParams::new(),
         )),
         "max_pool2d_forward" => one(backend.max_pool2d_forward(&a[0], [2, 2], [2, 2])),
+        "layer_norm_backward" => {
+            let g = backend
+                .layer_norm_backward(&a[0], &a[1], &a[2], &a[3], 1e-5)
+                .unwrap();
+            vec![g.input, g.weight, g.bias]
+        }
+        "channel_layer_norm_backward" => {
+            let g = backend
+                .channel_layer_norm_backward(&a[0], &a[1], &a[2], &a[3], 1e-5)
+                .unwrap();
+            vec![g.input, g.weight, g.bias]
+        }
+        "gelu_erf_backward" => one(backend.gelu_erf_backward(&a[0], &a[1])),
+        "softmax_backward" => one(backend.softmax_backward(&a[0], &a[1])),
+        "broadcast_add_backward" => {
+            let (ga, gb) = backend.broadcast_add_backward(&a[0], &a[1], &a[2]).unwrap();
+            vec![ga, gb]
+        }
+        "broadcast_mul_backward" => {
+            let (ga, gb) = backend.broadcast_mul_backward(&a[0], &a[1], &a[2]).unwrap();
+            vec![ga, gb]
+        }
+        "linear_bias_backward" => {
+            let g = backend
+                .linear_bias_backward(&a[0], &a[1], &a[2], &a[3])
+                .unwrap();
+            vec![g.input, g.weight, g.bias]
+        }
         "conv2d_backward" => {
             let params = Conv2dParams {
                 groups: 2,

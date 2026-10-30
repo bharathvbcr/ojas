@@ -10,8 +10,8 @@
 //! checkpointing).
 
 use ojas_core::{
-    inverse_permutation, permute_output_shape, AttentionOpts, Backend, BackendId, CeChunk, CeGrads,
-    Conv2dParams, ConvGrad, ConvTranspose2dParams, GdnInputs, OjasError, Tensor,
+    inverse_permutation, permute_output_shape, AffineGrad, AttentionOpts, Backend, BackendId,
+    CeChunk, CeGrads, Conv2dParams, ConvGrad, ConvTranspose2dParams, GdnInputs, OjasError, Tensor,
 };
 use ojas_cpu::CpuBackend;
 
@@ -159,6 +159,51 @@ enum Rec {
         x: usize,
         kernel: [usize; 2],
         stride: [usize; 2],
+    },
+    /// LayerNorm of `x` over the last axis with weight `w` and bias `b`.
+    LayerNorm {
+        x: usize,
+        w: usize,
+        b: usize,
+        eps: f32,
+    },
+    /// LayerNorm of `x` across the channel axis of `[N, C, ...]`.
+    ChannelLayerNorm {
+        x: usize,
+        w: usize,
+        b: usize,
+        eps: f32,
+    },
+    /// The exact (erf) GELU.
+    Gelu {
+        x: usize,
+    },
+    /// `x @ w^T + b`.
+    LinearBias {
+        x: usize,
+        w: usize,
+        b: usize,
+    },
+    /// `a + b` with numpy broadcasting.
+    BroadcastAdd {
+        a: usize,
+        b: usize,
+    },
+    /// `a * b` with numpy broadcasting.
+    BroadcastMul {
+        a: usize,
+        b: usize,
+    },
+    /// `x * scale` for a constant `scale`.
+    Scale {
+        x: usize,
+        scale: f32,
+    },
+    /// Softmax of `x` over the last axis. `out` is this node: its value is
+    /// the forward output the backward reads.
+    Softmax {
+        x: usize,
+        out: usize,
     },
     Ce {
         logits: usize,
@@ -325,6 +370,31 @@ impl Rec {
                 x: m(x),
                 kernel,
                 stride,
+            },
+            Rec::LayerNorm { x, w, b, eps } => Rec::LayerNorm {
+                x: m(x),
+                w: m(w),
+                b: m(b),
+                eps,
+            },
+            Rec::ChannelLayerNorm { x, w, b, eps } => Rec::ChannelLayerNorm {
+                x: m(x),
+                w: m(w),
+                b: m(b),
+                eps,
+            },
+            Rec::Gelu { x } => Rec::Gelu { x: m(x) },
+            Rec::LinearBias { x, w, b } => Rec::LinearBias {
+                x: m(x),
+                w: m(w),
+                b: m(b),
+            },
+            Rec::BroadcastAdd { a, b } => Rec::BroadcastAdd { a: m(a), b: m(b) },
+            Rec::BroadcastMul { a, b } => Rec::BroadcastMul { a: m(a), b: m(b) },
+            Rec::Scale { x, scale } => Rec::Scale { x: m(x), scale },
+            Rec::Softmax { x, out } => Rec::Softmax {
+                x: m(x),
+                out: m(out),
             },
             Rec::Ce {
                 logits,
@@ -772,6 +842,70 @@ impl<B: Backend> Tape<B> {
         self.record(Rec::MaxPool2d { x, kernel, stride })
     }
 
+    /// LayerNorm ([`Backend::layer_norm_forward`]) of `x` `[..., dim]` over
+    /// its last axis, with `w` and `b` `[dim]`.
+    pub fn layer_norm(&mut self, x: Var, w: Var, b: Var, eps: f32) -> Result<Var, OjasError> {
+        const OP: &str = "Tape::layer_norm";
+        let (x, w, b) = (self.index(x, OP)?, self.index(w, OP)?, self.index(b, OP)?);
+        self.record(Rec::LayerNorm { x, w, b, eps })
+    }
+
+    /// LayerNorm across the channel axis ([`Backend::channel_layer_norm_forward`])
+    /// of `x` `[N, C, ...]`, with `w` and `b` `[C]`.
+    pub fn channel_layer_norm(
+        &mut self,
+        x: Var,
+        w: Var,
+        b: Var,
+        eps: f32,
+    ) -> Result<Var, OjasError> {
+        const OP: &str = "Tape::channel_layer_norm";
+        let (x, w, b) = (self.index(x, OP)?, self.index(w, OP)?, self.index(b, OP)?);
+        self.record(Rec::ChannelLayerNorm { x, w, b, eps })
+    }
+
+    /// The exact GELU ([`Backend::gelu_erf_forward`]).
+    pub fn gelu_erf(&mut self, x: Var) -> Result<Var, OjasError> {
+        let x = self.index(x, "Tape::gelu_erf")?;
+        self.record(Rec::Gelu { x })
+    }
+
+    /// `x @ w^T + b` ([`Backend::linear_bias_forward`]): `x` `[..., in]`, `w`
+    /// `[out, in]` and `b` `[out]`.
+    pub fn linear_bias(&mut self, x: Var, w: Var, b: Var) -> Result<Var, OjasError> {
+        const OP: &str = "Tape::linear_bias";
+        let (x, w, b) = (self.index(x, OP)?, self.index(w, OP)?, self.index(b, OP)?);
+        self.record(Rec::LinearBias { x, w, b })
+    }
+
+    /// `a + b` with numpy broadcasting ([`Backend::broadcast_add_forward`]).
+    /// Each operand's gradient is summed back to its own shape.
+    pub fn broadcast_add(&mut self, a: Var, b: Var) -> Result<Var, OjasError> {
+        let a = self.index(a, "Tape::broadcast_add")?;
+        let b = self.index(b, "Tape::broadcast_add")?;
+        self.record(Rec::BroadcastAdd { a, b })
+    }
+
+    /// `a * b` with numpy broadcasting ([`Backend::broadcast_mul_forward`]).
+    pub fn broadcast_mul(&mut self, a: Var, b: Var) -> Result<Var, OjasError> {
+        let a = self.index(a, "Tape::broadcast_mul")?;
+        let b = self.index(b, "Tape::broadcast_mul")?;
+        self.record(Rec::BroadcastMul { a, b })
+    }
+
+    /// `x * scale` ([`Backend::scale_forward`]) for a finite constant
+    /// `scale`; its gradient is the incoming one times `scale`.
+    pub fn scale(&mut self, x: Var, scale: f32) -> Result<Var, OjasError> {
+        let x = self.index(x, "Tape::scale")?;
+        self.record(Rec::Scale { x, scale })
+    }
+
+    /// Softmax over the last axis ([`Backend::softmax_forward`]).
+    pub fn softmax(&mut self, x: Var) -> Result<Var, OjasError> {
+        let x = self.index(x, "Tape::softmax")?;
+        self.record(Rec::Softmax { x, out: 0 })
+    }
+
     pub fn mul(&mut self, a: Var, b: Var) -> Result<Var, OjasError> {
         let a = self.index(a, "Tape::mul")?;
         let b = self.index(b, "Tape::mul")?;
@@ -1134,6 +1268,22 @@ impl<B: Backend> Tape<B> {
             ),
             Rec::MaxPool2d { x, kernel, stride } => {
                 (be.max_pool2d_forward(&v[x], kernel, stride)?, rec)
+            }
+            Rec::LayerNorm { x, w, b, eps } => {
+                (be.layer_norm_forward(&v[x], &v[w], &v[b], eps)?, rec)
+            }
+            Rec::ChannelLayerNorm { x, w, b, eps } => (
+                be.channel_layer_norm_forward(&v[x], &v[w], &v[b], eps)?,
+                rec,
+            ),
+            Rec::Gelu { x } => (be.gelu_erf_forward(&v[x])?, rec),
+            Rec::LinearBias { x, w, b } => (be.linear_bias_forward(&v[x], &v[w], &v[b])?, rec),
+            Rec::BroadcastAdd { a, b } => (be.broadcast_add_forward(&v[a], &v[b])?, rec),
+            Rec::BroadcastMul { a, b } => (be.broadcast_mul_forward(&v[a], &v[b])?, rec),
+            Rec::Scale { x, scale } => (be.scale_forward(&v[x], scale)?, rec),
+            Rec::Softmax { x, .. } => {
+                let y = be.softmax_forward(&v[x])?;
+                (y, Rec::Softmax { x, out: v.len() })
             }
             Rec::Mul { a, b } => (be.mul_forward(&v[a], &v[b])?, rec),
             Rec::Add { x, y } => (be.residual_add_forward(&v[x], &v[y])?, rec),
@@ -1656,6 +1806,52 @@ impl<B: Backend> Tape<B> {
                     .max_pool2d_backward(&xv, grad, kernel, stride)?;
                 self.acc(x, gx)
             }
+            Rec::LayerNorm { x, w, b, eps } => {
+                let (xv, wv) = (self.values[x].clone(), self.values[w].clone());
+                let bv = self.values[b].clone();
+                let g = self.backend.layer_norm_backward(&xv, &wv, &bv, grad, eps)?;
+                self.affine_grads(x, w, b, g)
+            }
+            Rec::ChannelLayerNorm { x, w, b, eps } => {
+                let (xv, wv) = (self.values[x].clone(), self.values[w].clone());
+                let bv = self.values[b].clone();
+                let g = self
+                    .backend
+                    .channel_layer_norm_backward(&xv, &wv, &bv, grad, eps)?;
+                self.affine_grads(x, w, b, g)
+            }
+            Rec::Gelu { x } => {
+                let xv = self.values[x].clone();
+                let gx = self.backend.gelu_erf_backward(&xv, grad)?;
+                self.acc(x, gx)
+            }
+            Rec::LinearBias { x, w, b } => {
+                let (xv, wv) = (self.values[x].clone(), self.values[w].clone());
+                let bv = self.values[b].clone();
+                let g = self.backend.linear_bias_backward(&xv, &wv, &bv, grad)?;
+                self.affine_grads(x, w, b, g)
+            }
+            Rec::BroadcastAdd { a, b } => {
+                let (av, bv) = (self.values[a].clone(), self.values[b].clone());
+                let (ga, gb) = self.backend.broadcast_add_backward(&av, &bv, grad)?;
+                self.acc(a, ga)?;
+                self.acc(b, gb)
+            }
+            Rec::BroadcastMul { a, b } => {
+                let (av, bv) = (self.values[a].clone(), self.values[b].clone());
+                let (ga, gb) = self.backend.broadcast_mul_backward(&av, &bv, grad)?;
+                self.acc(a, ga)?;
+                self.acc(b, gb)
+            }
+            Rec::Scale { x, scale } => {
+                let gx = self.backend.scale_forward(grad, scale)?;
+                self.acc(x, gx)
+            }
+            Rec::Softmax { x, out } => {
+                let yv = self.values[out].clone();
+                let gx = self.backend.softmax_backward(&yv, grad)?;
+                self.acc(x, gx)
+            }
             Rec::Add { x, y } => {
                 // Both gradients of `x + y` are `grad` itself, so both inputs
                 // share its allocation: no copy and no charge (before
@@ -1764,6 +1960,19 @@ impl<B: Backend> Tape<B> {
         self.grads.push(None);
         self.ops.push(op);
         Var(id)
+    }
+
+    /// An input, weight and bias gradient into their nodes.
+    fn affine_grads(
+        &mut self,
+        x: usize,
+        w: usize,
+        b: usize,
+        g: AffineGrad,
+    ) -> Result<(), OjasError> {
+        self.acc(x, g.input)?;
+        self.acc(w, g.weight)?;
+        self.acc(b, g.bias)
     }
 
     /// A convolution's gradients into its input, weight and bias nodes. The
