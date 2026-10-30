@@ -1316,38 +1316,116 @@ mod tests {
             .collect()
     }
 
-    /// Below the cutoff Fast stays on `tile_fast`, which is the same chain.
-    #[cfg(any(target_arch = "aarch64", target_feature = "fma"))]
-    #[test]
-    fn fast_below_the_whole_call_cutoff_is_the_packed_fma_chain() {
-        let pool = Arc::new(Pool::new(7).unwrap());
-        let exec = Exec {
-            pool: &pool,
-            numerics: Numerics::Fast,
-        };
-        // Shapes that cross MR (6), NR (16), MC (72) and KC (256) while
-        // staying below the macOS cutoff come first; the larger ones run
-        // only where the cutoff is higher.
+    /// The chain a Fast product below the whole-call cutoff runs on this
+    /// build: the FMA chain where [`fma`] lowers to a fused multiply-add
+    /// (aarch64, or x86_64 compiled with the `fma` feature), and on any other
+    /// build (a default x86_64 one) the Exact chain `acc + a * b`, because
+    /// `mul_add` there would call libm per lane.
+    fn fast_packed_chain(a: &Mat, b: &Mat) -> Vec<f32> {
+        if cfg!(any(target_arch = "aarch64", target_feature = "fma")) {
+            naive_fma(a, b)
+        } else {
+            naive(a, b)
+        }
+    }
+
+    /// `(m, k, n)` shapes.
+    type Shapes = Vec<(usize, usize, usize)>;
+
+    /// Fast shapes `(m, k, n)` on both sides of [`FAST_WHOLE_CALL_MACS`], from
+    /// whichever cutoff this target has: one row (the `gemv_into` path), small
+    /// ones that cross MR, NR and the MC and KC blocks, `127x127x129` (below
+    /// the off-macOS cutoff, above the macOS one), and the shapes with the
+    /// fewest rows that are just below and at or above the cutoff.
+    fn cutoff_shapes() -> (Shapes, Shapes) {
+        let rows_at_cutoff = FAST_WHOLE_CALL_MACS.div_ceil(64 * 64);
         let shapes = [
+            (1, 300, 17),
             (7, 9, 17),
             (73, 7, 13),
-            (1, 300, 17),
             (6, 40, 33),
             (128, 64, 96),
             (127, 127, 129),
+            (rows_at_cutoff - 1, 64, 64),
+            (rows_at_cutoff, 64, 64),
+            (1, 128, FAST_WHOLE_CALL_MACS.div_ceil(128)),
         ];
-        let below: Vec<_> = shapes
+        let (above, below): (Vec<_>, Vec<_>) = shapes
             .into_iter()
-            .filter(|&(m, k, n)| !whole_call(Numerics::Fast, m, k, n))
-            .collect();
-        assert!(below.len() >= 4, "{below:?}");
-        for (m, k, n) in below {
-            let (ad, bd) = (random(m * k, 1), random(k * n, 2));
-            let a = Mat::row_major(&ad, m, k);
-            let b = Mat::row_major(&bd, k, n);
-            let got = gemm("test", exec, &a, &b).unwrap();
-            assert_eq!(bits(&got), bits(&naive_fma(&a, &b)), "{m}x{k}x{n}");
-            assert_ne!(bits(&got), bits(&naive(&a, &b)), "{m}x{k}x{n}");
+            .partition(|&(m, k, n)| whole_call(Numerics::Fast, m, k, n));
+        assert!(below.len() >= 5 && above.len() >= 2, "{below:?} {above:?}");
+        (below, above)
+    }
+
+    /// Both operand layouts a linear layer's `x · Wᵀ` and `g · W` give: `B`
+    /// row-major and `B` stored transposed.
+    fn with_layouts(m: usize, k: usize, n: usize, f: impl Fn(&Mat, &Mat, &str)) {
+        let (ad, bd) = (random(m * k, 1), random(k * n, 2));
+        let a = Mat::row_major(&ad, m, k);
+        let b = Mat::row_major(&bd, k, n);
+        let bt_data = naive_t(&b);
+        let bt = Mat::row_major(&bt_data, n, k).t();
+        f(&a, &b, &format!("{m}x{k}x{n} B row-major"));
+        f(&a, &bt, &format!("{m}x{k}x{n} B transposed"));
+    }
+
+    /// Below the cutoff Fast is the packed kernel's chain, [`fast_packed_chain`]:
+    /// on every target, at every thread count, for the packed kernel and
+    /// `gemv_into` alike. The two chains differ on these operands, so a
+    /// build that ran the other one is caught.
+    #[test]
+    fn fast_below_the_whole_call_cutoff_is_this_targets_packed_chain() {
+        let (below, _) = cutoff_shapes();
+        for threads in [1usize, 2, 3, 7, 16, 18] {
+            let pool = Arc::new(Pool::new(threads).unwrap());
+            let exec = Exec {
+                pool: &pool,
+                numerics: Numerics::Fast,
+            };
+            for &(m, k, n) in &below {
+                with_layouts(m, k, n, |a, b, label| {
+                    let got = gemm("test", exec, a, b).unwrap();
+                    assert_eq!(
+                        bits(&got),
+                        bits(&fast_packed_chain(a, b)),
+                        "{label} t{threads}"
+                    );
+                    assert_ne!(bits(&naive_fma(a, b)), bits(&naive(a, b)), "{label}");
+                });
+            }
+        }
+    }
+
+    /// At and above the cutoff Fast is a whole `ojas-simd` call on every
+    /// target, so its arithmetic is the FMA chain whatever the build's
+    /// `target_feature`s are. Off macOS that is `sgemm_tile`, bit for bit;
+    /// on macOS it is Accelerate (or `sgemm_tile` where Accelerate refuses
+    /// the layout), held to the bound any summation order meets.
+    #[test]
+    fn fast_at_the_whole_call_cutoff_is_the_ojas_simd_fma_chain() {
+        let (_, above) = cutoff_shapes();
+        for threads in [1usize, 2, 3, 7, 16, 18] {
+            let pool = Arc::new(Pool::new(threads).unwrap());
+            let exec = Exec {
+                pool: &pool,
+                numerics: Numerics::Fast,
+            };
+            for &(m, k, n) in &above {
+                with_layouts(m, k, n, |a, b, label| {
+                    let got = gemm("test", exec, a, b).unwrap();
+                    if cfg!(target_os = "macos") {
+                        assert_close(
+                            &got,
+                            &vec![0.0; m * n],
+                            a,
+                            b,
+                            &format!("{label} t{threads}"),
+                        );
+                    } else {
+                        assert_eq!(bits(&got), bits(&naive_fma(a, b)), "{label} t{threads}");
+                    }
+                });
+            }
         }
     }
 
