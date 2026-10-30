@@ -118,6 +118,35 @@ fn every_sam_op_is_the_refusing_default_on_wgpu() {
             g.max_pool2d_backward(&img, &dev(27, &[1, 4, 2, 2]), [2, 2], [2, 2])
                 .map(drop),
         ),
+        refusal(
+            "linear_bias_backward",
+            g.linear_bias_backward(
+                &dev(28, &[3, 4]),
+                &dev(29, &[5, 4]),
+                &dev(30, &[5]),
+                &dev(31, &[3, 5]),
+            )
+            .map(drop),
+        ),
+        refusal(
+            "layer_norm_backward",
+            g.layer_norm_backward(&x, &w8, &b8, &x, 1e-5).map(drop),
+        ),
+        refusal(
+            "channel_layer_norm_backward",
+            g.channel_layer_norm_backward(&img, &w4, &b4, &img, 1e-5)
+                .map(drop),
+        ),
+        refusal("gelu_erf_backward", g.gelu_erf_backward(&x, &x).map(drop)),
+        refusal(
+            "broadcast_add_backward",
+            g.broadcast_add_backward(&x, &w8, &x).map(drop),
+        ),
+        refusal(
+            "broadcast_mul_backward",
+            g.broadcast_mul_backward(&x, &w8, &x).map(drop),
+        ),
+        refusal("softmax_backward", g.softmax_backward(&x, &x).map(drop)),
         refusal("gelu_erf_forward", g.gelu_erf_forward(&x).map(drop)),
         refusal("relu_forward", g.relu_forward(&x).map(drop)),
         refusal("scale_forward", g.scale_forward(&x, 2.0).map(drop)),

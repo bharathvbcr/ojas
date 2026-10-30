@@ -68,18 +68,25 @@ const ACCUMULATE_GRAD: &str = "accumulate_grad";
 const SCALE_GRAD: &str = "scale_grad";
 const PERMUTE: &str = "permute";
 const LAYER_NORM_FORWARD: &str = "layer_norm_forward";
+const LAYER_NORM_BACKWARD: &str = "layer_norm_backward";
 const CHANNEL_LAYER_NORM_FORWARD: &str = "channel_layer_norm_forward";
+const CHANNEL_LAYER_NORM_BACKWARD: &str = "channel_layer_norm_backward";
 const GROUP_NORM_FORWARD: &str = "group_norm_forward";
 const GELU_ERF_FORWARD: &str = "gelu_erf_forward";
+const GELU_ERF_BACKWARD: &str = "gelu_erf_backward";
 const RELU_FORWARD: &str = "relu_forward";
 const CONCAT: &str = "concat";
 const SLICE: &str = "slice";
 const FILL: &str = "fill";
 const LINEAR_BIAS_FORWARD: &str = "linear_bias_forward";
+const LINEAR_BIAS_BACKWARD: &str = "linear_bias_backward";
 const BROADCAST_ADD_FORWARD: &str = "broadcast_add_forward";
+const BROADCAST_ADD_BACKWARD: &str = "broadcast_add_backward";
 const BROADCAST_MUL_FORWARD: &str = "broadcast_mul_forward";
+const BROADCAST_MUL_BACKWARD: &str = "broadcast_mul_backward";
 const SCALE_FORWARD: &str = "scale_forward";
 const SOFTMAX_FORWARD: &str = "softmax_forward";
+const SOFTMAX_BACKWARD: &str = "softmax_backward";
 const CE_FORWARD: &str = "cross_entropy_mean_forward";
 const CE_BACKWARD: &str = "cross_entropy_mean_backward";
 const CLIP: &str = "clip_grad_norm";
@@ -1404,22 +1411,50 @@ pub fn layer_norm_forward_dims(
 ) -> Result<RmsDims, OjasError> {
     const OP: &str = LAYER_NORM_FORWARD;
     f32_operands(OP, &[input, weight, bias])?;
+    layer_norm_layout(OP, input, weight, bias, eps)
+}
+
+/// The shapes and `eps` of a LayerNorm over the last axis, after the
+/// operands' own rules, for the forward and the backward.
+fn layer_norm_layout(
+    op: &'static str,
+    input: &Tensor,
+    weight: &Tensor,
+    bias: &Tensor,
+    eps: f32,
+) -> Result<RmsDims, OjasError> {
     if !eps.is_finite() {
-        return Err(OjasError::NonFinite { op: OP });
+        return Err(OjasError::NonFinite { op });
     }
-    let (lead, dim) = split_last(OP, input.shape(), "layer_norm input rank 0")?;
+    let (lead, dim) = split_last(op, input.shape(), "layer_norm input rank 0")?;
     for (name, t) in [("weight", weight), ("bias", bias)] {
         if t.shape() != [dim] {
             return Err(refuse(
-                OP,
+                op,
                 format!("{name} shape {:?} is not [{dim}]", t.shape()),
             ));
         }
     }
     Ok(RmsDims {
-        rows: f32_product(OP, lead)?,
+        rows: f32_product(op, lead)?,
         dim,
     })
+}
+
+/// [`crate::Backend::layer_norm_backward`]: `grad_output` shaped like
+/// `input` (checked before `eps` and the weight and bias, as
+/// [`rms_norm_backward_dims`] does), then as the forward.
+pub fn layer_norm_backward_dims(
+    input: &Tensor,
+    weight: &Tensor,
+    bias: &Tensor,
+    grad_output: &Tensor,
+    eps: f32,
+) -> Result<RmsDims, OjasError> {
+    const OP: &str = LAYER_NORM_BACKWARD;
+    f32_operands(OP, &[input, weight, bias, grad_output])?;
+    same(OP, input.shape(), grad_output.shape())?;
+    layer_norm_layout(OP, input, weight, bias, eps)
 }
 
 /// For [`crate::Backend::channel_layer_norm_forward`]: `input`
@@ -1433,13 +1468,25 @@ pub fn channel_layer_norm_forward_dims(
 ) -> Result<ChannelNormDims, OjasError> {
     const OP: &str = CHANNEL_LAYER_NORM_FORWARD;
     f32_operands(OP, &[input, weight, bias])?;
+    channel_norm_layout(OP, input, weight, bias, eps)
+}
+
+/// The shapes and `eps` of a LayerNorm across the channel axis, after the
+/// operands' own rules, for the forward and the backward.
+fn channel_norm_layout(
+    op: &'static str,
+    input: &Tensor,
+    weight: &Tensor,
+    bias: &Tensor,
+    eps: f32,
+) -> Result<ChannelNormDims, OjasError> {
     if !eps.is_finite() {
-        return Err(OjasError::NonFinite { op: OP });
+        return Err(OjasError::NonFinite { op });
     }
     let shape = input.shape();
     if shape.len() < 2 {
         return Err(refuse(
-            OP,
+            op,
             format!("input rank {} < 2 ([batch, channels, ...])", shape.len()),
         ));
     }
@@ -1447,17 +1494,32 @@ pub fn channel_layer_norm_forward_dims(
     for (name, t) in [("weight", weight), ("bias", bias)] {
         if t.shape() != [channels] {
             return Err(refuse(
-                OP,
+                op,
                 format!("{name} shape {:?} is not [{channels}]", t.shape()),
             ));
         }
     }
-    f32_product(OP, shape)?;
+    f32_product(op, shape)?;
     Ok(ChannelNormDims {
         batch: shape[0],
         channels,
         spatial: shape[2..].iter().product(),
     })
+}
+
+/// [`crate::Backend::channel_layer_norm_backward`]: `grad_output` shaped
+/// like `input`, then as the forward.
+pub fn channel_layer_norm_backward_dims(
+    input: &Tensor,
+    weight: &Tensor,
+    bias: &Tensor,
+    grad_output: &Tensor,
+    eps: f32,
+) -> Result<ChannelNormDims, OjasError> {
+    const OP: &str = CHANNEL_LAYER_NORM_BACKWARD;
+    f32_operands(OP, &[input, weight, bias, grad_output])?;
+    same(OP, input.shape(), grad_output.shape())?;
+    channel_norm_layout(OP, input, weight, bias, eps)
 }
 
 /// [`crate::Backend::group_norm_forward`]: `input` `[N, C, H, W]`, `weight`
@@ -1519,6 +1581,12 @@ pub fn group_norm_forward_dims(
 /// Returns its element count.
 pub fn gelu_erf_forward_dims(input: &Tensor) -> Result<usize, OjasError> {
     same_shape(GELU_ERF_FORWARD, &[input])
+}
+
+/// [`crate::Backend::gelu_erf_backward`]: `grad_output` shaped like `input`,
+/// both `F32`. Returns the element count.
+pub fn gelu_erf_backward_dims(input: &Tensor, grad_output: &Tensor) -> Result<usize, OjasError> {
+    same_shape(GELU_ERF_BACKWARD, &[input, grad_output])
 }
 
 /// [`crate::Backend::relu_forward`]: one `F32` tensor of any rank. Returns
@@ -1693,14 +1761,52 @@ pub fn linear_bias_forward_dims(
     const OP: &str = LINEAR_BIAS_FORWARD;
     matmul_operands(OP, &[input, weight])?;
     f32_operand(OP, bias)?;
-    let dims = linear_dims(OP, input, weight)?;
+    linear_bias_layout(OP, input, weight, bias)
+}
+
+/// The shapes of `x @ W^T + b`, after the operands' own rules, for the
+/// forward and the backward.
+fn linear_bias_layout(
+    op: &'static str,
+    input: &Tensor,
+    weight: &Tensor,
+    bias: &Tensor,
+) -> Result<LinearDims, OjasError> {
+    let dims = linear_dims(op, input, weight)?;
     if bias.shape() != [dims.out_features] {
         return Err(refuse(
-            OP,
+            op,
             format!(
                 "bias shape {:?} is not [{}]",
                 bias.shape(),
                 dims.out_features
+            ),
+        ));
+    }
+    Ok(dims)
+}
+
+/// [`crate::Backend::linear_bias_backward`]: the forward's operands plus
+/// `grad_output` (`F32` or `Bf16`) shaped like the forward output. The
+/// gradients are `F32`.
+pub fn linear_bias_backward_dims(
+    input: &Tensor,
+    weight: &Tensor,
+    bias: &Tensor,
+    grad_output: &Tensor,
+) -> Result<LinearDims, OjasError> {
+    const OP: &str = LINEAR_BIAS_BACKWARD;
+    matmul_operands(OP, &[input, weight])?;
+    f32_operand(OP, bias)?;
+    matmul_operand(OP, grad_output)?;
+    let dims = linear_bias_layout(OP, input, weight, bias)?;
+    if grad_output.shape() != dims.out_shape.as_slice() {
+        return Err(refuse(
+            OP,
+            format!(
+                "grad shape {:?} != forward shape {:?}",
+                grad_output.shape(),
+                dims.out_shape
             ),
         ));
     }
@@ -1784,6 +1890,41 @@ pub fn broadcast_mul_forward_dims(a: &Tensor, b: &Tensor) -> Result<BroadcastDim
     broadcast_dims(BROADCAST_MUL_FORWARD, a, b)
 }
 
+/// The forward's broadcast, then `grad_output` `F32` shaped like its
+/// output.
+fn broadcast_backward_dims(
+    op: &'static str,
+    a: &Tensor,
+    b: &Tensor,
+    grad_output: &Tensor,
+) -> Result<BroadcastDims, OjasError> {
+    let dims = broadcast_dims(op, a, b)?;
+    f32_operand(op, grad_output)?;
+    same(op, grad_output.shape(), &dims.out_shape)?;
+    Ok(dims)
+}
+
+/// [`crate::Backend::broadcast_add_backward`]: the rules of
+/// [`broadcast_add_forward_dims`], plus `grad_output` shaped like the sum.
+pub fn broadcast_add_backward_dims(
+    a: &Tensor,
+    b: &Tensor,
+    grad_output: &Tensor,
+) -> Result<BroadcastDims, OjasError> {
+    broadcast_backward_dims(BROADCAST_ADD_BACKWARD, a, b, grad_output)
+}
+
+/// [`crate::Backend::broadcast_mul_backward`]: the rules of
+/// [`broadcast_mul_forward_dims`], plus `grad_output` shaped like the
+/// product.
+pub fn broadcast_mul_backward_dims(
+    a: &Tensor,
+    b: &Tensor,
+    grad_output: &Tensor,
+) -> Result<BroadcastDims, OjasError> {
+    broadcast_backward_dims(BROADCAST_MUL_BACKWARD, a, b, grad_output)
+}
+
 /// [`crate::Backend::scale_forward`]: an `F32` `input` of any rank and a
 /// finite `scale` ([`OjasError::NonFinite`] otherwise). Returns the element
 /// count.
@@ -1801,6 +1942,20 @@ pub fn softmax_forward_dims(input: &Tensor) -> Result<RmsDims, OjasError> {
     const OP: &str = SOFTMAX_FORWARD;
     f32_operand(OP, input)?;
     let (lead, dim) = split_last(OP, input.shape(), "softmax input rank 0")?;
+    Ok(RmsDims {
+        rows: f32_product(OP, lead)?,
+        dim,
+    })
+}
+
+/// [`crate::Backend::softmax_backward`]: the forward's `output` `[..., dim]`
+/// of rank 1 or more and `grad_output` shaped like it, both `F32`. Returns
+/// the row count and `dim`.
+pub fn softmax_backward_dims(output: &Tensor, grad_output: &Tensor) -> Result<RmsDims, OjasError> {
+    const OP: &str = SOFTMAX_BACKWARD;
+    f32_operands(OP, &[output, grad_output])?;
+    same(OP, output.shape(), grad_output.shape())?;
+    let (lead, dim) = split_last(OP, output.shape(), "softmax output rank 0")?;
     Ok(RmsDims {
         rows: f32_product(OP, lead)?,
         dim,
@@ -4686,5 +4841,130 @@ mod tests {
                 })
             ));
         }
+    }
+
+    #[test]
+    fn norm_backward_dims_check_the_gradient_before_eps_and_the_affine() {
+        let (x, w, b) = (f(&[2, 3, 5]), f(&[5]), f(&[5]));
+        let g = f(&[2, 3, 5]);
+        let d = layer_norm_backward_dims(&x, &w, &b, &g, 1e-5).unwrap();
+        assert_eq!((d.rows, d.dim), (6, 5));
+        let op = "layer_norm_backward";
+        // The gradient's shape outranks a bad eps and a bad weight.
+        shape_err(
+            layer_norm_backward_dims(&x, &f(&[4]), &b, &f(&[2, 3, 4]), f32::NAN),
+            op,
+            "does not match",
+        );
+        assert!(matches!(
+            layer_norm_backward_dims(&x, &w, &b, &g, f32::INFINITY),
+            Err(OjasError::NonFinite {
+                op: "layer_norm_backward"
+            })
+        ));
+        shape_err(
+            layer_norm_backward_dims(&x, &f(&[4]), &b, &g, 1e-5),
+            op,
+            "weight shape",
+        );
+        shape_err(
+            layer_norm_backward_dims(&x, &w, &f(&[2, 5]), &g, 1e-5),
+            op,
+            "bias shape",
+        );
+        dtype_err(
+            layer_norm_backward_dims(&x, &w, &b, &u(&[2, 3, 5]), 1e-5),
+            op,
+            DType::F32,
+            DType::U32,
+        );
+        shape_err(
+            layer_norm_backward_dims(&f(&[0, 5]), &w, &b, &f(&[0, 5]), 1e-5),
+            op,
+            "empty tensor",
+        );
+
+        let (w, b) = (f(&[6]), f(&[6]));
+        let img = f(&[2, 6, 4, 5]);
+        let d = channel_layer_norm_backward_dims(&img, &w, &b, &img, 1e-6).unwrap();
+        assert_eq!((d.batch, d.channels, d.spatial), (2, 6, 20));
+        let op = "channel_layer_norm_backward";
+        shape_err(
+            channel_layer_norm_backward_dims(&img, &w, &b, &f(&[2, 6, 5, 4]), 1e-6),
+            op,
+            "does not match",
+        );
+        shape_err(
+            channel_layer_norm_backward_dims(&f(&[2, 5, 4]), &w, &b, &f(&[2, 5, 4]), 1e-6),
+            op,
+            "weight shape",
+        );
+    }
+
+    #[test]
+    fn gelu_and_softmax_backward_dims_need_a_gradient_of_the_same_shape() {
+        let x = f(&[3, 4]);
+        assert_eq!(gelu_erf_backward_dims(&x, &x).unwrap(), 12);
+        shape_err(
+            gelu_erf_backward_dims(&x, &f(&[4, 3])),
+            "gelu_erf_backward",
+            "does not match",
+        );
+        let d = softmax_backward_dims(&x, &x).unwrap();
+        assert_eq!((d.rows, d.dim), (3, 4));
+        shape_err(
+            softmax_backward_dims(&x, &f(&[3])),
+            "softmax_backward",
+            "does not match",
+        );
+        shape_err(
+            softmax_backward_dims(&f(&[]), &f(&[])),
+            "softmax_backward",
+            "rank 0",
+        );
+    }
+
+    #[test]
+    fn linear_bias_and_broadcast_backward_dims_check_the_forward_shapes() {
+        let (x, w, b) = (f(&[4, 7]), f(&[3, 7]), f(&[3]));
+        let d = linear_bias_backward_dims(&x, &w, &b, &f(&[4, 3])).unwrap();
+        assert_eq!((d.rows, d.in_features, d.out_features), (4, 7, 3));
+        let op = "linear_bias_backward";
+        shape_err(
+            linear_bias_backward_dims(&x, &w, &b, &f(&[3, 4])),
+            op,
+            "grad shape",
+        );
+        shape_err(
+            linear_bias_backward_dims(&x, &w, &f(&[4]), &f(&[4, 3])),
+            op,
+            "bias shape",
+        );
+        dtype_err(
+            linear_bias_backward_dims(&x, &w, &of(DType::Bf16, &[3]), &f(&[4, 3])),
+            op,
+            DType::F32,
+            DType::Bf16,
+        );
+        // The product's operands and the gradient may be bf16, as for
+        // linear_backward.
+        linear_bias_backward_dims(&x, &of(DType::Bf16, &[3, 7]), &b, &of(DType::Bf16, &[4, 3]))
+            .unwrap();
+
+        let (a, c) = (f(&[2, 3, 4]), f(&[3, 1]));
+        let d = broadcast_add_backward_dims(&a, &c, &f(&[2, 3, 4])).unwrap();
+        assert_eq!(d.out_shape, [2, 3, 4]);
+        let d = broadcast_mul_backward_dims(&a, &c, &f(&[2, 3, 4])).unwrap();
+        assert_eq!(d.b_strides, [0, 1, 0]);
+        shape_err(
+            broadcast_add_backward_dims(&a, &c, &f(&[3, 4])),
+            "broadcast_add_backward",
+            "does not match",
+        );
+        shape_err(
+            broadcast_mul_backward_dims(&a, &f(&[5]), &f(&[2, 3, 4])),
+            "broadcast_mul_backward",
+            "cannot broadcast",
+        );
     }
 }

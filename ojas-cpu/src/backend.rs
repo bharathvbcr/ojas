@@ -1,10 +1,13 @@
 use std::sync::Arc;
 
 use ojas_core::{
-    broadcast_add_forward_dims, broadcast_mul_forward_dims, channel_layer_norm_forward_dims,
-    concat_dims, fill_dims, gelu_erf_forward_dims, group_norm_forward_dims,
-    layer_norm_forward_dims, linear_bias_forward_dims, relu_forward_dims, scale_forward_dims,
-    slice_dims, softmax_forward_dims,
+    broadcast_add_backward_dims, broadcast_add_forward_dims, broadcast_mul_backward_dims,
+    broadcast_mul_forward_dims, broadcast_shapes, channel_layer_norm_backward_dims,
+    channel_layer_norm_forward_dims, concat_dims, fill_dims, gelu_erf_backward_dims,
+    gelu_erf_forward_dims, group_norm_forward_dims, layer_norm_backward_dims,
+    layer_norm_forward_dims, linear_bias_backward_dims, linear_bias_forward_dims,
+    relu_forward_dims, scale_forward_dims, slice_dims, softmax_backward_dims, softmax_forward_dims,
+    AffineGrad, LinearDims,
 };
 use ojas_core::{
     causal_conv1d_silu_backward_dims, causal_conv1d_silu_forward_dims, clip_scale,
@@ -37,8 +40,10 @@ use ojas_core::{
 use crate::attn::general::{self, Extras, Geom};
 use crate::attn::{causal_sdpa_backward, causal_sdpa_forward, Dims as SdpaKernelDims};
 use crate::encoder_ops::{
-    add_row_bias, broadcast_zip, channel_layer_norm_forward, gelu_erf_forward, group_norm_forward,
-    layer_norm_forward, relu_forward, scale_forward, softmax_forward,
+    add_row_bias, broadcast_grad, broadcast_zip, channel_layer_norm_backward,
+    channel_layer_norm_forward, gelu_erf_backward, gelu_erf_forward, group_norm_forward,
+    layer_norm_backward, layer_norm_forward, relu_forward, scale_forward, softmax_backward,
+    softmax_forward, Operand,
 };
 use crate::gdn::{self, GradsOut, Operands as GdnOperands};
 use crate::gemm::whole_call;
@@ -272,6 +277,86 @@ impl CpuBackend {
         Ok((grad_x, grad_w))
     }
 
+    /// The body of [`Backend::linear_backward`] after its validator, and of
+    /// [`Backend::linear_bias_backward`]: the input and weight gradients,
+    /// and, for a `bias`, `sum(grad_output)` over the rows, from the same
+    /// widened operands. Refusals name `op`.
+    fn linear_bwd(
+        &self,
+        op: &'static str,
+        dims: &LinearDims,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: Option<&Tensor>,
+        grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor, Option<Tensor>), OjasError> {
+        let exec = self.exec();
+        let wide = matmul_operands(op, exec, &self.budget, [input, weight, grad_output])?;
+        let ins = wide.each_ref().map(Wide::values);
+        if let Some(bias) = bias {
+            // Read for its shape only, but scanned as every operand is.
+            f32_operands(op, exec, [bias])?;
+        }
+        // One forward row, Fast whole call: `rank1_weight_grad` checks every
+        // weight-gradient element as it stores `fma(g, x, +0.0)`. That buffer
+        // is not scanned again. `grad_x` is still the Accelerate product and
+        // is scanned.
+        let (grad_x, grad_w) = if dims.rows == 1
+            && whole_call(
+                self.numerics,
+                dims.out_features,
+                dims.rows,
+                dims.in_features,
+            ) {
+            let gx_len = product(op, &[dims.rows, dims.in_features])?;
+            let gw_len = product(op, &[dims.out_features, dims.in_features])?;
+            let mut grad_x = Scratch::<f32>::try_alloc(gx_len, &self.budget)?;
+            let mut grad_w = Scratch::<f32>::try_alloc(gw_len, &self.budget)?;
+            let checked = linear_backward(
+                op,
+                &self.budget,
+                exec,
+                ins,
+                dims,
+                [grad_x.as_mut_slice(), grad_w.as_mut_slice()],
+            )?;
+            let grad_x = scanned_f32(op, exec, grad_x, input.shape())?;
+            let grad_w = if checked {
+                trusted_finite_f32(op, grad_w, weight.shape())?
+            } else {
+                scanned_f32(op, exec, grad_w, weight.shape())?
+            };
+            (grad_x, grad_w)
+        } else {
+            let shapes = [input.shape(), weight.shape()];
+            let [grad_x, grad_w] = fill_outs(op, &self.budget, exec, shapes, |grads| {
+                let _ = linear_backward(op, &self.budget, exec, ins, dims, grads)?;
+                Ok(())
+            })?;
+            (grad_x, grad_w)
+        };
+        let grad_b = if bias.is_some() {
+            // `[rows, out]` summed over the rows is the unbroadcast of a
+            // `[out]` bias added to every row.
+            let rows = [dims.rows, dims.out_features];
+            let stretch = broadcast_shapes(op, &rows, &[dims.out_features])?;
+            let grad_b = broadcast_grad(
+                op,
+                &self.budget,
+                exec,
+                &stretch,
+                Operand::B,
+                ins[2],
+                None,
+                &[dims.out_features],
+            )?;
+            Some(grad_b)
+        } else {
+            None
+        };
+        Ok((grad_x, grad_w, grad_b))
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn gate_forward_parts(
         &self,
@@ -500,46 +585,7 @@ impl Backend for CpuBackend {
     ) -> Result<(Tensor, Tensor), OjasError> {
         const OP: &str = "linear_backward";
         let dims = linear_backward_dims(input, weight, grad_output)?;
-        let exec = self.exec();
-        let wide = matmul_operands(OP, exec, &self.budget, [input, weight, grad_output])?;
-        let ins = wide.each_ref().map(Wide::values);
-        // One forward row, Fast whole call: `rank1_weight_grad` checks every
-        // weight-gradient element as it stores `fma(g, x, +0.0)`. That buffer
-        // is not scanned again. `grad_x` is still the Accelerate product and
-        // is scanned.
-        if dims.rows == 1
-            && whole_call(
-                self.numerics,
-                dims.out_features,
-                dims.rows,
-                dims.in_features,
-            )
-        {
-            let gx_len = product(OP, &[dims.rows, dims.in_features])?;
-            let gw_len = product(OP, &[dims.out_features, dims.in_features])?;
-            let mut grad_x = Scratch::<f32>::try_alloc(gx_len, &self.budget)?;
-            let mut grad_w = Scratch::<f32>::try_alloc(gw_len, &self.budget)?;
-            let checked = linear_backward(
-                OP,
-                &self.budget,
-                exec,
-                ins,
-                &dims,
-                [grad_x.as_mut_slice(), grad_w.as_mut_slice()],
-            )?;
-            let grad_x = scanned_f32(OP, exec, grad_x, input.shape())?;
-            let grad_w = if checked {
-                trusted_finite_f32(OP, grad_w, weight.shape())?
-            } else {
-                scanned_f32(OP, exec, grad_w, weight.shape())?
-            };
-            return Ok((grad_x, grad_w));
-        }
-        let shapes = [input.shape(), weight.shape()];
-        let [grad_x, grad_w] = fill_outs(OP, &self.budget, self.exec(), shapes, |grads| {
-            let _ = linear_backward(OP, &self.budget, exec, ins, &dims, grads)?;
-            Ok(())
-        })?;
+        let (grad_x, grad_w, _) = self.linear_bwd(OP, &dims, input, weight, None, grad_output)?;
         Ok((grad_x, grad_w))
     }
 
@@ -1317,6 +1363,53 @@ impl Backend for CpuBackend {
         )
     }
 
+    fn layer_norm_backward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        grad_output: &Tensor,
+        eps: f32,
+    ) -> Result<AffineGrad, OjasError> {
+        const OP: &str = "layer_norm_backward";
+        let dims = layer_norm_backward_dims(input, weight, bias, grad_output, eps)?;
+        let exec = self.exec();
+        // `bias` is read for its shape only, but scanned as every operand is.
+        let [x, w, _, gy] = f32_operands(OP, exec, [input, weight, bias, grad_output])?;
+        let shapes = [input.shape(), weight.shape(), bias.shape()];
+        let [input, weight, bias] = fill_outs(OP, &self.budget, exec, shapes, |grads| {
+            layer_norm_backward(OP, &self.budget, exec, [x, w, gy], dims, eps, grads)
+        })?;
+        Ok(AffineGrad {
+            input,
+            weight,
+            bias,
+        })
+    }
+
+    fn channel_layer_norm_backward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        grad_output: &Tensor,
+        eps: f32,
+    ) -> Result<AffineGrad, OjasError> {
+        const OP: &str = "channel_layer_norm_backward";
+        let dims = channel_layer_norm_backward_dims(input, weight, bias, grad_output, eps)?;
+        let exec = self.exec();
+        let [x, w, _, gy] = f32_operands(OP, exec, [input, weight, bias, grad_output])?;
+        let shapes = [input.shape(), weight.shape(), bias.shape()];
+        let [input, weight, bias] = fill_outs(OP, &self.budget, exec, shapes, |grads| {
+            channel_layer_norm_backward(OP, &self.budget, exec, [x, w, gy], dims, eps, grads)
+        })?;
+        Ok(AffineGrad {
+            input,
+            weight,
+            bias,
+        })
+    }
+
     fn channel_layer_norm_forward(
         &self,
         input: &Tensor,
@@ -1371,6 +1464,13 @@ impl Backend for CpuBackend {
         gelu_erf_forward(OP, &self.budget, self.exec(), x, input.shape())
     }
 
+    fn gelu_erf_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "gelu_erf_backward";
+        gelu_erf_backward_dims(input, grad_output)?;
+        let [x, gy] = f32_operands(OP, self.exec(), [input, grad_output])?;
+        gelu_erf_backward(OP, &self.budget, self.exec(), x, gy, input.shape())
+    }
+
     fn relu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
         const OP: &str = "relu_forward";
         relu_forward_dims(input)?;
@@ -1417,6 +1517,62 @@ impl Backend for CpuBackend {
         })
     }
 
+    fn linear_bias_backward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<AffineGrad, OjasError> {
+        const OP: &str = "linear_bias_backward";
+        let dims = linear_bias_backward_dims(input, weight, bias, grad_output)?;
+        let (input, weight, bias) =
+            self.linear_bwd(OP, &dims, input, weight, Some(bias), grad_output)?;
+        let bias = bias.ok_or_else(|| OjasError::Backend {
+            id: BackendId::Cpu,
+            detail: "linear_bias_backward made no bias gradient".to_string(),
+        })?;
+        Ok(AffineGrad {
+            input,
+            weight,
+            bias,
+        })
+    }
+
+    fn broadcast_add_backward(
+        &self,
+        a: &Tensor,
+        b: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        const OP: &str = "broadcast_add_backward";
+        let dims = broadcast_add_backward_dims(a, b, grad_output)?;
+        let exec = self.exec();
+        // The operands' values are not read, but they are scanned as every
+        // operand is.
+        let [_, _, gy] = f32_operands(OP, exec, [a, b, grad_output])?;
+        let budget = &self.budget;
+        let ga = broadcast_grad(OP, budget, exec, &dims, Operand::A, gy, None, a.shape())?;
+        let gb = broadcast_grad(OP, budget, exec, &dims, Operand::B, gy, None, b.shape())?;
+        Ok((ga, gb))
+    }
+
+    fn broadcast_mul_backward(
+        &self,
+        a: &Tensor,
+        b: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        const OP: &str = "broadcast_mul_backward";
+        let dims = broadcast_mul_backward_dims(a, b, grad_output)?;
+        let exec = self.exec();
+        let [av, bv, gy] = f32_operands(OP, exec, [a, b, grad_output])?;
+        let budget = &self.budget;
+        let ga = broadcast_grad(OP, budget, exec, &dims, Operand::A, gy, Some(bv), a.shape())?;
+        let gb = broadcast_grad(OP, budget, exec, &dims, Operand::B, gy, Some(av), b.shape())?;
+        Ok((ga, gb))
+    }
+
     fn broadcast_add_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
         const OP: &str = "broadcast_add_forward";
         let dims = broadcast_add_forward_dims(a, b)?;
@@ -1443,6 +1599,13 @@ impl Backend for CpuBackend {
         let dims = softmax_forward_dims(input)?;
         let [x] = f32_operands(OP, self.exec(), [input])?;
         softmax_forward(OP, &self.budget, self.exec(), x, dims, input.shape())
+    }
+
+    fn softmax_backward(&self, output: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "softmax_backward";
+        let dims = softmax_backward_dims(output, grad_output)?;
+        let [y, gy] = f32_operands(OP, self.exec(), [output, grad_output])?;
+        softmax_backward(OP, &self.budget, self.exec(), y, gy, dims, output.shape())
     }
 
     fn cross_entropy_mean_forward(

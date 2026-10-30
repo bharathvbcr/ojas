@@ -69,6 +69,44 @@ pub fn gelu_erf_exact(x: f32) -> f32 {
     (0.5 * xd * (1.0 + erf)) as f32
 }
 
+/// `1 / sqrt(2 pi)`, the standard normal density at 0.
+const FRAC_1_SQRT_2PI: f64 = 0.398_942_280_401_432_7;
+/// [`exp_in_range_f64`] takes arguments down to `-104`; `e^-208` is `5e-91`.
+const EXP_RANGE: f64 = 104.0;
+
+/// `e^-h` for `h >= 0` in `f64`, past `exp_in_range_f64`'s range as the
+/// product of two of its values. An `h` above `2 * EXP_RANGE` is `0.0`: there
+/// `x * phi(x)` is below `4e-90`, so even a gradient of `3.4e38` scales it to
+/// below `1e-50`, which is under the smallest `f32`.
+fn exp_neg(h: f64) -> f64 {
+    if h <= EXP_RANGE {
+        exp_in_range_f64(-h)
+    } else if h <= 2.0 * EXP_RANGE {
+        exp_in_range_f64(-EXP_RANGE) * exp_in_range_f64(EXP_RANGE - h)
+    } else {
+        0.0
+    }
+}
+
+/// `dy * d/dx gelu(x)` for the exact GELU: `dy * (Phi(x) + x * phi(x))`,
+/// `Phi(x) = 0.5 * (1 + erf(x / sqrt(2)))` and `phi(x) = e^(-x^2 / 2) /
+/// sqrt(2 pi)`, formed in `f64` and rounded once to `f32`, the same bits on
+/// every platform. The density's exponential is evaluated where torch's `f32`
+/// one has underflowed to 0 (`|x|` above 14.4), so a gradient near the
+/// `f32` maximum still sees the term it scales. A negative `x`'s tail
+/// carries the `1e-14` absolute error of `1 + erf`, which an `f32` gradient
+/// above `1e-7` does not see. NaN stays NaN, and an infinite `x` is NaN
+/// (`inf * 0`), as in torch.
+pub fn gelu_erf_backward_exact(x: f32, dy: f32) -> f32 {
+    if x.is_nan() {
+        return f32::NAN;
+    }
+    let xd = f64::from(x);
+    let cdf = 0.5 * (1.0 + erf_f64(xd * FRAC_1_SQRT_2));
+    let pdf = FRAC_1_SQRT_2PI * exp_neg(0.5 * xd * xd);
+    (f64::from(dy) * (cdf + xd * pdf)) as f32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,6 +226,85 @@ mod tests {
         assert_eq!(gelu_erf_exact(3.0e38), 3.0e38);
         assert!(gelu_erf_exact(f32::NAN).is_nan());
         assert!(gelu_erf_exact(f32::NEG_INFINITY).is_nan());
+    }
+
+    /// `gelu` in `f64`, the reference the derivative is differenced from.
+    fn gelu_f64(x: f64) -> f64 {
+        0.5 * x * (1.0 + erf_f64(x * FRAC_1_SQRT_2))
+    }
+
+    #[test]
+    fn gelu_derivative_matches_a_central_difference_of_gelu() {
+        let h = 1e-5;
+        let mut x = -7.0f64;
+        while x <= 7.0 {
+            let want = (gelu_f64(x + h) - gelu_f64(x - h)) / (2.0 * h);
+            let got = f64::from(gelu_erf_backward_exact(x as f32, 1.0));
+            // The difference quotient's own error is about 1e-9 in the tails.
+            assert!(
+                (got - want).abs() <= 2e-7 * want.abs() + 1e-8,
+                "x = {x}: {got} vs {want}"
+            );
+            x += 0.173;
+        }
+    }
+
+    #[test]
+    fn gelu_derivative_has_its_closed_form_values() {
+        // gelu'(0) = 1/2; gelu'(+-1) = Phi(1) +- phi(1).
+        assert_eq!(gelu_erf_backward_exact(0.0, 1.0), 0.5);
+        assert_eq!(gelu_erf_backward_exact(-0.0, 1.0), 0.5);
+        let (cdf, pdf) = (0.841_344_746_068_542_9, 0.241_970_724_519_143_37);
+        let got = f64::from(gelu_erf_backward_exact(1.0, 1.0));
+        assert!((got - (cdf + pdf)).abs() < 1e-7, "{got}");
+        let got = f64::from(gelu_erf_backward_exact(-1.0, 1.0));
+        assert!((got - (1.0 - cdf - pdf)).abs() < 1e-7, "{got}");
+        // The gradient scales the derivative.
+        assert_eq!(
+            gelu_erf_backward_exact(0.0, -3.0),
+            -3.0 * gelu_erf_backward_exact(0.0, 1.0)
+        );
+    }
+
+    #[test]
+    fn gelu_derivative_saturates_and_keeps_the_underflowed_density_term() {
+        // Far positive: exactly the gradient. Far negative: `-x * phi(x)` is
+        // `-9e-18` at -9 and below the smallest `f32` from -15 on, so zero.
+        for x in [9.0f32, 15.0, 30.0, 1e30, f32::MAX] {
+            assert_eq!(gelu_erf_backward_exact(x, 0.75), 0.75, "x = {x}");
+        }
+        for x in [15.0f32, 30.0, 1e30, f32::MAX] {
+            assert_eq!(gelu_erf_backward_exact(-x, 0.75), 0.0, "x = -{x}");
+        }
+        let nine = f64::from(gelu_erf_backward_exact(-9.0, 1.0));
+        let want = -9.0 * 0.398_942_280_401_432_7 * (-40.5f64).exp();
+        assert!(
+            (nine - want).abs() <= 1e-6 * want.abs(),
+            "{nine:e} vs {want:e}"
+        );
+        // Past |x| = 14.4 torch's f32 exponential is 0; the term survives a
+        // gradient near the f32 maximum: -x * phi(x) * dy.
+        for (x, dy) in [(15.0f64, 1e38f32), (18.0, 3.0e38), (18.5, 3.4e38)] {
+            let want = -x * 0.398_942_280_401_432_7 * (-0.5 * x * x).exp() * f64::from(dy);
+            let got = f64::from(gelu_erf_backward_exact(-x as f32, dy));
+            assert!(
+                (got - want).abs() <= 1e-6 * want.abs(),
+                "x = -{x}: {got} vs {want}"
+            );
+        }
+        // Where the term is below an f32 it is a signed zero, not garbage.
+        assert_eq!(gelu_erf_backward_exact(-25.0, 3.4e38), 0.0);
+        assert_eq!(gelu_erf_backward_exact(-1e30, f32::MAX), 0.0);
+    }
+
+    #[test]
+    fn gelu_derivative_passes_nan_and_refuses_nothing_else() {
+        assert!(gelu_erf_backward_exact(f32::NAN, 1.0).is_nan());
+        assert!(gelu_erf_backward_exact(1.0, f32::NAN).is_nan());
+        assert!(gelu_erf_backward_exact(f32::INFINITY, 1.0).is_nan());
+        assert!(gelu_erf_backward_exact(f32::NEG_INFINITY, 1.0).is_nan());
+        // An overflowing product is inf, for the caller to refuse.
+        assert_eq!(gelu_erf_backward_exact(1.5, f32::MAX), f32::INFINITY);
     }
 
     #[test]

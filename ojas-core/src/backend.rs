@@ -466,6 +466,16 @@ pub struct GatedRmsGrad {
     pub weight: Tensor,
 }
 
+/// Gradients of an op with an input, a weight and a bias
+/// ([`Backend::layer_norm_backward`], [`Backend::channel_layer_norm_backward`]
+/// and [`Backend::linear_bias_backward`]), each shaped like its operand.
+#[derive(Clone, Debug)]
+pub struct AffineGrad {
+    pub input: Tensor,
+    pub weight: Tensor,
+    pub bias: Tensor,
+}
+
 /// Gradients of [`Backend::gdn_log_decay_forward`], each shaped like its
 /// input.
 #[derive(Clone, Debug)]
@@ -1412,6 +1422,29 @@ pub trait Backend {
         Err(unsupported_op(self.id(), "layer_norm_forward"))
     }
 
+    /// The gradients of [`Self::layer_norm_forward`] for `grad_output`
+    /// shaped like `input`, from the forward's operands (`bias` is read only
+    /// to check it as the forward does). With `xhat = (x - mean) * rstd`
+    /// from the forward's own `f64` row statistics, `dx = rstd * (g * w -
+    /// mean(g * w) - xhat * mean(g * w * xhat))` per row, `dw = sum(g *
+    /// xhat)` and `db = sum(g)` over the rows. Every sum is `f64`, ascends
+    /// from index 0 (rows ascend for `dw` and `db`) and is rounded once, so
+    /// the bits do not depend on the thread count; a `var + eps` that is
+    /// not finite and positive is [`OjasError::NonFinite`], as in the
+    /// forward. [`crate::layer_norm_backward_dims`] validates. The default
+    /// refuses with [`OjasError::Unsupported`].
+    fn layer_norm_backward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        grad_output: &Tensor,
+        eps: f32,
+    ) -> Result<AffineGrad, OjasError> {
+        let _ = (input, weight, bias, grad_output, eps);
+        Err(unsupported_op(self.id(), "layer_norm_backward"))
+    }
+
     /// LayerNorm across the channel axis of an image-shaped tensor:
     /// `input` `[batch, channels, *spatial]` (`[N, C, H, W]`), `weight` and
     /// `bias` `[channels]`. Every position `(n, *spatial)` is normalized
@@ -1430,6 +1463,23 @@ pub trait Backend {
     ) -> Result<Tensor, OjasError> {
         let _ = (input, weight, bias, eps);
         Err(unsupported_op(self.id(), "channel_layer_norm_forward"))
+    }
+
+    /// The gradients of [`Self::channel_layer_norm_forward`], as
+    /// [`Self::layer_norm_backward`] gives them for each position's
+    /// channels: `dw[c]` and `db[c]` sum over the batch and every spatial
+    /// position, ascending. [`crate::channel_layer_norm_backward_dims`]
+    /// validates. The default refuses with [`OjasError::Unsupported`].
+    fn channel_layer_norm_backward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        grad_output: &Tensor,
+        eps: f32,
+    ) -> Result<AffineGrad, OjasError> {
+        let _ = (input, weight, bias, grad_output, eps);
+        Err(unsupported_op(self.id(), "channel_layer_norm_backward"))
     }
 
     /// GroupNorm over `input` `[N, C, H, W]`, torch's `nn.GroupNorm`: the `C`
@@ -1461,6 +1511,17 @@ pub trait Backend {
     fn gelu_erf_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
         let _ = input;
         Err(unsupported_op(self.id(), "gelu_erf_forward"))
+    }
+
+    /// `grad_output * gelu'(input)` for the exact GELU's derivative `Phi(x) +
+    /// x * phi(x)`: on the CPU [`crate::gelu_erf_backward_exact`], one `f32`
+    /// rounding of an `f64` value, the same bits on every platform. A
+    /// product that overflows `f32` is [`OjasError::NonFinite`].
+    /// [`crate::gelu_erf_backward_dims`] validates. The default refuses with
+    /// [`OjasError::Unsupported`].
+    fn gelu_erf_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        let _ = (input, grad_output);
+        Err(unsupported_op(self.id(), "gelu_erf_backward"))
     }
 
     /// `max(x, 0)`, torch's `F.relu`: `x` where `x >= 0` and `+0` where
@@ -1529,6 +1590,26 @@ pub trait Backend {
         Err(unsupported_op(self.id(), "linear_bias_forward"))
     }
 
+    /// The gradients of [`Self::linear_bias_forward`] for `grad_output`
+    /// shaped like its output: `input` and `weight` gradients as
+    /// [`Self::linear_backward`] gives them (same bits), and the bias
+    /// gradient `db[o] = sum(grad_output[r, o])`, an `f64` sum over the
+    /// rows from row 0, rounded once. `bias` is read only to check it as
+    /// the forward does. `input` and `weight` follow `linear_backward`'s
+    /// `F32` or `Bf16` rules; the gradients are `F32`.
+    /// [`crate::linear_bias_backward_dims`] validates. The default refuses
+    /// with [`OjasError::Unsupported`].
+    fn linear_bias_backward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<AffineGrad, OjasError> {
+        let _ = (input, weight, bias, grad_output);
+        Err(unsupported_op(self.id(), "linear_bias_backward"))
+    }
+
     /// `a + b` with numpy broadcasting ([`crate::broadcast_shapes`]): shapes
     /// aligned at the last axis, each pair of extents equal or one of them
     /// 1, rank at most [`crate::MAX_BROADCAST_RANK`]. One `f32` add per
@@ -1539,12 +1620,46 @@ pub trait Backend {
         Err(unsupported_op(self.id(), "broadcast_add_forward"))
     }
 
+    /// `(grad_a, grad_b)` of [`Self::broadcast_add_forward`] for
+    /// `grad_output` shaped like the sum: each is `grad_output` summed over
+    /// the axes its operand was stretched along, so it is shaped like its
+    /// operand. Each element is an `f64` sum of the output elements it fed,
+    /// in ascending output order, rounded once. A shape the forward refuses
+    /// is refused, never broadcast another way.
+    /// [`crate::broadcast_add_backward_dims`] validates. The default refuses
+    /// with [`OjasError::Unsupported`].
+    fn broadcast_add_backward(
+        &self,
+        a: &Tensor,
+        b: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        let _ = (a, b, grad_output);
+        Err(unsupported_op(self.id(), "broadcast_add_backward"))
+    }
+
     /// `a * b` with numpy broadcasting, as [`Self::broadcast_add_forward`]:
     /// one `f32` multiply per output element. The default refuses with
     /// [`OjasError::Unsupported`].
     fn broadcast_mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
         let _ = (a, b);
         Err(unsupported_op(self.id(), "broadcast_mul_forward"))
+    }
+
+    /// `(grad_a, grad_b)` of [`Self::broadcast_mul_forward`]: `grad_a` sums
+    /// `grad_output * b` and `grad_b` sums `grad_output * a` over the axes
+    /// each operand was stretched along, as
+    /// [`Self::broadcast_add_backward`] sums (the `f32` product is exact
+    /// in `f64`). [`crate::broadcast_mul_backward_dims`] validates. The
+    /// default refuses with [`OjasError::Unsupported`].
+    fn broadcast_mul_backward(
+        &self,
+        a: &Tensor,
+        b: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        let _ = (a, b, grad_output);
+        Err(unsupported_op(self.id(), "broadcast_mul_backward"))
     }
 
     /// `input * scale` into a new tensor, for a finite `scale`
@@ -1567,6 +1682,19 @@ pub trait Backend {
     fn softmax_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
         let _ = input;
         Err(unsupported_op(self.id(), "softmax_forward"))
+    }
+
+    /// The input gradient of [`Self::softmax_forward`] from its `output`
+    /// `y` (not its input) and `grad_output` `g`, both `[..., dim]`:
+    /// `y * (g - sum(g * y))` per row. The dot is an `f64` sum that ascends
+    /// from index 0, and each value is rounded once, so the bits do not
+    /// depend on the thread count and `Fast` and `Exact` agree. A row that
+    /// is not a probability row is not checked: the gradient is
+    /// that formula's. [`crate::softmax_backward_dims`] validates. The
+    /// default refuses with [`OjasError::Unsupported`].
+    fn softmax_backward(&self, output: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        let _ = (output, grad_output);
+        Err(unsupported_op(self.id(), "softmax_backward"))
     }
 
     /// Scalar mean cross-entropy. Targets are `U32`.
@@ -2068,18 +2196,25 @@ macro_rules! with_backend_methods {
             op fn residual_add_forward(&self, x: &$crate::Tensor, y: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn residual_add_backward(&self, x: &$crate::Tensor, y: &$crate::Tensor, grad_output: &$crate::Tensor) -> Result<($crate::Tensor, $crate::Tensor), $crate::OjasError>;
             op fn layer_norm_forward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor, eps: f32) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn layer_norm_backward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor, grad_output: &$crate::Tensor, eps: f32) -> Result<$crate::AffineGrad, $crate::OjasError>;
             op fn channel_layer_norm_forward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor, eps: f32) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn channel_layer_norm_backward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor, grad_output: &$crate::Tensor, eps: f32) -> Result<$crate::AffineGrad, $crate::OjasError>;
             op fn group_norm_forward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor, groups: usize, eps: f32) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn gelu_erf_forward(&self, input: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn gelu_erf_backward(&self, input: &$crate::Tensor, grad_output: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn relu_forward(&self, input: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn concat(&self, inputs: &[&$crate::Tensor], axis: usize) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn slice(&self, input: &$crate::Tensor, axis: usize, start: usize, len: usize) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn fill(&self, shape: &[usize], dtype: $crate::DType, value: f32) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn linear_bias_forward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn linear_bias_backward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor, grad_output: &$crate::Tensor) -> Result<$crate::AffineGrad, $crate::OjasError>;
             op fn broadcast_add_forward(&self, a: &$crate::Tensor, b: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn broadcast_add_backward(&self, a: &$crate::Tensor, b: &$crate::Tensor, grad_output: &$crate::Tensor) -> Result<($crate::Tensor, $crate::Tensor), $crate::OjasError>;
             op fn broadcast_mul_forward(&self, a: &$crate::Tensor, b: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn broadcast_mul_backward(&self, a: &$crate::Tensor, b: &$crate::Tensor, grad_output: &$crate::Tensor) -> Result<($crate::Tensor, $crate::Tensor), $crate::OjasError>;
             op fn scale_forward(&self, input: &$crate::Tensor, scale: f32) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn softmax_forward(&self, input: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn softmax_backward(&self, output: &$crate::Tensor, grad_output: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn cross_entropy_mean_forward(&self, logits: &$crate::Tensor, targets: &$crate::Tensor, ignore_index: Option<u32>) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn cross_entropy_mean_backward(&self, logits: &$crate::Tensor, targets: &$crate::Tensor, ignore_index: Option<u32>) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn clip_grad_norm(&self, grads: &mut [$crate::Tensor], max_norm: f32) -> Result<f32, $crate::OjasError>;
@@ -2884,18 +3019,27 @@ pub(crate) mod tests {
             op(backend.residual_add_forward(&t, &t)),
             op(backend.residual_add_backward(&t, &t, &t)),
             op(backend.layer_norm_forward(&t, &t, &t, 1e-6)),
+            op(backend.layer_norm_backward(&t, &t, &t, &t, 1e-6).map(drop)),
             op(backend.channel_layer_norm_forward(&t, &t, &t, 1e-6)),
+            op(backend
+                .channel_layer_norm_backward(&t, &t, &t, &t, 1e-6)
+                .map(drop)),
             op(backend.group_norm_forward(&t, &t, &t, 1, 1e-5)),
             op(backend.gelu_erf_forward(&t)),
+            op(backend.gelu_erf_backward(&t, &t)),
             op(backend.relu_forward(&t)),
             op(backend.concat(&[&t, &t], 0)),
             op(backend.slice(&t, 0, 0, 1)),
             op(backend.fill(&[1], DType::F32, 0.0)),
             op(backend.linear_bias_forward(&t, &t, &t)),
+            op(backend.linear_bias_backward(&t, &t, &t, &t).map(drop)),
             op(backend.broadcast_add_forward(&t, &t)),
+            op(backend.broadcast_add_backward(&t, &t, &t).map(drop)),
             op(backend.broadcast_mul_forward(&t, &t)),
+            op(backend.broadcast_mul_backward(&t, &t, &t).map(drop)),
             op(backend.scale_forward(&t, 0.5)),
             op(backend.softmax_forward(&t)),
+            op(backend.softmax_backward(&t, &t)),
             op(backend.cross_entropy_mean_forward(&t, &t, None)),
             op(backend.cross_entropy_mean_backward(&t, &t, None)),
             op(backend.clip_grad_norm(std::slice::from_mut(&mut m), 1.0)),
@@ -2970,18 +3114,25 @@ pub(crate) mod tests {
             "residual_add_forward",
             "residual_add_backward",
             "layer_norm_forward",
+            "layer_norm_backward",
             "channel_layer_norm_forward",
+            "channel_layer_norm_backward",
             "group_norm_forward",
             "gelu_erf_forward",
+            "gelu_erf_backward",
             "relu_forward",
             "concat",
             "slice",
             "fill",
             "linear_bias_forward",
+            "linear_bias_backward",
             "broadcast_add_forward",
+            "broadcast_add_backward",
             "broadcast_mul_forward",
+            "broadcast_mul_backward",
             "scale_forward",
             "softmax_forward",
+            "softmax_backward",
             "cross_entropy_mean_forward",
             "cross_entropy_mean_backward",
             "clip_grad_norm",
@@ -3209,6 +3360,36 @@ pub(crate) mod tests {
                 .max_pool2d_backward(&x, &x, [2, 2], [2, 2])
                 .map(drop),
             "max_pool2d_backward",
+        );
+        refused(
+            backend.layer_norm_backward(&x, &x, &x, &x, 1e-6).map(drop),
+            "layer_norm_backward",
+        );
+        refused(
+            backend
+                .channel_layer_norm_backward(&x, &x, &x, &x, 1e-6)
+                .map(drop),
+            "channel_layer_norm_backward",
+        );
+        refused(
+            backend.gelu_erf_backward(&x, &x).map(drop),
+            "gelu_erf_backward",
+        );
+        refused(
+            backend.linear_bias_backward(&x, &x, &x, &x).map(drop),
+            "linear_bias_backward",
+        );
+        refused(
+            backend.broadcast_add_backward(&x, &x, &x).map(drop),
+            "broadcast_add_backward",
+        );
+        refused(
+            backend.broadcast_mul_backward(&x, &x, &x).map(drop),
+            "broadcast_mul_backward",
+        );
+        refused(
+            backend.softmax_backward(&x, &x).map(drop),
+            "softmax_backward",
         );
         refused(
             backend
