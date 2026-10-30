@@ -29,7 +29,7 @@ const ALL: [Which; 4] = [
 ];
 
 #[test]
-#[ignore]
+#[ignore = "opens a Metal runtime; run in the GPU window with --release -- --ignored --test-threads=1"]
 fn gpu_read_entries_are_the_table_rows() {
     let s = stepped();
     // A matrix tessl stores transposed, a 1-D tensor and the embedding.
@@ -70,7 +70,7 @@ fn gpu_read_entries_are_the_table_rows() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "opens a Metal runtime; run in the GPU window with --release -- --ignored --test-threads=1"]
 fn gpu_state_round_trip_is_bit_identical() {
     let mut s = stepped();
     s.discard_gradients();
@@ -105,7 +105,7 @@ fn gpu_state_round_trip_is_bit_identical() {
 /// pool's peak since the reset is what was already allocated. A whole-table
 /// staging (the old path) raised it by the size of a table.
 #[test]
-#[ignore]
+#[ignore = "opens a Metal runtime; run in the GPU window with --release -- --ignored --test-threads=1"]
 fn gpu_state_io_allocates_no_device_memory() {
     let mut s = stepped();
     let before = s.device_bytes().allocated;
@@ -180,7 +180,7 @@ fn snapshot_dir() -> PathBuf {
 /// what was allocated before it (the new path measures about zero; the slack
 /// admits one staged copy of the picks, not of a table).
 #[test]
-#[ignore]
+#[ignore = "needs the real 2B snapshot (QWEN35_2B_SNAPSHOT or the Hugging Face cache) and a Metal runtime; run alone under the heavy-job lock"]
 fn gpu_real_2b_read_peaks() {
     let snap = Snapshot::from_dir(&snapshot_dir()).unwrap();
     let mut s = Qwen35Step::open(

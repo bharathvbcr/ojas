@@ -241,7 +241,7 @@ fn scale_grad_is_the_host_product_in_place_or_replaced() {
 /// (`*acc = residual_add_forward(acc, grad)`) against the override.
 /// `cargo test --release -p ojas-cpu --test framework_accum -- --ignored --nocapture`
 #[test]
-#[ignore]
+#[ignore = "interleaved A/B benchmark; run with --release -- --ignored --nocapture"]
 fn accumulate_grad_ab() {
     let be = CpuBackend::new(Budget::new(u64::MAX));
     let mut rng = SplitMix64(0xacc2);

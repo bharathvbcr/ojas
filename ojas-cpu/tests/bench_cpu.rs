@@ -32,7 +32,7 @@ fn backend(threads: usize, numerics: Numerics) -> CpuBackend {
 const NUMERICS: [Numerics; 2] = [Numerics::Exact, Numerics::Fast];
 
 #[test]
-#[ignore]
+#[ignore = "benchmark; run with --release -- --ignored --nocapture --test-threads=1"]
 fn linear_wall_time_matrix() {
     let shapes: &[(usize, usize, usize)] = &[
         (64, 64, 128),
@@ -81,7 +81,7 @@ fn linear_wall_time_matrix() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "benchmark; run with --release -- --ignored --nocapture --test-threads=1"]
 fn attention_wall_time_matrix() {
     let (b, h, d) = (4usize, 8usize, 64usize);
     for (threads, numerics) in thread_counts()

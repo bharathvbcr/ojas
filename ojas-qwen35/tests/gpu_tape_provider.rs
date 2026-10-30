@@ -414,7 +414,7 @@ fn run_steps<B: Backend>(p: &mut P<B>, from: u64, to: u64) -> Vec<f64> {
 // ---- (a) ---------------------------------------------------------------------
 
 #[test]
-#[ignore]
+#[ignore = "opens a Metal runtime; run in the GPU window with --release -- --ignored --test-threads=1"]
 fn gpu_tape_provider_matches_the_cpu_over_accumulate_and_adamw_steps() {
     let Some(mut gpu) = metal_provider() else {
         return;
@@ -448,7 +448,7 @@ fn gpu_tape_provider_matches_the_cpu_over_accumulate_and_adamw_steps() {
 // ---- (b) ---------------------------------------------------------------------
 
 #[test]
-#[ignore]
+#[ignore = "opens a Metal runtime; run in the GPU window with --release -- --ignored --test-threads=1"]
 fn gpu_three_row_accumulate_matches_the_torch_fixture() {
     let Some(mut p) = metal_provider() else {
         return;
@@ -547,7 +547,7 @@ fn gpu_three_row_accumulate_matches_the_torch_fixture() {
 // ---- (c) ---------------------------------------------------------------------
 
 #[test]
-#[ignore]
+#[ignore = "opens a Metal runtime; run in the GPU window with --release -- --ignored --test-threads=1"]
 fn gpu_a_non_finite_gradient_leaves_every_tensor_and_moment_unchanged() {
     let Some(mut p) = metal_provider() else {
         return;
@@ -744,7 +744,7 @@ fn checkpoint_dir(dir: &Path, step: u64) -> PathBuf {
 /// `OJAS_KR_ROLE=child`; with no role it does nothing, so the plain
 /// `--ignored` run passes over it.
 #[test]
-#[ignore]
+#[ignore = "child process of the kill-9 test; does nothing unless OJAS_KR_ROLE=child"]
 fn gpu_tape_provider_kill_resume_child() {
     match std::env::var(ROLE_ENV).as_deref() {
         Ok("child") => {}
@@ -822,7 +822,7 @@ fn read_losses(path: &Path) -> Vec<u64> {
 }
 
 #[test]
-#[ignore]
+#[ignore = "needs the real 2B snapshot (QWEN35_2B_SNAPSHOT or the Hugging Face cache) and a Metal runtime; run alone under the heavy-job lock"]
 fn gpu_tape_provider_survives_kill_9_at_the_2b_shape() {
     use std::os::unix::process::ExitStatusExt;
 

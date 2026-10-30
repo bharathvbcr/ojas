@@ -300,7 +300,7 @@ fn fastest<T>(runs: usize, mut f: impl FnMut() -> T) -> (f64, T) {
 }
 
 #[test]
-#[ignore]
+#[ignore = "throughput benchmark; run with --release -- --ignored --nocapture"]
 fn encode_ordinary_and_decode_throughput() {
     let runs: usize = std::env::var("OJAS_BPE_BENCH_RUNS")
         .ok()

@@ -1705,7 +1705,7 @@ mod pre_tokenizer_tests {
     /// cargo test -p ojas-data --lib -- --ignored real_qwen
     /// ```
     #[test]
-    #[ignore]
+    #[ignore = "parses the real Qwen3.5 tokenizer.json (12 MB) from the local Hugging Face cache; run with --ignored real_qwen"]
     fn real_qwen35_tokenizer_json_is_refused_and_fits_the_parser_limits() {
         let Some(home) = std::env::var_os("HOME") else {
             panic!("no HOME");

@@ -1876,14 +1876,101 @@ fn relative_gap(a: f32, b: f32) -> f32 {
     (a - b).abs() / b.abs().max(f32::MIN_POSITIVE)
 }
 
-/// `(calls, bytes)` of device readbacks made by `f`. A step on `CpuBackend`
-/// reads nothing back from a device, so a device session that fell back to
-/// the CPU reports `(0, 0)` here.
-fn readbacks_during<T>(f: impl FnOnce() -> T) -> (T, (u64, u64)) {
-    let (calls, bytes) = ojas_core::device_readbacks();
+/// The budget `session`'s backend charges: a child of the process ceiling that
+/// only this session's tensors draw on, so its readback counter is not
+/// disturbed by any other session or test.
+fn session_budget(session: &session::Session) -> Budget {
+    let state = session.lock_state().unwrap();
+    crate::model::on_model!(&state.engine, m => m.backend.budget().clone())
+}
+
+/// `(calls, bytes)` of device readbacks charged to `budget`'s tree while `f`
+/// runs, from whichever thread made them. A step on `CpuBackend` reads
+/// nothing back from a device, so a device session that fell back to the CPU
+/// reports `(0, 0)` here.
+fn readbacks_during<T>(budget: &Budget, f: impl FnOnce() -> T) -> (T, (u64, u64)) {
+    let (calls, bytes) = budget.device_readbacks();
     let out = f();
-    let (calls_after, bytes_after) = ojas_core::device_readbacks();
+    let (calls_after, bytes_after) = budget.device_readbacks();
     (out, (calls_after - calls, bytes_after - bytes))
+}
+
+/// A device buffer that holds its bytes on the host, so a test can read back
+/// without a device.
+#[derive(Debug)]
+struct FakeDeviceBuffer(Vec<u8>);
+
+impl ojas_core::DeviceBuffer for FakeDeviceBuffer {
+    fn backend(&self) -> ojas_core::BackendId {
+        ojas_core::BackendId::Wgpu
+    }
+    fn byte_len(&self) -> usize {
+        self.0.len()
+    }
+    fn read_bytes(&self, offset: usize, len: usize) -> Result<Vec<u8>, ojas_core::OjasError> {
+        Ok(self.0[offset..offset + len].to_vec())
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+fn fake_device_tensor(budget: &Budget) -> Tensor {
+    Tensor::from_device(
+        Arc::new(FakeDeviceBuffer(vec![0; 16])),
+        &[4],
+        ojas_core::DType::F32,
+        budget,
+    )
+    .unwrap()
+}
+
+/// The readback counter is scoped to the budget tree it is asked about. A
+/// readback charged to another tree, made on another thread while the
+/// counted closure runs, is not seen; one into this tree, made on another
+/// thread, is. The process-wide counter saw both, so parallel device tests
+/// could pass or fail on each other's reads.
+#[test]
+fn readbacks_are_counted_per_budget_tree_not_per_process() {
+    let mine = Budget::new(1 << 12);
+    let other = Budget::new(1 << 12);
+    let mine_tensor = fake_device_tensor(&mine);
+    let other_tensor = fake_device_tensor(&other);
+
+    let (_, reads) = readbacks_during(&mine, || {
+        std::thread::scope(|scope| {
+            scope
+                .spawn(|| other_tensor.to_host(&other).unwrap())
+                .join()
+                .unwrap()
+        })
+    });
+    assert_eq!(reads, (0, 0), "another tree's readback was counted");
+
+    let (_, reads) = readbacks_during(&mine, || {
+        std::thread::scope(|scope| {
+            scope
+                .spawn(|| mine_tensor.to_host(&mine).unwrap())
+                .join()
+                .unwrap()
+        })
+    });
+    assert_eq!(reads, (1, 16), "a readback from another thread was missed");
+
+    let child = mine.child(1 << 10);
+    let child_tensor = fake_device_tensor(&child);
+    let (_, reads) = readbacks_during(&mine, || child_tensor.to_host(&child).unwrap());
+    assert_eq!(
+        reads,
+        (1, 16),
+        "a descendant's readback rolls up to its root"
+    );
+    let (_, reads) = readbacks_during(&child, || mine_tensor.to_host(&mine).unwrap());
+    assert_eq!(
+        reads,
+        (0, 0),
+        "a readback into the parent is not the child's"
+    );
 }
 
 /// A device session trains on its device: each step matches the same step
@@ -1894,16 +1981,19 @@ fn readbacks_during<T>(f: impl FnOnce() -> T) -> (T, (u64, u64)) {
 fn assert_device_steps_match_cpu(device: session::Session, dir: &Path) {
     write_bin(dir, "tokens.bin");
     let cpu = load_path("model.safetensors").unwrap();
+    let (cpu_budget, device_budget) = (session_budget(&cpu), session_budget(&device));
     train_open(cpu.id, "tokens.bin").unwrap();
-    let (opened, reads) = readbacks_during(|| train_open(device.id, "tokens.bin"));
+    let (opened, reads) = readbacks_during(&device_budget, || train_open(device.id, "tokens.bin"));
     opened.unwrap();
     // Trainer::new on a device session downloads each resident weight once.
     assert_eq!(reads.0, u64::from(device.tensors), "{reads:?}");
     for n in 0..3 {
-        let (on_cpu, cpu_reads) =
-            readbacks_during(|| call(crate::OP_TRAIN_STEP, &sampled_payload(cpu.id)));
-        let (on_dev, dev_reads) =
-            readbacks_during(|| call(crate::OP_TRAIN_STEP, &sampled_payload(device.id)));
+        let (on_cpu, cpu_reads) = readbacks_during(&cpu_budget, || {
+            call(crate::OP_TRAIN_STEP, &sampled_payload(cpu.id))
+        });
+        let (on_dev, dev_reads) = readbacks_during(&device_budget, || {
+            call(crate::OP_TRAIN_STEP, &sampled_payload(device.id))
+        });
         let on_cpu = step_out(&on_cpu.unwrap());
         let on_dev = step_out(&on_dev.unwrap());
         assert_eq!(cpu_reads, (0, 0), "step {n}: the CPU step read a device");
@@ -1968,13 +2058,14 @@ fn assert_device_samples_match_cpu(device: session::Session) {
     const READS_PER_TOKEN: u64 = 2;
     const BYTES_PER_TOKEN: u64 = K * (4 + 4);
     let cpu = load_path("model.safetensors").unwrap();
+    let device_budget = session_budget(&device);
     for prompt in [&[0u32][..], &[1], &[0, 1, 1], &[1, 0, 0, 1, 0]] {
         let want = call(
             crate::OP_SAMPLE,
             &sample_payload(cpu.id, prompt, 0.0, TOKENS, 0),
         )
         .unwrap();
-        let (got, reads) = readbacks_during(|| {
+        let (got, reads) = readbacks_during(&device_budget, || {
             call(
                 crate::OP_SAMPLE,
                 &sample_payload(device.id, prompt, 0.0, TOKENS, 0),
@@ -1990,8 +2081,9 @@ fn assert_device_samples_match_cpu(device: session::Session) {
             "{prompt:?}"
         );
     }
-    let (token, reads) =
-        readbacks_during(|| call(crate::OP_GENERATE, &argmax_payload(device.id, &[0.0, 2.0])));
+    let (token, reads) = readbacks_during(&device_budget, || {
+        call(crate::OP_GENERATE, &argmax_payload(device.id, &[0.0, 2.0]))
+    });
     assert_eq!(token.unwrap(), 1u32.to_le_bytes());
     assert_eq!(reads, (0, 0));
     let err = call(crate::OP_SAMPLE, &greedy_payload(device.id, &[64])).unwrap_err();

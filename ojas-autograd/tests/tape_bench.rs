@@ -56,7 +56,7 @@ fn walk_peak(budget: &Budget, walk: impl FnOnce()) -> u64 {
 }
 
 #[test]
-#[ignore]
+#[ignore = "benchmark; run with --release -- --ignored --nocapture --test-threads=1"]
 fn tape_bench() {
     let cpu = backend();
     let budget = cpu.budget().clone();

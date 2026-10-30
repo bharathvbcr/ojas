@@ -81,7 +81,7 @@ fn reference_snapshot(ref_dir: &Path) -> PathBuf {
 }
 
 #[test]
-#[ignore]
+#[ignore = "needs the real 2B snapshot, the transformers reference (QWEN35_TRAIN_REF_DIR) and a Metal runtime; run alone under the heavy-job lock"]
 fn gpu_real_2b_tape_forward_backward_matches_transformers() {
     let ref_dir = train_ref_dir();
     let snap_dir = snapshot_dir("QWEN35_2B_SNAPSHOT");

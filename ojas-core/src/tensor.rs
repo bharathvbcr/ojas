@@ -5,7 +5,7 @@ use crate::limits::shape_product;
 use crate::OjasError;
 use std::any::Any;
 use std::fmt;
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 
 /// Memory owned by a device backend.
@@ -15,7 +15,7 @@ use std::sync::Arc;
 /// [`Tensor::f32_slice`] refuse a device tensor with
 /// [`OjasError::Placement`]; the only way back to host memory is
 /// [`Tensor::to_host`], which calls [`DeviceBuffer::read_bytes`] and is
-/// counted in [`device_readbacks`].
+/// counted in [`crate::Budget::device_readbacks`].
 pub trait DeviceBuffer: Any + Send + Sync + fmt::Debug {
     /// Backend that owns the memory.
     fn backend(&self) -> BackendId;
@@ -69,23 +69,6 @@ pub const LE_READ_CHUNK_BYTES: usize = 64 << 10;
 /// larger ones make fewer calls, each of which may wait on the device. A
 /// MiB keeps a checkpoint save of a 150 MB tensor to about 150 calls.
 pub const READBACK_CHUNK_BYTES: usize = 1 << 20;
-
-static READBACKS: AtomicU64 = AtomicU64::new(0);
-static READBACK_BYTES: AtomicU64 = AtomicU64::new(0);
-
-/// Process-wide `(calls, bytes)` of device-to-host copies made by
-/// [`Tensor::to_host`]. Monotonic. A difference taken around code under test
-/// also counts every other thread's readbacks, so it is only exact when
-/// nothing else in the process reads back meanwhile (one test per binary, or
-/// `--test-threads=1`). To count one caller's readbacks, use
-/// [`crate::Budget::device_readbacks`] on the budget that caller's backend
-/// charges.
-pub fn device_readbacks() -> (u64, u64) {
-    (
-        READBACKS.load(Ordering::Relaxed),
-        READBACK_BYTES.load(Ordering::Relaxed),
-    )
-}
 
 /// Owned elements plus view metadata.
 ///
@@ -1010,7 +993,7 @@ impl Tensor {
 
     /// Host copy with the same shape. A host tensor is returned as a cheap
     /// clone that shares storage. A device tensor is read back and counted
-    /// in [`device_readbacks`]. A contiguous view copies only its window; a
+    /// in [`crate::Budget::device_readbacks`] on `budget`. A contiguous view copies only its window; a
     /// strided one copies the whole allocation and keeps its strides.
     ///
     /// The window is read with [`DeviceBuffer::read_bytes`] in pieces of at
@@ -1085,8 +1068,6 @@ impl Tensor {
             done += n;
         }
         drop(transient);
-        READBACKS.fetch_add(1, Ordering::Relaxed);
-        READBACK_BYTES.fetch_add(len_u64, Ordering::Relaxed);
         budget.record_readback(len_u64);
         let host = Self {
             storage: Arc::new(Storage::new(Payload::Host(data), reservation)),
@@ -1364,6 +1345,7 @@ fn u64_len(nbytes: usize, op: &'static str) -> Result<u64, OjasError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicU64;
 
     struct SplitMix64(u64);
 

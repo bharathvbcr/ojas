@@ -497,7 +497,13 @@ fn zero_extent_inf_offset_and_budget_do_not_corrupt_inputs() {
     let scale = 1.0 / (5.0 + f64::from(CLIP_GRAD_NORM_EPS));
     assert!((f64::from(got[2]) - 3.0 * scale).abs() < 1e-5);
     assert!((f64::from(got[3]) - 4.0 * scale).abs() < 1e-5);
-    let _ = before_prefix_budget;
+    // The clip scaled the view in place: a copy of the prefix would have
+    // charged the budget.
+    assert_eq!(
+        cpu.budget().live_bytes().unwrap(),
+        before_prefix_budget,
+        "clip_grad_norm on an offset view charged the budget"
+    );
 
     // A full budget refuses the step and leaves the stored values alone.
     let budget = Budget::new(4 * 4);

@@ -97,7 +97,7 @@ fn compare_to_fixture(s: &Qwen35Step, dir: &Path, bound: f64) -> f64 {
 }
 
 #[test]
-#[ignore]
+#[ignore = "opens a Metal runtime; run in the GPU window with --release -- --ignored --test-threads=1"]
 fn gpu_name_map_is_tessls_parameter_table() {
     let s = open_tiny(Numerics::ExactF32);
     assert_eq!(s.parameter_table(), tower_tensors(s.config()).as_slice());
@@ -110,7 +110,7 @@ fn gpu_name_map_is_tessls_parameter_table() {
 /// letter rows at every position, read back in transformers' layout. A rerun
 /// is the same bits.
 #[test]
-#[ignore]
+#[ignore = "opens a Metal runtime; run in the GPU window with --release -- --ignored --test-threads=1"]
 fn gpu_tiny_rows_step_matches_the_transformers_fixture() {
     let dir = tiny_dir();
     let ids = ids(&dir);
@@ -142,7 +142,7 @@ fn gpu_tiny_rows_step_matches_the_transformers_fixture() {
 /// tessl's bf16-operand bounds against the same float32 reference (loss
 /// 2^-8, gradients 2^-5), and not the exact step's bits.
 #[test]
-#[ignore]
+#[ignore = "opens a Metal runtime; run in the GPU window with --release -- --ignored --test-threads=1"]
 fn gpu_tiny_bf16_operands_stay_near_the_fixture() {
     let dir = tiny_dir();
     let ids = ids(&dir);
@@ -178,7 +178,7 @@ fn gpu_tiny_bf16_operands_stay_near_the_fixture() {
 /// weights load exactly. An AdamW step runs, and the state format, which
 /// would drop the f32 masters, is refused.
 #[test]
-#[ignore]
+#[ignore = "opens a Metal runtime; run in the GPU window with --release -- --ignored --test-threads=1"]
 fn gpu_tiny_bf16_weights_train_near_the_fixture() {
     let dir = tiny_dir();
     let ids = ids(&dir);
@@ -220,7 +220,7 @@ struct WiringCase {
 /// bit, when tessl is driven directly with the same sequence, the same
 /// external gradient and the same accumulation: the wiring adds nothing.
 #[test]
-#[ignore]
+#[ignore = "opens a Metal runtime; run in the GPU window with --release -- --ignored --test-threads=1"]
 fn gpu_tiny_hidden_rows_external_grad_and_accumulation_are_tessls_own() {
     let dir = tiny_dir();
     let ids = ids(&dir);
@@ -461,7 +461,7 @@ fn f32_table(s: &Qwen35Step, which: Which) -> Vec<Vec<f32>> {
 /// reports is the host's sum of squares to 1e-5. Then the refusals an open
 /// provider makes.
 #[test]
-#[ignore]
+#[ignore = "opens a Metal runtime; run in the GPU window with --release -- --ignored --test-threads=1"]
 fn gpu_tiny_adamw_step_is_torchs_update() {
     let dir = tiny_dir();
     let ids = ids(&dir);
@@ -518,7 +518,7 @@ fn gpu_tiny_adamw_step_is_torchs_update() {
 /// while its moments update. The embedding's half-lr result must sit far
 /// (50x its bound) from the full-lr one, so a dropped scale cannot pass.
 #[test]
-#[ignore]
+#[ignore = "opens a Metal runtime; run in the GPU window with --release -- --ignored --test-threads=1"]
 fn gpu_tiny_per_group_lr_scales_the_update() {
     const FROZEN: &str = "layers.0.mlp.down_proj.weight";
     let dir = tiny_dir();
@@ -607,7 +607,7 @@ fn gpu_tiny_per_group_lr_scales_the_update() {
 /// the behaviour documented on [`Qwen35Step::grad_sq_norm`]; a true freeze
 /// is the Tape's frozen leaf.
 #[test]
-#[ignore]
+#[ignore = "opens a Metal runtime; run in the GPU window with --release -- --ignored --test-threads=1"]
 fn gpu_tiny_scale_zero_entry_still_feeds_the_norm() {
     const FROZEN: &str = "layers.0.mlp.down_proj.weight";
     let dir = tiny_dir();
@@ -672,7 +672,7 @@ fn scratch(name: &str) -> PathBuf {
 /// same bits. An existing directory is never overwritten, and a symbolic
 /// link is never written through.
 #[test]
-#[ignore]
+#[ignore = "opens a Metal runtime; run in the GPU window with --release -- --ignored --test-threads=1"]
 fn gpu_tiny_state_round_trip_is_bit_exact() {
     let dir = tiny_dir();
     let ids = ids(&dir);
@@ -740,7 +740,7 @@ fn gpu_tiny_state_round_trip_is_bit_exact() {
 /// the same reference is tessl's own `real_2b_step_matches_transformers`
 /// (gp-qwen35-2b-metal-tape-run, 2026-10-15).
 #[test]
-#[ignore]
+#[ignore = "needs the real 2B snapshot (QWEN35_2B_SNAPSHOT or the Hugging Face cache) and a Metal runtime; run alone under the heavy-job lock"]
 fn gpu_real_2b_single_step_matches_the_transformers_reference() {
     let ref_dir = train_ref_dir();
     let snap = Snapshot::from_dir(&snapshot_dir("QWEN35_2B_SNAPSHOT")).unwrap();

@@ -3,8 +3,9 @@
 //! backend's own budget (`Budget::device_readbacks`), so parallel tests cannot
 //! disturb it. The CPU reference runs `Numerics::Exact`.
 
-use std::sync::{Mutex, MutexGuard};
+mod common;
 
+use common::{data, serial};
 use ojas_autograd::{Tape, Var};
 use ojas_core::{Backend, BackendId, Budget, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
@@ -14,26 +15,6 @@ const TOL: f64 = 1e-4;
 const VOCAB: usize = 11;
 const DIM: usize = 8;
 const ROWS: usize = 6;
-
-static SERIAL: Mutex<()> = Mutex::new(());
-
-fn serial() -> MutexGuard<'static, ()> {
-    SERIAL
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-fn data(seed: u32, n: usize) -> Vec<f32> {
-    (0..n)
-        .map(|i| {
-            let v = (i as u32)
-                .wrapping_mul(2_654_435_761)
-                .wrapping_add(seed * 97)
-                % 1000;
-            v as f32 / 500.0 - 1.0
-        })
-        .collect()
-}
 
 struct Graph {
     params: [Var; 3],

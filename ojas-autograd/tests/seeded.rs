@@ -10,89 +10,10 @@
 
 mod common;
 
-use common::{bits, data, Resident};
+use common::{bits, data, gate_g6, grads, host_bits, record, Resident};
 use ojas_autograd::{Tape, Var};
 use ojas_core::{Backend, BackendId, Budget, CeChunk, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
-
-const VOCAB: usize = 7;
-const DIM: usize = 5;
-const ROWS: usize = 3;
-
-struct Graph {
-    params: [Var; 3],
-    root: Var,
-}
-
-/// Embedding, linear, silu residual, two reshapes, output linear,
-/// cross-entropy. With `doubled` the root is `loss + loss`, so the
-/// cross-entropy is not the root; otherwise it is.
-fn record<B: Backend>(tape: &mut Tape<B>, doubled: bool) -> Result<Graph, OjasError> {
-    let budget = Budget::new(1 << 20);
-    let table = tape.leaf(Tensor::from_f32(
-        &data(1, VOCAB * DIM),
-        &[VOCAB, DIM],
-        &budget,
-    )?)?;
-    let w1 = tape.leaf(Tensor::from_f32(&data(2, DIM * DIM), &[DIM, DIM], &budget)?)?;
-    let w2 = tape.leaf(Tensor::from_f32(
-        &data(3, VOCAB * DIM),
-        &[VOCAB, DIM],
-        &budget,
-    )?)?;
-    let ids = Tensor::from_u32(&[1, 4, 6], &[ROWS], &budget)?;
-    let targets = Tensor::from_u32(&[2, 0, 5], &[ROWS], &budget)?;
-    let e = tape.embedding(table, ids)?;
-    let h = tape.linear(e, w1)?;
-    let s = tape.silu(h)?;
-    let r = tape.add(h, s)?;
-    let r3 = tape.reshape(r, &[1, ROWS, DIM])?;
-    let r2 = tape.reshape(r3, &[ROWS, DIM])?;
-    let logits = tape.linear(r2, w2)?;
-    let loss = tape.cross_entropy(logits, targets, None)?;
-    let root = if doubled { tape.add(loss, loss)? } else { loss };
-    Ok(Graph {
-        params: [table, w1, w2],
-        root,
-    })
-}
-
-fn host_bits<B: Backend>(tape: &Tape<B>, var: Var) -> Vec<u32> {
-    let grad = tape.grad(var).expect("leaf gradient");
-    bits(&tape.backend().download(grad).unwrap())
-}
-
-/// Leaf gradient bits of `record` seeded with `seed`.
-fn grads<B: Backend>(backend: B, doubled: bool, seed: f32) -> [Vec<u32>; 3] {
-    let mut tape = Tape::new(backend);
-    let g = record(&mut tape, doubled).unwrap();
-    tape.backward_seeded(g.root, seed).unwrap();
-    g.params.map(|p| host_bits(&tape, p))
-}
-
-fn scaled(want: &[u32], seed: f32) -> Vec<u32> {
-    want.iter()
-        .map(|b| (f32::from_bits(*b) * seed).to_bits())
-        .collect()
-}
-
-/// Seed `s` gives exactly `s` times the seed-1 gradients, for power-of-two
-/// `s`, with the cross-entropy at the root and below it.
-fn gate_g6<B: Backend>(make: impl Fn() -> B, name: &str) {
-    for doubled in [false, true] {
-        let one = grads(make(), doubled, 1.0);
-        for seed in [0.5f32, 0.25, 0.125] {
-            let got = grads(make(), doubled, seed);
-            for (i, (g, w)) in got.iter().zip(&one).enumerate() {
-                assert_eq!(
-                    g,
-                    &scaled(w, seed),
-                    "{name}: doubled {doubled} seed {seed} param {i} is not seed x the seed-1 gradient"
-                );
-            }
-        }
-    }
-}
 
 fn cpu_exact() -> CpuBackend {
     CpuBackend::new(Budget::new(1 << 26)).with_numerics(Numerics::Exact)
