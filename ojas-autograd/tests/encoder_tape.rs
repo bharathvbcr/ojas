@@ -12,8 +12,12 @@
 //! - A node used twice (through two broadcast shapes) sums its gradients; a
 //!   record the backend refuses pushes nothing.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use ojas_autograd::{central_diff, gradients_match, Tape, Var};
-use ojas_core::{erf_f64, Backend, Budget, Numerics, OjasError, Tensor};
+use ojas_core::{
+    erf_f64, forward_backend_methods, AffineGrad, Backend, Budget, Numerics, OjasError, Tensor,
+};
 use ojas_cpu::CpuBackend;
 
 const EPS: f32 = 1e-5;
@@ -104,7 +108,7 @@ impl Block {
 /// linear with bias -> exact GELU -> LayerNorm -> times a per-token scale
 /// (a `[TOKENS, 1]` broadcast) -> plus a bias row -> scalar scale -> softmax
 /// -> times a fixed weighting `r`, so the sum of the output is not a constant.
-fn net(tape: &mut Tape<CpuBackend>, v: &[Var; 8]) -> Var {
+fn net<B: Backend>(tape: &mut Tape<B>, v: &[Var; 8]) -> Var {
     let [x, w, b, g, beta, s, p, r] = *v;
     let h = tape.linear_bias(x, w, b).unwrap();
     let h = tape.gelu_erf(h).unwrap();
@@ -144,7 +148,7 @@ fn by_hand(be: &CpuBackend, k: &Block) -> [Tensor; 8] {
     ]
 }
 
-fn leaves(tape: &mut Tape<CpuBackend>, k: &Block) -> [Var; 8] {
+fn leaves<B: Backend>(tape: &mut Tape<B>, k: &Block) -> [Var; 8] {
     k.all().map(|t| tape.leaf(t.clone()).unwrap())
 }
 
@@ -198,6 +202,141 @@ fn a_frozen_weight_takes_no_gradient_and_the_rest_do() {
             assert_eq!(bits(tape.grad(v[i]).unwrap()), bits(&want[i]), "{name}");
         }
     }
+}
+
+/// A CPU backend that counts the two linear backwards the tape can ask for:
+/// the full one (which forms the weight gradient) and the input-only one.
+struct Counting {
+    inner: CpuBackend,
+    full: AtomicUsize,
+    input_only: AtomicUsize,
+}
+
+macro_rules! all_but_linear_backwards {
+    (linear_bias_backward, { $($item:tt)* }) => {};
+    (linear_backward_input, { $($item:tt)* }) => {};
+    ($name:ident, { $($item:tt)* }) => {
+        $($item)*
+    };
+}
+
+impl Backend for Counting {
+    ojas_core::with_backend_methods!(
+        forward_backend_methods,
+        { self, self.inner, none, all_but_linear_backwards }
+    );
+
+    fn linear_bias_backward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<AffineGrad, OjasError> {
+        self.full.fetch_add(1, Ordering::SeqCst);
+        self.inner
+            .linear_bias_backward(input, weight, bias, grad_output)
+    }
+
+    fn linear_backward_input(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        self.input_only.fetch_add(1, Ordering::SeqCst);
+        self.inner.linear_backward_input(input, weight, grad_output)
+    }
+}
+
+/// Backward of the block on a counting backend, with `frozen` leaves (by index
+/// into [`NAMES`]) recorded frozen. Returns the tape and the leaves.
+fn counted(frozen: &[usize]) -> (Tape<Counting>, [Var; 8], [Tensor; 8]) {
+    let be = cpu();
+    let k = block(&be);
+    let want = by_hand(&be, &k);
+    let mut tape = Tape::new(Counting {
+        inner: be.clone(),
+        full: AtomicUsize::new(0),
+        input_only: AtomicUsize::new(0),
+    });
+    let mut v = leaves(&mut tape, &k);
+    for &i in frozen {
+        v[i] = tape.frozen_leaf(k.all()[i].clone()).unwrap();
+    }
+    let z = net(&mut tape, &v);
+    tape.backward(z).unwrap();
+    (tape, v, want)
+}
+
+#[test]
+fn a_frozen_weight_forms_no_weight_gradient() {
+    // The weight (leaf 1) frozen: the input-only backward runs once, the full
+    // one (which writes the `[OUT, IN]` weight gradient) never, and the input
+    // and bias gradients are the full backward's, bit for bit.
+    let (tape, v, want) = counted(&[1]);
+    let be = tape.backend();
+    assert_eq!(be.full.load(Ordering::SeqCst), 0, "dW was formed");
+    assert_eq!(be.input_only.load(Ordering::SeqCst), 1);
+    assert!(tape.grad(v[1]).is_none());
+    for (i, name) in NAMES.iter().enumerate() {
+        if i != 1 {
+            assert_eq!(bits(tape.grad(v[i]).unwrap()), bits(&want[i]), "{name}");
+        }
+    }
+    // A trainable weight takes the full backward, once.
+    let (tape, v, want) = counted(&[]);
+    let be = tape.backend();
+    assert_eq!(
+        (
+            be.full.load(Ordering::SeqCst),
+            be.input_only.load(Ordering::SeqCst)
+        ),
+        (1, 0)
+    );
+    assert_eq!(bits(tape.grad(v[1]).unwrap()), bits(&want[1]));
+}
+
+#[test]
+fn a_frozen_weight_and_bias_form_neither_gradient() {
+    let (tape, v, want) = counted(&[1, 2]);
+    let be = tape.backend();
+    assert_eq!(
+        (
+            be.full.load(Ordering::SeqCst),
+            be.input_only.load(Ordering::SeqCst)
+        ),
+        (0, 1)
+    );
+    assert!(tape.grad(v[1]).is_none() && tape.grad(v[2]).is_none());
+    for i in [0, 3, 4, 5, 6, 7] {
+        assert_eq!(
+            bits(tape.grad(v[i]).unwrap()),
+            bits(&want[i]),
+            "{}",
+            NAMES[i]
+        );
+    }
+}
+
+#[test]
+fn a_frozen_weight_past_the_broadcast_rank_still_gives_the_bias_gradient() {
+    // A rank-9 activation is past `MAX_BROADCAST_RANK`: the full backward runs
+    // and its weight gradient is dropped. [1; 8] leading axes and 3 features.
+    let be = cpu();
+    let x = tensor(&be, 51, &[1, 1, 1, 1, 1, 1, 1, 2, 3]);
+    let (w, b) = (tensor(&be, 52, &[4, 3]), tensor(&be, 53, &[4]));
+    let want = be.linear_bias_forward(&x, &w, &b).unwrap();
+    let g = ones_like(&be, &want);
+    let full = be.linear_bias_backward(&x, &w, &b, &g).unwrap();
+    let mut tape = Tape::new(be.clone());
+    let (vx, vb) = (tape.leaf(x).unwrap(), tape.leaf(b).unwrap());
+    let vw = tape.frozen_leaf(w).unwrap();
+    let y = tape.linear_bias(vx, vw, vb).unwrap();
+    tape.backward(y).unwrap();
+    assert!(tape.grad(vw).is_none());
+    assert_eq!(bits(tape.grad(vx).unwrap()), bits(&full.input));
+    assert_eq!(bits(tape.grad(vb).unwrap()), bits(&full.bias));
 }
 
 /// The channel branch of a neck: LayerNorm2d -> GELU -> plus a `[C, 1, 1]`

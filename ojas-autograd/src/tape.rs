@@ -1825,6 +1825,31 @@ impl<B: Backend> Tape<B> {
                 let gx = self.backend.gelu_erf_backward(&xv, grad)?;
                 self.acc(x, gx)
             }
+            // A frozen weight: no weight gradient is formed, as for
+            // `Rec::Linear`. The input gradient is `linear_backward_input`'s
+            // and the bias gradient (unless the bias is frozen too) is the
+            // stretched operand's gradient of a broadcast add of the bias to
+            // an output-shaped `grad`, the same ascending row sums
+            // `linear_bias_backward` makes. Past the broadcast rank the full
+            // backward runs and its weight gradient is dropped.
+            Rec::LinearBias { x, w, b } if self.is_frozen(w) => {
+                let (xv, wv) = (self.values[x].clone(), self.values[w].clone());
+                let bias_wanted = !self.is_frozen(b);
+                if grad.shape().len() > ojas_core::MAX_BROADCAST_RANK && bias_wanted {
+                    let bv = self.values[b].clone();
+                    let g = self.backend.linear_bias_backward(&xv, &wv, &bv, grad)?;
+                    self.acc(x, g.input)?;
+                    return self.acc(b, g.bias);
+                }
+                let gx = self.backend.linear_backward_input(&xv, &wv, grad)?;
+                self.acc(x, gx)?;
+                if bias_wanted {
+                    let bv = self.values[b].clone();
+                    let (_, gb) = self.backend.broadcast_add_backward(grad, &bv, grad)?;
+                    self.acc(b, gb)?;
+                }
+                Ok(())
+            }
             Rec::LinearBias { x, w, b } => {
                 let (xv, wv) = (self.values[x].clone(), self.values[w].clone());
                 let bv = self.values[b].clone();
