@@ -1559,7 +1559,15 @@ impl Worker {
                 w,
                 bias,
                 geom,
-            } => self.conv2d(op, [x, w], bias, geom),
+                lane,
+                pointwise,
+            } => {
+                if pointwise {
+                    self.conv2d_pointwise(op, [x, w], bias, geom, lane)
+                } else {
+                    self.conv2d(op, [x, w], bias, geom, lane)
+                }
+            }
             Cmd::ConvTranspose2d {
                 op,
                 x,
@@ -2650,7 +2658,7 @@ impl Worker {
     }
 
     /// A convolution as GEMM: `ojas_im2col` into `[pixels, c kh kw]`, tessl's
-    /// exact-f32 NT GEMM against the `[o, c kh kw]` weight, then
+    /// NT GEMM on `lane` against the `[o, c kh kw]` weight, then
     /// `ojas_conv_nchw` (layout, bias last). The operands are scanned here
     /// and the output after, all under `op`; the im2col matrix and the
     /// product hold only scanned finite values or their finite sums, and the
@@ -2661,6 +2669,7 @@ impl Worker {
         [x, w]: [Arg; 2],
         bias: Option<Arg>,
         g: ConvGeom,
+        lane: Lane,
     ) -> Res<Reply> {
         let xv = self.view(x)?;
         let wv = self.view(w)?;
@@ -2721,7 +2730,7 @@ impl Worker {
                 set_u32(b, v, 3 + i);
             }
         })?;
-        self.gemm_lane(Lane::ExactF32)
+        self.gemm_lane(lane)
             .nt(
                 &self.tt(&cols, &[rows, width])?,
                 &self.mat(&wv, out_c, width)?,
@@ -2740,6 +2749,97 @@ impl Worker {
             set_u32(b, pixels_u, 5);
             set_u32(b, u32::from(bv.is_some()), 6);
         })?;
+        self.check(&st, &y, ST_OUT)?;
+        Ok(self.keep(vec![y]))
+    }
+
+    /// [`Self::conv2d`]'s pointwise route: per image `n`, tessl's NN GEMM
+    /// `Y_n [o, pixels] = W [o, c] @ X_n [c, pixels]`, which is the NCHW
+    /// output block, then `y += bias[o]` in place on `ojas_bcast_binary`
+    /// (the layout pass's one IEEE add per element). The backend chose this
+    /// route only for views the GEMM reads in place, so no image is copied.
+    /// Operands and output are scanned as the im2col route scans them; the
+    /// product is the output itself, so the output scan covers it.
+    fn conv2d_pointwise(
+        &mut self,
+        op: &'static str,
+        [x, w]: [Arg; 2],
+        bias: Option<Arg>,
+        g: ConvGeom,
+        lane: Lane,
+    ) -> Res<Reply> {
+        let xv = self.view(x)?;
+        let wv = self.view(w)?;
+        let bv = bias.map(|a| self.view(a)).transpose()?;
+        let big = |dims: &[u32]| -> Res<usize> {
+            dims.iter()
+                .try_fold(1usize, |acc, &d| acc.checked_mul(d as usize))
+                .ok_or_else(|| metal_err(format!("{op}: convolution extent overflows")))
+        };
+        let (batch, c, o) = (g.batch as usize, g.c as usize, g.o as usize);
+        let pixels = big(&[g.oh, g.ow])?;
+        let out_n = big(&[g.batch, g.o, g.oh, g.ow])?;
+        if xv.n != big(&[g.batch, g.c, g.h, g.w])?
+            || wv.n != o * c
+            || bv.as_ref().is_some_and(|b| b.n != o)
+        {
+            return Err(metal_err(format!(
+                "{op}: buffers do not hold a [{}, {}, {}, {}] input, a [{}, {}, 1, 1] weight and the bias asked for",
+                g.batch, g.c, g.h, g.w, g.o, g.c
+            )));
+        }
+        let out_u = u32_of(out_n)?;
+        let y = self.fresh(out_n)?;
+        let st = self.status(op)?;
+        self.check(&st, &xv, ST_IN)?;
+        self.check_operand(&st, w, &wv, ST_IN)?;
+        if let (Some(a), Some(b)) = (bias, bv.as_ref()) {
+            self.check_operand(&st, a, b, ST_IN)?;
+        }
+        let gemm = self.gemm_lane(lane);
+        let weight = self.mat(&wv, o, c)?;
+        for image in 0..batch {
+            let input = V {
+                buf: xv.buf.clone(),
+                off: xv.off + image * c * pixels * 4,
+                n: c * pixels,
+            };
+            let output = V {
+                buf: y.buf.clone(),
+                off: image * o * pixels * 4,
+                n: o * pixels,
+            };
+            gemm.nn(
+                &weight,
+                &self.tt(&input, &[c, pixels])?,
+                &self.tt(&output, &[o, pixels])?,
+            )
+            .map_err(metal_err)?;
+        }
+        if let Some(b) = bv.as_ref() {
+            // y [batch, o, pixels] + bias [1, o, 1]; each thread reads and
+            // writes its own element, so the add is safe in place.
+            let words =
+                |v: [u32; 3]| -> Vec<u8> { v.iter().flat_map(|w| w.to_ne_bytes()).collect() };
+            let image = u32_of(o * pixels)?;
+            let (shape, y_stride, bias_stride) = (
+                words([g.batch, g.o, u32_of(pixels)?]),
+                words([image, u32_of(pixels)?, 1]),
+                words([0, 1, 0]),
+            );
+            self.k1("ojas_bcast_binary", out_n, |k| {
+                bind(k, &y, 0);
+                bind(k, b, 1);
+                bind(k, &y, 2);
+                set_u32(k, out_u, 3);
+                set_u32(k, 3, 4);
+                set_u32(k, 0, 5);
+                k.bind_bytes(&shape, 6);
+                k.bind_bytes(&y_stride, 7);
+                k.bind_bytes(&bias_stride, 8);
+                bind_st(k, &st, 9);
+            })?;
+        }
         self.check(&st, &y, ST_OUT)?;
         Ok(self.keep(vec![y]))
     }

@@ -28,7 +28,17 @@
 //!
 //! Convolution shapes add the `conv2d` arm (im2col, the exact-f32 GEMM and the
 //! layout pass) beside the `f32` linear of the same GEMM, so the difference is
-//! the im2col and layout share.
+//! the im2col and layout share. Further arms: `conv2d bf16-exact` (the same
+//! convolution on tagged operands, the bf16 lane) with its GEMM alone, and,
+//! where the kernel is 1 x 1 at stride 1 without padding, the same two through
+//! `conv2d_via_im2col`, the route before such a convolution skipped im2col (at
+//! that shape the plain `conv2d` arms, and the `o=8` probe, run the skip).
+//!
+//! Every shape first prints one `COUNT` line per arm: the compute dispatches
+//! one call makes, and how many of them are `ojas_im2col`, `ojas_conv_nchw`
+//! and `ojas_bcast_binary`. The `command overhead` rows time no work: `sync
+//! only`, one minimal command (`fill` of one element), and sixteen of them
+//! before one sync.
 
 #[cfg(target_os = "macos")]
 mod bench {
@@ -170,6 +180,24 @@ mod bench {
             stride: 1,
             padding: 1,
         },
+        // The detector's 1 x 1 (a plain [82944,256] x [256,256] GEMM) and the
+        // memory encoder's 3 x 3 (12.2 GFLOP), from SpikeTrack's op profile.
+        Conv {
+            name: "1x1 [1,256,288,288]",
+            shape: [1, 256, 288, 288],
+            out: 256,
+            kernel: 1,
+            stride: 1,
+            padding: 0,
+        },
+        Conv {
+            name: "memory encode 3x3 p1 [1,32,1152,1152] o16",
+            shape: [1, 32, 1152, 1152],
+            out: 16,
+            kernel: 3,
+            stride: 1,
+            padding: 1,
+        },
     ];
 
     type Arm<'a> = (&'static str, Box<dyn Fn() + 'a>);
@@ -201,6 +229,28 @@ mod bench {
         warmups: usize,
         runs: usize,
     ) {
+        // What each arm dispatches, from one counted call before the timed
+        // rounds: every compute dispatch (tessl's GEMMs and casts included)
+        // and the Ojas kernels the convolution's passes are named by.
+        for (name, f) in arms {
+            metal.sync().expect("sync");
+            let at = |k: &str| metal.kernel_dispatches(k);
+            let before = (
+                metal.dispatches(),
+                at("ojas_im2col"),
+                at("ojas_conv_nchw"),
+                at("ojas_bcast_binary"),
+            );
+            f();
+            metal.sync().expect("sync");
+            println!(
+                "COUNT\t{label}\t{name}\tdispatches {}\tim2col {}\tconv_nchw {}\tbcast {}",
+                metal.dispatches() - before.0,
+                at("ojas_im2col") - before.1,
+                at("ojas_conv_nchw") - before.2,
+                at("ojas_bcast_binary") - before.3,
+            );
+        }
         let mut samples: Vec<Vec<f64>> = vec![Vec::with_capacity(runs); arms.len()];
         for round in 0..warmups + runs {
             for (i, (_, f)) in arms.iter().enumerate() {
@@ -314,9 +364,21 @@ mod bench {
             let w8 = up(&host(&values(8 * k, 8, 0.05), &[8, ch, c.kernel, c.kernel]));
             let w8_2 = up(&host(&values(8 * k, 8, 0.05), &[8, k]));
             let prod = up(&host(&values(m * c.out, 9, 1.0), &[m, c.out]));
-            let arms: Vec<Arm<'_>> = vec![
+            // The same convolution on bf16-exact operands (what `Autocast`
+            // hands the backend), and its GEMM alone on the bf16 lane.
+            let ac = Autocast::new(&metal);
+            let (xt, wtt) = (
+                ac.cast_bf16(&x).expect("round x"),
+                ac.cast_bf16(&wt).expect("round w"),
+            );
+            let (colst, w2t) = (
+                ac.cast_bf16(&cols).expect("round cols"),
+                ac.cast_bf16(&w2).expect("round w2"),
+            );
+            assert!(xt.bf16_exact() && wtt.bf16_exact(), "operands are tagged");
+            let mut arms: Vec<Arm<'_>> = vec![
                 (
-                    "probe conv2d o=8 (im2col + thin GEMM)",
+                    "probe conv2d o=8 (im2col + thin GEMM; pointwise at 1x1)",
                     Box::new(|| drop(metal.conv2d_forward(&x, &w8, None, params).expect("p1"))),
                 ),
                 (
@@ -350,8 +412,69 @@ mod bench {
                     Box::new(|| drop(metal.linear_forward(&cols, &w2).expect("gemm"))),
                 ),
             ];
+            arms.push((
+                "conv2d bf16-exact (im2col + bf16 GEMM + layout)",
+                Box::new(|| {
+                    drop(
+                        metal
+                            .conv2d_forward(&xt, &wtt, Some(&bias), params)
+                            .expect("conv bf16"),
+                    )
+                }),
+            ));
+            arms.push((
+                "GEMM alone bf16 lane (the conv's [m,k]x[n,k])",
+                Box::new(|| drop(metal.linear_forward(&colst, &w2t).expect("gemm bf16"))),
+            ));
+            // A 1 x 1 stride 1 unpadded convolution skips im2col; the old
+            // route stays callable for the comparison.
+            if c.kernel == 1 && c.stride == 1 && pad == 0 {
+                arms.push((
+                    "conv2d f32 via im2col (the route before the skip)",
+                    Box::new(|| {
+                        drop(
+                            metal
+                                .conv2d_via_im2col(&x, &wt, Some(&bias), params)
+                                .expect("conv via im2col"),
+                        )
+                    }),
+                ));
+                arms.push((
+                    "conv2d bf16-exact via im2col (the route before the skip)",
+                    Box::new(|| {
+                        drop(
+                            metal
+                                .conv2d_via_im2col(&xt, &wtt, Some(&bias), params)
+                                .expect("conv bf16 via im2col"),
+                        )
+                    }),
+                ));
+            }
             let flops = 2.0 * m as f64 * k as f64 * c.out as f64;
             run_arms(&metal, c.name, flops, &arms, warmups, runs);
+        }
+
+        // Per-command overhead: a command that does no work, on the same
+        // worker, beside the same command repeated 16 times before one sync.
+        // `(16x - 1x) / 15` is the cost of one more queued command; the `sync
+        // only` row is the timing and wait floor of every other row.
+        if "command overhead".contains(&only) {
+            let arms: Vec<Arm<'_>> = vec![
+                ("sync only (no command)", Box::new(|| {})),
+                (
+                    "fill [1] x1 (one minimal command)",
+                    Box::new(|| drop(metal.fill(&[1], DType::F32, 1.0).expect("fill"))),
+                ),
+                (
+                    "fill [1] x16 (16 minimal commands, one sync)",
+                    Box::new(|| {
+                        for _ in 0..16 {
+                            drop(metal.fill(&[1], DType::F32, 1.0).expect("fill"));
+                        }
+                    }),
+                ),
+            ];
+            run_arms(&metal, "command overhead", 0.0, &arms, warmups, runs);
         }
     }
 }

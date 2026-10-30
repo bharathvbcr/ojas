@@ -10,8 +10,8 @@
 
 mod common;
 
-use common::{close, down, host, metal, ok, rand, up};
-use ojas_core::{Autocast, Backend, Budget, OjasError, Tensor};
+use common::{close, cpu, down, host, metal, ok, rand, up};
+use ojas_core::{Autocast, Backend, Budget, Conv2dParams, OjasError, Tensor};
 use ojas_metal::MetalBackend;
 
 const ROWS: usize = 256;
@@ -156,4 +156,214 @@ fn the_bf16_lane_charges_its_operand_copies() {
         ok("no TensorOps: no copies", tight.linear_forward(&x, &w));
     }
     ok("exact lane", tight.linear_forward(&xp, &wp));
+}
+
+/// `conv2d_forward` as the exact-f32 route forms it, from public ops: host
+/// im2col (`[n * oh * ow, c * kh * kw]`), `linear_forward` on that matrix
+/// and the `[o, c * kh * kw]` weight, then the layout pass and the bias add on
+/// the host. The convolution's exact lane runs that same NT GEMM, so its
+/// bits must equal this.
+fn conv_by_linear(
+    m: &MetalBackend,
+    x: &Tensor,
+    w: &Tensor,
+    bias: &Tensor,
+    p: Conv2dParams,
+) -> Vec<f32> {
+    let [n, c, h, wd] = [x.shape()[0], x.shape()[1], x.shape()[2], x.shape()[3]];
+    let [o, kh, kw] = [w.shape()[0], w.shape()[2], w.shape()[3]];
+    let (oh, ow) = (
+        (h + 2 * p.padding[0] - kh) / p.stride[0] + 1,
+        (wd + 2 * p.padding[1] - kw) / p.stride[1] + 1,
+    );
+    let (xs, width) = (ok("x", x.to_f32_vec()), c * kh * kw);
+    let mut cols = vec![0.0f32; n * oh * ow * width];
+    for img in 0..n {
+        for pixel in 0..oh * ow {
+            let (oy, ox) = (pixel / ow, pixel % ow);
+            for ch in 0..c {
+                for ky in 0..kh {
+                    for kx in 0..kw {
+                        let iy = (oy * p.stride[0] + ky) as isize - p.padding[0] as isize;
+                        let ix = (ox * p.stride[1] + kx) as isize - p.padding[1] as isize;
+                        if iy >= 0 && iy < h as isize && ix >= 0 && ix < wd as isize {
+                            cols[(img * oh * ow + pixel) * width + (ch * kh + ky) * kw + kx] =
+                                xs[((img * c + ch) * h + iy as usize) * wd + ix as usize];
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let prod = down(&ok(
+        "linear",
+        m.linear_forward(
+            &up(m, &host(&cols, &[n * oh * ow, width])),
+            &up(m, &host(&ok("w", w.to_f32_vec()), &[o, width])),
+        ),
+    ));
+    let bs = ok("bias", bias.to_f32_vec());
+    let mut y = vec![0.0f32; n * o * oh * ow];
+    for img in 0..n {
+        for ch in 0..o {
+            for pixel in 0..oh * ow {
+                y[(img * o + ch) * oh * ow + pixel] =
+                    prod[(img * oh * ow + pixel) * o + ch] + bs[ch];
+            }
+        }
+    }
+    y
+}
+
+/// The convolution cases of the lane tests: a padded 3 x 3 (as the neck's),
+/// a strided, unpadded 4 x 4 (as the patch embedding), K = 54 and 48, and a
+/// ragged one (K = 27, 63 pixels, 5 output channels: off every tile edge).
+fn conv_cases() -> [([usize; 4], [usize; 4], Conv2dParams); 3] {
+    [
+        (
+            [1, 3, 7, 9],
+            [5, 3, 3, 3],
+            Conv2dParams {
+                padding: [1, 1],
+                ..Conv2dParams::new()
+            },
+        ),
+        (
+            [2, 6, 9, 9],
+            [10, 6, 3, 3],
+            Conv2dParams {
+                padding: [1, 1],
+                ..Conv2dParams::new()
+            },
+        ),
+        (
+            [1, 3, 16, 16],
+            [12, 3, 4, 4],
+            Conv2dParams {
+                stride: [4, 4],
+                ..Conv2dParams::new()
+            },
+        ),
+    ]
+}
+
+#[test]
+fn bf16_exact_conv2d_forward_runs_the_bf16_lane() {
+    let m = metal();
+    let ac = Autocast::new(m.clone());
+    for (i, (xs, ws, p)) in conv_cases().into_iter().enumerate() {
+        let seed = 10 * (i as u64 + 1);
+        let (x, xp) = rounded(&m, &ac, &rand(&xs, seed, 1.0));
+        let (w, wp) = rounded(&m, &ac, &rand(&ws, seed + 1, 1.0));
+        let bias = up(&m, &rand(&[ws[0]], seed + 2, 1.0));
+
+        let (exact, exact_n) = counted(&m, || m.conv2d_forward(&xp, &wp, Some(&bias), p));
+        let (lane, lane_n) = counted(&m, || m.conv2d_forward(&x, &w, Some(&bias), p));
+        // The bf16 lane casts the im2col matrix and the weight to bf16
+        // before the GEMM.
+        assert_eq!(
+            lane_n,
+            exact_n + casts(&m),
+            "case {i}: bf16 lane dispatches"
+        );
+        close(
+            "lane vs exact lane",
+            &down(&lane),
+            &down(&exact),
+            ATOL,
+            RTOL,
+        );
+        // The CPU reference on the same bf16-exact values.
+        let want = ok(
+            "cpu",
+            cpu().conv2d_forward(
+                &host(&down(&xp), &xs),
+                &host(&down(&wp), &ws),
+                Some(&ok("bias", bias.to_host(&Budget::new(1 << 30)))),
+                p,
+            ),
+        );
+        close(
+            "lane vs cpu",
+            &down(&lane),
+            &ok("want", want.to_f32_vec()),
+            ATOL,
+            RTOL,
+        );
+        if !m.has_tensorops() {
+            assert_eq!(bits(&lane), bits(&exact), "no TensorOps: the exact lane");
+        }
+
+        // One untagged operand: the exact lane, bit for bit.
+        let (mixed, mixed_n) = counted(&m, || m.conv2d_forward(&x, &wp, Some(&bias), p));
+        assert_eq!(mixed_n, exact_n, "case {i}: mixed pair dispatches");
+        assert_eq!(bits(&mixed), bits(&exact), "case {i}: mixed pair bits");
+
+        // The exact lane is the NT GEMM a linear runs, unchanged: its bits
+        // are those of im2col on the host, `linear_forward` and the layout.
+        let by_linear = conv_by_linear(
+            &m,
+            &host(&down(&xp), &xs),
+            &host(&down(&wp), &ws),
+            &ok("bias", bias.to_host(&Budget::new(1 << 30))),
+            p,
+        );
+        let got: Vec<u32> = down(&exact).iter().map(|v| v.to_bits()).collect();
+        let want: Vec<u32> = by_linear.iter().map(|v| v.to_bits()).collect();
+        assert_eq!(
+            got, want,
+            "case {i}: f32 conv is not the exact NT GEMM's bits"
+        );
+    }
+}
+
+/// An f32 convolution (neither operand tagged) stays on the exact-f32 NT
+/// GEMM, bit for bit what it was before the lane was threaded through.
+#[test]
+fn an_f32_conv_stays_on_the_exact_lane() {
+    let m = metal();
+    for (i, (xs, ws, p)) in conv_cases().into_iter().enumerate() {
+        let (x, w) = (rand(&xs, 70 + i as u64, 1.0), rand(&ws, 80 + i as u64, 1.0));
+        let bias = rand(&[ws[0]], 90 + i as u64, 1.0);
+        let got = ok(
+            "conv",
+            m.conv2d_forward(&up(&m, &x), &up(&m, &w), Some(&up(&m, &bias)), p),
+        );
+        let by_linear = conv_by_linear(&m, &x, &w, &bias, p);
+        assert_eq!(
+            bits(&got),
+            by_linear.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            "case {i}"
+        );
+    }
+}
+
+/// The bf16 copies tessl makes of a convolution's im2col matrix and weight
+/// are charged with the op's scratch, as a linear's are.
+#[test]
+fn the_conv_bf16_lane_charges_its_operand_copies() {
+    let m = metal();
+    let ac = Autocast::new(m.clone());
+    let p = Conv2dParams {
+        padding: [1, 1],
+        ..Conv2dParams::new()
+    };
+    let (x, xp) = rounded(&m, &ac, &rand(&[1, 8, 10, 10], 100, 1.0));
+    let (w, wp) = rounded(&m, &ac, &rand(&[12, 8, 3, 3], 101, 1.0));
+    let (cols, prod, out) = (100 * 72, 100 * 12, 12 * 100);
+    let exact_call = ((cols + prod + out) * 4) as u64;
+    let copies = ((cols + 12 * 72) * 2) as u64;
+    let tight = m.with_budget(Budget::new(exact_call + copies / 2));
+    if m.has_tensorops() {
+        assert!(matches!(
+            tight.conv2d_forward(&x, &w, None, p),
+            Err(OjasError::CapacityExceeded { .. })
+        ));
+    } else {
+        ok(
+            "no TensorOps: no copies",
+            tight.conv2d_forward(&x, &w, None, p),
+        );
+    }
+    ok("exact lane", tight.conv2d_forward(&xp, &wp, None, p));
 }
