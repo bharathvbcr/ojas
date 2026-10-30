@@ -179,7 +179,7 @@ impl Tensor {
 - It drops the piece's charge before returning.
 - The peak charge is the window plus one piece, not twice the window. The first combined gate, which reserved a whole-window transient, failed `ojas-model`'s save-headroom test. That is why the readback is chunked.
 - A short read on any piece is `Backend`. The result and the piece are both released, and nothing is counted.
-- `device_readbacks` and `Budget::record_readback` still count one call per `to_host`.
+- `Budget::record_readback` (read by `Budget::device_readbacks`) still counts one call per `to_host`.
 
 **Loader piece (`LE_READ_CHUNK_BYTES`): 64 KiB, not 1 MiB.** It is the only transient a load adds. With 1 MiB, every tensor under 1 MiB got a full second copy, and `ojas-model/tests/resume_memory.rs` (heap-counted) failed. 64 KiB matches the save path's `LE_CHUNK`. A 1.5 GB checkpoint takes about 24k positioned reads.
 

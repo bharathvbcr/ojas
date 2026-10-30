@@ -285,7 +285,7 @@
 <figure class="diagram"><pre class="mermaid">flowchart LR
     HostMem[&#34;Host Tensor (HostData)&#34;] --&gt;|&#34;Backend::upload()&#34;| DeviceMem[&#34;Device Tensor (DeviceBuffer)&#34;]
     DeviceMem --&gt;|&#34;Tensor::to_host()&#34;| HostCopy[&#34;Host Tensor Copy (HostData)&#34;]
-    DeviceMem -.-&gt;|&#34;device_readbacks() counter increments&#34;| Counter[&#34;Readback Audit Counter&#34;]
+    DeviceMem -.-&gt;|&#34;Budget::device_readbacks counter increments&#34;| Counter[&#34;Readback Audit Counter&#34;]
     HostCopy --&gt; Counter</pre></figure>
 <aside class="alert alert-caution"><p class="alert-title">Caution</p><p>Host accessors such as <code>.f32_slice()</code>, <code>.f32_slice_mut()</code>, or <code>.to_f32_vec()</code> <strong>refuse device tensors</strong> rather than triggering an implicit, unmetered readback across PCIe / unified memory buses. Callers must explicitly call <code>.to_host(budget)</code>, which increments the counted readback metric.</p>
 </aside>

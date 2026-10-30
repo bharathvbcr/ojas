@@ -355,7 +355,7 @@ impl Tensor {
 </li>
 <li>A short read on any piece is <code>Backend</code>. The result and the piece are both released, and nothing is counted.
 </li>
-<li><code>device_readbacks</code> and <code>Budget::record_readback</code> still count one call per <code>to_host</code>.
+<li><code>Budget::record_readback</code> (read by <code>Budget::device_readbacks</code>) still counts one call per <code>to_host</code>.
 </li>
 </ul>
 <p><strong>Loader piece (<code>LE_READ_CHUNK_BYTES</code>): 64 KiB, not 1 MiB.</strong> It is the only transient a load adds. With 1 MiB, every tensor under 1 MiB got a full second copy, and <code>ojas-model/tests/resume_memory.rs</code> (heap-counted) failed. 64 KiB matches the save path&#39;s <code>LE_CHUNK</code>. A 1.5 GB checkpoint takes about 24k positioned reads.</p>

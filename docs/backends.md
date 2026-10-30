@@ -35,7 +35,7 @@ flowchart TD
 
 On a GPU session, `TrainStep` reads back only the loss; the device tape keeps activations resident. `to_host` reads in 1 MiB pieces and checkpoint load in 64 KiB pieces, so the peak is the window plus one piece ([`typed-storage-plan.md`](typed-storage-plan.md)). Every backend validates shapes through one shared contract before reserving budget ([`shape-contract.md`](shape-contract.md)), and Metal reports device faults at the next `sync` like wgpu ([`metal-deferred-faults.md`](metal-deferred-faults.md)). Every backend implements `optimizer_scratch_bytes` so training preflights memory requirements before optimizer updates take place.
 
-Device tensors: `Tensor::from_device` wraps a backend buffer, `to_host` copies it back and is counted by `device_readbacks()`, and `device_buffer_mut` requires sole ownership. The default `Backend::upload` returns `Unsupported` for a host tensor on a non-CPU backend, so a backend that has not implemented upload does not silently compute on the host.
+Device tensors: `Tensor::from_device` wraps a backend buffer, `to_host` copies it back and is counted per budget tree by `Budget::device_readbacks`, and `device_buffer_mut` requires sole ownership. The default `Backend::upload` returns `Unsupported` for a host tensor on a non-CPU backend, so a backend that has not implemented upload does not silently compute on the host.
 
 ---
 
@@ -45,7 +45,7 @@ Device tensors: `Tensor::from_device` wraps a backend buffer, `to_host` copies i
 flowchart LR
     subgraph HostRAM["Host RAM"]
         HostTen["Host Tensor (Arc<Vec<u8>>)"]
-        Audit["device_readbacks() Audit Counter"]
+        Audit["Budget::device_readbacks Audit Counter"]
     end
 
     subgraph GPUMem["GPU Unified / VRAM"]

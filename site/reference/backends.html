@@ -169,13 +169,13 @@
 <p><strong>CPU Auto Thread Selection:</strong> <code>DeviceCPUAuto</code> automatically queries <code>ResourcePlan::thread_ceiling</code> (usable host CPUs capped by cgroup CPU quota) to configure the CPU thread pool. If the host CPU count is unreadable, load is refused rather than guessed.</p>
 </aside>
 <p>On a GPU session, <code>TrainStep</code> reads back only the loss; the device tape keeps activations resident. <code>to_host</code> reads in 1 MiB pieces and checkpoint load in 64 KiB pieces, so the peak is the window plus one piece (<a href="typed-storage-plan.html"><code>typed-storage-plan.md</code></a>). Every backend validates shapes through one shared contract before reserving budget (<a href="shape-contract.html"><code>shape-contract.md</code></a>), and Metal reports device faults at the next <code>sync</code> like wgpu (<a href="metal-deferred-faults.html"><code>metal-deferred-faults.md</code></a>). Every backend implements <code>optimizer_scratch_bytes</code> so training preflights memory requirements before optimizer updates take place.</p>
-<p>Device tensors: <code>Tensor::from_device</code> wraps a backend buffer, <code>to_host</code> copies it back and is counted by <code>device_readbacks()</code>, and <code>device_buffer_mut</code> requires sole ownership. The default <code>Backend::upload</code> returns <code>Unsupported</code> for a host tensor on a non-CPU backend, so a backend that has not implemented upload does not silently compute on the host.</p>
+<p>Device tensors: <code>Tensor::from_device</code> wraps a backend buffer, <code>to_host</code> copies it back and is counted per budget tree by <code>Budget::device_readbacks</code>, and <code>device_buffer_mut</code> requires sole ownership. The default <code>Backend::upload</code> returns <code>Unsupported</code> for a host tensor on a non-CPU backend, so a backend that has not implemented upload does not silently compute on the host.</p>
 <hr>
 <h2 id="memory-residency--zero-copy-lifecycle">Memory Residency &amp; Zero-Copy Lifecycle <a class="anchor" href="#memory-residency--zero-copy-lifecycle" aria-label="Link to this section">#</a></h2>
 <figure class="diagram"><pre class="mermaid">flowchart LR
     subgraph HostRAM[&#34;Host RAM&#34;]
         HostTen[&#34;Host Tensor (Arc&lt;Vec&lt;u8&gt;&gt;)&#34;]
-        Audit[&#34;device_readbacks() Audit Counter&#34;]
+        Audit[&#34;Budget::device_readbacks Audit Counter&#34;]
     end
 
     subgraph GPUMem[&#34;GPU Unified / VRAM&#34;]

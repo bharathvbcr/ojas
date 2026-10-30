@@ -154,7 +154,7 @@ The `Backend` trait defines the uniform operator interface implemented by comput
 flowchart LR
     HostMem["Host Tensor (HostData)"] -->|"Backend::upload()"| DeviceMem["Device Tensor (DeviceBuffer)"]
     DeviceMem -->|"Tensor::to_host()"| HostCopy["Host Tensor Copy (HostData)"]
-    DeviceMem -.->|"device_readbacks() counter increments"| Counter["Readback Audit Counter"]
+    DeviceMem -.->|"Budget::device_readbacks counter increments"| Counter["Readback Audit Counter"]
     HostCopy --> Counter
 ```
 
