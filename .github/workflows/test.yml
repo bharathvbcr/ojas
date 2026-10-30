@@ -9,8 +9,6 @@ name: test
 #   $GITHUB_WORKSPACE/code/research/ojas
 #   $GITHUB_WORKSPACE/code/research/tessl
 #   $GITHUB_WORKSPACE/code/devtools/gusset
-# If ojas-metal/Cargo.toml still names the absolute developer path
-# /Users/bharath/Code/research/tessl, a symlink to the checkout is created there.
 #
 # GUSSET_REF and TESSL_REF pick the sibling commits. They default to main; a
 # run only reproduces a local tree whose sibling changes have been pushed.
@@ -62,14 +60,6 @@ jobs:
           repository: bharathvbcr/tessl
           ref: ${{ env.TESSL_REF }}
           path: code/research/tessl
-      - name: Point the absolute tessl path at the checkout
-        run: |
-          abs=$(sed -n 's/^tessl = { path = "\(\/[^"]*\)".*/\1/p' "$OJAS/ojas-metal/Cargo.toml")
-          if [ -n "$abs" ] && [ ! -e "$abs" ]; then
-            sudo mkdir -p "$(dirname "$abs")"
-            sudo ln -s "$GITHUB_WORKSPACE/code/research/tessl" "$abs"
-          fi
-          echo "tessl path: ${abs:-relative}"
       - name: Rust toolchain
         run: |
           rustup toolchain install stable --profile minimal --component clippy,rustfmt
@@ -119,14 +109,6 @@ jobs:
           repository: bharathvbcr/tessl
           ref: ${{ env.TESSL_REF }}
           path: code/research/tessl
-      - name: Point the absolute tessl path at the checkout
-        run: |
-          abs=$(sed -n 's/^tessl = { path = "\(\/[^"]*\)".*/\1/p' "$OJAS/ojas-metal/Cargo.toml")
-          if [ -n "$abs" ] && [ ! -e "$abs" ]; then
-            sudo mkdir -p "$(dirname "$abs")"
-            sudo ln -s "$GITHUB_WORKSPACE/code/research/tessl" "$abs"
-          fi
-          echo "tessl path: ${abs:-relative}"
       - name: Select the newest Xcode
         # ojas-metal compiles its kernels with -std=metal4.0 and tessl uses
         # Metal 4 command queues; both need a Metal 4 toolchain.
@@ -183,14 +165,6 @@ jobs:
           repository: bharathvbcr/tessl
           ref: ${{ env.TESSL_REF }}
           path: code/research/tessl
-      - name: Point the absolute tessl path at the checkout
-        run: |
-          abs=$(sed -n 's/^tessl = { path = "\(\/[^"]*\)".*/\1/p' "$OJAS/ojas-metal/Cargo.toml")
-          if [ -n "$abs" ] && [ ! -e "$abs" ]; then
-            sudo mkdir -p "$(dirname "$abs")"
-            sudo ln -s "$GITHUB_WORKSPACE/code/research/tessl" "$abs"
-          fi
-          echo "tessl path: ${abs:-relative}"
       - name: Select the newest Xcode
         if: runner.os == 'macOS'
         run: |
@@ -239,14 +213,6 @@ jobs:
           repository: bharathvbcr/tessl
           ref: ${{ env.TESSL_REF }}
           path: code/research/tessl
-      - name: Point the absolute tessl path at the checkout
-        run: |
-          abs=$(sed -n 's/^tessl = { path = "\(\/[^"]*\)".*/\1/p' "$OJAS/ojas-metal/Cargo.toml")
-          if [ -n "$abs" ] && [ ! -e "$abs" ]; then
-            sudo mkdir -p "$(dirname "$abs")"
-            sudo ln -s "$GITHUB_WORKSPACE/code/research/tessl" "$abs"
-          fi
-          echo "tessl path: ${abs:-relative}"
       - name: Rust toolchain
         run: |
           rustup toolchain install stable --profile minimal --component clippy
@@ -292,14 +258,6 @@ jobs:
           repository: bharathvbcr/tessl
           ref: ${{ env.TESSL_REF }}
           path: code/research/tessl
-      - name: Point the absolute tessl path at the checkout
-        run: |
-          abs=$(sed -n 's/^tessl = { path = "\(\/[^"]*\)".*/\1/p' "$OJAS/ojas-metal/Cargo.toml")
-          if [ -n "$abs" ] && [ ! -e "$abs" ]; then
-            sudo mkdir -p "$(dirname "$abs")"
-            sudo ln -s "$GITHUB_WORKSPACE/code/research/tessl" "$abs"
-          fi
-          echo "tessl path: ${abs:-relative}"
       - name: Rust toolchain at the declared rust-version
         working-directory: ${{ env.OJAS }}
         run: |
