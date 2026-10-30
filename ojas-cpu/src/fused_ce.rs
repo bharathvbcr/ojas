@@ -57,12 +57,12 @@
 use std::ops::Range;
 
 use ojas_core::{
-    exp_exact, linear_ce_dims, Budget, CeChunk, CeGrads, DType, LinearCe, LinearCeDims, OjasError,
-    Tensor,
+    exp_exact, linear_ce_dims, log1p_exact, Budget, CeChunk, CeGrads, DType, LinearCe,
+    LinearCeDims, OjasError, Tensor,
 };
 
 use crate::gemm::{gemm, gemm_acc, scratch, Mat};
-use crate::pointwise::{collapses, log1p_small};
+use crate::pointwise::collapses;
 use crate::pool::scoped::{self, min_rows};
 use crate::pool::Exec;
 use crate::validate::{
@@ -390,7 +390,7 @@ fn fused(
                 return Err(nonfinite(OP));
             }
             total += if others[i] > 0.0 {
-                log1p_small(others[i])
+                log1p_exact(others[i])
             } else {
                 maxes[i] + sum.ln() - picked[i]
             };

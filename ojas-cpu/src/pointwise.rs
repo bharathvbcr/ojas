@@ -39,8 +39,8 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use ojas_core::{
-    bf16_to_f32, exp_exact, BackendId, Budget, CeDims, EmbeddingDims, GateDims, Numerics,
-    OjasError, Reservation, Scratch, Tensor,
+    bf16_to_f32, exp_exact, log1p_exact, BackendId, Budget, CeDims, EmbeddingDims, GateDims,
+    Numerics, OjasError, Reservation, Scratch, Tensor,
 };
 
 use crate::exp::{exp, exp_sub_store, exp_sub_sum};
@@ -2302,24 +2302,6 @@ pub(crate) fn collapses(picked: f32, max: f32, sum: f32) -> bool {
     picked == max && sum == 1.0
 }
 
-/// `ln(1 + x)` for a small `x >= 0` with no libm call: `2 atanh(x / (2 + x))`
-/// as its odd series in f64, then rounded to f32. The only argument it is
-/// given is the target-excluded sum of a collapsed row, which is below
-/// `vocab * 2^-24` (every term that follows the target's 1.0 in the sum, and
-/// everything before it, was too small to move it), so `z = x / (2 + x)` is
-/// far below 1 and 24 terms are exact to f64 rounding. `x == 0` is 0.
-pub(crate) fn log1p_small(x: f32) -> f32 {
-    let x = f64::from(x);
-    let z = x / (2.0 + x);
-    let z2 = z * z;
-    let (mut term, mut sum) = (z, 0.0f64);
-    for k in 0..24 {
-        sum += term / f64::from(2 * k + 1);
-        term *= z2;
-    }
-    (2.0 * sum) as f32
-}
-
 /// `S = sum_{j != class} e^(x_j - x_class)` of a collapsed row (`x_class` is
 /// its maximum `max`), in ascending index order with the tier's exponential:
 /// [`exp_exact`] under Exact, [`crate::exp`] under Fast, the terms the row's
@@ -2399,7 +2381,7 @@ impl CeInput<'_> {
             }
         }
         Ok(Some(match other {
-            Some(s) => log1p_small(s),
+            Some(s) => log1p_exact(s),
             None => max + sum.ln() - picked,
         }))
     }
