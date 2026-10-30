@@ -398,7 +398,7 @@ mod bench {
                     Box::new(|| drop(metal.permute(&prod, &[1, 0]).expect("p5"))),
                 ),
                 (
-                    "conv2d f32 (im2col + GEMM + layout)",
+                    "conv2d f32 (conv2d_forward's route: 1x1 GEMM per image or im2col)",
                     Box::new(|| {
                         drop(
                             metal
@@ -413,7 +413,7 @@ mod bench {
                 ),
             ];
             arms.push((
-                "conv2d bf16-exact (im2col + bf16 GEMM + layout)",
+                "conv2d bf16-exact (conv2d_forward's route, bf16 lane)",
                 Box::new(|| {
                     drop(
                         metal
