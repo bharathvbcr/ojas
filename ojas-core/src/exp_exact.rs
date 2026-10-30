@@ -100,7 +100,7 @@ pub fn log_sum_exp_exact(max: f32, sum: f32) -> f32 {
 /// is the target-excluded sum of a softmax row whose target gradient the
 /// standard form rounds to 0, below `vocab * 2^-24`; a `x` outside `[0, 1]`
 /// or NaN gives NaN rather than a series that has not converged. This is a
-/// different reduction from [`ln_wide`]'s (a small argument, no exponent
+/// different reduction from `ln_wide`'s (a small argument, no exponent
 /// split), so it is not folded into it.
 pub fn log1p_exact(x: f32) -> f32 {
     if !(0.0..=1.0).contains(&x) {

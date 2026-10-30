@@ -321,14 +321,17 @@ fn a_bf16_tied_table_is_read_in_place_by_the_gather_and_the_fused_head() {
     ok("sync", m.sync());
 
     // A budget for the 2-byte table, the inputs, the fused head's outputs
-    // and scratch at 1024-column tiles, and less than a widened table.
+    // and scratch at 1024-column tiles, and less than a widened table. The
+    // scratch is LceGeom::scratch's: the logit tile, four stats a tile row
+    // (max, sum, target logit, target-excluded sum), the loss rows and their
+    // reduction, and the two gradient tiles.
     let chunk = ojas_core::CeChunk {
         rows: 8,
         cols: 1024,
     };
     let inputs = table_f32 / 2 + (n * 4 + 2 * n * dim * 4) as u64;
     let outputs = 4 + (n * dim * 4) as u64 + table_f32;
-    let scratch = 4 * (8 * 1024 + 3 * 8 + n + 2 + 8 * dim + 2 * 1024 * dim) as u64;
+    let scratch = 4 * (8 * 1024 + 4 * 8 + n + 2 + 8 * dim + 2 * 1024 * dim) as u64;
     let room = inputs + outputs + scratch;
     assert!(
         room < table_f32 / 2 + outputs + table_f32,
