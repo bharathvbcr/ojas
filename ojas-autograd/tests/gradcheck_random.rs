@@ -3,6 +3,9 @@
 //! term cannot hide behind an all-ones seed. Shapes include head_dim 1, odd
 //! dims, seq 1, and head_dim 65.
 
+mod common;
+
+use common::{ce, lin, Rng};
 use ojas_autograd::{central_diff, gradients_match, Tape, Var};
 use ojas_core::{Backend, Budget, OjasError, Tensor, RMS_NORM_EPS};
 use ojas_cpu::CpuBackend;
@@ -11,38 +14,6 @@ const H: f64 = 1e-4;
 const ATOL: f64 = 1e-4;
 const RTOL: f64 = 1e-3;
 const EPS: f64 = RMS_NORM_EPS as f64;
-
-struct Rng(u64);
-
-impl Rng {
-    fn next_u64(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        z ^ (z >> 31)
-    }
-
-    /// f32-representable value in `[-scale, scale)`, returned as f64.
-    fn unit(&mut self, scale: f32) -> f64 {
-        let u = (self.next_u64() >> 40) as f32 / (1u64 << 24) as f32;
-        f64::from(scale * (2.0 * u - 1.0))
-    }
-
-    /// Bounded away from zero, so RMSNorm of a short row stays smooth.
-    fn away(&mut self) -> f64 {
-        let v = self.unit(1.0);
-        f64::from((v.signum() * (0.25 + 0.75 * v.abs())) as f32)
-    }
-
-    fn vec(&mut self, n: usize, scale: f32) -> Vec<f64> {
-        (0..n).map(|_| self.unit(scale)).collect()
-    }
-
-    fn below(&mut self, n: usize) -> usize {
-        (self.next_u64() % n as u64) as usize
-    }
-}
 
 fn cpu() -> CpuBackend {
     CpuBackend::new(Budget::new(1 << 26))
@@ -72,17 +43,6 @@ fn fd(x: &[f64], f: impl Fn(&[f64]) -> f64) -> Vec<f64> {
 
 fn sigmoid(x: f64) -> f64 {
     1.0 / (1.0 + (-x).exp())
-}
-
-fn lin(x: &[f64], w: &[f64], kin: usize, nout: usize) -> Vec<f64> {
-    let rows = x.len() / kin;
-    let mut y = vec![0.0; rows * nout];
-    for r in 0..rows {
-        for c in 0..nout {
-            y[r * nout + c] = (0..kin).map(|i| x[r * kin + i] * w[c * kin + i]).sum();
-        }
-    }
-    y
 }
 
 fn rms(x: &[f64], w: &[f64]) -> Vec<f64> {
@@ -161,22 +121,6 @@ fn gate(x: &[f64], w: &[f64], bias: &[f64], attn: &[f64], din: usize, dh: usize)
         }
     }
     y
-}
-
-fn ce(logits: &[f64], targets: &[u32], vocab: usize, ignore: Option<u32>) -> f64 {
-    let mut total = 0.0;
-    let mut n = 0.0;
-    for (row, &tg) in targets.iter().enumerate() {
-        if ignore == Some(tg) {
-            continue;
-        }
-        let l = &logits[row * vocab..(row + 1) * vocab];
-        let m = l.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-        let lse = m + l.iter().map(|x| (x - m).exp()).sum::<f64>().ln();
-        total += lse - l[tg as usize];
-        n += 1.0;
-    }
-    total / n
 }
 
 fn silu(x: &[f64]) -> Vec<f64> {

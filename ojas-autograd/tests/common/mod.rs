@@ -21,8 +21,9 @@
 
 use std::any::Any;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
+use ojas_autograd::{Tape, Var};
 use ojas_core::{
     linear_ce_dims, AdamWConfig, Backend, BackendId, Budget, CeChunk, CeGrads, DType, DeviceBuffer,
     LinearCe, MuonNs5Config, Numerics, OjasError, PerHeadGateGrad, Tensor, ValueResidualGrad,
@@ -557,6 +558,103 @@ pub fn bits(t: &Tensor) -> Vec<u32> {
         .iter()
         .map(|v| v.to_bits())
         .collect()
+}
+
+const GRAPH_VOCAB: usize = 7;
+const GRAPH_DIM: usize = 5;
+const GRAPH_ROWS: usize = 3;
+
+/// The leaves, the loss and the root of [`record`].
+pub struct Graph {
+    /// Embedding table, first linear weight, output linear weight.
+    pub params: [Var; 3],
+    pub loss: Var,
+    pub root: Var,
+}
+
+/// Embedding, two linears with a residual, silu, two reshapes, cross-entropy.
+/// `h` feeds both the second linear and the add, so its gradient is
+/// accumulated. With `doubled`, the root is `loss + loss`, so the
+/// cross-entropy is not the root and its gradient is 2, not the seed.
+pub fn record<B: Backend>(tape: &mut Tape<B>, doubled: bool) -> Result<Graph, OjasError> {
+    let budget = Budget::new(1 << 20);
+    let table = tape.leaf(Tensor::from_f32(
+        &data(1, GRAPH_VOCAB * GRAPH_DIM),
+        &[GRAPH_VOCAB, GRAPH_DIM],
+        &budget,
+    )?)?;
+    let w1 = tape.leaf(Tensor::from_f32(
+        &data(2, GRAPH_DIM * GRAPH_DIM),
+        &[GRAPH_DIM, GRAPH_DIM],
+        &budget,
+    )?)?;
+    let w2 = tape.leaf(Tensor::from_f32(
+        &data(3, GRAPH_VOCAB * GRAPH_DIM),
+        &[GRAPH_VOCAB, GRAPH_DIM],
+        &budget,
+    )?)?;
+    let ids = Tensor::from_u32(&[1, 4, 6], &[GRAPH_ROWS], &budget)?;
+    let targets = Tensor::from_u32(&[2, 0, 5], &[GRAPH_ROWS], &budget)?;
+    let e = tape.embedding(table, ids)?;
+    let h = tape.linear(e, w1)?;
+    let s = tape.silu(h)?;
+    let r = tape.add(h, s)?;
+    let r3 = tape.reshape(r, &[1, GRAPH_ROWS, GRAPH_DIM])?;
+    let r2 = tape.reshape(r3, &[GRAPH_ROWS, GRAPH_DIM])?;
+    let logits = tape.linear(r2, w2)?;
+    let loss = tape.cross_entropy(logits, targets, None)?;
+    let root = if doubled { tape.add(loss, loss)? } else { loss };
+    Ok(Graph {
+        params: [table, w1, w2],
+        loss,
+        root,
+    })
+}
+
+pub fn host_bits<B: Backend>(tape: &Tape<B>, var: Var) -> Vec<u32> {
+    let grad = tape.grad(var).expect("leaf gradient");
+    bits(&tape.backend().download(grad).unwrap())
+}
+
+/// Leaf gradient bits of [`record`] seeded with `seed`.
+pub fn grads<B: Backend>(backend: B, doubled: bool, seed: f32) -> [Vec<u32>; 3] {
+    let mut tape = Tape::new(backend);
+    let g = record(&mut tape, doubled).unwrap();
+    tape.backward_seeded(g.root, seed).unwrap();
+    g.params.map(|p| host_bits(&tape, p))
+}
+
+/// `want` with every value multiplied by `seed`, bit for bit.
+pub fn scaled(want: &[u32], seed: f32) -> Vec<u32> {
+    want.iter()
+        .map(|b| (f32::from_bits(*b) * seed).to_bits())
+        .collect()
+}
+
+/// Gate G6: seed `s` gives exactly `s` times the seed-1 gradients, for
+/// power-of-two `s`, with the cross-entropy at the root and below it.
+pub fn gate_g6<B: Backend>(make: impl Fn() -> B, name: &str) {
+    for doubled in [false, true] {
+        let one = grads(make(), doubled, 1.0);
+        for seed in [0.5f32, 0.25, 0.125] {
+            let got = grads(make(), doubled, seed);
+            for (i, (g, w)) in got.iter().zip(&one).enumerate() {
+                assert_eq!(
+                    g,
+                    &scaled(w, seed),
+                    "{name}: doubled {doubled} seed {seed} param {i} is not seed x the seed-1 gradient"
+                );
+            }
+        }
+    }
+}
+
+/// Serializes the tests of one binary that share a device.
+pub fn serial() -> MutexGuard<'static, ()> {
+    static SERIAL: Mutex<()> = Mutex::new(());
+    SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// SplitMix64.
