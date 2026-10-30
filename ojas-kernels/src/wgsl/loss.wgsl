@@ -63,6 +63,54 @@ fn row_exp_sum(lane: u32, base: u32, vocab: u32, peak: f32) -> f32 {
     return sum;
 }
 
+// Softmax Collapse. A row whose target logit is its maximum and whose f32 sum
+// is exactly 1.0 has a standard target gradient `p - 1` of exactly 0 whatever
+// the other classes hold. Such a row that has another class takes the
+// target-excluded form, with S the sum over the other classes of
+// exp(x - peak): loss log1p(S), target gradient -(S / (1 + S)) / valid, each
+// other class (exp(x - peak) / (1 + S)) / valid. Every other row is the
+// standard form, bit for bit.
+
+// ln(1 + x) for the small x >= 0 of a collapsed row, as 2 atanh(x / (2 + x)):
+// the odd series to z^15, exact to f32 rounding for z <= 1/3. WGSL has no
+// log1p, and its `log` carries an absolute error of 2^-21 near 1, which would
+// swamp a loss of 1e-8.
+fn log1p_small(x: f32) -> f32 {
+    let z = x / (2.0 + x);
+    let z2 = z * z;
+    var p = 1.0 / 15.0;
+    p = p * z2 + 1.0 / 13.0;
+    p = p * z2 + 1.0 / 11.0;
+    p = p * z2 + 1.0 / 9.0;
+    p = p * z2 + 1.0 / 7.0;
+    p = p * z2 + 1.0 / 5.0;
+    p = p * z2 + 1.0 / 3.0;
+    p = p * z2 + 1.0;
+    return 2.0 * z * p;
+}
+
+// The row's target logit, or the peak for an ignored row (whose target may
+// lie outside the vocabulary and is never read).
+fn row_picked(base: u32, tgt: u32, peak: f32) -> f32 {
+    if (ignored(tgt)) { return peak; }
+    return x0[base + tgt];
+}
+
+// The sum over the other classes of exp(x - peak) of a collapsed row, and 0
+// for a row that is not (`wanted` false skips the exponentials but not the
+// tree: every lane must reach its barriers).
+fn row_other_sum(lane: u32, base: u32, vocab: u32, peak: f32, tgt: u32, wanted: bool) -> f32 {
+    var acc = 0.0;
+    if (wanted) {
+        for (var c = lane; c < vocab; c = c + 256u) {
+            if (c != tgt) {
+                acc = acc + exp(x0[base + c] - peak);
+            }
+        }
+    }
+    return tree_sum(lane, acc);
+}
+
 // One workgroup per row. x0 = logits, u0 = targets. y0[row] = row loss, or
 // 0 for an ignored row.
 @compute @workgroup_size(256, 1, 1)
@@ -73,11 +121,18 @@ fn ce_fwd(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: ve
     let base = row * vocab;
     let peak = row_peak(lid.x, base, vocab);
     let sum = row_exp_sum(lid.x, base, vocab, peak);
+    let tgt = row_target(row);
+    let picked = row_picked(base, tgt, peak);
+    let collapsed = !ignored(tgt) && picked == peak && sum == 1.0;
+    let other = row_other_sum(lid.x, base, vocab, peak, tgt, collapsed);
     if (lid.x == 0u) {
-        let tgt = row_target(row);
         var loss = 0.0;
         if (!ignored(tgt)) {
-            loss = peak + log(sum) - x0[base + tgt];
+            if (collapsed && other > 0.0) {
+                loss = log1p_small(other);
+            } else {
+                loss = peak + log(sum) - x0[base + tgt];
+            }
         }
         report(loss);
         y0[row] = loss;
@@ -85,7 +140,8 @@ fn ce_fwd(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: ve
 }
 
 // One workgroup per row. grad = softmax / valid, minus 1 / valid at the
-// target; an ignored row is 0.
+// target; an ignored row is 0. A collapsed row with another class is the
+// target-excluded form above.
 @compute @workgroup_size(256, 1, 1)
 fn ce_bwd(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let row = flat_group(wg, nwg);
@@ -97,12 +153,25 @@ fn ce_bwd(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: ve
     let sum = row_exp_sum(lid.x, base, vocab, peak);
     let tgt = row_target(row);
     let skip = ignored(tgt);
+    let picked = row_picked(base, tgt, peak);
+    let collapsed = !skip && picked == peak && sum == 1.0;
+    let other = row_other_sum(lid.x, base, vocab, peak, tgt, collapsed);
+    let switched = collapsed && other > 0.0;
+    let one_plus = 1.0 + other;
     for (var c = lid.x; c < vocab; c = c + 256u) {
         var g = 0.0;
         if (!skip) {
-            g = exp(x0[base + c] - peak) / sum / denom;
-            if (c == tgt) {
-                g = g - 1.0 / denom;
+            if (switched) {
+                if (c == tgt) {
+                    g = -(other / one_plus) / denom;
+                } else {
+                    g = exp(x0[base + c] - peak) / one_plus / denom;
+                }
+            } else {
+                g = exp(x0[base + c] - peak) / sum / denom;
+                if (c == tgt) {
+                    g = g - 1.0 / denom;
+                }
             }
         }
         report(g);
@@ -114,6 +183,12 @@ fn ce_bwd(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: ve
 // rows r0.. and vocabulary columns c0... `stats` is three arrays of N rows:
 // the running max m, the running sum s of exp(logit - m), and the target's
 // logit t. Words 2 and 3 are the ignore flag and id, as above.
+//
+// These three kernels still form the standard `p - 1` target gradient, so a
+// row past the f32 cliff collapses here as it did (ft-f40eeed8). Carrying the
+// collapsed-row form through them needs the target-excluded running sum as a
+// fourth array of N rows, which the host (backend.rs `linear_cross_entropy_mean`)
+// allocates and indexes as three.
 
 // One workgroup per tile row. Words: 0 R', 1 C', 4 c0, 5 r0, 6 first tile,
 // 7 N. x0 = tile, u0 = targets (all N), y0 = stats. The tile's own max and
