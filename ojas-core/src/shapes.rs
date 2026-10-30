@@ -1904,7 +1904,7 @@ fn broadcast_backward_dims(
     Ok(dims)
 }
 
-/// [`crate::Backend::broadcast_add_backward`]: as
+/// [`crate::Backend::broadcast_add_backward`]: the rules of
 /// [`broadcast_add_forward_dims`], plus `grad_output` shaped like the sum.
 pub fn broadcast_add_backward_dims(
     a: &Tensor,
@@ -1914,7 +1914,7 @@ pub fn broadcast_add_backward_dims(
     broadcast_backward_dims(BROADCAST_ADD_BACKWARD, a, b, grad_output)
 }
 
-/// [`crate::Backend::broadcast_mul_backward`]: as
+/// [`crate::Backend::broadcast_mul_backward`]: the rules of
 /// [`broadcast_mul_forward_dims`], plus `grad_output` shaped like the
 /// product.
 pub fn broadcast_mul_backward_dims(
