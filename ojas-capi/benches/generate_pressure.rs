@@ -18,7 +18,7 @@ const VOCAB: usize = 50_304;
 const N: usize = 200;
 
 #[test]
-#[ignore]
+#[ignore = "micro-benchmark; run with --ignored --nocapture --test-threads=1"]
 fn op_generate_argmax_with_and_without_the_pressure_probe() {
     let logits: Vec<f32> = (0..VOCAB).map(|i| (i as f32) * 1.0e-4).collect();
     let plain = ojas_capi::generate_argmax(&logits, false).expect("argmax");

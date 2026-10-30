@@ -77,7 +77,7 @@ fn plan(s: &Qwen35Step) -> OptimizerPlan {
 }
 
 #[test]
-#[ignore]
+#[ignore = "opens a Metal runtime; run in the GPU window with --release -- --ignored --test-threads=1"]
 fn gpu_save_state_refuses_a_half_filled_gradient_bank() {
     let mut s = open_tiny();
     // Empty bank: allowed.

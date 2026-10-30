@@ -53,7 +53,7 @@ fn sdpa(cpu: &CpuBackend, label: &str, t: usize) {
 }
 
 #[test]
-#[ignore]
+#[ignore = "wall-time benchmark; run with --release -- --ignored --nocapture"]
 fn exact_exp_op_times() {
     let budget = Budget::new(1 << 32);
     let exact = CpuBackend::with_threads(budget.clone(), 1)

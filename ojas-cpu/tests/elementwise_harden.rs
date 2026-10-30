@@ -461,7 +461,7 @@ fn concurrent_muls_on_one_backend_match_the_scalar_product() {
 /// Wall time of the nanolab shapes the CPU scorecard uses. Ignored; run with
 /// `--ignored` in release. Prints the minimum of 20 calls after two warmups.
 #[test]
-#[ignore]
+#[ignore = "wall-time benchmark; run with --release -- --ignored --nocapture"]
 fn time_nanolab_elementwise() {
     let be = cpu(6);
     let add_n = 1024 * 768;

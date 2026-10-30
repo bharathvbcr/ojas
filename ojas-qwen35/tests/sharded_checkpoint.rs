@@ -267,7 +267,7 @@ fn one_step(s: &mut Qwen35Step) -> (u64, Vec<(String, Vec<u32>)>) {
 }
 
 #[test]
-#[ignore]
+#[ignore = "opens a Metal runtime; run in the GPU window with --release -- --ignored --test-threads=1"]
 fn gpu_sharded_load_equals_the_single_file_load() {
     let mut want = open(&Snapshot::from_dir(&tiny_dir()).unwrap());
     let want_params = param_bits(&want);

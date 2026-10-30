@@ -274,7 +274,7 @@ fn time_ms(rounds: u32, mut body: impl FnMut()) -> f64 {
 
 /// Wall time of `(0, 2, 1, 3)` on `[1, 1024, 12, 64]`. Not part of the suite.
 #[test]
-#[ignore]
+#[ignore = "wall-time benchmark, not part of the suite; run with --release -- --ignored --nocapture"]
 fn bench_nanolab_permute() {
     let shape = [1usize, 1024, 12, 64];
     let n: usize = shape.iter().product();

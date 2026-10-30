@@ -130,7 +130,7 @@ fn ids(n: usize, vocab: u32, reserved: &[u32]) -> Vec<u32> {
 }
 
 #[test]
-#[ignore]
+#[ignore = "peak-memory row, one arm per process (QWEN35_MEM_ARM); opens a Metal runtime, run alone under the heavy-job lock"]
 fn gpu_memory_row() {
     let arm = std::env::var("QWEN35_MEM_ARM").expect("QWEN35_MEM_ARM");
     let tokens: usize = std::env::var("QWEN35_MEM_TOKENS")
@@ -1095,7 +1095,7 @@ fn tape_provider(snap: &Snapshot, ids: &[u32], mut r: Row) -> Row {
 ///     -- --ignored --test-threads=1 gpu_lora_step_trains_only_the_adapters
 /// ```
 #[test]
-#[ignore]
+#[ignore = "opens a Metal runtime; run in the GPU window with --release -- --ignored --test-threads=1"]
 fn gpu_lora_step_trains_only_the_adapters() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../ojas-model/tests/fixtures/qwen35_tiny");

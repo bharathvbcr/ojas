@@ -1832,7 +1832,7 @@ fn audit_baseline_cases_are_registered() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "per-op wall-time benchmark (OJAS_BENCH_MODE dump, time or loop); run with --release -- --ignored --nocapture --test-threads=1"]
 fn bench_ops() {
     let budget = Budget::new(BUDGET_BYTES);
     match std::env::var("OJAS_BENCH_MODE").as_deref() {

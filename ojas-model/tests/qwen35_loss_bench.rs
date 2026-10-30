@@ -101,14 +101,14 @@ fn time<B: Backend + Clone>(label: &str, backend: B, up: impl Fn(&Tensor) -> Ten
 }
 
 #[test]
-#[ignore]
+#[ignore = "benchmark; run with --release -- --ignored --nocapture --test-threads=1"]
 fn forward_loss_cpu() {
     time("cpu", cpu(), Tensor::clone);
 }
 
 #[cfg(target_os = "macos")]
 #[test]
-#[ignore]
+#[ignore = "benchmark; run with --release -- --ignored --nocapture --test-threads=1"]
 fn forward_loss_metal() {
     let Ok(m) = ojas_metal::MetalBackend::new(ojas_core::Budget::new(8 << 30)) else {
         println!("BENCH metal unavailable");

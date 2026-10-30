@@ -169,7 +169,7 @@ fn a_header_that_is_not_the_tower_is_refused() {
 /// tower and the MTP block, which are not loaded. CPU only; ignored because it
 /// needs the snapshot. `QWEN35_2B_SNAPSHOT` overrides the directory.
 #[test]
-#[ignore]
+#[ignore = "needs the real Qwen3.5-2B-Base snapshot (QWEN35_2B_SNAPSHOT or the Hugging Face cache)"]
 fn snapshot_header_matches_the_name_map() {
     let dir = match std::env::var_os("QWEN35_2B_SNAPSHOT") {
         Some(d) => PathBuf::from(d),

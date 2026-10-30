@@ -19,7 +19,7 @@ const N: usize = 200;
 const NVRTC: (i32, i32) = (12, 8);
 
 #[test]
-#[ignore]
+#[ignore = "host-only timing benchmark; run with --ignored --nocapture --test-threads=1"]
 fn cache_key_new_hashes_gdn_published_per_call() {
     let once = CacheKey::new(&GDN_PUBLISHED, &STRICT_SM90, NVRTC);
     assert_eq!(once.module, GDN_PUBLISHED.name);

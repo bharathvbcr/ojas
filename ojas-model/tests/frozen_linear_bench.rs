@@ -96,7 +96,7 @@ fn rows<B: Backend>(label: &str, b: &B, up: impl Fn(&Tensor) -> Tensor) {
 }
 
 #[test]
-#[ignore]
+#[ignore = "benchmark; run with --release -- --ignored --nocapture --test-threads=1"]
 fn frozen_linear_backward_cpu() {
     let cpu = CpuBackend::with_threads(Budget::new(24 << 30), 6).unwrap();
     cpu.start_workers().unwrap();
@@ -105,7 +105,7 @@ fn frozen_linear_backward_cpu() {
 
 #[cfg(target_os = "macos")]
 #[test]
-#[ignore]
+#[ignore = "benchmark; run with --release -- --ignored --nocapture --test-threads=1"]
 fn frozen_linear_backward_metal() {
     let m = ojas_metal::MetalBackend::new(Budget::new(24 << 30)).unwrap();
     rows("metal", &m, |t| m.upload(t).unwrap());

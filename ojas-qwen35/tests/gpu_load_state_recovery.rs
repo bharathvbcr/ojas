@@ -15,7 +15,7 @@ use support::{backward_one, cut_short, scratch, stepped, table_bits, take_step};
 /// A malformed state is refused before the first write: nothing moved and
 /// the provider is still usable.
 #[test]
-#[ignore]
+#[ignore = "opens a Metal runtime; run in the GPU window with --release -- --ignored --test-threads=1"]
 fn gpu_load_state_refuses_a_malformed_file_and_stays_usable() {
     let mut s = stepped();
     s.discard_gradients();
@@ -41,7 +41,7 @@ fn gpu_load_state_refuses_a_malformed_file_and_stays_usable() {
 /// A failure after a write has landed (a file cut short underneath an index
 /// that had already passed) poisons the provider: it holds a mix of states.
 #[test]
-#[ignore]
+#[ignore = "opens a Metal runtime; run in the GPU window with --release -- --ignored --test-threads=1"]
 fn gpu_load_state_poisons_only_after_a_write() {
     let mut s = stepped();
     s.discard_gradients();
