@@ -1311,20 +1311,20 @@ kernel void ojas_ce_fused(
 // The logits of `input @ weight^T` exist one [rr, cc] tile at a time (tessl
 // GEMMs write the tile); these kernels turn tiles into the loss and the
 // gradient of the logits with ojas_ce_fused's arithmetic. Per tile row the
-// running (max, sum of exp) is merged across vocabulary tiles with ce_merge;
-// `stats` holds (max, sum, target logit) per row of the current row tile.
-//
-// These three kernels still form the standard `p - 1` target gradient, so a
-// row past the f32 cliff collapses here as it did (ft-f40eeed8). Carrying the
-// collapsed-row form through them needs the target-excluded running sum in
-// `stats`, a fourth value per row, which the host (device.rs `linear_ce`)
-// allocates and indexes as three.
+// running (max, sum of exp, sum of exp over every class but the target) is
+// merged across vocabulary tiles with ce_merge3; `stats` holds (max, sum,
+// target logit, target-excluded sum) per row of the current row tile, four
+// floats a row (device.rs `linear_ce` allocates `4 * rt`, link.rs
+// `LceGeom::scratch` charges it). A row whose target logit is its maximum with
+// a sum of exactly 1.0 and another class takes ojas_ce_fused's target-excluded
+// form (Softmax Collapse, ft-f40eeed8); every other row is the standard form.
 
-/// Per tile row (one threadgroup): online (max, sum exp) of the tile row,
-/// merged into the row's running pair (assigned on the first column tile),
-/// and the target's logit when the target falls in this tile. Every logit is
-/// checked, ignored rows included; a non-finite one sets ST_IN, because the
-/// composition's linear_forward refuses it before cross-entropy runs.
+/// Per tile row (one threadgroup): online (max, sum exp, sum exp over every
+/// class but the target) of the tile row, merged into the row's running triple
+/// (assigned on the first column tile), and the target's logit when the target
+/// falls in this tile. Every logit is checked, ignored rows included; a
+/// non-finite one sets ST_IN, because the composition's linear_forward refuses
+/// it before cross-entropy runs.
 kernel void ojas_lce_stats(
     device const float *tile [[buffer(0)]],
     device const uint *targets [[buffer(1)]],
@@ -1337,42 +1337,52 @@ kernel void ojas_lce_stats(
     uint r [[threadgroup_position_in_grid]],
     uint lane [[thread_index_in_threadgroup]])
 {
-    threadgroup float2 sh[CE_TG];
+    threadgroup float3 sh[CE_TG];
     if (r >= rr) return;
     const ulong base = (ulong)r * cc;
+    const uint t = targets[r];
     bool bad = false;
     float m = -INFINITY;
     float s = 0.0f;
+    float so = 0.0f;
     for (uint c = lane; c < cc; c += CE_TG) {
         const float x = tile[base + c];
         if (!isfinite(x)) {
             bad = true;
             continue;
         }
+        const bool is_target = col0 + c == t;
         if (x > m) {
-            s = s * precise::exp(m - x) + 1.0f;
+            const float k = precise::exp(m - x);
+            s = s * k + 1.0f;
+            so = so * k + (is_target ? 0.0f : 1.0f);
             m = x;
         } else {
-            s += precise::exp(x - m);
+            const float e = precise::exp(x - m);
+            s += e;
+            if (!is_target) so += e;
         }
     }
     if (bad) atomic_store_explicit(&st[ST_IN], 1u, memory_order_relaxed);
-    sh[lane] = float2(m, s);
+    sh[lane] = float3(m, s, so);
     threadgroup_barrier(mem_flags::mem_threadgroup);
     for (uint off = CE_TG / 2u; off > 0u; off >>= 1u) {
-        if (lane < off) sh[lane] = ce_merge(sh[lane], sh[lane + off]);
+        if (lane < off) sh[lane] = ce_merge3(sh[lane], sh[lane + off]);
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
     if (lane != 0u) return;
-    const float2 run = first != 0u ? float2(-INFINITY, 0.0f) : float2(stats[3u * r], stats[3u * r + 1u]);
-    const float2 merged = ce_merge(run, sh[0]);
-    stats[3u * r] = merged.x;
-    stats[3u * r + 1u] = merged.y;
-    const uint t = targets[r];
-    if (t >= col0 && t - col0 < cc) stats[3u * r + 2u] = tile[base + (t - col0)];
+    const float3 run = first != 0u
+        ? float3(-INFINITY, 0.0f, 0.0f)
+        : float3(stats[4u * r], stats[4u * r + 1u], stats[4u * r + 3u]);
+    const float3 merged = ce_merge3(run, sh[0]);
+    stats[4u * r] = merged.x;
+    stats[4u * r + 1u] = merged.y;
+    stats[4u * r + 3u] = merged.z;
+    if (t >= col0 && t - col0 < cc) stats[4u * r + 2u] = tile[base + (t - col0)];
 }
 
-/// loss_rows[r] = max + log(sum) - target logit, or 0 for an ignored or
+/// loss_rows[r] = max + log(sum) - target logit, or log1p of the target-excluded
+/// sum for a collapsed row (see the section header), or 0 for an ignored or
 /// out-of-range target (the host has refused the latter).
 kernel void ojas_lce_loss(
     device const float *stats [[buffer(0)]],
@@ -1387,15 +1397,22 @@ kernel void ojas_lce_loss(
     if (r >= rr) return;
     const uint t = targets[r];
     const bool skip = (has_ignore != 0u && t == ignore) || t >= vocab;
-    loss_rows[r] = skip
-        ? 0.0f
-        : stats[3u * r] + precise::log(stats[3u * r + 1u]) - stats[3u * r + 2u];
+    if (skip) {
+        loss_rows[r] = 0.0f;
+        return;
+    }
+    const float mx = stats[4u * r];
+    const float sum = stats[4u * r + 1u];
+    const float picked = stats[4u * r + 2u];
+    const float other = stats[4u * r + 3u];
+    const bool collapsed = picked == mx && sum == 1.0f && other > 0.0f;
+    loss_rows[r] = collapsed ? ce_log1p(other) : mx + precise::log(sum) - picked;
 }
 
 /// The logits tile becomes the gradient tile in place: softmax / n_valid,
-/// minus 1 / n_valid at the target, zero for a skipped row; the arithmetic
-/// of ojas_ce_fused. A non-finite value sets ST_OUT. x is the column, y the
-/// row.
+/// minus 1 / n_valid at the target (or the target-excluded form of a collapsed
+/// row), zero for a skipped row; the arithmetic of ojas_ce_fused. A non-finite
+/// value sets ST_OUT. x is the column, y the row.
 kernel void ojas_lce_grad(
     device float *tile [[buffer(0)]],
     device const uint *targets [[buffer(1)]],
@@ -1419,9 +1436,21 @@ kernel void ojas_lce_grad(
         return;
     }
     const float denom = (float)n_valid;
-    const float p = precise::divide(precise::exp(tile[at] - stats[3u * r]), stats[3u * r + 1u]);
-    float g = precise::divide(p, denom);
-    if (col0 + gid.x == t) g -= precise::divide(1.0f, denom);
+    const float mx = stats[4u * r];
+    const float sum = stats[4u * r + 1u];
+    const float other = stats[4u * r + 3u];
+    const bool is_target = col0 + gid.x == t;
+    float g;
+    if (stats[4u * r + 2u] == mx && sum == 1.0f && other > 0.0f) {
+        const float one_plus = 1.0f + other;
+        g = is_target
+            ? -precise::divide(precise::divide(other, one_plus), denom)
+            : precise::divide(precise::divide(precise::exp(tile[at] - mx), one_plus), denom);
+    } else {
+        const float p = precise::divide(precise::exp(tile[at] - mx), sum);
+        g = precise::divide(p, denom);
+        if (is_target) g -= precise::divide(1.0f, denom);
+    }
     if (!isfinite(g)) atomic_store_explicit(&st[ST_OUT], 1u, memory_order_relaxed);
     tile[at] = g;
 }

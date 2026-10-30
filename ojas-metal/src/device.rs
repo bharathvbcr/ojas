@@ -4390,7 +4390,7 @@ impl Worker {
         let gx = g.grads.input.then(|| self.fresh(n * d)).transpose()?;
         let gw = g.grads.weight.then(|| self.fresh(v * d)).transpose()?;
         let tile = self.fresh(g.rt * g.ct)?;
-        let stats = self.fresh(3 * g.rt)?;
+        let stats = self.fresh(4 * g.rt)?;
         let loss_rows = self.fresh(n)?;
         let sum = self.fresh(1)?;
         let gx_tmp = g.grads.input.then(|| self.fresh(g.rt * d)).transpose()?;
