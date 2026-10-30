@@ -566,6 +566,7 @@ dependencies = [
  "ojas-core",
  "ojas-cpu",
  "ojas-kernels",
+ "ojas-metal",
  "ojas-wgpu",
 ]
 

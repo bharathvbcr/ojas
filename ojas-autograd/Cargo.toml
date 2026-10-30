@@ -14,3 +14,8 @@ ojas-kernels = { path = "../ojas-kernels" }
 
 [dev-dependencies]
 ojas-wgpu = { path = "../ojas-wgpu" }
+
+# The G6 seeded-backward gate on a real Metal device (`tests/metal_tape.rs`).
+# A workspace member, so no new third-party dependency.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+ojas-metal = { path = "../ojas-metal" }
