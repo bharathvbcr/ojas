@@ -1277,12 +1277,11 @@ kernel void ojas_ce_fused(
     }
     const float mx = sh[0].x;
     const float sum = sh[0].y;
-    const float picked = logits[base + t];
-    // Uniform across the threadgroup: every lane reads the same sh[0] and the
-    // row's one target. Only such a row can collapse.
-    const bool maybe = picked == mx && sum == 1.0f;
+    // Uniform across the threadgroup (every lane reads the same sh[0] and the
+    // row's one target, one address a row): only a row whose target is the
+    // maximum with a sum of exactly 1.0 can collapse.
     float other = 0.0f;
-    if (maybe) {
+    if (logits[base + t] == mx && sum == 1.0f) {
         // Every lane has read sh[0]; the second pass reuses sh[].y.
         threadgroup_barrier(mem_flags::mem_threadgroup);
         float acc = 0.0f;
@@ -1298,29 +1297,32 @@ kernel void ojas_ce_fused(
         }
         other = sh[0].y;
     }
-    const bool collapsed = maybe && other > 0.0f;
-    // The standard expression first and unconditionally, then replaced for a
-    // collapsed row, so a fast-math compile cannot reassociate it away from the
-    // bits every other row has always had.
-    float loss = mx + precise::log(sum) - logits[base + t];
-    if (collapsed) loss = ce_log1p(other);
-    if (lane == 0u) loss_rows[r] = loss;
-    if (write_grad == 0u) return;
     const float denom = (float)n_valid;
-    const float at_target = precise::divide(1.0f, denom);
-    const float one_plus = 1.0f + other;
-    bool bad_out = false;
-    for (uint c = lane; c < vocab; c += CE_TG) {
-        float g;
-        if (collapsed) {
-            g = c == t
+    if (other > 0.0f) {
+        // Collapsed: the target-excluded form, and only it.
+        if (lane == 0u) loss_rows[r] = ce_log1p(other);
+        if (write_grad == 0u) return;
+        const float one_plus = 1.0f + other;
+        bool bad_collapsed = false;
+        for (uint c = lane; c < vocab; c += CE_TG) {
+            const float g = c == t
                 ? -precise::divide(precise::divide(other, one_plus), denom)
                 : precise::divide(precise::divide(precise::exp(logits[base + c] - mx), one_plus), denom);
-        } else {
-            const float p = precise::divide(precise::exp(logits[base + c] - mx), sum);
-            g = precise::divide(p, denom);
-            if (c == t) g -= at_target;
+            bad_collapsed = bad_collapsed || !isfinite(g);
+            grad[base + c] = g;
         }
+        if (bad_collapsed) atomic_store_explicit(&st[ST_OUT], 1u, memory_order_relaxed);
+        return;
+    }
+    // The standard tail, as it always was: every row but a collapsed one.
+    if (lane == 0u) loss_rows[r] = mx + precise::log(sum) - logits[base + t];
+    if (write_grad == 0u) return;
+    const float at_target = precise::divide(1.0f, denom);
+    bool bad_out = false;
+    for (uint c = lane; c < vocab; c += CE_TG) {
+        const float p = precise::divide(precise::exp(logits[base + c] - mx), sum);
+        float g = precise::divide(p, denom);
+        if (c == t) g -= at_target;
         bad_out = bad_out || !isfinite(g);
         grad[base + c] = g;
     }
