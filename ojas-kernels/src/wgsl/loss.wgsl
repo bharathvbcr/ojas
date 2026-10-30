@@ -96,16 +96,26 @@ fn row_picked(base: u32, tgt: u32, peak: f32) -> f32 {
     return x0[base + tgt];
 }
 
-// The sum over the other classes of exp(x - peak) of a collapsed row, and 0
-// for a row that is not (`wanted` false skips the exponentials but not the
-// tree: every lane must reach its barriers).
-fn row_other_sum(lane: u32, base: u32, vocab: u32, peak: f32, tgt: u32, wanted: bool) -> f32 {
+// Whether the row needs its target-excluded sum, as one value every lane holds.
+// Lane 0 writes the whole condition to a workgroup variable and every lane
+// reads it with `workgroupUniformLoad`, which the compiler knows is uniform:
+// the tree reduction behind `if (row_gate(..))` is then legal, and a row that
+// does not need it pays this one load (two barriers) instead of a tree. The
+// condition must not be combined with a value derived from a reduction
+// (`peak`, `sum`) at the branch: that would not be uniform to the compiler.
+var<workgroup> gate_flag: u32;
+fn row_gate(lane: u32, need: bool) -> bool {
+    if (lane == 0u) { gate_flag = select(0u, 1u, need); }
+    return workgroupUniformLoad(&gate_flag) != 0u;
+}
+
+// The sum over the other classes of exp(x - peak) of a row, in the tree's fixed
+// order. Call it only behind `row_gate`: every lane must reach its barriers.
+fn row_other_sum(lane: u32, base: u32, vocab: u32, peak: f32, tgt: u32) -> f32 {
     var acc = 0.0;
-    if (wanted) {
-        for (var c = lane; c < vocab; c = c + 256u) {
-            if (c != tgt) {
-                acc = acc + exp(x0[base + c] - peak);
-            }
+    for (var c = lane; c < vocab; c = c + 256u) {
+        if (c != tgt) {
+            acc = acc + exp(x0[base + c] - peak);
         }
     }
     return tree_sum(lane, acc);
@@ -122,9 +132,11 @@ fn ce_fwd(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: ve
     let peak = row_peak(lid.x, base, vocab);
     let sum = row_exp_sum(lid.x, base, vocab, peak);
     let tgt = row_target(row);
-    let picked = row_picked(base, tgt, peak);
-    let collapsed = !ignored(tgt) && picked == peak && sum == 1.0;
-    let other = row_other_sum(lid.x, base, vocab, peak, tgt, collapsed);
+    let collapsed = row_gate(lid.x, !ignored(tgt) && row_picked(base, tgt, peak) == peak && sum == 1.0);
+    var other = 0.0;
+    if (collapsed) {
+        other = row_other_sum(lid.x, base, vocab, peak, tgt);
+    }
     if (lid.x == 0u) {
         var loss = 0.0;
         if (!ignored(tgt)) {
@@ -153,9 +165,11 @@ fn ce_bwd(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: ve
     let sum = row_exp_sum(lid.x, base, vocab, peak);
     let tgt = row_target(row);
     let skip = ignored(tgt);
-    let picked = row_picked(base, tgt, peak);
-    let collapsed = !skip && picked == peak && sum == 1.0;
-    let other = row_other_sum(lid.x, base, vocab, peak, tgt, collapsed);
+    let collapsed = row_gate(lid.x, !skip && row_picked(base, tgt, peak) == peak && sum == 1.0);
+    var other = 0.0;
+    if (collapsed) {
+        other = row_other_sum(lid.x, base, vocab, peak, tgt);
+    }
     let switched = collapsed && other > 0.0;
     let one_plus = 1.0 + other;
     for (var c = lid.x; c < vocab; c = c + 256u) {
@@ -206,7 +220,18 @@ fn lce_stats(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg:
     let g = pw(5u) + row;
     let tgt = u0[g];
     let in_tile = tgt >= c0 && tgt < c0 + cols;
-    let other = row_other_sum(lid.x, base, cols, peak, select(0xffffffffu, tgt - c0, in_tile), true);
+    // A tile without the row's target has no target to leave out: its
+    // contribution to the excluded sum is exactly its `sum`. The target's tile
+    // runs the second reduction only when the target is the tile's peak and the
+    // tile's sum is not above 1.0 (`!(sum > 1.0)`): a row can collapse only
+    // then, since its final sum is at least this tile's. Otherwise the row
+    // cannot collapse, lce_finish and lce_grad never read the slot, and `sum`
+    // goes in it.
+    let again = row_gate(lid.x, in_tile && x0[base + tgt - c0] == peak && !(sum > 1.0));
+    var other = sum;
+    if (again) {
+        other = row_other_sum(lid.x, base, cols, peak, tgt - c0);
+    }
     if (lid.x == 0u) {
         if (pw(6u) == 1u) {
             y0[g] = peak;
