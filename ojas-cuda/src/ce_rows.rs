@@ -15,8 +15,9 @@
 //!    row's running max `m` and running `s = sum(exp(logit - m))` with an
 //!    **online log-sum-exp** (`m_new = max(m_old, chunk max)`,
 //!    `s = s_old * exp(m_old - m_new) + sum(exp(logit - m_new))`), and picks up
-//!    the target's logit when its chunk passes. The per-row loss is
-//!    `m + ln(s) - logit[target]`, formed in f64 on the host from the three
+//!    the target's logit when its chunk passes. A second running sum `so` is
+//!    carried the same way over every class except the target. The per-row
+//!    loss is `m + ln(s) - logit[target]`, formed in f64 on the host from the
 //!    f32s, as tessl does (`cross_entropy.rs:376-381`);
 //! 3. **second walk** (with gradients): the chunk's logits are recomputed and
 //!    `qd_ce_softmax_grad_f32` turns them, in place, into
@@ -24,6 +25,19 @@
 //!    for the mean); then `dh (+)= dlogits @ W_c` (K1 `nn`; the first chunk
 //!    overwrites, the rest add) and `dW[v0..v0+w] = dlogitsᵀ @ h` (K1 `tn`).
 //!    `dW` is overwritten; with the tied embedding, K9's backward adds onto it.
+//!
+//! **Softmax Collapse.** When the target's logit is the row maximum `m` and
+//! this kernel's own `p_t = exp(logit - lse)`, `lse = m + ln(s)`, is exactly
+//! 1.0f, `p_t - 1` is exactly 0 in f32 whatever the other classes hold, so the
+//! target gradient vanishes while theirs stay positive. That happens when `s`
+//! is exactly 1.0, and also earlier: `lse` is rounded at the spacing of `m`
+//! (about 1.9e-6 at a logit of 20), so an `ln(s)` below half of it is lost and
+//! `p_t` is 1 while `s` is still above 1.0. Such a row (and only such a row,
+//! with `so > 0`) takes the target-excluded form instead, with `S = so`: loss
+//! `ln(1 + S)`, target gradient `-S / (1 + S) * scale'`, every other class
+//! `exp(logit - m) / (1 + S) * scale'`. Every other row is the standard form
+//! above, bit for bit. The switch is this kernel's own zero-gradient condition
+//! (the CPU, Metal and wgpu forms divide by the sum, so theirs is `sum == 1.0`).
 //!
 //! Scratch is bounded by the chunk: `[n, chunk]` logits and `[n]` row state.
 //! K1's GEMMs take buffer views, so the head chunk is read from `W` and the
@@ -74,7 +88,7 @@ const SOURCE: &str = concat!(
 // One block per row n of a [n_rows, width] chunk (row stride ld) of the
 // vocabulary columns [v0, v0 + width). first != 0 on the chunk at v0 = 0.
 extern "C" __global__ void qd_ce_lse_update_f32(
-    const float* logits, float* m, float* s, float* tlogit, const unsigned int* targets,
+    const float* logits, float* m, float* s, float* so, float* tlogit, const unsigned int* targets,
     unsigned long long n_rows, unsigned long long width, unsigned long long ld,
     unsigned long long v0, int first)
 {
@@ -91,16 +105,22 @@ extern "C" __global__ void qd_ce_lse_update_f32(
     mx = qd_block_max(mx, scratch);
     const float m_old = first ? mx : m[n];
     const float m_new = fmaxf(m_old, mx);
+    const unsigned long long t = targets[n];
     float acc = 0.0f;
+    float acc_other = 0.0f;
     for (unsigned long long c = threadIdx.x; c < width; c += blockDim.x) {
-        acc = acc + qd_exp_nonpos(row[c] - m_new);
+        const float e = qd_exp_nonpos(row[c] - m_new);
+        acc = acc + e;
+        acc_other = acc_other + (v0 + c == t ? 0.0f : e);
     }
     acc = qd_block_sum(acc, scratch);
+    acc_other = qd_block_sum(acc_other, scratch);
     if (threadIdx.x == 0) {
         const float carried = first ? 0.0f : s[n] * qd_exp_nonpos(m_old - m_new);
+        const float carried_other = first ? 0.0f : so[n] * qd_exp_nonpos(m_old - m_new);
         s[n] = carried + acc;
+        so[n] = carried_other + acc_other;
         m[n] = m_new;
-        const unsigned long long t = targets[n];
         if (t >= v0 && t - v0 < width) {
             tlogit[n] = row[t - v0];
         }
@@ -108,9 +128,14 @@ extern "C" __global__ void qd_ce_lse_update_f32(
 }
 
 // logits[n, c] = (exp(logits[n, c] - lse[n]) - [v0 + c == target]) * scale,
-// lse = m + log(s) from the completed first walk.
+// lse = m + log(s) from the completed first walk. A row whose target logit is
+// its maximum m with exp(tlogit - lse) exactly 1.0f (the standard target
+// gradient is then exactly 0) and another class (so > 0) is the
+// target-excluded form instead: with S = so, (exp(logits[n, c] - m) / (1 + S))
+// * scale, and -(S / (1 + S)) * scale at the target.
 extern "C" __global__ void qd_ce_softmax_grad_f32(
-    float* logits, const float* m, const float* s, const unsigned int* targets,
+    float* logits, const float* m, const float* s, const float* so, const float* tlogit,
+    const unsigned int* targets,
     unsigned long long n_rows, unsigned long long width, unsigned long long ld,
     unsigned long long v0, float scale)
 {
@@ -118,13 +143,21 @@ extern "C" __global__ void qd_ce_softmax_grad_f32(
     QD_GRID_STRIDE(i, total) {
         const unsigned long long n = i / width;
         const unsigned long long c = i - n * width;
-        const float lse = m[n] + qd_log(s[n]);
         const unsigned long long at = n * ld + c;
-        float p = qd_exp_nonpos(logits[at] - lse);
-        if (v0 + c == (unsigned long long)targets[n]) {
-            p = p - 1.0f;
+        const bool is_target = v0 + c == (unsigned long long)targets[n];
+        const float lse = m[n] + qd_log(s[n]);
+        if (tlogit[n] == m[n] && qd_exp_nonpos(tlogit[n] - lse) == 1.0f && so[n] > 0.0f) {
+            const float one_plus = 1.0f + so[n];
+            const float g = is_target ? -(so[n] / one_plus)
+                                      : qd_exp_nonpos(logits[at] - m[n]) / one_plus;
+            logits[at] = g * scale;
+        } else {
+            float p = qd_exp_nonpos(logits[at] - lse);
+            if (is_target) {
+                p = p - 1.0f;
+            }
+            logits[at] = p * scale;
         }
-        logits[at] = p * scale;
     }
 }
 "#
@@ -302,14 +335,38 @@ pub struct CeOutput {
     pub per_row: Vec<f64>,
 }
 
-/// The per-row losses and their reduction from the walk's `(m, s, tlogit)`,
-/// in f64 as tessl forms them; a non-finite row is refused, naming it.
-pub fn losses(plan: &CeRowsPlan, m: &[f32], s: &[f32], t: &[f32]) -> Result<CeOutput, CudaError> {
+/// Whether a row's walk state is a collapsed row: the target's logit `t` is the
+/// maximum `m` and the kernel's own `p_t = exp(t - (m + ln(s)))` is exactly
+/// 1.0, so the standard form's target gradient is exactly 0 (this includes
+/// `s == 1.0`, and rows where `ln(s)` is lost in rounding `m + ln(s)`), and the
+/// target-excluded sum `so` is positive (a one-class row, or one whose other
+/// terms all underflowed, keeps the standard form's zeros). The device kernel
+/// tests the same three things through the same twins of `exp` and `log`, so
+/// the loss and the gradient switch on the same rows.
+pub fn collapsed(m: f32, s: f32, so: f32, t: f32) -> bool {
+    t == m && exp_nonpos_f32(t - (m + log_f32(s))) == 1.0 && so > 0.0
+}
+
+/// The per-row losses and their reduction from the walk's `(m, s, so,
+/// tlogit)`, in f64 as tessl forms them (`ln(1 + so)` for a [`collapsed`]
+/// row); a non-finite row is refused, naming it.
+pub fn losses(
+    plan: &CeRowsPlan,
+    (m, s, so): (&[f32], &[f32], &[f32]),
+    t: &[f32],
+) -> Result<CeOutput, CudaError> {
     let per_row: Vec<f64> = m
         .iter()
         .zip(s)
+        .zip(so)
         .zip(t)
-        .map(|((&m, &s), &t)| f64::from(m) + f64::from(s).ln() - f64::from(t))
+        .map(|(((&m, &s), &so), &t)| {
+            if collapsed(m, s, so, t) {
+                f64::from(so).ln_1p()
+            } else {
+                f64::from(m) + f64::from(s).ln() - f64::from(t)
+            }
+        })
         .collect();
     if let Some(i) = per_row.iter().position(|l| !l.is_finite()) {
         return Err(CudaError::invalid(
@@ -329,7 +386,7 @@ pub fn losses(plan: &CeRowsPlan, m: &[f32], s: &[f32], t: &[f32]) -> Result<CeOu
 pub fn lse_update_mirror(
     logits: &[f32],
     (n_rows, width): (usize, usize),
-    (m, s, tlogit): (&mut [f32], &mut [f32], &mut [f32]),
+    (m, s, so, tlogit): (&mut [f32], &mut [f32], &mut [f32], &mut [f32]),
     targets: &[u32],
     (v0, first): (usize, bool),
 ) {
@@ -339,15 +396,28 @@ pub fn lse_update_mirror(
         let mx = row_max(threads, width, |c| row[c]);
         let m_old = if first { mx } else { m[n] };
         let m_new = m_old.max(mx);
+        let t = targets[n] as usize;
         let acc = row_sum(threads, width, |c| exp_nonpos_f32(row[c] - m_new));
+        let acc_other = row_sum(threads, width, |c| {
+            if v0 + c == t {
+                0.0
+            } else {
+                exp_nonpos_f32(row[c] - m_new)
+            }
+        });
         let carried = if first {
             0.0
         } else {
             s[n] * exp_nonpos_f32(m_old - m_new)
         };
         s[n] = carried + acc;
+        let carried_other = if first {
+            0.0
+        } else {
+            so[n] * exp_nonpos_f32(m_old - m_new)
+        };
+        so[n] = carried_other + acc_other;
         m[n] = m_new;
-        let t = targets[n] as usize;
         if t >= v0 && t - v0 < width {
             tlogit[n] = row[t - v0];
         }
@@ -358,17 +428,29 @@ pub fn lse_update_mirror(
 pub fn softmax_grad_mirror(
     logits: &mut [f32],
     (n_rows, width): (usize, usize),
-    (m, s): (&[f32], &[f32]),
+    (m, s, so, tlogit): (&[f32], &[f32], &[f32], &[f32]),
     targets: &[u32],
     v0: usize,
     factor: f32,
 ) {
     for n in 0..n_rows {
         let lse = m[n] + log_f32(s[n]);
+        let collapsed = collapsed(m[n], s[n], so[n], tlogit[n]);
+        let one_plus = 1.0 + so[n];
         for c in 0..width {
             let at = n * width + c;
+            let is_target = v0 + c == targets[n] as usize;
+            if collapsed {
+                let g = if is_target {
+                    -(so[n] / one_plus)
+                } else {
+                    exp_nonpos_f32(logits[at] - m[n]) / one_plus
+                };
+                logits[at] = g * factor;
+                continue;
+            }
             let mut p = exp_nonpos_f32(logits[at] - lse);
-            if v0 + c == targets[n] as usize {
+            if is_target {
                 p -= 1.0;
             }
             logits[at] = p * factor;
@@ -409,7 +491,12 @@ pub fn ce_rows_mirror(
             hr[i * hid + c] = h[plan.h.at(r as usize, c)];
         }
     }
-    let (mut m, mut s, mut t) = (vec![0.0f32; n], vec![0.0f32; n], vec![0.0f32; n]);
+    let (mut m, mut s, mut so, mut t) = (
+        vec![0.0f32; n],
+        vec![0.0f32; n],
+        vec![0.0f32; n],
+        vec![0.0f32; n],
+    );
     let logits_of = |v0: usize, wd: usize| -> Result<(Vec<f32>, &[f32]), CudaError> {
         let wc = &w[v0 * hid..(v0 + wd) * hid];
         let shape = GemmShape::new(n, wd, hid)?;
@@ -425,12 +512,12 @@ pub fn ce_rows_mirror(
         lse_update_mirror(
             &logits,
             (n, wd),
-            (&mut m, &mut s, &mut t),
+            (&mut m, &mut s, &mut so, &mut t),
             targets,
             (v0, v0 == 0),
         );
     }
-    let out = losses(plan, &m, &s, &t)?;
+    let out = losses(plan, (&m, &s, &so), &t)?;
     let Some(scale) = grad_scale else {
         return Ok(CeMirror {
             out,
@@ -445,7 +532,7 @@ pub fn ce_rows_mirror(
     for (v0, wd) in plan.chunks() {
         let (v0, wd) = (u(v0), u(wd));
         let (mut logits, wc) = logits_of(v0, wd)?;
-        softmax_grad_mirror(&mut logits, (n, wd), (&m, &s), targets, v0, factor);
+        softmax_grad_mirror(&mut logits, (n, wd), (&m, &s, &so, &t), targets, v0, factor);
         let prev = (v0 != 0).then_some(dh.as_slice());
         dh = gemm_ffma_f32(
             GemmLayout::Nn,
@@ -474,10 +561,10 @@ pub fn ce_rows_mirror(
 
 /// Elements of device scratch one call holds for `plan`, the bound the
 /// workspace and the per-call buffers stay within: logits at each width, the
-/// gathered rows and the row state.
+/// gathered rows and the row state `(m, s, so, tlogit)`.
 pub fn scratch_elements(plan: &CeRowsPlan) -> u64 {
     let widths: u64 = plan.widths().into_iter().flatten().sum();
-    widths * plan.n + plan.n * plan.hidden + 3 * plan.n
+    widths * plan.n + plan.n * plan.hidden + 4 * plan.n
 }
 
 /// Device bytes the K10 walk used to move through K0's `deliver` before its
@@ -508,7 +595,7 @@ mod tests {
         assert_eq!(widths, 8192 + 2560);
         assert_eq!(
             scratch_elements(&p),
-            widths * 4 + 4 * 2048 + 3 * 4,
+            widths * 4 + 4 * 2048 + 4 * 4,
             "no [chunk, H] weight or dW scratch"
         );
     }
@@ -606,9 +693,10 @@ mod tests {
     #[test]
     fn non_finite_losses_are_refused_by_row() {
         let p = plan(2, 8, 10, 4);
-        let e = losses(&p, &[1.0, f32::NAN], &[1.0, 1.0], &[0.0, 0.0]).unwrap_err();
+        let so = [0.0f32, 0.0];
+        let e = losses(&p, (&[1.0, f32::NAN], &[1.0, 1.0], &so), &[0.0, 0.0]).unwrap_err();
         assert!(e.to_string().contains("row 1"), "{e}");
-        assert!(losses(&p, &[1.0, 1.0], &[0.0, 1.0], &[0.0, 0.0]).is_err());
+        assert!(losses(&p, (&[1.0, 1.0], &[0.0, 1.0], &so), &[0.0, 0.0]).is_err());
     }
 
     #[test]
@@ -616,7 +704,8 @@ mod tests {
         assert!(SOURCE
             .contains("const float carried = first ? 0.0f : s[n] * qd_exp_nonpos(m_old - m_new);"));
         assert!(SOURCE.contains("const float lse = m[n] + qd_log(s[n]);"));
-        assert!(SOURCE.contains("acc = acc + qd_exp_nonpos(row[c] - m_new);"));
+        assert!(SOURCE.contains("acc = acc + e;"));
+        assert!(SOURCE.contains("const float e = qd_exp_nonpos(row[c] - m_new);"));
         assert!(
             !SOURCE.contains("expf("),
             "libdevice expf is not host-reproducible"

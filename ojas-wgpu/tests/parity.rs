@@ -577,6 +577,403 @@ fn cross_entropy_matches_cpu() {
     assert!(matches!(r, Err(OjasError::NonFinite { .. })), "got {r:?}");
 }
 
+// ---- Softmax Collapse (ft-f40eeed8) -------------------------------------
+//
+// A row keeps the standard form bit for bit unless its target logit is the
+// row maximum and the f32 sum of `e^(z - max)` is exactly 1.0; only those
+// rows take the target-excluded form (S = sum over j != t of e^(z_j - z_t),
+// loss log1p(S), target gradient -S / (1 + S) / valid, others e^(z_j - z_t) /
+// (1 + S) / valid). The oracle is f64, forms no `p - 1`, and sums in another
+// order than the kernel's tree, so rows are held to it only where the f32 sum
+// is certain to be 1.0 (S below 2^-25).
+//
+// WGSL's `exp` is only specified to 3 + 2|x| ulps, so a row's gate is that
+// bound at the largest exponent argument it uses: every gradient is one `exp`
+// divided by `1 + S` (S is a weighted mean of such exps, so it carries at most
+// the largest error), and the loss is `log1p(S)`, which has S's relative
+// error.
+
+/// `|got - want|` in units of the f32 spacing at `want`.
+fn cliff_ulps(got: f32, want: f64) -> f64 {
+    let w = want as f32;
+    let spacing = if w == 0.0 || !w.is_normal() {
+        f64::from(f32::from_bits(1))
+    } else {
+        let next = f32::from_bits(w.abs().to_bits() + 1);
+        f64::from(next) - f64::from(w.abs())
+    };
+    (f64::from(got) - want).abs() / spacing
+}
+
+/// `(loss, gradient, S)` of one row at divisor `denom`, in f64, from the
+/// target-excluded expression.
+fn cliff_oracle(row: &[f32], target: usize, denom: f64) -> (f64, Vec<f64>, f64) {
+    let zt = f64::from(row[target]);
+    let e: Vec<f64> = row
+        .iter()
+        .enumerate()
+        .map(|(j, &v)| {
+            if j == target {
+                0.0
+            } else {
+                (f64::from(v) - zt).exp()
+            }
+        })
+        .collect();
+    let s: f64 = e.iter().sum();
+    let grad = e
+        .iter()
+        .enumerate()
+        .map(|(j, &ej)| {
+            if j == target {
+                -s / (1.0 + s) / denom
+            } else {
+                ej / (1.0 + s) / denom
+            }
+        })
+        .collect();
+    (s.ln_1p(), grad, s)
+}
+
+/// The ulp gate of a row: WGSL's `exp` bound at the largest argument, plus
+/// the division and rounding.
+fn cliff_gate(row: &[f32], target: usize) -> f64 {
+    let zt = row[target];
+    let worst = row
+        .iter()
+        .enumerate()
+        .filter(|(j, _)| *j != target)
+        .fold(0.0f32, |m, (_, &v)| m.max((v - zt).abs()));
+    4.0 + 2.0 * f64::from(worst)
+}
+
+/// A row of `vocab` classes in `[-3, 3)` on a 2^-12 grid, with the target
+/// `margin` above the largest other logit.
+fn margin_row(vocab: usize, target: usize, margin: f32) -> Vec<f32> {
+    let mut state = 0x2545_f491u32 ^ (vocab as u32) << 8 ^ target as u32;
+    let mut row: Vec<f32> = (0..vocab)
+        .map(|_| {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let x = (state >> 8) as f32 / (1u32 << 24) as f32 * 6.0 - 3.0;
+            (x * 4096.0).round() / 4096.0
+        })
+        .collect();
+    let max_other = row
+        .iter()
+        .enumerate()
+        .filter(|(j, _)| *j != target)
+        .fold(f32::NEG_INFINITY, |m, (_, &v)| m.max(v));
+    row[target] = max_other + margin;
+    row
+}
+
+fn fnv(values: impl IntoIterator<Item = u32>) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    for v in values {
+        for byte in v.to_le_bytes() {
+            h ^= u64::from(byte);
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    h
+}
+
+/// Loss and `[rows, vocab]` gradient on the device.
+fn device_ce(
+    logits: &[f32],
+    vocab: usize,
+    targets: &[u32],
+    ignore: Option<u32>,
+) -> (f32, Vec<f32>) {
+    let rows = targets.len();
+    let gl = up(&Tensor::from_f32(logits, &[rows, vocab], host_budget()).unwrap());
+    let gt = up(&host_u32(targets, &[rows]));
+    let loss = down(&gpu().cross_entropy_mean_forward(&gl, &gt, ignore).unwrap())[0];
+    let grad = down(&gpu().cross_entropy_mean_backward(&gl, &gt, ignore).unwrap());
+    (loss, grad)
+}
+
+/// Loss and gradient on the CPU Exact reference.
+fn cpu_ce(logits: &[f32], vocab: usize, targets: &[u32], ignore: Option<u32>) -> (f32, Vec<f32>) {
+    let c = cpu();
+    let rows = targets.len();
+    let lt = Tensor::from_f32(logits, &[rows, vocab], host_budget()).unwrap();
+    let tt = host_u32(targets, &[rows]);
+    let loss = c
+        .cross_entropy_mean_forward(&lt, &tt, ignore)
+        .unwrap()
+        .to_f32_vec()
+        .unwrap()[0];
+    let grad = c
+        .cross_entropy_mean_backward(&lt, &tt, ignore)
+        .unwrap()
+        .to_f32_vec()
+        .unwrap();
+    (loss, grad)
+}
+
+/// A switched row: nonzero target gradient, the row summing to 0 within a few
+/// ulps of its peak, and loss and gradients within the row's gate.
+fn assert_switched(what: &str, loss: f32, grad: &[f32], row: &[f32], target: usize, denom: f64) {
+    let (want_loss, want_grad, s) = cliff_oracle(row, target, denom);
+    let gate = cliff_gate(row, target);
+    assert!(
+        grad[target] < 0.0,
+        "{what}: target gradient collapsed to {} (S {s:e})",
+        grad[target]
+    );
+    let l = cliff_ulps(loss, want_loss);
+    assert!(
+        l <= gate,
+        "{what}: loss {loss:e} vs log1p(S) {want_loss:e} ({l} ulps, gate {gate})"
+    );
+    assert_row(what, grad, &want_grad, gate);
+}
+
+fn assert_row(what: &str, grad: &[f32], want: &[f64], gate: f64) {
+    for (j, (&got, &w)) in grad.iter().zip(want).enumerate() {
+        let u = cliff_ulps(got, w);
+        assert!(
+            u <= gate,
+            "{what}: grad[{j}] {got:e} vs {w:e} ({u} ulps, gate {gate})"
+        );
+    }
+    let sum: f64 = grad.iter().map(|g| f64::from(*g)).sum();
+    let peak = grad.iter().fold(0.0f32, |m, g| m.max(g.abs()));
+    let spacing = f64::from(f32::from_bits(peak.to_bits() + 1)) - f64::from(peak);
+    let sum_gate = gate + (grad.len() as f64).sqrt();
+    assert!(
+        sum.abs() <= sum_gate * spacing,
+        "{what}: row sums to {sum:e}, more than {sum_gate:.1} ulps of the peak {peak:e}"
+    );
+}
+
+/// `[9, -9, -9]` at target 0, margin 18, with an ignored row after it so the
+/// mean divisor is 1.
+#[test]
+fn a_row_past_the_fp32_cliff_keeps_a_nonzero_target_gradient() {
+    let row = [9.0f32, -9.0, -9.0];
+    let (loss, grad) = device_ce(&[9.0, -9.0, -9.0, 1.0, 2.0, 3.0], 3, &[0, 99], Some(99));
+    assert_switched("cliff", loss, &grad[..3], &row, 0, 1.0);
+    assert!(grad[3..].iter().all(|g| *g == 0.0), "ignored row {grad:?}");
+}
+
+const SWEEP_VOCAB: usize = 301;
+const SWEEP_TARGETS: [usize; 8] = [0, 7, 8, 63, 150, 296, 299, 300];
+const SWEEP_MARGINS: [f32; 7] = [16.0, 17.0, 18.0, 20.0, 25.0, 30.0, 40.0];
+
+/// Margins 16 to 40 at a 301-class vocabulary with the target at lane 0,
+/// lane 7, a chunk edge, mid-row, and in the tail: every row keeps a nonzero
+/// target gradient, and each row whose sum is certain to be 1.0 meets the f64
+/// oracle at its gate.
+#[test]
+fn the_margin_sweep_across_the_cliff_keeps_the_target_gradient() {
+    let mut flat = Vec::new();
+    let mut targets = Vec::new();
+    let mut rows = Vec::new();
+    for &t in &SWEEP_TARGETS {
+        for &margin in &SWEEP_MARGINS {
+            let row = margin_row(SWEEP_VOCAB, t, margin);
+            flat.extend_from_slice(&row);
+            targets.push(t as u32);
+            rows.push((t, row, margin));
+        }
+    }
+    let denom = rows.len() as f64;
+    let (_, grad) = device_ce(&flat, SWEEP_VOCAB, &targets, None);
+    let mut certain = Vec::new();
+    for (r, (t, row, margin)) in rows.iter().enumerate() {
+        let g = &grad[r * SWEEP_VOCAB..(r + 1) * SWEEP_VOCAB];
+        let (_, want, s) = cliff_oracle(row, *t, denom);
+        assert!(
+            g[*t] < 0.0,
+            "target {t} margin {margin}: target gradient {}",
+            g[*t]
+        );
+        if s < 2.0f64.powi(-25) {
+            certain.push(r);
+            assert_row(
+                &format!("target {t} margin {margin}"),
+                g,
+                &want,
+                cliff_gate(row, *t),
+            );
+        }
+    }
+    assert!(
+        certain.len() >= 24,
+        "only {} rows were certain to switch",
+        certain.len()
+    );
+    // The mean loss of switched rows alone is the mean of their log1p(S): a
+    // mixed batch would carry the standard form's rounding of the rows near
+    // the cliff.
+    let flat: Vec<f32> = certain.iter().flat_map(|&r| rows[r].1.clone()).collect();
+    let targets: Vec<u32> = certain.iter().map(|&r| rows[r].0 as u32).collect();
+    let (loss, _) = device_ce(&flat, SWEEP_VOCAB, &targets, None);
+    let want = certain
+        .iter()
+        .map(|&r| cliff_oracle(&rows[r].1, rows[r].0, 1.0).0)
+        .sum::<f64>()
+        / certain.len() as f64;
+    let gate = certain
+        .iter()
+        .map(|&r| cliff_gate(&rows[r].1, rows[r].0))
+        .fold(0.0f64, f64::max);
+    let u = cliff_ulps(loss, want);
+    assert!(
+        u <= gate,
+        "mean loss {loss:e} vs {want:e} ({u} ulps, gate {gate})"
+    );
+}
+
+/// Two-class rows straddling the cliff, target at either lane, margins 14 to
+/// 40, against the CPU Exact tier. The one other class makes `S = e^(z_o -
+/// z_t)` a single `exp`, so wherever the device's `exp` and the CPU's agree
+/// the sums agree, and then every gradient bit must agree, the target's
+/// included. Past the cliff the target gradient is the exact negation of the
+/// other class's on any backend (`1 + S` is 1.0), so the row sums to 0. The
+/// count of rows where the two `exp`s agreed is printed.
+#[test]
+fn two_class_rows_straddling_the_cliff_agree_with_the_cpu_where_the_sums_agree() {
+    let mut flat = Vec::new();
+    let mut targets = Vec::new();
+    let mut keys = Vec::new();
+    for target in [0usize, 1] {
+        for margin in 14..=40 {
+            let mut row = [0.0f32; 2];
+            row[target] = margin as f32;
+            flat.extend_from_slice(&row);
+            targets.push(target as u32);
+            keys.push((target, margin));
+        }
+    }
+    let (_, gpu_grad) = device_ce(&flat, 2, &targets, None);
+    let (_, cpu_grad) = cpu_ce(&flat, 2, &targets, None);
+    let mut agreed = 0;
+    for (r, &(target, margin)) in keys.iter().enumerate() {
+        let other = 1 - target;
+        let (g, c) = (&gpu_grad[2 * r..2 * r + 2], &cpu_grad[2 * r..2 * r + 2]);
+        assert!(g[target] < 0.0, "target {target} margin {margin}: {g:?}");
+        if g[other].to_bits() == c[other].to_bits() {
+            agreed += 1;
+            assert_eq!(
+                g[target].to_bits(),
+                c[target].to_bits(),
+                "target {target} margin {margin}: the sums agree, the target gradient does not ({g:?} vs {c:?})"
+            );
+        }
+        if margin >= 18 {
+            assert_eq!(
+                g[target].to_bits(),
+                (-g[other]).to_bits(),
+                "target {target} margin {margin}: the row does not sum to 0 ({g:?})"
+            );
+            // Both tiers switch here (1 + S is 1.0), so the target gradient is
+            // the single `exp` over the divisor; the device's is within its
+            // own bound, 3 + 2|x| ulps with `x = -margin`, of the CPU's.
+            let u = cliff_ulps(g[target], f64::from(c[target]));
+            let gate = 4.0 + 2.0 * f64::from(margin);
+            assert!(
+                u <= gate,
+                "target {target} margin {margin}: {} vs cpu {} ({u} ulps, gate {gate})",
+                g[target],
+                c[target]
+            );
+        }
+    }
+    // WGSL's `exp` is only specified to 3 + 2|x| ulps, so it need not match the
+    // CPU's correctly rounded one bit for bit: where it does, the sums agree and
+    // the check above holds exactly; where it does not (every row on the
+    // adapter that recorded this), the ulp bound and the exact negation stand.
+    eprintln!(
+        "exps agreed with the CPU on {agreed} of {} rows on {}",
+        keys.len(),
+        gpu().context().adapter_name()
+    );
+}
+
+/// A one-class row has no other class: loss and gradient are +0.0, as the
+/// standard form's `x - x` gives.
+#[test]
+fn a_one_class_row_keeps_positive_zero() {
+    let (loss, grad) = device_ce(&[5.0, -3.0, 0.0], 1, &[0, 0, 0], None);
+    assert_eq!(loss.to_bits(), 0);
+    assert!(grad.iter().all(|g| g.to_bits() == 0), "{grad:?}");
+}
+
+/// A batch the digests cover: vocabulary, flat logits, targets and the ignored id.
+type Batch = (usize, Vec<f32>, Vec<u32>, Option<u32>);
+
+/// Rows the standard form leaves alone (none has its target at the maximum
+/// with a sum of 1.0, in any summation order): ties at the maximum, a target
+/// far below it, and moderate margins at vocabularies 3 and 40, and margins
+/// to 13 at 301 classes. Their loss and gradient bits equal the digests
+/// recorded from af8bd9c on `RECORDED_ADAPTER`; on another adapter the bits
+/// are not asserted and the test says so.
+fn ordinary_batches() -> Vec<Batch> {
+    let mut batches = Vec::new();
+    for vocab in [3usize, 40] {
+        let mut flat = Vec::new();
+        let mut targets = Vec::new();
+        for &target in &[0usize, 1, vocab - 1] {
+            for &margin in &[-6.0f32, -1.0, 0.0, 3.0, 9.0, 13.0] {
+                flat.extend(margin_row(vocab, target, margin));
+                targets.push(target as u32);
+            }
+        }
+        batches.push((vocab, flat, targets, None));
+    }
+    let mut flat = Vec::new();
+    let mut targets = Vec::new();
+    for &target in &SWEEP_TARGETS {
+        for &margin in &[-3.0f32, 0.0, 6.0, 10.0, 12.0, 13.0] {
+            let row = margin_row(SWEEP_VOCAB, target, margin);
+            let (_, _, s) = cliff_oracle(&row, target, 1.0);
+            assert!(
+                s > SWEEP_VOCAB as f64 * 2.0f64.powi(-23),
+                "margin {margin} is near the cliff"
+            );
+            flat.extend(row);
+            targets.push(target as u32);
+        }
+    }
+    batches.push((SWEEP_VOCAB, flat, targets, None));
+    let mut flat = vec![9.0f32, 9.0, -30.0, 9.0, -30.0, 9.0, 9.0, 9.0, 9.0];
+    let mut targets = vec![0u32, 0, 2];
+    flat.extend([30.0f32, -30.0, 5.0, -2.0, -40.0, 40.0]);
+    targets.extend([2u32, 0]);
+    flat.extend([1.0f32, 2.0, 3.0, 50.0, -50.0, 0.0]);
+    targets.extend([2u32, 7]);
+    batches.push((3, flat, targets, Some(7)));
+    batches
+}
+
+/// The adapter the digests below were recorded on, and the digests: `[loss,
+/// gradient]` per batch.
+const RECORDED_ADAPTER: &str = "Apple M5 Pro";
+const ORDINARY: [[u64; 2]; 4] = [
+    [0x81bc81cabd88d95f, 0xf2104b756aa59e72],
+    [0xb2e5c827cac86aac, 0x7276cc0eadcff5d1],
+    [0x60fb318f4316eb19, 0xfccd2717aab78244],
+    [0xc1fe72ea5afff431, 0x9690e68da8a1b7c4],
+];
+
+#[test]
+fn ordinary_rows_are_bit_identical_to_the_commit_before() {
+    let name = gpu().context().adapter_name().to_string();
+    for (b, (vocab, flat, targets, ignore)) in ordinary_batches().into_iter().enumerate() {
+        let (loss, grad) = device_ce(&flat, vocab, &targets, ignore);
+        let got = [fnv([loss.to_bits()]), fnv(grad.iter().map(|g| g.to_bits()))];
+        eprintln!("ORDINARY adapter {name:?} batch {b} {got:#018x?}");
+        if name == RECORDED_ADAPTER {
+            assert_eq!(got, ORDINARY[b], "batch {b}: loss and gradient digests");
+        } else {
+            eprintln!("ordinary-rows digests not asserted: recorded on {RECORDED_ADAPTER:?}, running on {name:?}");
+        }
+    }
+}
+
 #[test]
 fn clip_and_adam_refuse_shared_or_host_targets_without_writing() {
     let g = gpu();

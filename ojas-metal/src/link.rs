@@ -1258,7 +1258,7 @@ impl LceGeom {
     }
 
     /// Elements of device scratch: the logits tile, per-row (max, sum,
-    /// target logit), the loss rows and their reduction, and the GEMM
+    /// target logit, target-excluded sum), the loss rows and their reduction, and the GEMM
     /// destination of each gradient asked for (`[rt, d]` for the input's,
     /// `[ct, d]` for the weight's); plus any staging copies.
     pub(crate) fn scratch(&self) -> Option<usize> {
@@ -1267,7 +1267,7 @@ impl LceGeom {
             total = total.checked_add(x)?;
             Some(())
         };
-        add(self.rt.checked_mul(3)?)?;
+        add(self.rt.checked_mul(4)?)?;
         add(self.n)?;
         add(1 + reduce_groups(self.n))?;
         let x_tile = self.rt.checked_mul(self.d)?;

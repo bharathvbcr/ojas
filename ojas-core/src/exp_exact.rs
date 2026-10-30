@@ -90,6 +90,33 @@ pub fn log_sum_exp_exact(max: f32, sum: f32) -> f32 {
     (f64::from(max) + ln_wide(f64::from(sum))) as f32
 }
 
+/// `ln(1 + x)` for `x` in `[0, 1]`, rounded once to `f32`, with no libm call:
+/// `2 atanh(z)`, `z = x / (2 + x) <= 1/3`, by its odd series in `f64`. The
+/// 24 terms leave out `z^49/49 < 2^-77` relative, so the result is within
+/// `f64` rounding of `ln(1 + x)` before the single rounding to `f32`; like
+/// [`log_sum_exp_exact`] it is not claimed to be correctly rounded, and the
+/// bits are the same on every platform. `x == 0` is `0`, and a tiny `x` is
+/// returned unchanged (`2z = x`) where `1 + x` would have lost it. The domain
+/// is the target-excluded sum of a softmax row whose target gradient the
+/// standard form rounds to 0, below `vocab * 2^-24`; a `x` outside `[0, 1]`
+/// or NaN gives NaN rather than a series that has not converged. This is a
+/// different reduction from [`ln_wide`]'s (a small argument, no exponent
+/// split), so it is not folded into it.
+pub fn log1p_exact(x: f32) -> f32 {
+    if !(0.0..=1.0).contains(&x) {
+        return f32::NAN;
+    }
+    let x = f64::from(x);
+    let z = x / (2.0 + x);
+    let z2 = z * z;
+    let (mut term, mut sum) = (z, 0.0f64);
+    for k in 0..24 {
+        sum += term / f64::from(2 * k + 1);
+        term *= z2;
+    }
+    (2.0 * sum) as f32
+}
+
 /// `ln x` for a positive normal `f64` (every positive finite `f32` is one):
 /// `x = m · 2^e` with `m` in `[√½, √2)`, then
 /// `ln m = 2·atanh(z)`, `z = (m - 1)/(m + 1)`, `|z| <= 0.1716`, by its odd
@@ -328,6 +355,41 @@ mod tests {
                 (want == 0.0 && got == 0.0) || err < 1.0 / (1u64 << 50) as f64,
                 "ln({x:e}) = {got:e}, platform {want:e}"
             );
+        }
+    }
+
+    #[test]
+    fn log1p_exact_matches_f64_within_one_ulp_on_zero_to_one() {
+        assert_eq!(log1p_exact(0.0).to_bits(), 0);
+        assert_eq!(log1p_exact(-0.0).to_bits(), 0);
+        // A tiny x comes back unchanged, down to the subnormals.
+        for x in [1.0e-30f32, 1.0e-20, f32::MIN_POSITIVE, f32::from_bits(1)] {
+            assert_eq!(log1p_exact(x), x, "log1p({x:e})");
+        }
+        let check = |x: f32| {
+            let got = log1p_exact(x);
+            let want = f64::from(x).ln_1p() as f32;
+            assert!(
+                got.to_bits().abs_diff(want.to_bits()) <= 1,
+                "log1p({x:e}) = {got:e}, f64 {want:e}"
+            );
+        };
+        // Sums of the size a vocabulary of 50k classes leaves (2^-24 * V),
+        // the powers of two between 2^-60 and 1, and a grid over the domain.
+        for k in 0..=60 {
+            check(2.0f32.powi(-k));
+            if k >= 1 {
+                check(2.0f32.powi(-k) * 1.37);
+            }
+        }
+        for i in 0..=20_000u32 {
+            check(i as f32 / 20_000.0);
+        }
+        check(50_304.0 * 2.0f32.powi(-24));
+        check(1.0);
+        check(f32::from_bits(1.0f32.to_bits() - 1));
+        for bad in [-0.5f32, -f32::MIN_POSITIVE, 1.5, f32::INFINITY, f32::NAN] {
+            assert!(log1p_exact(bad).is_nan(), "log1p({bad:e})");
         }
     }
 

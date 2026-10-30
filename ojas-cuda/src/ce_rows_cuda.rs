@@ -5,14 +5,14 @@
 //!
 //! [`CeWorkspace`] holds every buffer one call needs, sized by the plan and
 //! bounded by [`crate::ce_rows::scratch_elements`]: the gathered rows, the row state
-//! `(m, s, tlogit)`, the targets, and per chunk width (the full width, and
+//! `(m, s, so, tlogit)`, the targets, and per chunk width (the full width, and
 //! the tail's when the vocabulary is not a multiple of the chunk) a logits
 //! block. K1's GEMMs take views, so the head chunk `W[v0..v0 + w]` is read in
 //! place and `dW[v0..v0 + w]` written in place: no weight or `dW` chunk is
 //! copied, as the host mirror already did.
 //!
 //! [`ce_rows`] **waits**: the per-row losses are formed in f64 on the host
-//! from the downloaded `(m, s, tlogit)`, as tessl does, and a non-finite row
+//! from the downloaded `(m, s, so, tlogit)`, as tessl does, and a non-finite row
 //! is refused **before** the gradient walk runs.
 
 use cudarc::driver::PushKernelArg;
@@ -42,6 +42,9 @@ pub struct CeWorkspace {
     hr: CudaBuffer<f32>,
     m: CudaBuffer<f32>,
     s: CudaBuffer<f32>,
+    /// The running sum over every class but the target: the collapsed-row
+    /// form's `S`.
+    so: CudaBuffer<f32>,
     t: CudaBuffer<f32>,
     targets: CudaBuffer<u32>,
     sets: Vec<ChunkScratch>,
@@ -66,6 +69,7 @@ impl CeWorkspace {
             hr: rt.alloc_zeros(n * hid, "ce_rows gathered rows")?,
             m: rt.alloc_zeros(n, "ce_rows m")?,
             s: rt.alloc_zeros(n, "ce_rows s")?,
+            so: rt.alloc_zeros(n, "ce_rows s excluding the target")?,
             t: rt.alloc_zeros(n, "ce_rows target logit")?,
             targets: rt.alloc_zeros(n, "ce_rows targets")?,
             sets,
@@ -80,7 +84,8 @@ impl CeWorkspace {
     /// f32 elements held: [`crate::ce_rows::scratch_elements`] of the plan.
     pub fn elements(&self) -> u64 {
         let set: usize = self.sets.iter().map(|c| c.logits.len()).sum();
-        let total = set + self.hr.len() + self.m.len() + self.s.len() + self.t.len();
+        let total =
+            set + self.hr.len() + self.m.len() + self.s.len() + self.so.len() + self.t.len();
         u64::try_from(total).unwrap_or(u64::MAX)
     }
 }
@@ -139,8 +144,9 @@ pub fn ce_rows(
     }
     let m = rt.download(&ws.m)?;
     let s = rt.download(&ws.s)?;
+    let so = rt.download(&ws.so)?;
     let t = rt.download(&ws.t)?;
-    let out = losses(&plan, &m, &s, &t)?;
+    let out = losses(&plan, (&m, &s, &so), &t)?;
     let Some(g) = grads else {
         return Ok(out);
     };
@@ -238,6 +244,7 @@ fn lse_update(
     b.arg(set.logits.slice())
         .arg(ws.m.slice_mut())
         .arg(ws.s.slice_mut())
+        .arg(ws.so.slice_mut())
         .arg(ws.t.slice_mut())
         .arg(ws.targets.slice())
         .arg(&n)
@@ -245,13 +252,14 @@ fn lse_update(
         .arg(&ld)
         .arg(&v0)
         .arg(&first);
-    // SAFETY: (const float* logits, float* m, float* s, float* tlogit, const
-    // unsigned int* targets, ull n_rows, ull width, ull ld, ull v0, int
-    // first); CeWorkspace::new sized every buffer from the plan (its fields
-    // are private), so logits is [n, wd] dense and m, s, tlogit, targets hold
-    // n; targets were checked below vocab on the host (check_rows). One block of
-    // ROW_THREADS per row; only thread 0 of block r writes m[r], s[r] and
-    // tlogit[r]. The four are distinct allocations.
+    // SAFETY: (const float* logits, float* m, float* s, float* so, float*
+    // tlogit, const unsigned int* targets, ull n_rows, ull width, ull ld, ull
+    // v0, int first); CeWorkspace::new sized every buffer from the plan (its
+    // fields are private), so logits is [n, wd] dense and m, s, so, tlogit,
+    // targets hold n; targets were checked below vocab on the host
+    // (check_rows). One block of ROW_THREADS per row; only thread 0 of block r
+    // writes m[r], s[r], so[r] and tlogit[r]. The five are distinct
+    // allocations.
     unsafe { b.launch(cfg(l)) }.map_err(|e| driver_error(CE_LSE_UPDATE, e))?;
     Ok(())
 }
@@ -273,17 +281,20 @@ fn softmax_grad(
     b.arg(set.logits.slice_mut())
         .arg(ws.m.slice())
         .arg(ws.s.slice())
+        .arg(ws.so.slice())
+        .arg(ws.t.slice())
         .arg(ws.targets.slice())
         .arg(&n)
         .arg(&wd)
         .arg(&ld)
         .arg(&v0)
         .arg(&factor);
-    // SAFETY: (float* logits, const float* m, const float* s, const unsigned
-    // int* targets, ull n_rows, ull width, ull ld, ull v0, float scale);
-    // logits is [n, wd] dense and m, s, targets hold n (CeWorkspace::new
-    // sized them from the plan). The grid strides over n * wd with one writer per logit, in
-    // place; logits is a distinct allocation from m, s and targets.
+    // SAFETY: (float* logits, const float* m, const float* s, const float* so,
+    // const float* tlogit, const unsigned int* targets, ull n_rows, ull width,
+    // ull ld, ull v0, float scale); logits is [n, wd] dense and m, s, so,
+    // tlogit, targets hold n (CeWorkspace::new sized them from the plan). The
+    // grid strides over n * wd with one writer per logit, in place; logits is
+    // a distinct allocation from m, s, so, tlogit and targets.
     unsafe { b.launch(cfg(l)) }.map_err(|e| driver_error(CE_SOFTMAX_GRAD, e))?;
     Ok(())
 }

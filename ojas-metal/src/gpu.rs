@@ -1734,22 +1734,51 @@ mod tests {
         let logits = gemm_nt(hidden, weight, rows, vocab, dim);
         let mut loss = 0.0f64;
         let mut d_logits = vec![0.0f32; rows * vocab];
-        let scale = 1.0f32 / rows as f32;
+        let scale = 1.0f64 / rows as f64;
         for r in 0..rows {
-            let row = &logits[r * vocab..(r + 1) * vocab];
-            let max = row.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-            let mut sum = 0.0f32;
-            let mut exp = vec![0.0f32; vocab];
-            for j in 0..vocab {
-                exp[j] = (row[j] - max).exp();
-                sum += exp[j];
-            }
+            let row: Vec<f64> = logits[r * vocab..(r + 1) * vocab]
+                .iter()
+                .map(|&z| f64::from(z))
+                .collect();
             let t = targets[r] as usize;
-            loss += f64::from(max + sum.ln() - row[t]);
+            // The target is left out of the sum, so no `p - 1` is formed and
+            // the target gradient is the exact negation of the others', however
+            // far the target leads. `lead` is how far the largest other logit
+            // leads the target (0 when none does); factoring `exp(lead)` out of
+            // `S = sum_{j != t} exp(z_j - z_t)` keeps every exponent at most 0.
+            // A one-class row has no other class: loss 0, gradient 0.
+            let Some(lead) = row
+                .iter()
+                .enumerate()
+                .filter(|(j, _)| *j != t)
+                .map(|(_, &z)| z - row[t])
+                .reduce(f64::max)
+            else {
+                continue;
+            };
+            let lead = lead.max(0.0);
+            let scaled = |j: usize| {
+                if j == t {
+                    0.0
+                } else {
+                    (row[j] - row[t] - lead).exp()
+                }
+            };
+            let s_scaled: f64 = (0..vocab).map(scaled).sum();
+            let denom = (-lead).exp() + s_scaled;
+            // loss = ln(1 + S) = lead + ln(exp(-lead) + S').
+            loss += if lead == 0.0 {
+                s_scaled.ln_1p()
+            } else {
+                lead + denom.ln()
+            };
             for j in 0..vocab {
-                let p = exp[j] / sum;
-                let one = if j == t { 1.0 } else { 0.0 };
-                d_logits[r * vocab + j] = (p - one) * scale;
+                let g = if j == t {
+                    -s_scaled / denom
+                } else {
+                    scaled(j) / denom
+                };
+                d_logits[r * vocab + j] = (g * scale) as f32;
             }
         }
         loss /= rows as f64;
