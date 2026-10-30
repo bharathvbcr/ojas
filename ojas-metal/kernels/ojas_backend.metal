@@ -1171,14 +1171,55 @@ inline float2 ce_merge(float2 a, float2 b)
     return float2(m, a.y * precise::exp(a.x - m) + b.y * precise::exp(b.x - m));
 }
 
+/// (m, s, so) of a log-sum-exp whose third component `so` is the same sum
+/// with the target's term left out: s = sum exp(x - m), so = the part of it
+/// over every class but the target. Merging with an empty side (m = -inf)
+/// leaves the other side unchanged. `s` is computed as ce_merge computes it.
+inline float3 ce_merge3(float3 a, float3 b)
+{
+    if (a.x == -INFINITY) return b;
+    if (b.x == -INFINITY) return a;
+    const float m = max(a.x, b.x);
+    return float3(
+        m,
+        a.y * precise::exp(a.x - m) + b.y * precise::exp(b.x - m),
+        a.z * precise::exp(a.x - m) + b.z * precise::exp(b.x - m));
+}
+
+/// ln(1 + x) for the small x >= 0 of a collapsed row's target-excluded sum,
+/// as 2 atanh(x / (2 + x)): the odd series to z^15, exact to f32 rounding for
+/// z <= 1/3. Metal has no log1p, and log(1 + x) for x below 2^-23 is 0.
+inline float ce_log1p(float x)
+{
+    const float z = precise::divide(x, 2.0f + x);
+    const float z2 = z * z;
+    float p = 1.0f / 15.0f;
+    p = p * z2 + 1.0f / 13.0f;
+    p = p * z2 + 1.0f / 11.0f;
+    p = p * z2 + 1.0f / 9.0f;
+    p = p * z2 + 1.0f / 7.0f;
+    p = p * z2 + 1.0f / 5.0f;
+    p = p * z2 + 1.0f / 3.0f;
+    p = p * z2 + 1.0f;
+    return 2.0f * z * p;
+}
+
 /// Cross-entropy in two passes over each row instead of five, with the
 /// finiteness checks folded in rather than run as separate passes:
 /// 1. every row, ignored or not, is read once: a NaN or infinity sets ST_IN,
 ///    and each lane keeps an online (max, sum of exp) that the threadgroup
-///    merges; the loss row is max + log(sum) - logit[target];
+///    merges, plus the same sum over every class but the target; the loss row
+///    is max + log(sum) - logit[target];
 /// 2. with `write_grad`, the gradient row (softmax / n_valid, minus
 ///    1 / n_valid at the target, the same arithmetic as before) is written,
 ///    and a value that is not finite sets ST_OUT.
+/// A row whose target gradient that form rounds to exactly 0 (Softmax
+/// Collapse: the target logit is the row maximum and the sum is exactly 1.0)
+/// and that has another class takes the target-excluded form instead, with S
+/// the sum over the other classes of exp(x - max): loss log1p(S), the target
+/// gradient -(S / (1 + S)) / n_valid and each other class
+/// (exp(x - max) / (1 + S)) / n_valid. Every other row is the form above, bit
+/// for bit.
 /// An ignored or out-of-range row writes loss 0 and a zero gradient row.
 /// n_valid, the rows neither ignored nor out of range, is counted on the
 /// host from its copy of the targets.
@@ -1197,7 +1238,7 @@ kernel void ojas_ce_fused(
     uint r [[threadgroup_position_in_grid]],
     uint lane [[thread_index_in_threadgroup]])
 {
-    threadgroup float2 sh[CE_TG];
+    threadgroup float3 sh[CE_TG];
     if (r >= rows) return;
     const uint t = targets[r];
     const bool skip = (has_ignore != 0u && t == ignore) || t >= vocab;
@@ -1205,6 +1246,7 @@ kernel void ojas_ce_fused(
     bool bad = false;
     float m = -INFINITY;
     float s = 0.0f;
+    float so = 0.0f;
     for (uint c = lane; c < vocab; c += CE_TG) {
         const float x = logits[base + c];
         if (!isfinite(x)) {
@@ -1212,10 +1254,14 @@ kernel void ojas_ce_fused(
             continue;
         }
         if (x > m) {
-            s = s * precise::exp(m - x) + 1.0f;
+            const float k = precise::exp(m - x);
+            s = s * k + 1.0f;
+            so = so * k + (c == t ? 0.0f : 1.0f);
             m = x;
         } else {
-            s += precise::exp(x - m);
+            const float e = precise::exp(x - m);
+            s += e;
+            if (c != t) so += e;
         }
     }
     if (bad) atomic_store_explicit(&st[ST_IN], 1u, memory_order_relaxed);
@@ -1226,23 +1272,34 @@ kernel void ojas_ce_fused(
         }
         return;
     }
-    sh[lane] = float2(m, s);
+    sh[lane] = float3(m, s, so);
     threadgroup_barrier(mem_flags::mem_threadgroup);
     for (uint off = CE_TG / 2u; off > 0u; off >>= 1u) {
-        if (lane < off) sh[lane] = ce_merge(sh[lane], sh[lane + off]);
+        if (lane < off) sh[lane] = ce_merge3(sh[lane], sh[lane + off]);
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
     const float mx = sh[0].x;
     const float sum = sh[0].y;
-    if (lane == 0u) loss_rows[r] = mx + precise::log(sum) - logits[base + t];
+    const float other = sh[0].z;
+    const float picked = logits[base + t];
+    const bool collapsed = picked == mx && sum == 1.0f && other > 0.0f;
+    if (lane == 0u) loss_rows[r] = collapsed ? ce_log1p(other) : mx + precise::log(sum) - picked;
     if (write_grad == 0u) return;
     const float denom = (float)n_valid;
     const float at_target = precise::divide(1.0f, denom);
+    const float one_plus = 1.0f + other;
     bool bad_out = false;
     for (uint c = lane; c < vocab; c += CE_TG) {
-        const float p = precise::divide(precise::exp(logits[base + c] - mx), sum);
-        float g = precise::divide(p, denom);
-        if (c == t) g -= at_target;
+        float g;
+        if (collapsed) {
+            g = c == t
+                ? -precise::divide(precise::divide(other, one_plus), denom)
+                : precise::divide(precise::divide(precise::exp(logits[base + c] - mx), one_plus), denom);
+        } else {
+            const float p = precise::divide(precise::exp(logits[base + c] - mx), sum);
+            g = precise::divide(p, denom);
+            if (c == t) g -= at_target;
+        }
         bad_out = bad_out || !isfinite(g);
         grad[base + c] = g;
     }
@@ -1256,6 +1313,12 @@ kernel void ojas_ce_fused(
 // gradient of the logits with ojas_ce_fused's arithmetic. Per tile row the
 // running (max, sum of exp) is merged across vocabulary tiles with ce_merge;
 // `stats` holds (max, sum, target logit) per row of the current row tile.
+//
+// These three kernels still form the standard `p - 1` target gradient, so a
+// row past the f32 cliff collapses here as it did (ft-f40eeed8). Carrying the
+// collapsed-row form through them needs the target-excluded running sum in
+// `stats`, a fourth value per row, which the host (device.rs `linear_ce`)
+// allocates and indexes as three.
 
 /// Per tile row (one threadgroup): online (max, sum exp) of the tile row,
 /// merged into the row's running pair (assigned on the first column tile),
