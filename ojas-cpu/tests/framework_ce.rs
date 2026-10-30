@@ -231,6 +231,168 @@ fn fast_matches_the_composed_path_within_tolerance() {
     println!("Fast worst relative error vs composed: {worst:e}");
 }
 
+/// Under Fast, when the chunk covers the whole product (one tile, one GEMM of
+/// the composed path's own shape) the fused loss and both gradients are the
+/// unfused Fast path's bits at every thread count: the row sums are
+/// `exp_sub_sum`'s lane order and every term and softmax value is the same
+/// `exp`, not `exp_exact`. The two paths still differ for a chunk that splits
+/// the vocabulary or the rows, which `fast_matches_the_composed_path_within_tolerance`
+/// holds to a tolerance.
+#[test]
+fn fast_single_block_is_bitwise_the_unfused_fast_path() {
+    let mut rng = SplitMix64(0xce08);
+    let mut cases = Vec::new();
+    // Vocabularies on both sides of the 16 exponential lanes, and products
+    // above the whole-call cutoff on both platforms.
+    for (n, d, v) in [
+        (1usize, 3usize, 7usize),
+        (7, 5, 13),
+        (33, 16, 50),
+        (64, 24, 97),
+        (130, 32, 300),
+        (300, 64, 1031),
+    ] {
+        for ignore in ignores(v) {
+            let c = case(&mut rng, n, d, v, ignore);
+            let ids = c.t.to_u32_vec().unwrap();
+            if !ignore.is_some_and(|ig| ids.iter().all(|&t| t == ig)) {
+                cases.push((n, d, v, c));
+            }
+        }
+    }
+    for threads in [1usize, 3, 18] {
+        let be = CpuBackend::with_threads(Budget::new(u64::MAX), threads).unwrap();
+        assert_eq!(be.numerics(), Numerics::Fast);
+        for (n, d, v, c) in &cases {
+            let (want_loss, (want_gx, want_gw)) = composed(&be, c);
+            // A chunk larger than the product clamps to it.
+            for chunk in [
+                CeChunk { rows: *n, cols: *v },
+                CeChunk {
+                    rows: n + 3,
+                    cols: v + 5,
+                },
+            ] {
+                let what = format!("fast t{threads} n{n} d{d} v{v} {:?} {chunk:?}", c.ignore);
+                let got = be
+                    .linear_cross_entropy_mean(&c.x, &c.w, &c.t, c.ignore, chunk, CeGrads::BOTH)
+                    .unwrap();
+                assert_exact(&what, &got, &want_loss, &want_gx, &want_gw);
+                let loss_only = be
+                    .linear_cross_entropy_mean(&c.x, &c.w, &c.t, c.ignore, chunk, CeGrads::NONE)
+                    .unwrap();
+                assert_eq!(
+                    bits(&f(&loss_only.loss)),
+                    bits(&f(&want_loss)),
+                    "{what} loss only"
+                );
+            }
+        }
+    }
+}
+
+/// The rows the softmax collapse fix routes to the target-excluded form take
+/// the Fast exponential in both paths, so a batch of collapsed, ordinary and
+/// ignored rows is the unfused Fast path's bits too. `w` is the identity, so
+/// a row's logits are its `x`: a spike of 40 over noise collapses (the other
+/// classes sum below 2^-24), a spike of 2 does not.
+#[test]
+fn fast_single_block_collapsed_rows_are_bitwise_the_unfused_fast_path() {
+    let (n, v) = (12usize, 12usize);
+    let ib = Budget::new(u64::MAX);
+    let mut rng = SplitMix64(0xce09);
+    let ignore = Some(99u32);
+    let mut xs = rng.vec(n * v, 0.5);
+    let mut ids = Vec::new();
+    for r in 0..n {
+        let target = (r * 5) % v;
+        let spike = match r % 3 {
+            0 => 40.0,
+            1 => 2.0,
+            _ => 41.5,
+        };
+        xs[r * v + target] += spike;
+        ids.push(if r == 4 { 99 } else { target as u32 });
+    }
+    let mut eye = vec![0.0f32; v * v];
+    for i in 0..v {
+        eye[i * v + i] = 1.0;
+    }
+    let c = Case {
+        x: Tensor::from_f32(&xs, &[n, v], &ib).unwrap(),
+        w: Tensor::from_f32(&eye, &[v, v], &ib).unwrap(),
+        t: Tensor::from_u32(&ids, &[n], &ib).unwrap(),
+        ignore,
+    };
+    for threads in [1usize, 3, 18] {
+        let be = CpuBackend::with_threads(Budget::new(u64::MAX), threads).unwrap();
+        let logits = be.linear_forward(&c.x, &c.w).unwrap();
+        let g = f(&be
+            .cross_entropy_mean_backward(&logits, &c.t, ignore)
+            .unwrap());
+        for r in (0..n).filter(|r| r % 3 != 1 && *r != 4) {
+            assert_ne!(
+                g[r * v + ids[r] as usize],
+                0.0,
+                "row {r} must take the target-excluded form (standard form gives 0)"
+            );
+        }
+        let (want_loss, (want_gx, want_gw)) = composed(&be, &c);
+        let got = be
+            .linear_cross_entropy_mean(
+                &c.x,
+                &c.w,
+                &c.t,
+                ignore,
+                CeChunk { rows: n, cols: v },
+                CeGrads::BOTH,
+            )
+            .unwrap();
+        assert_exact(
+            &format!("collapsed fast t{threads}"),
+            &got,
+            &want_loss,
+            &want_gx,
+            &want_gw,
+        );
+    }
+}
+
+/// A logit gap past `f32::MAX` makes `x - max` infinite. Both Fast paths
+/// clamp it to a tiny positive term, so the row collapses and the two paths
+/// still agree to the bit.
+#[test]
+fn fast_single_block_infinite_gap_matches_the_unfused_fast_path() {
+    let ib = Budget::new(u64::MAX);
+    let c = Case {
+        x: Tensor::from_f32(&[1.0], &[1, 1], &ib).unwrap(),
+        w: Tensor::from_f32(&[3.0e38, -3.0e38], &[2, 1], &ib).unwrap(),
+        t: Tensor::from_u32(&[0], &[1], &ib).unwrap(),
+        ignore: None,
+    };
+    for threads in [1usize, 3, 18] {
+        let be = CpuBackend::with_threads(Budget::new(u64::MAX), threads).unwrap();
+        let (want_loss, (want_gx, want_gw)) = composed(&be, &c);
+        let got = be
+            .linear_cross_entropy_mean(
+                &c.x,
+                &c.w,
+                &c.t,
+                None,
+                CeChunk { rows: 1, cols: 2 },
+                CeGrads::BOTH,
+            )
+            .unwrap();
+        assert_exact(
+            &format!("gap fast t{threads}"),
+            &got,
+            &want_loss,
+            &want_gx,
+            &want_gw,
+        );
+    }
+}
+
 #[test]
 fn loss_only_call_returns_no_gradients_and_the_same_loss() {
     let mut rng = SplitMix64(0xce03);

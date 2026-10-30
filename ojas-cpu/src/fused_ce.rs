@@ -9,7 +9,11 @@
 //! the vocabulary takes more than one block:
 //!
 //! 1. the row maximum;
-//! 2. `sum exp(l - max)` in ascending vocabulary order, and the target logit;
+//! 2. `sum exp(l - max)`, and the target logit. Under Exact each term is
+//!    [`exp_exact`] and the sum ascends the vocabulary. Under Fast the terms
+//!    and their sum are [`crate::exp`]'s `exp_sub_sum`, as the unfused
+//!    cross-entropy forms them: 16 lane sums over a tile's consecutive logits,
+//!    combined in lane order, and one tile's sum is added to the row's;
 //! 3. with a gradient asked for, `G = (softmax - onehot) / n_valid` formed in
 //!    the tile in place, then `grad_x[rows] += G · W_c` and/or
 //!    `grad_w[cols] += Gᵀ · x_c`, each only when its gradient is asked for
@@ -34,8 +38,17 @@
 //! (or `N`) takes. Under [`ojas_core::Numerics::Exact`] the exact GEMM kernel
 //! does not depend on the tiling, so the loss and both gradients equal the
 //! composed `linear_forward → cross_entropy_mean_forward/backward →
-//! linear_backward` bit for bit, for every chunk. Under Fast they agree to
-//! rounding: a whole-call product (Accelerate on macOS) picks its own order.
+//! linear_backward` bit for bit, for every chunk.
+//!
+//! Under [`ojas_core::Numerics::Fast`] the exponentials are the unfused
+//! path's too (`exp`, not `exp_exact`), in pass 2b and the gradient tile as
+//! well. When one tile covers the whole product (`chunk.rows >= N` and
+//! `chunk.cols >= V`) the logits, every row's sum and both gradients are the
+//! composed Fast path's calls on the same operands, so the loss and both
+//! gradients equal it bit for bit. A chunk that splits the rows or the
+//! vocabulary agrees to rounding: the row blocks are different GEMM calls
+//! (a whole-call product, Accelerate on macOS, picks its own order), and a
+//! vocabulary tile's lane sums restart at the tile.
 //!
 //! When `chunk.cols` covers the vocabulary there is one tile per row block,
 //! so it is computed once and the three passes reuse it. The per-row work of
@@ -58,9 +71,10 @@ use std::ops::Range;
 
 use ojas_core::{
     exp_exact, linear_ce_dims, log1p_exact, Budget, CeChunk, CeGrads, DType, LinearCe,
-    LinearCeDims, OjasError, Tensor,
+    LinearCeDims, Numerics, OjasError, Tensor,
 };
 
+use crate::exp::{exp, exp_sub_sum};
 use crate::gemm::{gemm, gemm_acc, scratch, Mat};
 use crate::pointwise::collapses;
 use crate::pool::scoped::{self, min_rows};
@@ -355,6 +369,7 @@ fn fused(
                 targets: block_targets,
                 ignore,
                 maxes: &maxes,
+                numerics: exec.numerics,
             };
             exp_sums(exec, logits, range, rows, [&mut sums, &mut picked])?;
         }
@@ -377,6 +392,7 @@ fn fused(
                     targets: block_targets,
                     ignore,
                     maxes: &maxes,
+                    numerics: exec.numerics,
                 };
                 exp_others(exec, logits, range, rows, &flags, &mut others)?;
             }
@@ -409,6 +425,7 @@ fn fused(
                 targets: block_targets,
                 ignore,
                 maxes: &maxes,
+                numerics: exec.numerics,
             };
             softmax_grad(exec, &mut g, range.clone(), rows, (&sums, &others), denom)?;
             let g = Mat::row_major(&g, r, width);
@@ -434,17 +451,30 @@ fn fused(
     Ok(loss)
 }
 
-/// A row block's targets, the ignored id, and each row's maximum logit.
+/// A row block's targets, the ignored id, each row's maximum logit, and the
+/// numerics tier its exponentials follow.
 #[derive(Clone, Copy)]
 struct Rows<'a> {
     targets: &'a [u32],
     ignore: Option<u32>,
     maxes: &'a [f32],
+    numerics: Numerics,
 }
 
 impl Rows<'_> {
     fn ignored(&self, i: usize) -> bool {
         self.ignore == Some(self.targets[i])
+    }
+
+    /// `e^(logit - max)` of row `i`: [`exp_exact`] under Exact, [`exp`] under
+    /// Fast, the terms of `pointwise::row_exp_sum` and `other_sum`.
+    #[inline(always)]
+    fn term(&self, i: usize, logit: f32) -> f32 {
+        let x = logit - self.maxes[i];
+        match self.numerics {
+            Numerics::Exact => exp_exact(x),
+            Numerics::Fast => exp(x),
+        }
     }
 }
 
@@ -472,10 +502,12 @@ fn row_maxes(
     Ok(())
 }
 
-/// Pass 2: each valid row's `sum exp(l - max)` continued over this tile in
-/// ascending vocabulary order, and its target logit if the tile holds it.
-/// Rows split across [`scoped`] threads; each row's sum is one thread's
-/// sequence, so the bits do not depend on the split.
+/// Pass 2: each valid row's `sum exp(l - max)` continued over this tile, and
+/// its target logit if the tile holds it. Exact adds [`exp_exact`] terms in
+/// ascending vocabulary order; Fast adds the tile's `exp_sub_sum` (the unfused
+/// path's lane order) to the row's sum. Rows split across [`scoped`] threads;
+/// each row's sum is one thread's sequence, so the bits do not depend on the
+/// split.
 fn exp_sums(
     exec: Exec<'_>,
     logits: &[f32],
@@ -497,12 +529,19 @@ fn exp_sums(
                     continue;
                 }
                 let row = &logits[i * width..(i + 1) * width];
-                for &value in row {
-                    let e = exp_exact(value - rows.maxes[i]);
-                    if !e.is_finite() {
-                        return Err(nonfinite(OP));
+                match rows.numerics {
+                    Numerics::Exact => {
+                        for &value in row {
+                            let e = exp_exact(value - rows.maxes[i]);
+                            if !e.is_finite() {
+                                return Err(nonfinite(OP));
+                            }
+                            sums[local] += e;
+                        }
                     }
-                    sums[local] += e;
+                    // A term is at most 1 and a non-finite sum is refused
+                    // where the sums are read.
+                    Numerics::Fast => sums[local] += exp_sub_sum(row, rows.maxes[i]),
                 }
                 let class = rows.targets[i] as usize;
                 if range.contains(&class) {
@@ -517,9 +556,10 @@ fn exp_sums(
 
 /// Pass 2b, run only for a row block that holds a collapsed row: for each row
 /// `flags` marks, `others[i]` continued over this tile with `sum_{j != t}
-/// e^(l_j - max)` in ascending vocabulary order (the row's target logit is its
-/// maximum). Rows split across [`scoped`] threads; each row's sum is one
-/// thread's sequence, so the bits do not depend on the split.
+/// e^(l_j - max)` in ascending vocabulary order, each term the tier's `e^x`
+/// (the row's target logit is its maximum). Rows split across [`scoped`]
+/// threads; each row's sum is one thread's sequence, so the bits do not depend
+/// on the split.
 fn exp_others(
     exec: Exec<'_>,
     logits: &[f32],
@@ -538,7 +578,7 @@ fn exp_others(
             let class = rows.targets[i] as usize;
             for (col, &value) in row.iter().enumerate() {
                 if range.start + col != class {
-                    sums[local] += exp_exact(value - rows.maxes[i]);
+                    sums[local] += rows.term(i, value);
                 }
             }
         }
@@ -568,12 +608,12 @@ fn softmax_grad(
                 row.fill(0.0);
                 continue;
             }
-            let (max, sum) = (rows.maxes[i], sums[i]);
+            let sum = sums[i];
             let class = rows.targets[i] as usize;
             if others[i] > 0.0 {
                 let (s, one_plus) = (others[i], 1.0 + others[i]);
                 for value in row.iter_mut() {
-                    *value = (exp_exact(*value - max) / one_plus) / denom;
+                    *value = (rows.term(i, *value) / one_plus) / denom;
                 }
                 if range.contains(&class) {
                     row[class - range.start] = -(s / one_plus) / denom;
@@ -581,7 +621,7 @@ fn softmax_grad(
                 continue;
             }
             for value in row.iter_mut() {
-                let p = exp_exact(*value - max) / sum;
+                let p = rows.term(i, *value) / sum;
                 *value = p / denom;
             }
             if range.contains(&class) {
