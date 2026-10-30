@@ -83,6 +83,5 @@ pub use spatial::{
     ConvTranspose2dDims, ConvTranspose2dParams, InterleavedRopeDims, MaxPool2dDims,
 };
 pub use tensor::{
-    device_readbacks, f32_all_finite, DeviceBuffer, HostElement, Tensor, LE_READ_CHUNK_BYTES,
-    READBACK_CHUNK_BYTES,
+    f32_all_finite, DeviceBuffer, HostElement, Tensor, LE_READ_CHUNK_BYTES, READBACK_CHUNK_BYTES,
 };

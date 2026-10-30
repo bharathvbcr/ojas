@@ -664,7 +664,7 @@ pub trait Backend {
     ///
     /// A tensor already there is returned as a shared clone. The default
     /// fits a host backend: a device tensor is copied back to the host and
-    /// counted in [`crate::device_readbacks`]. On a backend whose id is not
+    /// counted in [`crate::Budget::device_readbacks`]. On a backend whose id is not
     /// [`BackendId::Cpu`], the default refuses a host tensor with
     /// [`OjasError::Unsupported`] rather than pretend it is resident, and
     /// refuses another device's tensor with [`OjasError::Placement`]. A

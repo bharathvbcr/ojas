@@ -88,8 +88,7 @@ impl Budget {
     /// `(calls, bytes)` of device-to-host copies [`crate::Tensor::to_host`]
     /// charged to this budget or to any of its descendants. Monotonic.
     ///
-    /// Unlike the process-wide [`crate::device_readbacks`], this counts only
-    /// the budget tree a caller owns. Two tests that each build a backend on
+    /// This counts only the budget tree a caller owns. Two tests that each build a backend on
     /// their own `Budget` cannot see each other's readbacks, whatever thread
     /// made them. A readback made on another thread into this tree is still
     /// counted, so "zero readbacks" cannot pass because the copy happened
