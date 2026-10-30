@@ -170,7 +170,7 @@
 <ol>
 <li><strong>A fault does not fail its op.</strong> An op whose kernel produces a non-finite value, or reads one, returns <code>Ok</code>. The op&#39;s status words record it, and the op keeps going.
 </li>
-<li><strong>The next sync point reports it.</strong> The next <code>Backend::sync</code>, <code>Backend::download</code> (of any tensor) or <code>Backend::clip_grad_norm</code> on this backend returns <code>OjasError::NonFinite { op }</code>. <code>op</code> names the <strong>first op in recording order</strong> on this backend that faulted since the previous report (F11&#39;s rule) (V for wgpu, <code>ojas-wgpu/src/backend.rs:376-390</code>).
+<li><strong>The next sync point reports it.</strong> The next <code>Backend::sync</code>, <code>Backend::download</code> (of any tensor) or <code>Backend::clip_grad_norm</code> on this backend returns <code>OjasError::NonFinite { op }</code>. <code>op</code> names the <strong>first op in recording order</strong> on this backend that faulted since the previous report (F11&#39;s rule) (V for wgpu, <code>ojas-wgpu/src/backend.rs:376-390</code>). The reported op name strictly matches the called form (e.g. <code>attention_forward</code> rather than <code>attention_forward_saving</code>).
 </li>
 <li><strong>A fault is reported once and never lost.</strong> After it is reported, the next sync point returns <code>Ok</code> unless a new fault arrived.
 <ul>
@@ -235,7 +235,7 @@
 </li>
 <li>So <code>OutOfRange</code> and the all-ignored <code>NonFinite</code> stay immediate.
 </li>
-<li>Every U32 Metal tensor is an upload (no Metal op produces U32), so the copy always exists (V by inspection of <code>backend.rs</code>).
+<li>Every U32 Metal tensor is an upload or created via <code>Backend::fill</code> (which attaches an explicit <code>Ids::Below(value + 1)</code> bound), so valid id bounds are always present without device readbacks.
 </li>
 </ul>
 </li>

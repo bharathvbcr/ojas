@@ -167,6 +167,14 @@
 <ul>
 <li>Every <code>Backend</code> op runs on the CPU, on Apple Silicon Metal, and on wgpu: forward, backward, permute, clip, AdamW and Muon.
 </li>
+<li>General attention (<code>attention_forward</code>, <code>attention_forward_saving</code>, <code>attention_backward</code>): bidirectional self-attention, cross-attention ($T_q \ne T_k$), broadcastable additive score bias with dedicated gradient pass, and per-batch key-length masks. On Metal: routed to <code>tessl encoder_attn</code> at D=32/64, pad-q routing for $T_q &lt; T_k \le 2.25 T_q$, split-K tiled attention for D=16/32 with bias, and scalar fallback.
+</li>
+<li>Spatial operators: <code>conv2d</code> (arbitrary stride, pad, dilation, groups, depthwise), <code>conv_transpose2d</code> (kernel == stride), <code>max_pool2d</code>, <code>interpolate_bilinear</code> (both <code>align_corners</code> modes), and interleaved RoPE with 2-D axial tables. Planned <code>permute</code> executes row copies for contiguous 16-float spans and 2-D transpose tiles with fused finite tests.
+</li>
+<li>Vision &amp; encoder forward ops: LayerNorm (two-pass f64 sums for mean and variance on CPU), channel LayerNorm, <code>group_norm</code> (exact f64 two-pass on CPU, 3-pass GPU kernel on Metal with large-mean residual correction), erf GELU, ReLU, <code>concat</code>, <code>slice</code> (whole-input finite check), and <code>fill</code> (torch.full equivalent with U32 <code>Ids::Below</code> bound).
+</li>
+<li>Parity against real SAM 3.1 safetensors weights and PyTorch 2.14 activation fixtures via <code>ojas-oracle::sam_fixtures</code>.
+</li>
 <li>The autograd <code>Tape</code> gradchecks a multi-head attention block against double-precision (<code>f64</code>) finite differences.
 </li>
 <li><code>ojas-model</code> defines the nanolab GPT once (spec, <code>state_dict</code> names, order-independent init, the block) and runs it two ways: recorded on the <code>Tape</code> for training, eagerly through <code>Eval</code> for decoding. Its <code>Trainer</code> takes Muon + AdamW steps on any <code>Backend</code> and saves and resumes a checkpoint directory.

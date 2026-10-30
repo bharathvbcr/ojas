@@ -200,7 +200,55 @@
 <h3 id="2-backend-extension-shaders-kernelsojas-backendmetal">2. Backend Extension Shaders (<code>kernels/ojas_backend.metal</code>) <a class="anchor" href="#2-backend-extension-shaders-kernelsojas-backendmetal" aria-label="Link to this section">#</a></h3>
 <p>Implements elementwise operations, vector arithmetic, and reduction passes required by <code>ojas_core::Backend</code>, plus:</p>
 <ul>
-<li><strong><code>permute</code></strong> (<code>ojas_permute</code>): a device-resident, bit-exact axis reorder up to rank 8, such as <code>[B, T, H, D]</code> to <code>[B, H, T, D]</code>. A NaN or infinity in the input is refused, as on the CPU reference, at the next sync point (see &#34;Deferred faults&#34; below).
+<li><strong><code>permute</code></strong> (<code>ojas_permute</code>, <code>ojas_permute_runs</code>, <code>ojas_permute_tile</code>): a device-resident, bit-exact axis reorder up to rank 8, planned by <code>src/permute.rs</code>.
+<ul>
+<li><code>ojas_permute_runs</code> runs row copies when the innermost contiguous run is a multiple of 16 floats (e.g. attention head swaps, window split/merge when <code>window * C</code> is a multiple of 16, identity floor).
+</li>
+<li><code>ojas_permute_tile</code> uses a 32x32 shared-memory tile for 2-D transposes and NCHW/NHWC moves. Both kernels fuse the finite check into memory reads.
+</li>
+<li><code>ojas_permute</code> serves as the general fallback.
+</li>
+</ul>
+</li>
+<li><strong>General attention</strong> (<code>attention_forward</code>, <code>attention_forward_saving</code>):
+<ul>
+<li>Plain unmasked attention at D=32 and D=64 routes to <code>tessl encoder_attn</code> between permutes (e.g. 22.8 vs 606 ms at <code>[1, 16, 5184, 64]</code>).
+</li>
+<li>For $T_q &lt; T_k$, the pad-q route zero-pads $Q$ to $T_k$ rows when $T_k \le 2.25 T_q$ at D=32/64 and slices the output.
+</li>
+<li>Head dims 16 and 32 with bias run split-K tiled kernels (<code>ojas_xattn_part_dD</code>, <code>ojas_xattn_combine_dD</code>), splitting key ranges across threadgroups to saturate the GPU for short queries.
+</li>
+<li>General shapes, windowing, and causal cross-attention fall back to scalar <code>ojas_attn_gen_fwd</code> (one simdgroup per row, D ≤ 256).
+</li>
+</ul>
+</li>
+<li><strong>Spatial operators</strong>:
+<ul>
+<li><code>conv2d_forward</code>: arbitrary stride and padding using <code>ojas_im2col</code> scratch followed by tessl NT GEMM and <code>ojas_conv_nchw</code>; depthwise convolution (<code>groups == in == out</code>) runs the direct single-pass kernel <code>ojas_dwconv</code>.
+</li>
+<li><code>conv_transpose2d_forward</code>: (kernel == stride) executed via <code>ojas_permute</code> to NHWC, tessl NN GEMM, and <code>ojas_convt_nchw</code>.
+</li>
+<li><code>interpolate_bilinear_forward</code>: <code>ojas_bilinear</code> computes taps directly in the shader for both <code>align_corners</code> modes with zero axis-table allocations.
+</li>
+<li><code>rope_interleaved_forward</code> / <code>_backward</code>: adjacent-pair rotation on <code>ojas_rope</code> mode 2, matching CPU axial 2D tables.
+</li>
+</ul>
+</li>
+<li><strong>Vision &amp; encoder operators</strong>:
+<ul>
+<li><code>group_norm_forward</code>: three passes (<code>ojas_gn_mean_var</code>, <code>ojas_gn_reduce</code>, <code>ojas_gn_apply</code>) splitting rows into up to 512 threadgroups per row; uses large-mean residual correction for numerical precision.
+</li>
+<li><code>layer_norm_forward</code> &amp; <code>channel_layer_norm_forward</code>: routed to tessl BERT layer norm (channel norm composed with permutes).
+</li>
+<li><code>gelu_erf_forward</code>: routed to tessl BERT <code>bias_gelu_erf</code>.
+</li>
+<li><code>relu_forward</code>: <code>ojas_relu_fwd</code> (bit-identical to CPU).
+</li>
+<li><code>concat</code>, <code>slice</code> &amp; <code>fill</code>: device-resident memory assembly (<code>ojas_concat_part</code>, <code>ojas_slice</code> with full-input finite scan, <code>ojas_fill_words</code>). Filled U32 tensors carry <code>Ids::Below(value + 1)</code> bounds.
+</li>
+<li><code>linear_bias_forward</code>: GEMM followed by broadcast bias addition.
+</li>
+</ul>
 </li>
 <li><strong>AdamW</strong> (<code>ojas_adamw_check</code>, <code>ojas_adamw_apply</code>): torch&#39;s single-tensor step in tessl&#39;s f32 arithmetic, with scalars from <code>ojas_core::check_adamw</code>. The step is in place and needs no scratch.
 <ul>

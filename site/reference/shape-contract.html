@@ -284,6 +284,29 @@
 <li><code>sigmoid_*_dims</code> (one <code>F32</code> shape) and <code>gdn_log_decay_*_dims</code> (<code>a</code> <code>[..., H]</code> of rank 1 or more, <code>a_log</code> and <code>dt_bias</code> <code>[H]</code>, <code>GdnDecayDims</code>; 2026-10-08) validate the attention output gate and the delta rule&#39;s gates. Unit cases in <code>ojas-core/src/shapes.rs</code>; CPU and Metal refusals in <code>ojas-{cpu,metal}/tests/hybrid.rs</code>.
 </li>
 </ul>
+<h2 id="vision-encoder-and-tensor-utility-validators-session-ojas-78-2026-10-26-to-2026-10-27">Vision, encoder and tensor utility validators (session ojas-78, 2026-10-26 to 2026-10-27) <a class="anchor" href="#vision-encoder-and-tensor-utility-validators-session-ojas-78-2026-10-26-to-2026-10-27" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><code>layer_norm_forward_dims</code> &amp; <code>channel_layer_norm_forward_dims</code>: validate operand finiteness, last-axis width matching weight/bias $[D]$ (or channel count $[C]$ for channel norm $[N, C, \dots]$), and $eps &gt; 0$.
+</li>
+<li><code>group_norm_forward_dims</code>: validates rank-4 input $[N, C, H, W]$, weight/bias $[C]$, $groups \ge 1$, $C \pmod{groups} == 0$, and finite $eps &gt; 0$.
+</li>
+<li><code>gelu_erf_forward_dims</code> &amp; <code>relu_forward_dims</code>: validate single operand (F32, non-empty, fitting usize).
+</li>
+<li><code>concat_dims</code>: validates non-empty inputs list, identical ranks, equal dimensions along all axes other than <code>axis</code>, and $axis &lt; rank$. Returns <code>ConcatDims</code>.
+</li>
+<li><code>slice_dims</code>: validates $len \ge 1$, $start + len \le input.shape[axis]$, and $axis &lt; rank$.
+</li>
+<li><code>fill_dims</code>: refuses zero extents before dtype, ensures element count fits usize, and verifies that the scalar value is representable in the target dtype (F32, Bf16, or U32 in range $[0, 2^{32}-1]$).
+</li>
+<li><code>linear_bias_forward_dims</code>: validates input rank $\ge 2$, weight rank 2, input trailing extent matching weight input channels, and bias rank 1 $[out]$.
+</li>
+<li><code>broadcast_add_forward_dims</code> &amp; <code>broadcast_mul_forward_dims</code>: enforce NumPy-style broadcast alignment up to rank 8, refusing incompatible shapes before memory is reserved or dispatches occur.
+</li>
+<li><code>scale_forward_dims</code>: validates finite float multiplier $s$ and operand shapes.
+</li>
+<li><code>softmax_forward_dims</code>: validates last-axis row reductions (<code>RmsDims</code>).
+</li>
+</ul>
       </article>
       <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/shape-contract.md" rel="noopener"><code>docs/shape-contract.md</code></a>. If this page and the repository disagree, the repository wins.</p>
       <nav class="ref-pager" aria-label="Previous and next">
@@ -298,6 +321,7 @@
 <li><a href="#where-the-backends-disagree-today-resolved-by-adopting-the-validators">Where the backends disagree today (resolved by adopting the validators)</a></li>
 <li><a href="#adoption-gate-every-backend">Adoption gate (every backend)</a></li>
 <li><a href="#accumulate-grad-permute-and-the-hybrid-layer-ops-2026-10-07">accumulate_grad, permute and the hybrid-layer ops (2026-10-07)</a></li>
+<li><a href="#vision-encoder-and-tensor-utility-validators-session-ojas-78-2026-10-26-to-2026-10-27">Vision, encoder and tensor utility validators (session ojas-78, 2026-10-26 to 2026-10-27)</a></li>
 </ol></nav>
   </div>
   <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">

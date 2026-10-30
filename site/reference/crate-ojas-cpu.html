@@ -167,9 +167,11 @@
 
     subgraph Kernels[&#34;Compute Operators&#34;]
         GEMM[&#34;Packed GEMM / BLAS&#34;]
-        RMS[&#34;RMSNorm (eps = 1e-6)&#34;]
-        RoPE[&#34;Half-Split RoPE&#34;]
-        SDPA[&#34;Causal SDPA (Arbitrary head dimension d)&#34;]
+        RMS[&#34;RMSNorm &amp; Two-Pass f64 LayerNorm/GroupNorm&#34;]
+        RoPE[&#34;Half-Split &amp; Interleaved 2D RoPE&#34;]
+        SDPA[&#34;Causal &amp; General Attention (Bidirectional, Cross-Attn, Bias)&#34;]
+        Spatial[&#34;Spatial Ops: Conv2d, ConvT, MaxPool, Bilinear&#34;]
+        Encoder[&#34;Vision/Encoder Ops: GELU erf, ReLU, Concat, Slice, Fill&#34;]
         SwiGLU[&#34;SwiGLU MLP&#34;]
         DualOpt[&#34;Dual Optimizers (Muon NS5 + AdamW)&#34;]
     end
@@ -238,6 +240,16 @@
 <li><strong>Each Storage Is Scanned for NaN Once Until It Is Written (since 2026-10-02):</strong> the entry scan goes through <code>Tensor::all_finite_cached</code> (ojas-core), which records on the storage that a scan of the whole allocation found every value finite. Later ops on that tensor, its clones and its views skip the scan; a smaller view over a storage not known finite still scans its own window. Every host write (<code>f32_slice_mut</code>, <code>write_f32</code>) needs sole ownership and resets the record, so a NaN written in place after a successful op is refused by the next one (<code>tests/redteam.rs</code> <code>a_nan_written_in_place_after_a_successful_op_is_refused_by_the_next</code>; the core test <code>a_nan_written_after_a_finite_result_is_caught_on_the_next_call</code> fails if the reset is removed). Computed outputs are built by <code>fill_out</code> / <code>fill_outs</code> (see point 6) and recorded finite as they are made; outputs finite by construction (embedding, permute, the CE gradient, the add backward copies) start unknown and are scanned once by their first consumer, as every operand was before. The finiteness test itself has one owner, <code>ojas_core::f32_all_finite</code>. Interleaved A/B on <code>bench_ops</code> (6 threads, 9 rounds, min / median, under a load of about 30): embedding forward 0.08 / 0.09 of before (its 50304×768 table was rescanned every call), embedding backward 0.39 / 0.47, mul forward 0.69 / 0.64, mul backward 0.79 / 0.72; linear was within the noise of that load. <code>bench_ops</code> reuses its inputs, so these numbers are for operands already recorded finite. An op&#39;s first touch of an unknown operand now scans each operand in turn (each split into 1M-value pieces on the pool) where it used to scan all of them in one parallel pass, so an op with several fresh operands under 1M values each scans them serially. The <code>block</code> case, whose intermediate activations are fresh every step, measures the net: block step 0.95 of before by min and 0.98 by median, block forward 0.98 / 0.88 (7 interleaved rounds against the pre-flag tree, load 20–28): no regression, within noise of a small gain.
 </li>
 <li><strong>Kernel Hardening &amp; Pointwise Parallel Execution (since 2026-10-04, updated 2026-10-05):</strong> expanded activation kernels in <code>pointwise.rs</code> (ReLU, SiLU, GELU, Sigmoid, Tanh) and pointwise parallel execution over scoped worker threads (<code>tests/pointwise_parallel.rs</code>). Validated and hardened memory layout transformations (<code>tests/permute_harden.rs</code>), token embedding lookup bounds (<code>tests/embedding_harden.rs</code>), AdamW finite checking and zero-step updates (<code>tests/adamw_harden.rs</code>), elementwise edge handling (<code>tests/elementwise_harden.rs</code>), and IEEE 754 numeric compliance (<code>tests/numerics.rs</code>). Test suite verified at 291 passed tests.
+</li>
+<li><strong>Vision, Spatial &amp; General Attention Stack (since 2026-10-26):</strong>
+<ul>
+<li><strong>General attention (<code>src/attn.rs</code>):</strong> Exact reference supporting bidirectional self-attention, cross-attention ($T_q \ne T_k$), broadcastable additive score bias $[B, H, T_q, T_k]$ with dedicated deterministic gradient pass, and per-batch key-length masks. Reuses causal row kernels so overlapping layouts are bit-equal to causal SDPA.
+</li>
+<li><strong>Spatial operators (<code>src/conv2d.rs</code>, <code>ojas_core::spatial</code>):</strong> Exact <code>conv2d_forward</code> (im2col + GEMM supporting arbitrary stride, padding, dilation, and groups, with direct depthwise loop and optional bias), <code>conv_transpose2d_forward</code>, <code>max_pool2d_forward</code>, and <code>interpolate_bilinear_forward</code> (both <code>align_corners</code> modes).
+</li>
+<li><strong>Encoder &amp; vision operators (<code>src/encoder_ops.rs</code>):</strong> Two-pass f64 LayerNorm and channel LayerNorm (mean and variance sums computed in f64 to maintain accuracy on wide rows with large means), exact two-pass f64 <code>group_norm_forward</code>, <code>relu_forward</code>, exact erf series <code>gelu_erf_forward</code>, <code>concat</code>, <code>slice</code> (whole-input finite check), and <code>fill</code> (torch.full equivalent).
+</li>
+</ul>
 </li>
 </ol>
 </aside>

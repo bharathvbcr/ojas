@@ -32,6 +32,22 @@ Also landed after the 37 commits above: merge `8060846` brings in the `inference
 
 ---
 
+## Changes 2026-10-25 to 2026-10-27: Vision, Spatial & SAM 3.1 Stack (PRs #1, #2, #3, session ojas-78)
+
+Source: 120 commits from `83d7a29` to `6abdb31` on `main`, merging PR #1 (`dc21254`, spatial ops), PR #2 (`85ffe0d`, encoder forward ops), PR #3 (`c4db546`/`d2922fb`, general attention), and the subsequent session ojas-78 waves (`BUILD_REPORT-78.md`).
+
+| Area | Commits | What changed |
+| :--- | :--- | :--- |
+| **General attention** | `982b206`, `fa5771c`, `819c015`, `e4b57f9`, `f5de4c0`, `47d3691`, `8a6c546`, `44555bc` | `attention_forward`, `attention_forward_saving`, and `attention_backward` with `AttentionOpts { causal, window, bias, key_lens }`: non-causal/bidirectional and cross-attention ($T_q \ne T_k$), broadcastable additive score bias $[B, H, T_q, T_k]$ with dedicated gradient pass, and per-batch key-length mask. CPU reference reuses row kernels. Metal acceleration routes plain D=32 and D=64 to `tessl encoder_attn`, pads shorter $Q$ for $T_q < T_k \le 2.25 T_q$, uses split-K tiled kernels (`ojas_xattn_part_dD`/`combine`) for D=16 and 32 with bias, and falls back to scalar `ojas_attn_gen_fwd`. Deferred faults accurately name `attention_forward`. |
+| **Spatial operators** | `9d22a4f`, `76a1f07`, `b3ce6f4`, `4665a81`, `592aa4c`, `3d41ca2`, `4897d82`, `a7fd1ba` | SAM spatial ops on CPU and Metal: `conv2d_forward` (CPU im2col+GEMM with dilation/groups/bias; Metal arbitrary stride/padding im2col+GEMM, and direct depthwise kernel `ojas_dwconv`), `conv_transpose2d_forward` (GEMM + `ojas_convt_nchw`), `interpolate_bilinear_forward` (both `align_corners` modes on `ojas_bilinear`), `rope_interleaved_forward`/`_backward` on `ojas_rope` mode 2 with `axial_rope_2d_tables`, `max_pool2d_forward` on CPU. Window partition/merge and pixel shuffle/unshuffle via planned permute. |
+| **Vision & encoder ops** | `dd94824`, `75880b7`, `ceb1f84`, `2086e46`, `32448ac`, `0817cf9`, `4f5d0e5`, `6a870f9`, `317d238`, `71fd64d`, `eddba6f` | Forward ops: `layer_norm_forward` (CPU two-pass f64 sums for mean & variance, Metal via tessl BERT), `channel_layer_norm_forward`, `gelu_erf_forward` (exact erf series), `relu_forward` (`ojas_relu_fwd`), `linear_bias_forward`, `broadcast_add_forward`, `broadcast_mul_forward`, `scale_forward`, `softmax_forward`. `group_norm_forward` on CPU (two-pass f64) and Metal (3-pass GPU kernel with large-mean residual correction). `concat`, `slice` (whole-input finite check), and `fill` (torch.full equivalent with U32 `Ids::Below` bound). |
+| **Planned permute** | `6daa9da`, `a58410f`, `2dc0601`, `1e3e1ad` | `ojas-metal/src/permute.rs` plans row copies (`ojas_permute_runs`) for contiguous 16-float spans and 2-D transpose tiles (`ojas_permute_tile`) with fused finite checks; falls back to generic `ojas_permute`. 1-D transpose grid, refusal for plans that do not tile output. |
+| **Oracle & SAM 3.1 parity** | `afdaf98`, `d694d2f`, `c10dd27`, `0675f00`, `1eef067` | `ojas-oracle::sam_fixtures` gates CPU and Metal against SpikeTrack's SAM 3.1 activation fixtures and real weights (`sam3.1_multiplex.safetensors`). |
+| **Frame profiling & alloc bench** | `c4f53df`, `0c5678d`, `b35304c`, `f5ec7e8`, `4a9fe41`, `2229f25`, `5c98157`, `081a20e`, `6abdb31` | SpikeTrack frame ledger filled to 156 of 167 rows at F=1, 3, 7. cbd5565 frame profile reconciled against the ledger. `alloc_bench.rs` and decision rules examining buffer pool cache ceiling (1 GiB), memory cap (1 GiB), and memory churn under contention. |
+| **C-API call table** | `f79ae5e`, `50d5141`, `16adc5f`, `907d2c7`, `d2922fb` | `ojas-capi` gate pinned at 75 ops total and 71 refused after cancel. |
+
+---
+
 ## Current test counts
 
 The latest full workspace run: <!--count:ws.summary-->1825 passed, 0 failed, 41 ignored, 211 suites (`cargo test --workspace --release -- --test-threads=2` at `d431949`, 2026-10-09, macOS, Metal and wgpu on the real GPU, no SKIP lines)<!--/count-->.

@@ -60,7 +60,27 @@ Nanolab default GPT applies a linear gate with bias followed by sigmoid modulati
 
 ### 2. Backend Extension Shaders (`kernels/ojas_backend.metal`)
 Implements elementwise operations, vector arithmetic, and reduction passes required by `ojas_core::Backend`, plus:
-* **`permute`** (`ojas_permute`): a device-resident, bit-exact axis reorder up to rank 8, such as `[B, T, H, D]` to `[B, H, T, D]`. A NaN or infinity in the input is refused, as on the CPU reference, at the next sync point (see "Deferred faults" below).
+* **`permute`** (`ojas_permute`, `ojas_permute_runs`, `ojas_permute_tile`): a device-resident, bit-exact axis reorder up to rank 8, planned by `src/permute.rs`.
+  * `ojas_permute_runs` runs row copies when the innermost contiguous run is a multiple of 16 floats (e.g. attention head swaps, window split/merge when `window * C` is a multiple of 16, identity floor).
+  * `ojas_permute_tile` uses a 32x32 shared-memory tile for 2-D transposes and NCHW/NHWC moves. Both kernels fuse the finite check into memory reads.
+  * `ojas_permute` serves as the general fallback.
+* **General attention** (`attention_forward`, `attention_forward_saving`):
+  * Plain unmasked attention at D=32 and D=64 routes to `tessl encoder_attn` between permutes (e.g. 22.8 vs 606 ms at `[1, 16, 5184, 64]`).
+  * For $T_q < T_k$, the pad-q route zero-pads $Q$ to $T_k$ rows when $T_k \le 2.25 T_q$ at D=32/64 and slices the output.
+  * Head dims 16 and 32 with bias run split-K tiled kernels (`ojas_xattn_part_dD`, `ojas_xattn_combine_dD`), splitting key ranges across threadgroups to saturate the GPU for short queries.
+  * General shapes, windowing, and causal cross-attention fall back to scalar `ojas_attn_gen_fwd` (one simdgroup per row, D ≤ 256).
+* **Spatial operators**:
+  * `conv2d_forward`: arbitrary stride and padding using `ojas_im2col` scratch followed by tessl NT GEMM and `ojas_conv_nchw`; depthwise convolution (`groups == in == out`) runs the direct single-pass kernel `ojas_dwconv`.
+  * `conv_transpose2d_forward`: (kernel == stride) executed via `ojas_permute` to NHWC, tessl NN GEMM, and `ojas_convt_nchw`.
+  * `interpolate_bilinear_forward`: `ojas_bilinear` computes taps directly in the shader for both `align_corners` modes with zero axis-table allocations.
+  * `rope_interleaved_forward` / `_backward`: adjacent-pair rotation on `ojas_rope` mode 2, matching CPU axial 2D tables.
+* **Vision & encoder operators**:
+  * `group_norm_forward`: three passes (`ojas_gn_mean_var`, `ojas_gn_reduce`, `ojas_gn_apply`) splitting rows into up to 512 threadgroups per row; uses large-mean residual correction for numerical precision.
+  * `layer_norm_forward` & `channel_layer_norm_forward`: routed to tessl BERT layer norm (channel norm composed with permutes).
+  * `gelu_erf_forward`: routed to tessl BERT `bias_gelu_erf`.
+  * `relu_forward`: `ojas_relu_fwd` (bit-identical to CPU).
+  * `concat`, `slice` & `fill`: device-resident memory assembly (`ojas_concat_part`, `ojas_slice` with full-input finite scan, `ojas_fill_words`). Filled U32 tensors carry `Ids::Below(value + 1)` bounds.
+  * `linear_bias_forward`: GEMM followed by broadcast bias addition.
 * **AdamW** (`ojas_adamw_check`, `ojas_adamw_apply`): torch's single-tensor step in tessl's f32 arithmetic, with scalars from `ojas_core::check_adamw`. The step is in place and needs no scratch.
   * The check kernel decides the whole step: inputs and every new p, m and v must be finite.
   * The apply kernel, in the same command buffer, writes only if this call's status words are clear. A refused step leaves all three tensors bit-identical and is reported at the next sync point.

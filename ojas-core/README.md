@@ -135,7 +135,11 @@ stateDiagram-v2
 ## Compute Backend Contract (`Backend`)
 
 The `Backend` trait defines the uniform operator interface implemented by compute engines (`CpuBackend`, `MetalBackend`, `WgpuBackend`):
-* Forward and backward linear transformations, activations (GELU, SiLU, ReLU), and causal multi-head attention.
+* Forward and backward linear transformations, activations (GELU, SiLU, ReLU, Sigmoid), and causal multi-head attention.
+* **General attention:** `attention_forward`, `attention_forward_saving`, and `attention_backward` with `AttentionOpts { causal, window, bias, key_lens }` for bidirectional attention, cross-attention ($T_q \ne T_k$), broadcastable additive score bias $[B, H, T_q, T_k]$, and key-length masks.
+* **Spatial operations (`ojas_core::spatial`):** `conv2d_forward`, `conv_transpose2d_forward`, `max_pool2d_forward`, `interpolate_bilinear_forward`, `rope_interleaved_forward`/`_backward`, and window partition/merge and pixel shuffle/unshuffle helpers.
+* **Vision and encoder operations:** `layer_norm_forward`, `channel_layer_norm_forward`, `group_norm_forward`, `gelu_erf_forward`, `relu_forward`, `linear_bias_forward`, `broadcast_add_forward`, `broadcast_mul_forward`, `scale_forward`, `softmax_forward`, `concat`, `slice`, and `fill`.
+* **Pure shape contract (`ojas_core::shapes`):** Pure `*_dims` validators for every backend operation, evaluated before budget allocation or kernel dispatch to guarantee uniform error classification across backends.
 * Fused head cross-entropy computation (`linear_cross_entropy_mean`) and key-value cache operations.
 * In-place optimizer steps: `adamw_step` and `muon_ns5_step`.
 * **Optimizer Scratch Sizing:** `optimizer_scratch_bytes(kind, rows, cols)` reports the exact or bounding scratch memory needed for an optimizer step. This permits training routines to preflight memory before taking steps, preventing out-of-memory errors from poisoning parameter states.

@@ -83,3 +83,15 @@ Both must return the validator's variant. The sweep must fail before adoption wh
 - `conv2d_forward_dims`, `conv_transpose2d_forward_dims`, `max_pool2d_forward_dims`, `interpolate_bilinear_forward_dims` and `rope_interleaved_*_dims` (in `ojas_core::spatial`) validate the SAM-style spatial ops (`Conv2dDims`, `ConvTranspose2dDims`, `MaxPool2dDims`, `BilinearDims`, `InterleavedRopeDims`). Images are `NCHW` and weights PyTorch's layout.
 - `attention_forward_dims`, `attention_forward_saving_dims` and `attention_backward_dims` (`AttentionDims`) validate general attention before any kernel runs: rank-4 `[B, H, T, D]` operands, `k` and `v` alike, `Hq % Hkv == 0`, `Tq` may differ from `Tk`; `window` needs `causal` and is at least 1; `bias` is rank 4 `[Bb, Hb, Tqb, Tk]` with each of the first three extents full or 1; `key_lens` is U32 `[B]`; `bias_grad` needs a bias. Unit cases in `ojas-core/src/shapes.rs`; CPU refusals in `ojas-cpu/tests/shape_first.rs` and `attention_general.rs`.
 - `sigmoid_*_dims` (one `F32` shape) and `gdn_log_decay_*_dims` (`a` `[..., H]` of rank 1 or more, `a_log` and `dt_bias` `[H]`, `GdnDecayDims`; 2026-10-08) validate the attention output gate and the delta rule's gates. Unit cases in `ojas-core/src/shapes.rs`; CPU and Metal refusals in `ojas-{cpu,metal}/tests/hybrid.rs`.
+
+## Vision, encoder and tensor utility validators (session ojas-78, 2026-10-26 to 2026-10-27)
+- `layer_norm_forward_dims` & `channel_layer_norm_forward_dims`: validate operand finiteness, last-axis width matching weight/bias $[D]$ (or channel count $[C]$ for channel norm $[N, C, \dots]$), and $eps > 0$.
+- `group_norm_forward_dims`: validates rank-4 input $[N, C, H, W]$, weight/bias $[C]$, $groups \ge 1$, $C \pmod{groups} == 0$, and finite $eps > 0$.
+- `gelu_erf_forward_dims` & `relu_forward_dims`: validate single operand (F32, non-empty, fitting usize).
+- `concat_dims`: validates non-empty inputs list, identical ranks, equal dimensions along all axes other than `axis`, and $axis < rank$. Returns `ConcatDims`.
+- `slice_dims`: validates $len \ge 1$, $start + len \le input.shape[axis]$, and $axis < rank$.
+- `fill_dims`: refuses zero extents before dtype, ensures element count fits usize, and verifies that the scalar value is representable in the target dtype (F32, Bf16, or U32 in range $[0, 2^{32}-1]$).
+- `linear_bias_forward_dims`: validates input rank $\ge 2$, weight rank 2, input trailing extent matching weight input channels, and bias rank 1 $[out]$.
+- `broadcast_add_forward_dims` & `broadcast_mul_forward_dims`: enforce NumPy-style broadcast alignment up to rank 8, refusing incompatible shapes before memory is reserved or dispatches occur.
+- `scale_forward_dims`: validates finite float multiplier $s$ and operand shapes.
+- `softmax_forward_dims`: validates last-axis row reductions (`RmsDims`).

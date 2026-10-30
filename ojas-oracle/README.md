@@ -21,6 +21,13 @@ test time. Two kinds:
   probabilities and inverse-CDF choices for fixed logits, settings and
   uniforms, which `ojas-infer/tests/sampler_golden.rs` holds the host sampler
   to (`python/sampler_golden.py`).
+- **`sam_fixtures` (SpikeTrack SAM 3.1 real-activation and weight parity)**:
+  Parity harness in `src/sam_fixtures.rs` comparing isolated Ojas ops against
+  PyTorch 2.14 goldens from SpikeTrack's SAM 3.1 trunk and neck (`OJAS_SAM_FIXTURES`,
+  `OJAS_SAM_GROUPNORM_FIXTURES`), plus weight-bearing ops (`conv2d`, `conv_transpose2d`,
+  `linear_bias`, `layer_norm`) against the converted checkpoint (`OJAS_SAM_WEIGHTS`,
+  `sam3.1_multiplex.safetensors`). Tests in `tests/sam_fixtures.rs`, `tests/sam_fixtures_cpu.rs`,
+  and `ojas-metal/tests/sam_fixtures_metal.rs`.
 
 Python is used only to *generate* files (`python/`, a reference oracle);
 nothing in the crate runs it.

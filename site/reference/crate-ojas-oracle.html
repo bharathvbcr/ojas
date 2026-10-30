@@ -158,6 +158,8 @@
 </li>
 <li><strong><code>fixtures/sampler/golden.txt</code></strong>: torch&#39;s filtered, renormalised probabilities and inverse-CDF choices for fixed logits, settings and uniforms, which <code>ojas-infer/tests/sampler_golden.rs</code> holds the host sampler to (<code>python/sampler_golden.py</code>).
 </li>
+<li><strong><code>sam_fixtures</code> (SpikeTrack SAM 3.1 real-activation and weight parity)</strong>: Parity harness in <code>src/sam_fixtures.rs</code> comparing isolated Ojas ops against PyTorch 2.14 goldens from SpikeTrack&#39;s SAM 3.1 trunk and neck (<code>OJAS_SAM_FIXTURES</code>, <code>OJAS_SAM_GROUPNORM_FIXTURES</code>), plus weight-bearing ops (<code>conv2d</code>, <code>conv_transpose2d</code>, <code>linear_bias</code>, <code>layer_norm</code>) against the converted checkpoint (<code>OJAS_SAM_WEIGHTS</code>, <code>sam3.1_multiplex.safetensors</code>). Tests in <code>tests/sam_fixtures.rs</code>, <code>tests/sam_fixtures_cpu.rs</code>, and <code>ojas-metal/tests/sam_fixtures_metal.rs</code>.
+</li>
 </ul>
 <p>Python is used only to <em>generate</em> files (<code>python/</code>, a reference oracle); nothing in the crate runs it.</p>
 <h2 id="the-variant-goldens">The variant goldens <a class="anchor" href="#the-variant-goldens" aria-label="Link to this section">#</a></h2>

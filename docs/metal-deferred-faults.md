@@ -20,7 +20,7 @@ wgpu avoids this by recording ops into a shared encoder and reporting non-finite
 Wording follows `ojas-wgpu/src/backend.rs:17-44` and `ojas-wgpu/README.md:75` wherever Metal can mean the same thing.
 
 1. **A fault does not fail its op.** An op whose kernel produces a non-finite value, or reads one, returns `Ok`. The op's status words record it, and the op keeps going.
-2. **The next sync point reports it.** The next `Backend::sync`, `Backend::download` (of any tensor) or `Backend::clip_grad_norm` on this backend returns `OjasError::NonFinite { op }`. `op` names the **first op in recording order** on this backend that faulted since the previous report (F11's rule) (V for wgpu, `ojas-wgpu/src/backend.rs:376-390`).
+2. **The next sync point reports it.** The next `Backend::sync`, `Backend::download` (of any tensor) or `Backend::clip_grad_norm` on this backend returns `OjasError::NonFinite { op }`. `op` names the **first op in recording order** on this backend that faulted since the previous report (F11's rule) (V for wgpu, `ojas-wgpu/src/backend.rs:376-390`). The reported op name strictly matches the called form (e.g. `attention_forward` rather than `attention_forward_saving`).
 3. **A fault is reported once and never lost.** After it is reported, the next sync point returns `Ok` unless a new fault arrived.
    - Metal is stronger than wgpu here: wgpu may report a fault twice when two threads' syncs overlap (`ojas-wgpu/src/context.rs:18-19`). On Metal, scanning and reporting both run on the single device thread, so each fault is reported to exactly one caller (I; phase B pins it in a test).
 4. **The fault belongs to the backend, not the caller.** Threads sharing one `MetalBackend` (or its clones) share one pending fault, reported to whichever thread reaches a sync point first. Callers that need their faults kept apart open one backend each. This is the same rule as wgpu (`ojas-wgpu/src/backend.rs:36-40`).
@@ -58,7 +58,7 @@ Everything the host can decide without the device:
   - Under the contract, a U32 upload keeps a host copy of its ids, as wgpu does (`ojas-wgpu/src/backend.rs:9-11`).
   - Embedding ids and cross-entropy / linear-CE targets are then range-checked, and the valid count formed, on the host.
   - So `OutOfRange` and the all-ignored `NonFinite` stay immediate.
-  - Every U32 Metal tensor is an upload (no Metal op produces U32), so the copy always exists (V by inspection of `backend.rs`).
+  - Every U32 Metal tensor is an upload or created via `Backend::fill` (which attaches an explicit `Ids::Below(value + 1)` bound), so valid id bounds are always present without device readbacks.
 - **Poisoned** (§4.4) and **`Unsupported`**.
 
 **Observable precedence change (as on wgpu).** Today "a non-finite logit outranks an out-of-range target" (`tests/cross_entropy.rs:96-107`, `tests/linear_ce.rs` refusals). Under the contract:
