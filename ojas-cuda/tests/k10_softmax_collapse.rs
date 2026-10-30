@@ -205,13 +205,9 @@ const MARGINS: [f32; 14] = [
 /// Margins 14 to 40 at 301 classes, every target position, in chunks of 64
 /// (the carried sum is rescaled across five chunk boundaries): a row whose sum
 /// is certain to be 1.0 whatever the order (S below 2^-25) switches, keeps a
-/// nonzero target gradient and meets the oracle. Rows above that bound stay on
-/// the standard form, and on this kernel that form's target gradient is
-/// already 0 for some of them well before the sum reaches 1.0: `lse = m +
-/// ln(s)` is rounded at the spacing of `m` (about 2e-6 at a logit of 20), so
-/// `ln(s)` below half of that is lost and `p_t` is exactly 1. The rule
-/// (target at the maximum, `s == 1.0`) leaves those rows alone, so the test
-/// asserts no gradient for them.
+/// nonzero target gradient and meets the oracle. Rows above that bound are
+/// held to nothing here: they switch or not by the kernel's own condition (see
+/// [`a_row_whose_log_sum_rounds_away_keeps_its_target_gradient`]).
 #[test]
 fn the_margin_sweep_across_the_cliff_keeps_the_target_gradient() {
     let mut certain = 0;
@@ -229,6 +225,45 @@ fn the_margin_sweep_across_the_cliff_keeps_the_target_gradient() {
         }
     }
     assert!(certain >= 40, "only {certain} rows were certain to switch");
+}
+
+/// The row that told the two predicates apart: 301 classes, margin 18, S about
+/// 7.6e-7, at each target position whose S is below 9e-7. The sum is `1 + 7.2e-7` in f32, not 1.0,
+/// but K10 forms `lse = m + ln(s)` at the spacing of `m` (about 1.9e-6 at a
+/// logit of 20), so `ln(s)` is below half of it, `lse` rounds to `m` and the
+/// standard `p_t` is exactly 1: the target gradient is 0. K10 switches on its
+/// own zero-gradient condition, the target at the maximum and `p_t == 1.0f`,
+/// so these rows take the target-excluded form too (a `s == 1.0` test misses
+/// them). The row `[9, -9, -9]` cannot tell the two apart: its sum is 1.0.
+#[test]
+fn a_row_whose_log_sum_rounds_away_keeps_its_target_gradient() {
+    let measured = oracle(&margin_row(VOCAB, 0, 18.0), 0).2;
+    assert!((7.6e-7..7.7e-7).contains(&measured), "S {measured:e}");
+    let mut tested = 0;
+    for &target in &TARGETS {
+        let row = margin_row(VOCAB, target, 18.0);
+        let (_, _, s) = oracle(&row, target);
+        // Half the spacing of m is about 9.5e-7: a larger S can survive the
+        // rounding of lse and keep a nonzero standard gradient.
+        if s >= 9.0e-7 {
+            continue;
+        }
+        tested += 1;
+        for chunk in [64u64, 301] {
+            let (per_row, _, grad) = mirror(&row, VOCAB, &[target as u32], chunk, Reduction::Mean);
+            assert_switched(
+                &format!("target {target} chunk {chunk} S {s:e}"),
+                per_row[0],
+                &grad,
+                &row,
+                target,
+            );
+        }
+    }
+    assert!(
+        tested >= 3,
+        "only {tested} targets had S below half the spacing of m"
+    );
 }
 
 /// Two-class rows straddling the cliff: past it (1 + S is 1.0) the target

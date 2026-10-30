@@ -26,14 +26,18 @@
 //!    overwrites, the rest add) and `dW[v0..v0+w] = dlogitsᵀ @ h` (K1 `tn`).
 //!    `dW` is overwritten; with the tied embedding, K9's backward adds onto it.
 //!
-//! **Softmax Collapse.** When the target's logit is the row maximum and `s`
-//! is exactly 1.0, `exp(logit - lse) - 1` is exactly 0 in f32 whatever the
-//! other classes hold, so the target gradient vanishes while theirs stay
-//! positive. Such a row (and only such a row, with `so > 0`) takes the
-//! target-excluded form instead, with `S = so`: loss `ln(1 + S)`, target
-//! gradient `-S / (1 + S) * scale'`, every other class
+//! **Softmax Collapse.** When the target's logit is the row maximum `m` and
+//! this kernel's own `p_t = exp(logit - lse)`, `lse = m + ln(s)`, is exactly
+//! 1.0f, `p_t - 1` is exactly 0 in f32 whatever the other classes hold, so the
+//! target gradient vanishes while theirs stay positive. That happens when `s`
+//! is exactly 1.0, and also earlier: `lse` is rounded at the spacing of `m`
+//! (about 1.9e-6 at a logit of 20), so an `ln(s)` below half of it is lost and
+//! `p_t` is 1 while `s` is still above 1.0. Such a row (and only such a row,
+//! with `so > 0`) takes the target-excluded form instead, with `S = so`: loss
+//! `ln(1 + S)`, target gradient `-S / (1 + S) * scale'`, every other class
 //! `exp(logit - m) / (1 + S) * scale'`. Every other row is the standard form
-//! above, bit for bit.
+//! above, bit for bit. The switch is this kernel's own zero-gradient condition
+//! (the CPU, Metal and wgpu forms divide by the sum, so theirs is `sum == 1.0`).
 //!
 //! Scratch is bounded by the chunk: `[n, chunk]` logits and `[n]` row state.
 //! K1's GEMMs take buffer views, so the head chunk is read from `W` and the
@@ -125,7 +129,8 @@ extern "C" __global__ void qd_ce_lse_update_f32(
 
 // logits[n, c] = (exp(logits[n, c] - lse[n]) - [v0 + c == target]) * scale,
 // lse = m + log(s) from the completed first walk. A row whose target logit is
-// its maximum m with s exactly 1.0 and another class (so > 0) is the
+// its maximum m with exp(tlogit - lse) exactly 1.0f (the standard target
+// gradient is then exactly 0) and another class (so > 0) is the
 // target-excluded form instead: with S = so, (exp(logits[n, c] - m) / (1 + S))
 // * scale, and -(S / (1 + S)) * scale at the target.
 extern "C" __global__ void qd_ce_softmax_grad_f32(
@@ -140,13 +145,13 @@ extern "C" __global__ void qd_ce_softmax_grad_f32(
         const unsigned long long c = i - n * width;
         const unsigned long long at = n * ld + c;
         const bool is_target = v0 + c == (unsigned long long)targets[n];
-        if (tlogit[n] == m[n] && s[n] == 1.0f && so[n] > 0.0f) {
+        const float lse = m[n] + qd_log(s[n]);
+        if (tlogit[n] == m[n] && qd_exp_nonpos(tlogit[n] - lse) == 1.0f && so[n] > 0.0f) {
             const float one_plus = 1.0f + so[n];
             const float g = is_target ? -(so[n] / one_plus)
                                       : qd_exp_nonpos(logits[at] - m[n]) / one_plus;
             logits[at] = g * scale;
         } else {
-            const float lse = m[n] + qd_log(s[n]);
             float p = qd_exp_nonpos(logits[at] - lse);
             if (is_target) {
                 p = p - 1.0f;
@@ -331,12 +336,15 @@ pub struct CeOutput {
 }
 
 /// Whether a row's walk state is a collapsed row: the target's logit `t` is the
-/// maximum `m` and the sum `s` is exactly 1.0, so the standard form's target
-/// gradient is exactly 0, and the target-excluded sum `so` is positive (a
-/// one-class row, or one whose other terms all underflowed, keeps the
-/// standard form's zeros). The device kernel tests the same three things.
+/// maximum `m` and the kernel's own `p_t = exp(t - (m + ln(s)))` is exactly
+/// 1.0, so the standard form's target gradient is exactly 0 (this includes
+/// `s == 1.0`, and rows where `ln(s)` is lost in rounding `m + ln(s)`), and the
+/// target-excluded sum `so` is positive (a one-class row, or one whose other
+/// terms all underflowed, keeps the standard form's zeros). The device kernel
+/// tests the same three things through the same twins of `exp` and `log`, so
+/// the loss and the gradient switch on the same rows.
 pub fn collapsed(m: f32, s: f32, so: f32, t: f32) -> bool {
-    t == m && s == 1.0 && so > 0.0
+    t == m && exp_nonpos_f32(t - (m + log_f32(s))) == 1.0 && so > 0.0
 }
 
 /// The per-row losses and their reduction from the walk's `(m, s, so,
