@@ -13,7 +13,14 @@
 //! - `split-K`: `attention_forward_saving_splitk`;
 //! - `pad-q`: `attention_forward_padq`, tessl's `encoder_attn` over Q padded
 //!   to `Tk` rows, with the pad ratio bound lifted (where no bias, key lengths
-//!   or head dim 16 rule it out).
+//!   or head dim 16 rule it out);
+//! - `scalar` (the bias rows only): `attention_forward_saving_scalar`, the
+//!   general `ojas_attn_gen_fwd` the tiled kernel replaces. Its output is held
+//!   to the dispatcher's before any timing (max abs and max rel to the peak
+//!   are printed, the reductions differ so they are not bit-equal), the
+//!   kernels it encoded over the timed rounds are counted (the scalar kernel
+//!   once per call, no split-K and no flash), and the row prints the
+//!   dispatcher / scalar ratio against the pair's noise bar.
 //!
 //! The `sweep tq=.. m=..` rows (rules.md addendum 2) time `flash (forced)`
 //! (`attention_forward_saving_flash`), `split-K` and the `dispatcher` for Tq in
@@ -304,6 +311,12 @@ mod bench {
             .fold(0.0, f32::max)
     }
 
+    /// The largest `|got - want|` over the largest `|want|`.
+    fn rel_to_peak(got: &[f32], want: &[f32]) -> f32 {
+        let peak = want.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        max_abs(got, want) / peak.max(1e-12)
+    }
+
     fn cpu_agrees(got: &[f32], want: &[f32], tk: usize) -> Result<(), String> {
         let peak = want.iter().fold(0.0f32, |m, x| m.max(x.abs()));
         let worst = max_abs(got, want);
@@ -435,7 +448,9 @@ mod bench {
                 println!("# CORRECTNESS FAIL {}: {note}", r.name);
                 failed = true;
             }
-            if flash_row {
+            // The scalar kernel is the oracle of the flash rows and the timed
+            // baseline of the bias rows.
+            if flash_row || r.bias {
                 let (sc, sc_lse) = metal
                     .attention_forward_saving_scalar(&q, &k, &v, opts())
                     .expect("scalar");
@@ -455,6 +470,13 @@ mod bench {
                     max_abs(&s2v, &scv),
                     max_abs(&s2l, &scl)
                 ));
+                if r.bias {
+                    note.push_str(&format!(
+                        " (rel to peak out {:.2e} lse {:.2e})",
+                        rel_to_peak(&s2v, &scv),
+                        rel_to_peak(&s2l, &scl)
+                    ));
+                }
                 for (what, got, w) in [("output", &s2v, &scv), ("lse", &s2l, &scl)] {
                     if let Err(e) = cpu_agrees(got, w, tk) {
                         println!("# CORRECTNESS FAIL {} vs scalar {what}: {e}", r.name);
@@ -714,7 +736,24 @@ mod bench {
                     }),
                 ));
             }
+            // The bias rows' baseline, timed in the same interleaved rounds.
+            let scalar_arm = r.bias.then(|| {
+                arms.push((
+                    "scalar",
+                    Box::new(|| {
+                        drop(
+                            metal
+                                .attention_forward_saving_scalar(&q, &k, &v, opts())
+                                .expect("scalar"),
+                        )
+                    }),
+                ));
+                arms.len() - 1
+            });
+            metal.sync().expect("sync");
+            let encoded_before = snapshot(&metal);
             let samples = run_arms(&metal, &arms, warmups, runs);
+            let encoded = snapshot(&metal);
             let flops = 4.0 * (h * tq * tk * d) as f64;
             let (stats, noisy) = report(&r.name, &arms, &samples, |ms| {
                 format!(
@@ -750,6 +789,52 @@ mod bench {
                 continue;
             }
             let (s2m, skm) = (stats[0], stats[1]);
+            if let Some(si) = scalar_arm {
+                // Each arm ran `2 * (warmups + runs)` calls: the dispatcher
+                // and split-K are both split-K on a bias row, the scalar arm
+                // is the scalar kernel, so over the rounds the scalar kernel
+                // was encoded once per scalar call, split-K's partials and
+                // combine twice per call pair, and flash never.
+                let calls = (2 * (warmups + runs)) as u64;
+                let observed = Ran {
+                    flash: encoded.flash - encoded_before.flash,
+                    scalar: encoded.scalar - encoded_before.scalar,
+                    part: encoded.part - encoded_before.part,
+                    combine: encoded.combine - encoded_before.combine,
+                };
+                let want = Ran {
+                    flash: 0,
+                    scalar: calls,
+                    part: 2 * calls,
+                    combine: 2 * calls,
+                };
+                println!(
+                    "# kernels {} | timed rounds encoded {observed:?}, expected {want:?} ({calls} calls per arm)",
+                    r.name
+                );
+                if observed != want {
+                    println!(
+                        "# DISPATCH FAIL {}: the scalar arm did not run the scalar kernel once per call, or another arm ran a kernel it should not",
+                        r.name
+                    );
+                    failed = true;
+                }
+                let sm = stats[si];
+                let noise_sc = (s2m.2 - s2m.1).max(sm.2 - sm.1);
+                println!(
+                    "# row {} | scalar - dispatcher = {:.3} ms (noise bar {:.3}), dispatcher / scalar = {:.3} (scalar {:.1}x slower) {}",
+                    r.name,
+                    sm.0 - s2m.0,
+                    noise_sc,
+                    s2m.0 / sm.0,
+                    sm.0 / s2m.0,
+                    if sm.0 - s2m.0 > noise_sc {
+                        "dispatcher faster beyond noise"
+                    } else {
+                        "NOT beyond noise"
+                    }
+                );
+            }
             let noise_sk = (s2m.2 - s2m.1).max(skm.2 - skm.1);
             println!(
                 "# row {} | {note} | dispatcher - splitK = {:.3} ms (noise bar {:.3}) {}",

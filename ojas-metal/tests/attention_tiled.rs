@@ -49,7 +49,14 @@ struct Case {
     d: usize,
     bias: Option<[usize; 3]>,
     lens: Option<Vec<u32>>,
+    /// A query row whose bias is `MASKED` on every key, in every bias plane.
+    masked_row: Option<usize>,
 }
+
+/// A finite bias that buries a score: the row it covers is not "sees no key"
+/// (that is a key length of 0), it is a softmax over scores that all round to
+/// the same value.
+const MASKED: f32 = -1e30;
 
 impl Case {
     fn new(b: usize, h: usize, hkv: usize, tq: usize, tk: usize, d: usize) -> Self {
@@ -62,7 +69,12 @@ impl Case {
             d,
             bias: None,
             lens: None,
+            masked_row: None,
         }
+    }
+    fn masked_row(mut self, row: usize) -> Self {
+        self.masked_row = Some(row);
+        self
     }
     fn bias(mut self, s: [usize; 3]) -> Self {
         self.bias = Some(s);
@@ -88,9 +100,17 @@ impl Operands {
             q: rand(&[c.b, c.h, c.tq, c.d], seed, 1.0),
             k: rand(&[c.b, c.hkv, c.tk, c.d], seed + 1, 1.0),
             v: rand(&[c.b, c.hkv, c.tk, c.d], seed + 2, 1.0),
-            bias: c
-                .bias
-                .map(|[b, h, t]| rand(&[b, h, t, c.tk], seed + 3, 2.0)),
+            bias: c.bias.map(|[b, h, t]| {
+                let shape = [b, h, t, c.tk];
+                let mut data = values(shape.iter().product(), seed + 3, 2.0);
+                if let Some(row) = c.masked_row {
+                    for plane in 0..b * h {
+                        let at = (plane * t + row) * c.tk;
+                        data[at..at + c.tk].fill(MASKED);
+                    }
+                }
+                host(&data, &shape)
+            }),
             lens: c.lens.as_ref().map(|l| host_u32(l, &[l.len()])),
         }
     }
@@ -357,6 +377,42 @@ fn key_lengths_including_zero_match_cpu() {
     let per_batch = 2 * 6 * 32;
     assert!(out[..per_batch].iter().all(|&x| x == 0.0), "zeros");
     assert!(lse[..2 * 6].iter().all(|&x| x == 0.0), "lse 0");
+}
+
+/// A key length past `Tk` reads every key, as the CPU and the D64 scalar test
+/// (`attention_general.rs`, `key_lengths_match_cpu_including_empty_and_oversized`)
+/// do: the kernel clamps it with `min(Tk, len)`. One key tile and several
+/// splits, so the clamp is held at the split bounds too.
+#[test]
+fn a_key_length_beyond_tk_reads_every_key_as_the_cpu_does() {
+    let m = metal();
+    for (i, d) in [32usize, 16].into_iter().enumerate() {
+        check(
+            &m,
+            &Case::new(2, 2, 2, 6, 40, d).lens(&[99, 7]),
+            70 + 2 * i as u64,
+        );
+        check(
+            &m,
+            &Case::new(2, 2, 2, 6, 300, d).lens(&[999, 65]),
+            71 + 2 * i as u64,
+        );
+    }
+}
+
+/// A query row biased by -1e30 on every key, the other rows normal: the
+/// scores of that row all round to one value, so it averages `V` and its
+/// log-sum-exp is about -1e30, as on the CPU.
+#[test]
+fn a_query_row_biased_to_minus_1e30_on_every_key_matches_cpu() {
+    let m = metal();
+    for (i, d) in [32usize, 16].into_iter().enumerate() {
+        check(
+            &m,
+            &Case::new(2, 3, 3, 5, 200, d).bias([2, 3, 5]).masked_row(2),
+            90 + i as u64,
+        );
+    }
 }
 
 #[test]
