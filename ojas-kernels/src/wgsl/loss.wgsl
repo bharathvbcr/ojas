@@ -180,20 +180,19 @@ fn ce_bwd(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: ve
 }
 
 // linear_cross_entropy_mean: the logits exist only as an R' x C' tile of
-// rows r0.. and vocabulary columns c0... `stats` is three arrays of N rows:
-// the running max m, the running sum s of exp(logit - m), and the target's
-// logit t. Words 2 and 3 are the ignore flag and id, as above.
-//
-// These three kernels still form the standard `p - 1` target gradient, so a
-// row past the f32 cliff collapses here as it did (ft-f40eeed8). Carrying the
-// collapsed-row form through them needs the target-excluded running sum as a
-// fourth array of N rows, which the host (backend.rs `linear_cross_entropy_mean`)
-// allocates and indexes as three.
+// rows r0.. and vocabulary columns c0... `stats` is four arrays of N rows:
+// the running max m, the running sum s of exp(logit - m), the target's logit
+// t, and the running sum so of exp(logit - m) over every class but the target
+// (the backend allocates and charges `4 * N`). Words 2 and 3 are the ignore
+// flag and id, as above. A row whose target logit is its maximum with a sum of
+// exactly 1.0 and another class takes ce_bwd's target-excluded form, with
+// S = so (Softmax Collapse, ft-f40eeed8); every other row is the standard form.
 
 // One workgroup per tile row. Words: 0 R', 1 C', 4 c0, 5 r0, 6 first tile,
 // 7 N. x0 = tile, u0 = targets (all N), y0 = stats. The tile's own max and
 // sum are merged into the row's: m' = max(m, tm), s' = s exp(m - m') +
-// ts exp(tm - m').
+// ts exp(tm - m'), and so' likewise from the tile's sum over every class but
+// the target.
 @compute @workgroup_size(256, 1, 1)
 fn lce_stats(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let row = flat_group(wg, nwg);
@@ -202,28 +201,33 @@ fn lce_stats(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg:
     let base = row * cols;
     let peak = row_peak(lid.x, base, cols);
     let sum = row_exp_sum(lid.x, base, cols, peak);
+    let n = pw(7u);
+    let c0 = pw(4u);
+    let g = pw(5u) + row;
+    let tgt = u0[g];
+    let in_tile = tgt >= c0 && tgt < c0 + cols;
+    let other = row_other_sum(lid.x, base, cols, peak, select(0xffffffffu, tgt - c0, in_tile), true);
     if (lid.x == 0u) {
-        let n = pw(7u);
-        let c0 = pw(4u);
-        let g = pw(5u) + row;
         if (pw(6u) == 1u) {
             y0[g] = peak;
             y0[n + g] = sum;
+            y0[3u * n + g] = other;
         } else {
             let m = y0[g];
             let m2 = max(m, peak);
             y0[n + g] = y0[n + g] * exp(m - m2) + sum * exp(peak - m2);
+            y0[3u * n + g] = y0[3u * n + g] * exp(m - m2) + other * exp(peak - m2);
             y0[g] = m2;
         }
-        let tgt = u0[g];
-        if (tgt >= c0 && tgt < c0 + cols) {
+        if (in_tile) {
             y0[2u * n + g] = x0[base + tgt - c0];
         }
     }
 }
 
 // One lane per row. Words: 0 N. x0 = stats, u0 = targets, y0 = row loss
-// (m + log s - t, or 0 for an ignored row), summed by the reduce module.
+// (m + log s - t, log1p of so for a collapsed row, or 0 for an ignored row),
+// summed by the reduce module.
 @compute @workgroup_size(256, 1, 1)
 fn lce_finish(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
     let g = flat_group(wg, nwg) * 256u + lid.x;
@@ -231,14 +235,21 @@ fn lce_finish(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg
     if (g >= n) { return; }
     var loss = 0.0;
     if (!ignored(u0[g])) {
+        // The standard expression first and unconditionally, then replaced for a
+        // collapsed row: a compiler with fast math may reassociate
+        // `m + log(s) - t`, and keeping it out of the branch keeps the bits of
+        // every other row what they were.
         loss = x0[g] + log(x0[n + g]) - x0[2u * n + g];
+        if (x0[2u * n + g] == x0[g] && x0[n + g] == 1.0 && x0[3u * n + g] > 0.0) {
+            loss = log1p_small(x0[3u * n + g]);
+        }
     }
     report(loss);
     y0[g] = loss;
 }
 
 // One lane per tile element, in place: the tile's logits become the seed-1
-// gradient, ce_bwd's expression with the row's final m and s. Words: 0
+// gradient, ce_bwd's expression with the row's final m, s and so. Words: 0
 // R' * C', 1 C', 4 c0, 5 r0, 6 valid count bits (f32), 7 N. x0 = stats,
 // u0 = targets, y0 = tile.
 @compute @workgroup_size(256, 1, 1)
@@ -252,9 +263,20 @@ fn lce_grad(@builtin(workgroup_id) wg: vec3<u32>, @builtin(num_workgroups) nwg: 
     let tgt = u0[g];
     var grad = 0.0;
     if (!ignored(tgt)) {
-        grad = exp(y0[i] - x0[g]) / x0[n + g] / denom;
-        if (pw(4u) + i % cols == tgt) {
-            grad = grad - 1.0 / denom;
+        let is_target = pw(4u) + i % cols == tgt;
+        let other = x0[3u * n + g];
+        if (x0[2u * n + g] == x0[g] && x0[n + g] == 1.0 && other > 0.0) {
+            let one_plus = 1.0 + other;
+            if (is_target) {
+                grad = -(other / one_plus) / denom;
+            } else {
+                grad = exp(y0[i] - x0[g]) / one_plus / denom;
+            }
+        } else {
+            grad = exp(y0[i] - x0[g]) / x0[n + g] / denom;
+            if (is_target) {
+                grad = grad - 1.0 / denom;
+            }
         }
     }
     report(grad);

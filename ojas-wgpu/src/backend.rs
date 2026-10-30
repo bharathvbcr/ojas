@@ -2966,9 +2966,9 @@ impl Backend for WgpuBackend {
         let tile_elems = product(op, &[rc, cc])?;
         u(op, product(op, &[n, d])?)?;
         u(op, product(op, &[vocab, d])?)?;
-        u(op, product(op, &[3, n])?)?;
+        u(op, product(op, &[4, n])?)?;
         self.fits(op, tile_elems)?;
-        self.fits(op, 3 * n)?;
+        self.fits(op, 4 * n)?;
         self.groups(rc)?;
         self.lanes(tile_elems)?;
         let (has_ignore, ignore) = (u32::from(ignore_index.is_some()), ignore_index.unwrap_or(0));
@@ -2984,7 +2984,7 @@ impl Backend for WgpuBackend {
         let wb = bind(op, &mut job, &wv)?;
         let tb = bind(op, &mut job, &tv)?;
         let tile = job.scratch((tile_elems as u64) * 4)?;
-        let stats = job.scratch((3 * n as u64) * 4)?;
+        let stats = job.scratch((4 * n as u64) * 4)?;
         let row_loss = job.scratch((n as u64) * 4)?;
         let single = cc == vocab;
         let logits = |job: &mut Job<'_>, r0: usize, rr: usize, c0: usize, cw: usize| {
