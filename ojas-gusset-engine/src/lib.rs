@@ -270,10 +270,20 @@ pub unsafe extern "C" fn ojas_take_last_error(dst: *mut u8, cap: usize) -> usize
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, MutexGuard};
+
+    /// The heap ceiling, the last-error slot and gusset's handler registry
+    /// are process-wide, so the tests here run one at a time.
+    static SERIAL: Mutex<()> = Mutex::new(());
+
+    fn serial() -> MutexGuard<'static, ()> {
+        SERIAL.lock().unwrap_or_else(|err| err.into_inner())
+    }
 
     /// One test owns the process-wide ceiling, so nothing runs beside it.
     #[test]
     fn the_heap_ceiling_refuses_only_large_requests_and_take_last_error_survives_it() {
+        let _serial = serial();
         // A 4 MiB caller buffer, allocated while there is no ceiling.
         let cap = 4 * HEAP_CEILING_MIN_REQUEST;
         let mut dst: Vec<u8> = Vec::with_capacity(cap);
@@ -342,5 +352,70 @@ mod tests {
         assert_eq!(ojas_set_heap_ceiling(NO_HEAP_CEILING), 0);
         assert!(big.try_reserve_exact(HEAP_CEILING_MIN_REQUEST).is_ok());
         ojas_capi::clear_last_error();
+    }
+
+    /// Every opcode `ojas_engine_init` installs.
+    const OPCODES: [u32; 15] = [
+        ojas_capi::OP_LOAD,
+        ojas_capi::OP_GENERATE,
+        ojas_capi::OP_FREE,
+        ojas_capi::OP_PANIC,
+        ojas_capi::OP_NEW,
+        ojas_capi::OP_TRAIN_OPEN,
+        ojas_capi::OP_TRAIN_STEP,
+        ojas_capi::OP_SAVE,
+        ojas_capi::OP_RESUME,
+        ojas_capi::OP_TOKENIZER,
+        ojas_capi::OP_TOKENIZE,
+        ojas_capi::OP_SAMPLE,
+        ojas_capi::OP_INSPECT,
+        ojas_capi::OP_SET_MEMORY_CEILING,
+        ojas_capi::OP_SYSTEM_PROFILE,
+    ];
+
+    /// `opcode` is registered with gusset, found by asking to register it: a
+    /// duplicate is refused and the first handler stays.
+    fn is_registered(opcode: u32) -> bool {
+        match gusset::register_engine(opcode, |_ctx, _input| Ok(Vec::<u8>::new())) {
+            Ok(()) => false,
+            Err(err) => {
+                assert!(err.contains("already registered"), "opcode {opcode}: {err}");
+                true
+            }
+        }
+    }
+
+    /// `ojas_engine_init` may be called again, and from many threads at once.
+    /// Every call reports success. The first installs the ojas opcodes, and a
+    /// later call neither clears the registry (which would drop a handler
+    /// another component registered after the install) nor registers again.
+    #[test]
+    fn engine_init_installs_once_and_a_second_call_changes_nothing() {
+        let _serial = serial();
+        let codes: Vec<i32> = std::thread::scope(|scope| {
+            let racers: Vec<_> = (0..8).map(|_| scope.spawn(|| ojas_engine_init())).collect();
+            racers.into_iter().map(|r| r.join().unwrap()).collect()
+        });
+        assert_eq!(codes, [0; 8], "racing first calls");
+        assert_eq!(ojas_capi::last_error(), "");
+        for op in OPCODES {
+            assert!(is_registered(op), "opcode {op} is not installed");
+        }
+
+        // A handler registered after the install, on an opcode ojas does not
+        // use, must outlive another init: a clear would drop it.
+        const OTHER_COMPONENT: u32 = 9_999;
+        assert!(!OPCODES.contains(&OTHER_COMPONENT));
+        assert!(!is_registered(OTHER_COMPONENT), "the probe registers it");
+        ojas_capi::set_last_error("stale");
+        assert_eq!(ojas_engine_init(), 0, "a second call");
+        assert_eq!(ojas_capi::last_error(), "", "success clears the error");
+        assert!(
+            is_registered(OTHER_COMPONENT),
+            "a second init cleared another component's handler"
+        );
+        for op in OPCODES {
+            assert!(is_registered(op), "opcode {op} was lost by a second init");
+        }
     }
 }
