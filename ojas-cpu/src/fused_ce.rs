@@ -15,6 +15,15 @@
 //!    `grad_w[cols] += Gᵀ · x_c`, each only when its gradient is asked for
 //!    (a frozen tied head takes no `[V, d]` output and no `Gᵀ · x_c`).
 //!
+//! A row whose target gradient the standard form rounds to exactly 0
+//! ([`collapses`]: the target logit is the row maximum and the sum is exactly
+//! 1.0) is the one exception. After pass 2 a row block that holds such a row
+//! makes one more pass over its tiles (recomputed when the vocabulary takes
+//! more than one block) that sums `e^(l - max)` over the other classes of
+//! those rows alone, and the row takes the target-excluded form in pass 3
+//! (the rule of `pointwise::CeInput::row`). A block with no such row makes no
+//! extra pass, and every other row is the standard form, bit for bit.
+//!
 //! The pass-1/pass-2 split (rather than an online, rescaled sum) keeps every
 //! loss term the f32 sequence `cross_entropy_mean_forward` computes, and the
 //! gradient tile is the one `cross_entropy_mean_backward` writes (ignored
@@ -53,6 +62,7 @@ use ojas_core::{
 };
 
 use crate::gemm::{gemm, gemm_acc, scratch, Mat};
+use crate::pointwise::{collapses, log1p_small};
 use crate::pool::scoped::{self, min_rows};
 use crate::pool::Exec;
 use crate::validate::{
@@ -348,6 +358,29 @@ fn fused(
             };
             exp_sums(exec, logits, range, rows, [&mut sums, &mut picked])?;
         }
+        // `others[i]` is the target-excluded sum of a collapsed row that has
+        // another class; every other row keeps 0.0 and the standard form.
+        let mut others = vec![0.0f32; r];
+        let collapsed = |i: usize| !ignored(i) && collapses(picked[i], maxes[i], sums[i]);
+        if (0..r).any(collapsed) {
+            let flags: Vec<bool> = (0..r).map(collapsed).collect();
+            for range in vocab_blocks() {
+                let computed;
+                let logits = match &kept {
+                    Some((logits, _)) => logits,
+                    None => {
+                        computed = logit_tile(exec, &x_block, w, range.clone(), d)?.0;
+                        &computed
+                    }
+                };
+                let rows = Rows {
+                    targets: block_targets,
+                    ignore,
+                    maxes: &maxes,
+                };
+                exp_others(exec, logits, range, rows, &flags, &mut others)?;
+            }
+        }
         for i in 0..r {
             if ignored(i) {
                 continue;
@@ -356,7 +389,11 @@ fn fused(
             if !(sum.is_finite() && sum > 0.0) {
                 return Err(nonfinite(OP));
             }
-            total += maxes[i] + sum.ln() - picked[i];
+            total += if others[i] > 0.0 {
+                log1p_small(others[i])
+            } else {
+                maxes[i] + sum.ln() - picked[i]
+            };
         }
 
         if !grads.any() {
@@ -373,7 +410,7 @@ fn fused(
                 ignore,
                 maxes: &maxes,
             };
-            softmax_grad(exec, &mut g, range.clone(), rows, &sums, denom)?;
+            softmax_grad(exec, &mut g, range.clone(), rows, (&sums, &others), denom)?;
             let g = Mat::row_major(&g, r, width);
             let w_block = Mat::row_major(w_block.values(), width, d);
             if let Some(gx) = gx.as_deref_mut() {
@@ -478,15 +515,50 @@ fn exp_sums(
     Ok(())
 }
 
+/// Pass 2b, run only for a row block that holds a collapsed row: for each row
+/// `flags` marks, `others[i]` continued over this tile with `sum_{j != t}
+/// e^(l_j - max)` in ascending vocabulary order (the row's target logit is its
+/// maximum). Rows split across [`scoped`] threads; each row's sum is one
+/// thread's sequence, so the bits do not depend on the split.
+fn exp_others(
+    exec: Exec<'_>,
+    logits: &[f32],
+    range: Range<usize>,
+    rows: Rows<'_>,
+    flags: &[bool],
+    others: &mut [f32],
+) -> Result<(), OjasError> {
+    let (r, width) = (others.len(), range.len());
+    scoped::chunks_into(exec, others, r, 1, min_rows(width), |part, sums| {
+        for (local, i) in part.enumerate() {
+            if !flags[i] {
+                continue;
+            }
+            let row = &logits[i * width..(i + 1) * width];
+            let class = rows.targets[i] as usize;
+            for (col, &value) in row.iter().enumerate() {
+                if range.start + col != class {
+                    sums[local] += exp_exact(value - rows.maxes[i]);
+                }
+            }
+        }
+        Ok(())
+    })?;
+    Ok(())
+}
+
 /// Pass 3: the logit tile turned in place into `G = (softmax - onehot) /
-/// denom`, zero rows for ignored targets. Rows split across [`scoped`]
-/// threads; every value is computed alone.
+/// denom`, zero rows for ignored targets. `(sums, others)` are the passes'
+/// per-row sums: a row with `others[i] > 0.0` is a collapsed row and takes the
+/// target-excluded form, `e / (1 + S) / denom` for each other class and
+/// `-(S / (1 + S)) / denom` at the target, `S = others[i]`. Rows split across
+/// [`scoped`] threads; every value is computed alone.
 fn softmax_grad(
     exec: Exec<'_>,
     g: &mut [f32],
     range: Range<usize>,
     rows: Rows<'_>,
-    sums: &[f32],
+    (sums, others): (&[f32], &[f32]),
     denom: f32,
 ) -> Result<(), OjasError> {
     let (r, width) = (sums.len(), range.len());
@@ -497,11 +569,21 @@ fn softmax_grad(
                 continue;
             }
             let (max, sum) = (rows.maxes[i], sums[i]);
+            let class = rows.targets[i] as usize;
+            if others[i] > 0.0 {
+                let (s, one_plus) = (others[i], 1.0 + others[i]);
+                for value in row.iter_mut() {
+                    *value = (exp_exact(*value - max) / one_plus) / denom;
+                }
+                if range.contains(&class) {
+                    row[class - range.start] = -(s / one_plus) / denom;
+                }
+                continue;
+            }
             for value in row.iter_mut() {
                 let p = exp_exact(*value - max) / sum;
                 *value = p / denom;
             }
-            let class = rows.targets[i] as usize;
             if range.contains(&class) {
                 row[class - range.start] -= 1.0 / denom;
             }

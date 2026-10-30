@@ -2293,17 +2293,69 @@ pub(crate) struct CeInput<'a> {
     pub valid: u32,
 }
 
+/// Whether the standard form's target gradient of a row is exactly 0 (Softmax
+/// Collapse): the target logit is the row maximum, so its term is `e^0 = 1`,
+/// and the working-precision `sum` of `e^(x - max)` is exactly 1.0, so
+/// `p_t = 1` and `p_t - 1` cancels. A tie at the maximum adds a second 1.0 to
+/// the sum, so it never collapses. Only these rows leave the standard form.
+pub(crate) fn collapses(picked: f32, max: f32, sum: f32) -> bool {
+    picked == max && sum == 1.0
+}
+
+/// `ln(1 + x)` for a small `x >= 0` with no libm call: `2 atanh(x / (2 + x))`
+/// as its odd series in f64, then rounded to f32. The only argument it is
+/// given is the target-excluded sum of a collapsed row, which is below
+/// `vocab * 2^-24` (every term that follows the target's 1.0 in the sum, and
+/// everything before it, was too small to move it), so `z = x / (2 + x)` is
+/// far below 1 and 24 terms are exact to f64 rounding. `x == 0` is 0.
+pub(crate) fn log1p_small(x: f32) -> f32 {
+    let x = f64::from(x);
+    let z = x / (2.0 + x);
+    let z2 = z * z;
+    let (mut term, mut sum) = (z, 0.0f64);
+    for k in 0..24 {
+        sum += term / f64::from(2 * k + 1);
+        term *= z2;
+    }
+    (2.0 * sum) as f32
+}
+
+/// `S = sum_{j != class} e^(x_j - x_class)` of a collapsed row (`x_class` is
+/// its maximum `max`), in ascending index order with the tier's exponential:
+/// [`exp_exact`] under Exact, [`crate::exp`] under Fast, the terms the row's
+/// own sum added. A pass of its own, run only on the rows that collapse.
+fn other_sum(row: &[f32], class: usize, max: f32, numerics: Numerics) -> f32 {
+    let term = |word: f32| match numerics {
+        Numerics::Exact => exp_exact(word - max),
+        Numerics::Fast => exp(word - max),
+    };
+    let mut sum = 0.0f32;
+    for (col, &word) in row.iter().enumerate() {
+        if col != class {
+            sum += term(word);
+        }
+    }
+    sum
+}
+
 impl CeInput<'_> {
     /// One row's loss term `max + ln(sum) - x[target]`, or `None` for an
     /// ignored row. With `grad`, the row's `(softmax - onehot) / valid` is
     /// written into it. Every logit of the row is checked finite, ignored
     /// rows included.
+    ///
+    /// A row whose target gradient the standard form rounds to exactly 0
+    /// ([`collapses`]) and that has another class takes the target-excluded
+    /// form instead: with `S = sum_{j != t} e^(x_j - x_t)`, the loss is
+    /// `ln(1 + S)`, the target gradient `-S / (1 + S) / valid` and every other
+    /// class `e^(x_j - x_t) / (1 + S) / valid`, so the row sums to 0 in the
+    /// working precision. Every other row is the standard form, bit for bit.
     fn row(
         &self,
         op: &'static str,
         numerics: Numerics,
         n: usize,
-        grad: Option<&mut [f32]>,
+        mut grad: Option<&mut [f32]>,
     ) -> Result<Option<f32>, OjasError> {
         let row = self
             .logits
@@ -2323,20 +2375,33 @@ impl CeInput<'_> {
         }
         let class = target as usize;
         let picked = row[class];
-        let sum = match grad {
-            None => row_exp_sum(op, row, max, numerics, None)?,
-            Some(dst) => {
-                let sum = row_exp_sum(op, row, max, numerics, Some(&mut *dst))?;
-                let denom = self.valid as f32;
-                for slot in dst.iter_mut() {
-                    let p = *slot / sum;
-                    *slot = p / denom;
+        let sum = row_exp_sum(op, row, max, numerics, grad.as_deref_mut())?;
+        let other = collapses(picked, max, sum)
+            .then(|| other_sum(row, class, max, numerics))
+            .filter(|s| *s > 0.0);
+        if let Some(dst) = grad {
+            let denom = self.valid as f32;
+            match other {
+                Some(s) => {
+                    let d = 1.0 + s;
+                    for slot in dst.iter_mut() {
+                        *slot = (*slot / d) / denom;
+                    }
+                    dst[class] = -(s / d) / denom;
                 }
-                dst[class] -= 1.0 / denom;
-                sum
+                None => {
+                    for slot in dst.iter_mut() {
+                        let p = *slot / sum;
+                        *slot = p / denom;
+                    }
+                    dst[class] -= 1.0 / denom;
+                }
             }
-        };
-        Ok(Some(max + sum.ln() - picked))
+        }
+        Ok(Some(match other {
+            Some(s) => log1p_small(s),
+            None => max + sum.ln() - picked,
+        }))
     }
 
     /// The mean loss, in fixed blocks of rows on the pool's threads; with
@@ -2420,7 +2485,9 @@ pub(crate) fn ce_input<'a>(
 /// Every value is `(e / sum) / valid` with `e = e^(x - max)` in `[0, 1]` and
 /// `sum >= 1` (the maximum's own term is exactly 1), minus `1 / valid` at
 /// the target, so the gradient is finite by construction and is not scanned
-/// again.
+/// again. A collapsed row ([`collapses`]) is `(e / (1 + S)) / valid` with the
+/// target `-(S / (1 + S)) / valid`, `S` the sum of the other classes' `e`
+/// (below `vocab * 2^-24`): the same bounds hold.
 pub(crate) fn cross_entropy_grad(
     op: &'static str,
     exec: Exec<'_>,
