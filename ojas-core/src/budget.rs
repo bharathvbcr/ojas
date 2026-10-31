@@ -191,6 +191,20 @@ impl Budget {
         Ok(())
     }
 
+    /// Check whether `bytes` could ever fit into this budget and every ancestor
+    /// if all live allocations were freed. If `bytes > cap` on any level, no amount
+    /// of trimming can ever make it fit.
+    fn can_ever_fit(&self, bytes: u64) -> bool {
+        let mut node = Some(self);
+        while let Some(budget) = node {
+            if bytes > budget.inner.cap_bytes {
+                return false;
+            }
+            node = budget.inner.parent.as_ref();
+        }
+        true
+    }
+
     /// Reserve `bytes`, or refuse.
     ///
     /// A request of `0` returns a reservation and does not change the counter.
@@ -204,13 +218,15 @@ impl Budget {
         }
         if let Err(err) = self.charge(bytes) {
             if let OjasError::CapacityExceeded { .. } = &err {
-                if let Some(handler) = self.trim_handler() {
-                    let freed = handler.trim_memory(bytes);
-                    if freed > 0 && self.charge(bytes).is_ok() {
-                        return Ok(Reservation {
-                            bytes,
-                            budget: self.clone(),
-                        });
+                if self.can_ever_fit(bytes) {
+                    if let Some(handler) = self.trim_handler() {
+                        let freed = handler.trim_memory(bytes);
+                        if freed > 0 && self.charge(bytes).is_ok() {
+                            return Ok(Reservation {
+                                bytes,
+                                budget: self.clone(),
+                            });
+                        }
                     }
                 }
             }

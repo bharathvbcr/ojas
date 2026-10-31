@@ -104,12 +104,12 @@ use ojas_core::{
     scale_forward_dims, sigmoid_backward_dims, sigmoid_forward_dims, silu_backward_dims,
     silu_forward_dims, slice_dims, softmax_forward_dims, topk_rows_dims,
     value_residual_blend_backward_dims, value_residual_blend_forward_dims, AdamWConfig,
-    AdamWScalars, AttentionDims, AttentionOpts, Backend, BackendId, BroadcastDims, Budget, CeChunk,
-    CeGrads, Conv1dDims, Conv2dDims, Conv2dParams, ConvTranspose2dDims, ConvTranspose2dParams,
-    DType, DeviceBuffer, GateDims, GatedRmsGrad, GdnDecayGrad, GdnDims, GdnForward, GdnGrad,
-    GdnInputs, InterleavedRopeDims, LinearCe, MuonNs5Config, Ns5Precision, Numerics, OjasError,
-    OptimizerKind, PartialRopeDims, PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout,
-    SdpaDims, Tensor, ValueResidualGrad, MAX_PERMUTE_RANK,
+    AdamWScalars, AttentionDims, AttentionOpts, Backend, BackendId, BroadcastDims, Budget,
+    BudgetTrimHandler, CeChunk, CeGrads, Conv1dDims, Conv2dDims, Conv2dParams, ConvTranspose2dDims,
+    ConvTranspose2dParams, DType, DeviceBuffer, GateDims, GatedRmsGrad, GdnDecayGrad, GdnDims,
+    GdnForward, GdnGrad, GdnInputs, InterleavedRopeDims, LinearCe, MuonNs5Config, Ns5Precision,
+    Numerics, OjasError, OptimizerKind, PartialRopeDims, PerHeadGateGrad, Reservation, RmsDims,
+    RopeDims, RopeLayout, SdpaDims, Tensor, ValueResidualGrad, MAX_PERMUTE_RANK,
 };
 
 use crate::layout::{CONV1D_BWD_ROWS, CONV1D_WIDTHS, GATED_RMS_BWD_MAX_DIM, GATED_RMS_BWD_ROWS};
@@ -199,16 +199,43 @@ impl fmt::Debug for MetalBackend {
     }
 }
 
+pub(crate) struct MetalTrimHandler {
+    link: Arc<Link>,
+}
+
+impl fmt::Debug for MetalTrimHandler {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MetalTrimHandler")
+            .field("device", &self.link.device_name())
+            .finish()
+    }
+}
+
+impl BudgetTrimHandler for MetalTrimHandler {
+    fn trim_memory(&self, _needed_bytes: u64) -> u64 {
+        match self.link.call(Cmd::TrimPool) {
+            Ok(Reply::Trimmed(freed)) => freed,
+            _ => 0,
+        }
+    }
+}
+
 impl MetalBackend {
     /// Open the default Metal device on its own thread. Off macOS, or without
     /// the `metal` feature, this is [`OjasError::Unsupported`].
     pub fn new(budget: Budget) -> Result<Self, OjasError> {
         let waits = Arc::new(Waits::default());
         let (tx, device) = crate::device::spawn(Arc::clone(&waits), budget.cap_bytes())?;
-        Ok(Self {
-            link: Arc::new(Link::new(tx, device, waits, budget.cap_bytes())),
-            budget,
-        })
+        let link = Arc::new(Link::new(tx, device, waits, budget.cap_bytes()));
+
+        // Wire automatic cache trim hook: when host or backend reservations hit
+        // capacity, evict idle pool freelist buffers to reclaim headroom.
+        let trim_handler = Arc::new(MetalTrimHandler {
+            link: Arc::clone(&link),
+        });
+        budget.set_trim_handler(trim_handler);
+
+        Ok(Self { link, budget })
     }
 
     pub fn device_name(&self) -> &str {
@@ -251,7 +278,7 @@ impl MetalBackend {
     /// fails for want of device memory does it on its own before giving up.
     pub fn trim_pool(&self) -> Result<(), OjasError> {
         match self.link.call(Cmd::TrimPool)? {
-            Reply::Done => Ok(()),
+            Reply::Done | Reply::Trimmed(_) => Ok(()),
             other => Err(metal_err(format!("trim_pool: device returned {other:?}"))),
         }
     }

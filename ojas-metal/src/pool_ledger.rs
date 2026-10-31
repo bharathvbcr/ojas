@@ -22,7 +22,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use ojas_core::{Budget, OjasError, Reservation};
+use ojas_core::{Budget, BudgetTrimHandler, OjasError, Reservation};
 use tessl::{LedgerClass, LedgerRefused, PoolLedger};
 
 /// The reservations held for each balance, by the size they were taken at.
@@ -49,6 +49,15 @@ impl Held {
     }
 }
 
+#[derive(Debug)]
+struct NoOpTrim;
+
+impl BudgetTrimHandler for NoOpTrim {
+    fn trim_memory(&self, _needed_bytes: u64) -> u64 {
+        0
+    }
+}
+
 /// A [`tessl::PoolLedger`] over two children of one [`Budget`].
 pub struct BudgetLedger {
     live: Budget,
@@ -61,9 +70,19 @@ impl BudgetLedger {
     /// the cache child is capped at `cache_cap_bytes` (tessl bounds the free
     /// list by its own cache cap as well).
     pub fn new(root: &Budget, cache_cap_bytes: u64) -> Arc<Self> {
+        let live = root.child(root.cap_bytes());
+        let cache = root.child(cache_cap_bytes);
+
+        // Child budgets must not delegate to root's trim handler.
+        // BufferPool::charge_fresh already drives its own ladder,
+        // so try_charge must fail fast without recursing back to the device thread.
+        let noop: Arc<dyn BudgetTrimHandler> = Arc::new(NoOpTrim);
+        live.set_trim_handler(Arc::clone(&noop));
+        cache.set_trim_handler(noop);
+
         Arc::new(Self {
-            live: root.child(root.cap_bytes()),
-            cache: root.child(cache_cap_bytes),
+            live,
+            cache,
             held: Mutex::new(Held::default()),
         })
     }

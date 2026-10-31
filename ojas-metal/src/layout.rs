@@ -112,7 +112,7 @@ mod tests {
             *CONV1D_WIDTHS.end(),
             tessl::qwen35_bwd::CONV_MAX_KW as usize
         );
-        assert!(CONV1D_BWD_ROWS > 0 && GATED_RMS_BWD_ROWS > 0);
+        const { assert!(CONV1D_BWD_ROWS > 0 && GATED_RMS_BWD_ROWS > 0) };
         assert_eq!(SQ_PIECE, tessl::sq_norm::SQ_PIECE);
         assert_eq!(SQ_OUT_WORDS, tessl::sq_norm::SQ_OUT_WORDS);
     }

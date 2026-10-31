@@ -1040,6 +1040,7 @@ pub(crate) enum Reply {
     Norm(f32),
     Memory(crate::MetalMemory),
     Done,
+    Trimmed(u64),
 }
 
 pub(crate) struct Msg {

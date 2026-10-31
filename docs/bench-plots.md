@@ -632,6 +632,10 @@ No chart: the folder holds only scripts, logs or text that is not a measurement 
 
 No chart: the folder holds only scripts, logs or text that is not a measurement table.
 
+## 2026-10-16-audit-baseline
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
 ## 2026-10-17-clip-sqnorm-ab
 
 No chart: the folder holds only scripts, logs or text that is not a measurement table.
@@ -649,5 +653,65 @@ No chart: the folder holds only scripts, logs or text that is not a measurement 
 No chart: the folder holds only scripts, logs or text that is not a measurement table.
 
 ## 2026-10-25-cpu-muon-bf16-fold
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
+## 2026-10-26-attention-vision
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
+## 2026-10-27-alloc
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
+## 2026-10-27-attention-mpp
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
+## 2026-10-27-attention-spiketrack
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
+## 2026-10-27-attention-stage2
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
+## 2026-10-27-conv-im2col
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
+## 2026-10-27-frame-ledger
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
+## 2026-10-27-frame-ops
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
+## 2026-10-27-group-norm
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
+## 2026-10-27-interpolate
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
+## 2026-10-27-linear-gemm
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
+## 2026-10-27-memory-bound
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
+## 2026-10-27-permute
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
+## 2026-10-27-tiled-vs-padq
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
+## 2026-10-30-gemm-class
 
 No chart: the folder holds only scripts, logs or text that is not a measurement table.

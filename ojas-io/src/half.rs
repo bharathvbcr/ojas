@@ -96,8 +96,13 @@ pub fn widen_in_place(bytes: &mut [u8], n: usize, widen: impl Fn(u16) -> f32) {
         let (lo, hi) = bytes.split_at_mut(2 * n + 2 * i);
         let dst = &mut lo[4 * i..4 * (i + B)];
         let src = &hi[..2 * B];
-        for (d, s) in dst.chunks_exact_mut(4).zip(src.chunks_exact(2)) {
-            d.copy_from_slice(&widen(u16::from_le_bytes([s[0], s[1]])).to_ne_bytes());
+        for (d, s) in dst
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(src.as_chunks::<2>().0)
+        {
+            *d = widen(u16::from_le_bytes(*s)).to_ne_bytes();
         }
         i += B;
     }

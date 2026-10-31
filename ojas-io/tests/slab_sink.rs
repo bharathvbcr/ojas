@@ -54,7 +54,7 @@ fn fixtures() -> Vec<Fx> {
         .map(|(i, (name, dtype, shape))| {
             let n = shape.iter().product::<u64>() * dtype.size();
             Fx {
-                name: *name,
+                name,
                 dtype: *dtype,
                 shape: shape.to_vec(),
                 data: stream(i as u64 + 1, n as usize),

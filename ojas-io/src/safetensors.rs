@@ -202,9 +202,7 @@ impl TensorInfo {
     pub fn numel(&self) -> usize {
         let mut p = 1usize;
         for &d in &self.shape {
-            p = p
-                .checked_mul(usize::try_from(d).unwrap_or(usize::MAX))
-                .unwrap_or(usize::MAX);
+            p = p.saturating_mul(usize::try_from(d).unwrap_or(usize::MAX));
         }
         p
     }
@@ -526,8 +524,8 @@ impl<'a> SafeTensors<'a> {
                     let take = (dst.len() - offset).min(chunk.len() / 4);
                     let bytes = &mut chunk[..take * 4];
                     self.read_into(name, (offset * 4) as u64, bytes)?;
-                    for (i, c) in bytes.chunks_exact(4).enumerate() {
-                        dst[offset + i] = f32::from_le_bytes([c[0], c[1], c[2], c[3]]);
+                    for (i, &c) in bytes.as_chunks::<4>().0.iter().enumerate() {
+                        dst[offset + i] = f32::from_le_bytes(c);
                     }
                     offset += take;
                 }
@@ -540,8 +538,8 @@ impl<'a> SafeTensors<'a> {
                     let take = (dst.len() - offset).min(chunk.len() / 2);
                     let bytes = &mut chunk[..take * 2];
                     self.read_into(name, (offset * 2) as u64, bytes)?;
-                    for (i, c) in bytes.chunks_exact(2).enumerate() {
-                        dst[offset + i] = bf16_to_f32(u16::from_le_bytes([c[0], c[1]]));
+                    for (i, &c) in bytes.as_chunks::<2>().0.iter().enumerate() {
+                        dst[offset + i] = bf16_to_f32(u16::from_le_bytes(c));
                     }
                     offset += take;
                 }
@@ -554,8 +552,8 @@ impl<'a> SafeTensors<'a> {
                     let take = (dst.len() - offset).min(chunk.len() / 2);
                     let bytes = &mut chunk[..take * 2];
                     self.read_into(name, (offset * 2) as u64, bytes)?;
-                    for (i, c) in bytes.chunks_exact(2).enumerate() {
-                        dst[offset + i] = f16_to_f32(u16::from_le_bytes([c[0], c[1]]));
+                    for (i, &c) in bytes.as_chunks::<2>().0.iter().enumerate() {
+                        dst[offset + i] = f16_to_f32(u16::from_le_bytes(c));
                     }
                     offset += take;
                 }
@@ -602,8 +600,8 @@ impl<'a> SafeTensors<'a> {
             let take = (dst.len() - offset).min(chunk.len() / 2);
             let bytes = &mut chunk[..take * 2];
             self.read_into(name, (offset * 2) as u64, bytes)?;
-            for (i, c) in bytes.chunks_exact(2).enumerate() {
-                dst[offset + i] = u16::from_le_bytes([c[0], c[1]]);
+            for (i, &c) in bytes.as_chunks::<2>().0.iter().enumerate() {
+                dst[offset + i] = u16::from_le_bytes(c);
             }
             offset += take;
         }
@@ -645,8 +643,8 @@ impl<'a> SafeTensors<'a> {
             let take = (dst.len() - offset).min(chunk.len() / 4);
             let bytes = &mut chunk[..take * 4];
             self.read_into(name, (offset * 4) as u64, bytes)?;
-            for (i, c) in bytes.chunks_exact(4).enumerate() {
-                dst[offset + i] = u32::from_le_bytes([c[0], c[1], c[2], c[3]]);
+            for (i, &c) in bytes.as_chunks::<4>().0.iter().enumerate() {
+                dst[offset + i] = u32::from_le_bytes(c);
             }
             offset += take;
         }

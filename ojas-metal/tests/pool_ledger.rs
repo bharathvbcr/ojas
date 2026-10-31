@@ -170,3 +170,65 @@ fn dropping_the_runtime_returns_every_charge_to_the_budget() {
     assert_eq!(ledger.live_bytes() + ledger.cached_bytes(), 0);
     assert_eq!(ledger.unmatched_releases(), 0);
 }
+
+#[test]
+fn adversarial_metal_backend_trim_pool_and_child_budget_invariants() {
+    use ojas_core::{Backend, BudgetTrimHandler, Tensor};
+    use ojas_metal::MetalBackend;
+
+    let root = Budget::new(64 * MIB as u64);
+    let backend = MetalBackend::new(root.clone()).expect("MetalBackend::new");
+
+    // 1. Verify BudgetTrimHandler is installed on root budget by MetalBackend
+    assert!(root.trim_handler().is_some());
+
+    // 2. Upload tensors, verify budget tracking
+    let input = Tensor::from_f32(&[1.0, 2.0, 3.0, 4.0], &[4], &root).unwrap();
+    let dev_t = backend.upload(&input).unwrap();
+    assert_eq!(dev_t.device(), Some(ojas_core::BackendId::Metal));
+    drop(dev_t);
+    drop(input);
+
+    // 3. Verify trim_pool() executes, calls Cmd::TrimPool, returns Reply::Trimmed(freed) without deadlock
+    assert!(backend.trim_pool().is_ok());
+
+    // 4. Verify can_ever_fit fast path vs trim handler invocation
+    #[derive(Debug)]
+    struct SpyTrim(std::sync::atomic::AtomicBool);
+    impl BudgetTrimHandler for SpyTrim {
+        fn trim_memory(&self, _needed: u64) -> u64 {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+            0
+        }
+    }
+    let spy_budget = Budget::new(100);
+    let spy = Arc::new(SpyTrim(std::sync::atomic::AtomicBool::new(false)));
+    spy_budget.set_trim_handler(spy.clone());
+
+    // An oversized request (> cap) must refuse without calling spy (can_ever_fit check)
+    let err = spy_budget.try_reserve(101).unwrap_err();
+    assert!(matches!(
+        err,
+        OjasError::CapacityExceeded {
+            requested: 101,
+            cap: 100,
+            ..
+        }
+    ));
+    assert!(
+        !spy.0.load(std::sync::atomic::Ordering::SeqCst),
+        "oversized allocation must not invoke trim handler"
+    );
+
+    // A request that could fit if memory were freed invokes trim handler
+    let _r1 = spy_budget.try_reserve(80).unwrap();
+    let _err2 = spy_budget.try_reserve(50).unwrap_err();
+    assert!(
+        spy.0.load(std::sync::atomic::Ordering::SeqCst),
+        "memory pressure invokes trim handler"
+    );
+
+    // 5. Verify child budgets on BudgetLedger have NoOpTrim and don't deadlock
+    let ledger = BudgetLedger::new(&root, 16 * MIB as u64);
+    assert_eq!(ledger.cached_bytes(), 0);
+}

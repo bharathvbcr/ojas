@@ -45,7 +45,7 @@ pub use backend::{
     METAL_GDN_VALUE_BLOCK, METAL_MAX_HEAD_DIM, MUON_NS5_A, MUON_NS5_B, MUON_NS5_C, MUON_NS_EPS,
     RMS_NORM_EPS,
 };
-pub use budget::{Budget, Reservation, Scratch};
+pub use budget::{Budget, BudgetTrimHandler, Reservation, Scratch};
 pub use checkpoint::{
     prefix_bytes, read_prefix, CheckpointPrefix, CheckpointV1, DataCursor, NamedBlob,
     OptimizerCheckpoint, CHECKPOINT_MAGIC, CHECKPOINT_VERSION,

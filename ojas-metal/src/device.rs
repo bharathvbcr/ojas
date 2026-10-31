@@ -1035,19 +1035,23 @@ impl Worker {
 
     /// Release every buffer tessl's pool has cached: lowering the cap to 0
     /// drops them (tessl `set_max_cache_bytes` trims to the new cap), and
-    /// the cap is then restored, so later frees cache as before.
-    fn drop_pool(&self) {
+    /// the cap is then restored, so later frees cache as before. Returns
+    /// the number of bytes freed from the cache.
+    fn drop_pool(&self) -> u64 {
+        let before = self.rt.pool_resident().cached_bytes;
         let cap = self.rt.memory_info().pool_cache_cap;
         self.rt.set_pool_cache_cap_bytes(0);
         self.rt.set_pool_cache_cap_bytes(cap);
+        let after = self.rt.pool_resident().cached_bytes;
+        before.saturating_sub(after)
     }
 
     /// [`Cmd::TrimPool`]: recycle what was freed since the last waited
-    /// commit, then release the whole cache.
+    /// commit, then release the whole cache and report bytes freed.
     fn trim_pool(&self) -> Res<Reply> {
         self.recycle()?;
-        self.drop_pool();
-        Ok(Reply::Done)
+        let freed = self.drop_pool();
+        Ok(Reply::Trimmed(freed))
     }
 
     /// `n` four-byte elements, offset 0.
