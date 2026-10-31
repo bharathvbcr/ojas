@@ -29,11 +29,10 @@
 //! The files are pinned: `tests/fixture_pins.rs` checks the copies against the
 //! sha256s in their manifests, and `runga` reports the pins it was built with.
 
-use ojas_io::{parse_json_with, JsonLimits, JsonValue, SafeTensors};
+use ojas_io::{npy, parse_json_with, JsonLimits, JsonValue, SafeTensors};
 
 use crate::error::CudaError;
 use crate::k11_host::{replay_f32, AdamwEntry, AdamwHyper, AdamwTable, Trajectory};
-use crate::npy;
 
 /// sha256 of L-oracle's `manifest.json` as merged at Lappi 14601bc: the pin
 /// over the four pins it holds (`tests/fixture_pins.rs` checks the copy).
@@ -786,28 +785,8 @@ mod tests {
             .unwrap()
             .get_object("adamw_f")
             .unwrap();
-        to_ours(case).render()
-    }
-
-    /// Re-render through this crate's writer so a test can edit the text.
-    fn to_ours(v: &JsonValue) -> crate::json::Json {
-        use crate::json::{Json, JsonObj};
-        match v {
-            JsonValue::Null => Json::Null,
-            JsonValue::Bool(b) => Json::from(*b),
-            JsonValue::Number(ojas_io::JsonNumber::U64(n)) => Json::from(*n),
-            JsonValue::Number(ojas_io::JsonNumber::I64(n)) => Json::from(*n),
-            JsonValue::Number(ojas_io::JsonNumber::F64(x)) => Json::from(*x),
-            JsonValue::String(s) => Json::from(s.as_str()),
-            JsonValue::Array(a) => Json::Arr(a.iter().map(to_ours).collect()),
-            JsonValue::Object(o) => {
-                let mut obj = JsonObj::new();
-                for (k, x) in o {
-                    obj.push(k, to_ours(x));
-                }
-                obj.into()
-            }
-        }
+        // Re-rendered through ojas-io's writer so the test can edit the text.
+        case.render()
     }
 
     fn check(text: &str) -> Result<FBuilder, String> {

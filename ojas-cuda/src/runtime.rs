@@ -35,11 +35,11 @@ use ojas_device::{free_bytes_fit, poll_until};
 
 use crate::budget::{bytes_for, AllocBudget, Reservation};
 use crate::error::CudaError;
-#[cfg(feature = "harness")]
-use crate::json::{Json, JsonObj};
 use crate::kernels::{CompileSpec, KernelModule};
 use crate::libprobe;
 use crate::nvrtc_cache::{CacheKey, CacheStats, NvrtcCache};
+#[cfg(feature = "harness")]
+use ojas_io::{JsonObj, JsonValue as Json};
 
 /// The compute capability this crate is written and tested for (GH200:
 /// sm_90), required exactly. Stated once, in [`crate::kernels`], where the

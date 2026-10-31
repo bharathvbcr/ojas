@@ -27,10 +27,10 @@ use crate::gdn::{
 };
 use crate::gdn_host::{gdn_published_mirror, smoke_cases, GdnPublishedCase, GdnPublishedOutputs};
 use crate::gdn_kernels::GDN_PUBLISHED;
-use crate::json::{Json, JsonObj};
 use crate::kernels::STRICT_SM90;
 use crate::runtime::{driver_error, CudaRuntime};
 use crate::smoke::guarded;
+use ojas_io::{JsonObj, JsonValue as Json};
 
 /// Written to every output before a launch, so an element never written
 /// shows (tessl `tests/gdn_train.rs:181-182`).
@@ -326,7 +326,7 @@ impl GdnPublishedTiming {
         let (serial, batched) = self.projected_step_s();
         JsonObj::new()
             .with("report_only", true)
-            .with("lens", Json::Arr(self.lens.iter().map(|&t| Json::from(t)).collect()))
+            .with("lens", Json::Array(self.lens.iter().map(|&t| Json::from(t)).collect()))
             .with("heads", self.heads)
             .with("v_dim", self.v_dim)
             .with("reps", self.reps)

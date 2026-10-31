@@ -368,14 +368,14 @@ fn published_gdn_timing_b1_vs_batched_report_only() {
                 e.kind()
             )
         });
-        let json = ojas_cuda::json::JsonObj::new()
+        let json = ojas_io::JsonObj::new()
             .with("device", info.name.as_str())
             .with("sm_count", info.sm_count)
             .with("driver_version", info.driver_version)
             .with("timing", t.to_json());
         println!(
             "GDN_PUBLISHED_TIMING {}",
-            ojas_cuda::json::Json::from(json).render()
+            ojas_io::JsonValue::from(json).render()
         );
         for (name, ms) in [
             ("batched_fwd_ms", t.batched_fwd_ms),

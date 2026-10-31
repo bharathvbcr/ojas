@@ -27,7 +27,6 @@ use device_small_common::{
     f32s, golden, wide, Goldens, CE_BF16_GRAD_PEAK_REL, CE_EXACT_GRAD_PEAK_REL, CE_LOSS_TOL,
     CE_SOURCE,
 };
-use ojas_cuda::bf16::round_to_bf16;
 use ojas_cuda::ce_rows::{ce_rows_mirror, CeMirror, CeOutput, CeRowsPlan, Reduction, CE_CHUNK};
 use ojas_cuda::check::Check;
 use ojas_cuda::host_ref::Operands;
@@ -163,7 +162,10 @@ impl Problem {
         let round = |x: &[f32]| -> Vec<f64> {
             match operands {
                 Operands::ExactF32 => wide(x),
-                Operands::Bf16 => x.iter().map(|&v| f64::from(round_to_bf16(v))).collect(),
+                Operands::Bf16 => x
+                    .iter()
+                    .map(|&v| f64::from(ojas_core::round_f32_to_bf16(v)))
+                    .collect(),
             }
         };
         let to_usize = |v: &[u32]| -> Vec<usize> { v.iter().map(|&i| i as usize).collect() };

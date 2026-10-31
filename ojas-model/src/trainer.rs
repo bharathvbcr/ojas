@@ -44,10 +44,10 @@ use ojas_cpu::{
     scaled_lr, LrSchedule, OptimGroup, ADAM_HYBRID_WEIGHT_DECAY, MUON_MOMENTUM, MUON_WEIGHT_DECAY,
 };
 use ojas_data::{Batch, BatchSampler, DataError, SamplerConfig, TokenBin};
+use ojas_io::quote;
 
 use crate::block::{bind, forward_loss, ActivationCheckpoint, Rope};
 use crate::init::{fnv1a, fnv1a_extend};
-use crate::json::quote;
 use crate::names::{param_table, ParamInfo};
 use crate::spec::ModelSpec;
 

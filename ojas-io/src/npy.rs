@@ -4,10 +4,10 @@
 //! unexpected layout fails the test that loads it instead of feeding it
 //! plausible numbers.
 //!
-//! Written by L-cuda-oracle as `tests/reference/npy.rs`. It moved here
-//! unchanged (L-cuda-M1, lead's ruling 2026-10-01) because `runga` and the
-//! tiny-fixture loader read `.npy` outside the test harness;
-//! `tests/reference/npy.rs` now re-exports this module.
+//! This is the workspace's one `.npy` reader. It was ojas-cuda's `npy`
+//! (written by L-cuda-oracle as `tests/reference/npy.rs`, moved into the
+//! library by L-cuda-M1) and moved here unchanged, errors included, so
+//! every crate reading goldens shares it; ojas-cuda's tests re-export it.
 
 use std::path::Path;
 

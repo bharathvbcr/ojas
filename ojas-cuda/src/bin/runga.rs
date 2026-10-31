@@ -34,7 +34,6 @@ use std::time::{Duration, Instant};
 
 use ojas_cuda::check::{overall, panic_text, Check, Status};
 use ojas_cuda::gdn_smoke::{gdn_published_checks, gdn_published_timing};
-use ojas_cuda::json::{Json, JsonObj};
 use ojas_cuda::k11_golden::{AdamwF, DecaySensitive, DECAY_MANIFEST_SHA256};
 use ojas_cuda::k11_smoke::k11_checks;
 use ojas_cuda::k8_smoke::k8_checks;
@@ -47,6 +46,7 @@ use ojas_cuda::runtime::{CudaRuntime, RuntimeConfig};
 use ojas_cuda::tiny_fixture_published::{files as tiny_files, loader_checks};
 use ojas_cuda::CudaError;
 use ojas_cuda::{small_common_cuda, small_smoke, smoke};
+use ojas_io::{JsonObj, JsonValue as Json};
 
 const PROG: &str = "runga";
 /// Repetitions of the K1 determinism runs (rung 0's).

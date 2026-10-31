@@ -147,6 +147,7 @@
       <article class="prose-ojas">
 <h1 id="ojas-io">ojas-io <a class="anchor" href="#ojas-io" aria-label="Link to this section">#</a></h1>
 <p><code>ojas-io</code> provides serialization and deserialization routines for <strong>safetensors</strong> model files and binary <strong>Checkpoint v1</strong> containers, hardened against malicious payloads, corrupted headers, and integer overflow attacks.</p>
+<p>It also holds the workspace&#39;s other small format code, so no crate carries a copy: the strict JSON reader&#39;s compact writer (<code>JsonValue::render</code>, <code>JsonObj</code>, <code>quote</code>; a non-finite float is written as the string <code>&#34;NaN&#34;</code>, <code>&#34;inf&#34;</code> or <code>&#34;-inf&#34;</code>, never as a number) and the <code>.npy</code> golden reader (<code>npy</code>: little-endian <code>&lt;f4</code>, <code>&lt;f8</code>, <code>&lt;i8</code>, C order, versions 1.0 to 3.0; anything else is refused by name).</p>
 <hr>
 <h2 id="formats--parsing-engine">Formats &amp; Parsing Engine <a class="anchor" href="#formats--parsing-engine" aria-label="Link to this section">#</a></h2>
 <figure class="diagram"><pre class="mermaid">flowchart TD

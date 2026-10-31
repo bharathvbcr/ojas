@@ -12,6 +12,9 @@
 //! [`replace_dir_with`] swaps in a whole directory; its docs give what a
 //! reader sees if the writer dies at each step.
 //!
+//! [`json`] reads strict JSON and, through [`JsonValue::render`] and
+//! [`JsonObj`], writes it compactly; [`npy`] reads `.npy` goldens.
+//!
 //! [`sha256`] is the workspace's one SHA-256 (streaming, one-shot, and
 //! [`sha256::file_sha256_hex`], a digest of a file read in bounded chunks).
 
@@ -21,6 +24,8 @@ mod checkpoint;
 mod error;
 mod half;
 pub mod json;
+mod json_write;
+pub mod npy;
 mod open;
 mod posread;
 mod replace;
@@ -36,6 +41,7 @@ pub use checkpoint::{
 pub use error::IoError;
 pub use half::{bf16_to_f32, f16_to_f32, f32_to_bf16, f32_to_f16};
 pub use json::{parse_json, parse_json_with, JsonLimits, JsonNumber, JsonValue};
+pub use json_write::{quote, JsonObj};
 pub use open::open_nofollow;
 pub use replace::{recover_replaced_dir, replace_dir_with, replace_dir_with_if};
 pub use safetensors::{

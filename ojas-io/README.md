@@ -2,6 +2,8 @@
 
 `ojas-io` provides serialization and deserialization routines for **safetensors** model files and binary **Checkpoint v1** containers, hardened against malicious payloads, corrupted headers, and integer overflow attacks.
 
+It also holds the workspace's other small format code, so no crate carries a copy: the strict JSON reader's compact writer (`JsonValue::render`, `JsonObj`, `quote`; a non-finite float is written as the string `"NaN"`, `"inf"` or `"-inf"`, never as a number) and the `.npy` golden reader (`npy`: little-endian `<f4`, `<f8`, `<i8`, C order, versions 1.0 to 3.0; anything else is refused by name).
+
 ---
 
 ## Formats & Parsing Engine

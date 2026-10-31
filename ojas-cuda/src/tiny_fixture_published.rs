@@ -35,7 +35,7 @@
 //!   with every key named (an unknown key is refused: the fixture is pinned,
 //!   so a new key means a different fixture);
 //! - `model.safetensors` through `ojas_io::SafeTensors`, every tensor BF16;
-//! - the `.npy` files through [`crate::npy`]: `ids` `<i8`, `loss` `<f8`,
+//! - the `.npy` files through [`ojas_io::npy`]: `ids` `<i8`, `loss` `<f8`,
 //!   one `<f4` `grad.<parameter>` per parameter, of the parameter's shape.
 //!
 //! With `cuda`, [`TinyFixture::upload`] puts all of it in device buffers.
@@ -43,10 +43,9 @@
 use std::io::Read;
 use std::path::Path;
 
-use ojas_io::{open_nofollow, parse_json_with, JsonLimits, JsonValue, SafeTensors, StDtype};
+use ojas_io::{npy, open_nofollow, parse_json_with, JsonLimits, JsonValue, SafeTensors, StDtype};
 
 use crate::error::CudaError;
-use crate::npy;
 
 /// The files, compiled in.
 pub mod files {

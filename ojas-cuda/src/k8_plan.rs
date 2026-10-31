@@ -21,10 +21,10 @@
 //! matches any NaN with any NaN. A NaN reaching a gradient stops the step
 //! ([`crate::step::validate_external_grad`]).
 
-use crate::bf16::f32_to_bf16_bits;
 use crate::error::CudaError;
 use crate::k0_plan::ColWindow;
 use crate::k8_act::{silu_f32, silu_grad_f32};
+use ojas_core::f32_to_bf16;
 
 /// `(ld, off, buffer length)` of one operand.
 pub type WindowSpec = (u64, u64, usize);
@@ -116,7 +116,7 @@ impl SwigluPlan {
     /// The bf16-out forward on the host: the f32 product rounded once.
     pub fn host_bf16(&self, gate: &[f32], up: &[f32], out: &mut [u16]) -> Result<(), CudaError> {
         self.check(gate.len(), up.len(), out.len())?;
-        self.each(|g, u, o| out[o] = f32_to_bf16_bits(swiglu_elem(gate[g], up[u])));
+        self.each(|g, u, o| out[o] = f32_to_bf16(swiglu_elem(gate[g], up[u])));
         Ok(())
     }
 
@@ -499,7 +499,7 @@ mod tests {
         // aarch64's bits.
         let d = diff_bits_f32(&outs, &[f32::from_bits(0xffc0_0000); 5]);
         assert_eq!(d.mismatches, 0, "{d:?}");
-        let bf = f32_to_bf16_bits(swiglu_elem(payload, 1.0));
+        let bf = f32_to_bf16(swiglu_elem(payload, 1.0));
         assert_eq!(diff_bits_bf16(&[bf], &[0x7fff]).mismatches, 0);
         // The device module does not canonicalise.
         assert!(!crate::k8_kernels::K8.source.contains("qd_canon_nan"));
@@ -558,7 +558,7 @@ mod tests {
             let mut out16 = vec![0u16; out.len()];
             p.host_bf16(&c.fused, &c.fused, &mut out16).unwrap();
             for (a, b) in out.iter().zip(&out16) {
-                assert_eq!(f32_to_bf16_bits(*a), *b);
+                assert_eq!(f32_to_bf16(*a), *b);
             }
             let shared = c.bwd_plan(BwdOut::Shared).unwrap();
             let sep = c.bwd_plan(BwdOut::Separate).unwrap();

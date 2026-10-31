@@ -11,11 +11,11 @@
 //! These live in `src/` until L-cuda-oracle's `tests/reference/` exists; the
 //! device checks in [`crate::check`] compare against them.
 
-use crate::bf16::{bf16_bits_to_f32, f32_to_bf16_bits, round_to_bf16};
 use crate::gemm_plan::{GemmLayout, GemmShape};
 use crate::k0_plan::{
     CopyColsPlan, DeliverMode, DeliverPlan, GatherRowsPlan, ScatterAddRowsPlan, ZeroPlan,
 };
+use ojas_core::{bf16_to_f32, f32_to_bf16, round_f32_to_bf16};
 
 /// `usize` from a plan's `u64` index, which a plan has bounded by a slice length.
 fn ix(x: u64) -> usize {
@@ -24,12 +24,12 @@ fn ix(x: u64) -> usize {
 
 /// f32 to bf16 bits, elementwise.
 pub fn cast_f32_to_bf16(src: &[f32]) -> Vec<u16> {
-    src.iter().copied().map(f32_to_bf16_bits).collect()
+    src.iter().copied().map(f32_to_bf16).collect()
 }
 
 /// bf16 bits to f32, elementwise.
 pub fn cast_bf16_to_f32(src: &[u16]) -> Vec<f32> {
-    src.iter().copied().map(bf16_bits_to_f32).collect()
+    src.iter().copied().map(bf16_to_f32).collect()
 }
 
 /// [`CopyColsPlan`] on the host.
@@ -87,7 +87,7 @@ pub fn ce_gather_rows_bf16(plan: &GatherRowsPlan, h: &[u16], rows: &[u32], out: 
         let i = u64::try_from(i).unwrap_or(u64::MAX);
         for c in 0..plan.hidden {
             out[ix(i * plan.hidden + c)] =
-                bf16_bits_to_f32(h[ix(u64::from(r) * plan.ld + plan.off + c)]);
+                bf16_to_f32(h[ix(u64::from(r) * plan.ld + plan.off + c)]);
         }
     }
 }
@@ -114,7 +114,7 @@ impl Operands {
     fn load(self, x: f32) -> f32 {
         match self {
             Operands::ExactF32 => x,
-            Operands::Bf16 => round_to_bf16(x),
+            Operands::Bf16 => round_f32_to_bf16(x),
         }
     }
 }

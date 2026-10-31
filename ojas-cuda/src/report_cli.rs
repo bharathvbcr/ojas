@@ -16,10 +16,10 @@ use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::check::{overall, Check, Status};
-use crate::json::{Json, JsonObj};
 use crate::rung0_cli::{
     self, write_atomic, Args, EXIT_FAIL, EXIT_PASS, EXIT_REFUSED, EXIT_TIMEOUT,
 };
+use ojas_io::{JsonObj, JsonValue as Json};
 
 /// One run's report, filled in as checks finish.
 pub struct Report {
@@ -64,7 +64,7 @@ impl Report {
         obj.push("phase_at_end", self.phase.as_str());
         obj.push(
             "checks",
-            Json::Arr(self.checks.iter().map(Check::to_json).collect()),
+            Json::Array(self.checks.iter().map(Check::to_json).collect()),
         );
         obj.push("summary", summary);
         obj.push("status", status);
