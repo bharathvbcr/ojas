@@ -1663,8 +1663,8 @@ pub trait Backend {
     /// handled as [`Self::layer_norm_backward`] handles a row: `xhat = (x -
     /// mean) * rstd` from the forward's own `f64` statistics over the
     /// group's `C / groups * H * W` values, `dx = rstd * (g * w - mean(g * w)
-    /// - xhat * mean(g * w * xhat))` with `w` the channel's weight. `dw[c]`
-    /// and `db[c]` sum `g * xhat` and `g` over the positions of channel `c`
+    /// - xhat * mean(g * w * xhat))` with `w` the channel's weight. `dw\[c\]`
+    /// and `db\[c\]` sum `g * xhat` and `g` over the positions of channel `c`
     /// and then the images, ascending. Every sum is `f64` in a fixed
     /// ascending order and rounded once, so the bits do not depend on the
     /// thread count. `groups` and `eps` are the forward's.
