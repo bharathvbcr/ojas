@@ -2049,7 +2049,7 @@ mod tests {
     }
 
     #[test]
-    fn param_bytes_rounds_each_buffer_up_to_its_pool_size() {
+    fn param_bytes_rounds_each_buffer_up_to_a_power_of_two_bucket() {
         let mut shape = shape();
         shape.vocab = 17;
         let got = param_bytes(&shape).unwrap();
@@ -2060,7 +2060,7 @@ mod tests {
         let logical = logical_elems * 4;
         assert!(
             got > logical,
-            "device budget {got} did not account for power-of-two buckets above logical {logical}"
+            "device budget {got} did not account for pool rounding above logical {logical}"
         );
     }
 
