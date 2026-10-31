@@ -10,7 +10,12 @@ use std::env;
 use std::path::PathBuf;
 use std::process::Command;
 
-const SOURCES: [&str; 2] = ["per_head_gate.metal", "ojas_backend.metal"];
+const SOURCES: [&str; 4] = [
+    "per_head_gate.metal",
+    "causal_attn_bwd.metal",
+    "ojas_backend.metal",
+    "max_pool.metal",
+];
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
