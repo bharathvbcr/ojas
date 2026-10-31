@@ -105,11 +105,11 @@ use ojas_core::{
     silu_forward_dims, slice_dims, softmax_forward_dims, topk_rows_dims,
     value_residual_blend_backward_dims, value_residual_blend_forward_dims, AdamWConfig,
     AttentionDims, AttentionOpts, Backend, BackendId, BroadcastDims, Budget, CeChunk, CeGrads,
-    Conv1dDims, Conv2dDims, Conv2dParams, ConvTranspose2dDims, ConvTranspose2dParams, DType,
-    DeviceBuffer, GateDims, GatedRmsGrad, GdnDecayGrad, GdnDims, GdnForward, GdnGrad, GdnInputs,
-    InterleavedRopeDims, LinearCe, MuonNs5Config, Ns5Precision, Numerics, OjasError, OptimizerKind,
-    PartialRopeDims, PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
-    ValueResidualGrad, MAX_PERMUTE_RANK,
+    Conv1dDims, Conv2dDims, Conv2dParams, ConvGrad, ConvTranspose2dDims, ConvTranspose2dParams,
+    DType, DeviceBuffer, GateDims, GatedRmsGrad, GdnDecayGrad, GdnDims, GdnForward, GdnGrad,
+    GdnInputs, InterleavedRopeDims, LinearCe, MuonNs5Config, Ns5Precision, Numerics, OjasError,
+    OptimizerKind, PartialRopeDims, PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout,
+    SdpaDims, Tensor, ValueResidualGrad, MAX_PERMUTE_RANK,
 };
 
 use crate::link::{
@@ -119,6 +119,8 @@ use crate::link::{
     WaitCounts, Waits, SQ_OUT_WORDS,
 };
 use crate::permute;
+
+mod spatial_bwd;
 
 /// A Metal allocation owned by the device thread, named by id.
 pub struct MetalBuffer {
@@ -3808,6 +3810,39 @@ impl Backend for MetalBackend {
             Reply::Done => Ok(()),
             other => Err(metal_err(format!("{OP}: device returned {other:?}"))),
         }
+    }
+
+    /// The gradients of a convolution on the device: for one group im2col,
+    /// two exact-f32 GEMMs and a col2im gather; for a depthwise convolution
+    /// three direct kernels. Every sum is a gather in the CPU's order (no
+    /// atomics), so a result repeats bit for bit; the GEMM-backed `dx` and
+    /// `dw` differ from the CPU's by f32 summation order. The bias gradient
+    /// and the depthwise gradients are the CPU's bits. Dilation above 1 and
+    /// other grouped convolutions are [`OjasError::Unsupported`], as for the
+    /// forward. See `src/backend/spatial_bwd.rs`.
+    fn conv2d_backward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: Option<&Tensor>,
+        grad_output: &Tensor,
+        params: Conv2dParams,
+    ) -> Result<ConvGrad, OjasError> {
+        self.conv2d_backward_routed(input, weight, bias, grad_output, params)
+    }
+
+    /// The gradients of a transposed convolution whose kernel equals its
+    /// stride, as [`Self::conv2d_backward`] gives them. Any other stride,
+    /// padding or output padding is [`OjasError::Unsupported`].
+    fn conv_transpose2d_backward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: Option<&Tensor>,
+        grad_output: &Tensor,
+        params: ConvTranspose2dParams,
+    ) -> Result<ConvGrad, OjasError> {
+        self.conv_transpose2d_backward_routed(input, weight, bias, grad_output, params)
     }
 }
 

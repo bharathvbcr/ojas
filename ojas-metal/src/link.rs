@@ -1031,6 +1031,40 @@ pub(crate) enum Cmd {
         /// Newton-Schulz at `Ns5Precision::Bf16`.
         bf16: bool,
     },
+    /// `conv2d_backward` with one group: `ojas_im2col`, two exact-f32 GEMMs
+    /// on the layout-permuted `gy` and `ojas_col2im`. Replies with `dx`,
+    /// `dw`, then `db` when `bias` is given (it is scanned, not otherwise
+    /// read; the gradient is the sum of `gy`). `op` names a fault.
+    Conv2dBwd {
+        op: &'static str,
+        x: Arg,
+        w: Arg,
+        bias: Option<Arg>,
+        gy: Arg,
+        geom: ConvGeom,
+    },
+    /// `conv2d_backward` with `groups == c == o`: three direct kernels, no
+    /// GEMM. Replies as [`Cmd::Conv2dBwd`].
+    DepthwiseConv2dBwd {
+        op: &'static str,
+        x: Arg,
+        w: Arg,
+        bias: Option<Arg>,
+        gy: Arg,
+        geom: ConvGeom,
+    },
+    /// `conv_transpose2d_backward` with kernel == stride: `ojas_im2col` of
+    /// `gy` read on the input's grid, two exact-f32 GEMMs and a layout pass.
+    /// `geom` is the forward's (the input extents, the output channels and
+    /// the kernel). Replies as [`Cmd::Conv2dBwd`].
+    ConvTranspose2dBwd {
+        op: &'static str,
+        x: Arg,
+        w: Arg,
+        bias: Option<Arg>,
+        gy: Arg,
+        geom: ConvGeom,
+    },
 }
 
 #[derive(Debug)]

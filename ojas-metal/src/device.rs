@@ -45,6 +45,8 @@ use crate::link::{
 };
 use crate::permute::{self, Plan};
 
+mod spatial_bwd;
+
 /// Threads of an `ojas_permute_tile` threadgroup (`PERMUTE_TILE_THREADS`).
 const PERMUTE_TILE_THREADS: usize = 256;
 /// The status word that tells `ojas_permute_runs` and `ojas_permute_tile` not
@@ -584,6 +586,9 @@ impl Worker {
         }
         rt.add_metallib_bytes(lib).map_err(metal_err)?;
         for name in KERNELS {
+            rt.pipeline(name).map_err(metal_err)?;
+        }
+        for name in spatial_bwd::KERNELS {
             rt.pipeline(name).map_err(metal_err)?;
         }
         let slab = rt.alloc_buffer(SLAB_SLOTS * ST_BYTES).map_err(metal_err)?;
@@ -1764,6 +1769,30 @@ impl Worker {
                 alpha,
                 bf16,
             } => self.muon(p, g, m, rows, cols, momentum, nesterov, decay, alpha, bf16),
+            Cmd::Conv2dBwd {
+                op,
+                x,
+                w,
+                bias,
+                gy,
+                geom,
+            } => self.conv2d_bwd(op, [x, w, gy], bias, geom),
+            Cmd::DepthwiseConv2dBwd {
+                op,
+                x,
+                w,
+                bias,
+                gy,
+                geom,
+            } => self.depthwise_conv2d_bwd(op, [x, w, gy], bias, geom),
+            Cmd::ConvTranspose2dBwd {
+                op,
+                x,
+                w,
+                bias,
+                gy,
+                geom,
+            } => self.conv_transpose2d_bwd(op, [x, w, gy], bias, geom),
         }
     }
 
