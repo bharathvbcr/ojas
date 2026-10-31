@@ -13,7 +13,7 @@ default = []
 cuda = ["dep:cudarc"]
 # The parity ladder (K0-K11 and K2(i) wrappers the step provider does not call
 # yet, host references, goldens, fixtures) and what the rung binaries share
-# (smokes, report CLI, json, npy). Not part of the library API; the bins
+# (smokes, report CLI, check). Not part of the library API; the bins
 # require it and this crate's own tests turn it on (dev-dependency below).
 harness = []
 

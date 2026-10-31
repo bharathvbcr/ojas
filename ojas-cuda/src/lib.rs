@@ -41,10 +41,10 @@
 //! and watchdog CLI, `check`, the goldens, the tiny-fixture loader and the
 //! deterministic inputs; the report writer and the `.npy` reader are
 //! `ojas_io::JsonObj` and `ojas_io::npy`, and bf16 is `ojas_core::f32_to_bf16`).
-//! The rung binaries require it, and the
-//! crate's own tests turn it on through a dev-dependency on this crate, so
-//! `cargo test -p ojas-cuda` still runs every host test. A ladder module moves
-//! into the default build when the step provider starts calling it.
+//! The rung binaries require it, and the crate's own tests turn it on through
+//! a dev-dependency on this crate, so `cargo test -p ojas-cuda` still runs
+//! every host test. A ladder module moves into the default build when the
+//! step provider starts calling it.
 //!
 //! Device tests live in `tests/device_*.rs`, `#[ignore]`d, for an sm_90 GPU.
 

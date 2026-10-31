@@ -1114,52 +1114,10 @@ mod tests {
         assert!(u(1).deny_unknown_keys_at("p", &[]).is_err());
     }
 
-    /// Render a value as JSON. Floats use `{:?}`, which keeps `.0`, so a float
-    /// does not come back as an integer.
+    /// Append the compact text of a value ([`JsonValue::render`], whose floats
+    /// use `{:?}` and keep `.0`, so a float does not come back as an integer).
     fn render(v: &JsonValue, out: &mut String) {
-        match v {
-            JsonValue::Null => out.push_str("null"),
-            JsonValue::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-            JsonValue::Number(JsonNumber::U64(n)) => out.push_str(&n.to_string()),
-            JsonValue::Number(JsonNumber::I64(n)) => out.push_str(&n.to_string()),
-            JsonValue::Number(JsonNumber::F64(x)) => out.push_str(&format!("{x:?}")),
-            JsonValue::String(t) => {
-                out.push('"');
-                for c in t.chars() {
-                    match c {
-                        '"' | '\\' => {
-                            out.push('\\');
-                            out.push(c);
-                        }
-                        c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-                        c => out.push(c),
-                    }
-                }
-                out.push('"');
-            }
-            JsonValue::Array(items) => {
-                out.push('[');
-                for (i, item) in items.iter().enumerate() {
-                    if i > 0 {
-                        out.push(',');
-                    }
-                    render(item, out);
-                }
-                out.push(']');
-            }
-            JsonValue::Object(entries) => {
-                out.push('{');
-                for (i, (k, item)) in entries.iter().enumerate() {
-                    if i > 0 {
-                        out.push(',');
-                    }
-                    render(&JsonValue::String(k.clone()), out);
-                    out.push(':');
-                    render(item, out);
-                }
-                out.push('}');
-            }
-        }
+        out.push_str(&v.render());
     }
 
     fn random_value(rng: &mut crate::test_util::Mix, depth: usize) -> JsonValue {

@@ -48,10 +48,11 @@ refused by name), so it adds nothing. The runtime's own pieces (`budget`, `nvrtc
 does not call yet (the K0–K11 and K2(i) wrappers, their plans, host references and emulations) and
 what the rung binaries and the device tests share (`smoke` and the `*_smoke` modules, `report_cli`,
 `rung0_cli`, `check`, `inputs`, `k11_golden`, `tiny_fixture_published`, `host_ref`). The report
-writer, the `.npy` reader and the bf16 conversions are not this crate's: they are `ojas_io::JsonObj`,
-`ojas_io::npy` and `ojas_core::f32_to_bf16`. The rung binaries require it. The crate's tests turn it on themselves (a dev-dependency on
-`ojas-cuda` with `harness`), so `cargo test -p ojas-cuda` still runs every host test. A ladder
-module joins the default build when the step provider starts calling it.
+writer, the `.npy` reader and the bf16 conversions are not this crate's: they are
+`ojas_io::JsonObj`, `ojas_io::npy` and `ojas_core::f32_to_bf16`. The rung binaries require it. The
+crate's tests turn it on themselves (a dev-dependency on `ojas-cuda` with `harness`), so
+`cargo test -p ojas-cuda` still runs every host test. A ladder module joins the default build when
+the step provider starts calling it.
 
 **Status (2026-10-06).** Milestones M0 (K0, K1) and M1 (K8, K11, the tiny-fixture loader), K2(i)
 (GDN at the published rule), and L-cuda-small's K3, K4, K6, K7, K9, K10. On 2026-10-05 the GH200
