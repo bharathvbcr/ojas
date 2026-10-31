@@ -1186,6 +1186,7 @@ impl<B: Backend> Tape<B> {
                     window,
                     bias: bias.map(|b| &v[b]),
                     key_lens: key_lens.as_ref(),
+                    ..Default::default()
                 };
                 let (y, lse) = be.attention_forward_saving(&v[q], &v[k], &v[vi], opts)?;
                 let rec = Rec::Attn {
@@ -1645,6 +1646,7 @@ impl<B: Backend> Tape<B> {
                     window,
                     bias: bias.map(|b| &self.values[b]),
                     key_lens: key_lens.as_ref(),
+                    ..Default::default()
                 };
                 let bias_grad = bias.is_some_and(|b| !self.is_frozen(b));
                 let g = self.backend.attention_backward(

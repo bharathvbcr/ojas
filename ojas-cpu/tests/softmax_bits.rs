@@ -173,6 +173,7 @@ fn digests(numerics: Numerics) -> Vec<(String, u64)> {
             window: c.window,
             bias: bias.as_ref(),
             key_lens: lens.as_ref(),
+            ..Default::default()
         };
         let (y, lse) = cpu.attention_forward_saving(&q, &k, &v, opts).unwrap();
         out.push((format!("attention case {i}"), fnv(&[&y, &lse])));

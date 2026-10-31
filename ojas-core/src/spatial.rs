@@ -24,6 +24,7 @@ const CONV2D_BACKWARD: &str = "conv2d_backward";
 const CONV_TRANSPOSE2D_BACKWARD: &str = "conv_transpose2d_backward";
 const MAX_POOL2D_BACKWARD: &str = "max_pool2d_backward";
 const BILINEAR: &str = "interpolate_bilinear_forward";
+const BILINEAR_BACKWARD: &str = "interpolate_bilinear_backward";
 const ROPE_INTERLEAVED_FORWARD: &str = "rope_interleaved_forward";
 const ROPE_INTERLEAVED_BACKWARD: &str = "rope_interleaved_backward";
 const AXIAL_TABLES: &str = "axial_rope_2d_tables";
@@ -503,8 +504,37 @@ pub fn interpolate_bilinear_forward_dims(
 ) -> Result<BilinearDims, OjasError> {
     const OP: &str = BILINEAR;
     f32_operand(OP, input)?;
-    let [batch, channels, height, width] = rank4(OP, "input", input)?;
-    positive_pair(OP, "out_size", out_size)?;
+    bilinear_dims(OP, input, out_size)
+}
+
+/// [`Backend::interpolate_bilinear_backward`]: `input` `[N, C, H, W]` and
+/// `grad_output` `[N, C, out_h, out_w]`, both `F32`, checked in that order
+/// (dtype, then no zero extent, then size), then the rank of each, then that
+/// `grad_output` has the input's batch and channels. The returned dims are
+/// the forward's for `out_size = [out_h, out_w]`, so `out_size` is
+/// `grad_output`'s extents and the gradient is shaped like `input`.
+/// `align_corners` changes no shape and is not checked.
+pub fn interpolate_bilinear_backward_dims(
+    input: &Tensor,
+    grad_output: &Tensor,
+) -> Result<BilinearDims, OjasError> {
+    const OP: &str = BILINEAR_BACKWARD;
+    f32_operands(OP, &[input, grad_output])?;
+    let [_, _, out_h, out_w] = rank4(OP, "grad_output", grad_output)?;
+    let dims = bilinear_dims(OP, input, [out_h, out_w])?;
+    same(OP, grad_output.shape(), &dims.out_shape())?;
+    Ok(dims)
+}
+
+/// The rules the bilinear forward and backward share, after the operands'
+/// own dtype rules.
+fn bilinear_dims(
+    op: &'static str,
+    input: &Tensor,
+    out_size: [usize; 2],
+) -> Result<BilinearDims, OjasError> {
+    let [batch, channels, height, width] = rank4(op, "input", input)?;
+    positive_pair(op, "out_size", out_size)?;
     let dims = BilinearDims {
         batch,
         channels,
@@ -513,7 +543,7 @@ pub fn interpolate_bilinear_forward_dims(
         out_height: out_size[0],
         out_width: out_size[1],
     };
-    f32_product(OP, &dims.out_shape())?;
+    f32_product(op, &dims.out_shape())?;
     Ok(dims)
 }
 
@@ -887,4 +917,98 @@ pub fn pixel_unshuffle<B: Backend + ?Sized>(
     let split = x.reshape(&[n, c, h, factor, w, factor])?;
     let moved = backend.permute(&split, &[0, 1, 3, 5, 2, 4])?;
     moved.reshape(&[n, c * factor * factor, h, w])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tensor(dtype: DType, shape: &[usize]) -> Tensor {
+        Tensor::zeros(shape, dtype, &Budget::new(1 << 24)).unwrap()
+    }
+
+    fn f(shape: &[usize]) -> Tensor {
+        tensor(DType::F32, shape)
+    }
+
+    #[track_caller]
+    fn shape_err<T: std::fmt::Debug>(r: Result<T, OjasError>, needle: &str) {
+        match r {
+            Err(OjasError::Shape { op, detail }) => {
+                assert_eq!(op, "interpolate_bilinear_backward", "{detail}");
+                assert!(detail.contains(needle), "{detail:?} lacks {needle:?}");
+            }
+            other => panic!("expected Shape containing {needle:?}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bilinear_backward_dims_are_the_forwards_for_the_gradients_extents() {
+        let input = f(&[2, 3, 5, 7]);
+        let grad = f(&[2, 3, 9, 13]);
+        let d = interpolate_bilinear_backward_dims(&input, &grad).unwrap();
+        assert_eq!(
+            d,
+            interpolate_bilinear_forward_dims(&input, [9, 13]).unwrap()
+        );
+        assert_eq!(d.out_shape(), [2, 3, 9, 13]);
+        assert_eq!((d.height, d.width), (5, 7));
+        // Shrinking and a 1 x N edge are legal shapes too.
+        let d = interpolate_bilinear_backward_dims(&f(&[1, 2, 1, 6]), &f(&[1, 2, 1, 3])).unwrap();
+        assert_eq!((d.height, d.width, d.out_height, d.out_width), (1, 6, 1, 3));
+    }
+
+    #[test]
+    fn bilinear_backward_dims_refuse_under_the_backwards_name() {
+        let input = f(&[2, 3, 5, 7]);
+        let grad = f(&[2, 3, 9, 13]);
+        // The gradient must share the input's batch and channels.
+        shape_err(
+            interpolate_bilinear_backward_dims(&input, &f(&[1, 3, 9, 13])),
+            "does not match",
+        );
+        shape_err(
+            interpolate_bilinear_backward_dims(&input, &f(&[2, 4, 9, 13])),
+            "does not match",
+        );
+        // Ranks.
+        shape_err(
+            interpolate_bilinear_backward_dims(&input, &f(&[3, 9, 13])),
+            "rank",
+        );
+        shape_err(
+            interpolate_bilinear_backward_dims(&f(&[3, 5, 7]), &grad),
+            "rank",
+        );
+        // Dtype precedes shape, in argument order, and a zero extent is empty.
+        for (a, b) in [
+            (tensor(DType::U32, &[2, 3, 5, 7]), grad.clone()),
+            (input.clone(), tensor(DType::U32, &[2, 3, 9, 13])),
+        ] {
+            assert!(matches!(
+                interpolate_bilinear_backward_dims(&a, &b),
+                Err(OjasError::Dtype {
+                    op: "interpolate_bilinear_backward",
+                    expected: DType::F32,
+                    got: DType::U32
+                })
+            ));
+        }
+        shape_err(
+            interpolate_bilinear_backward_dims(&input, &f(&[2, 3, 0, 13])),
+            "empty tensor",
+        );
+        shape_err(
+            interpolate_bilinear_backward_dims(&f(&[2, 3, 0, 7]), &grad),
+            "empty tensor",
+        );
+        // The forward keeps its own name.
+        assert!(matches!(
+            interpolate_bilinear_forward_dims(&f(&[3, 5, 7]), [2, 2]),
+            Err(OjasError::Shape {
+                op: "interpolate_bilinear_forward",
+                ..
+            })
+        ));
+    }
 }

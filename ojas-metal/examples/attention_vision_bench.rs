@@ -278,6 +278,7 @@ mod bench {
                         window: None,
                         bias: None,
                         key_lens: None,
+                        ..Default::default()
                     },
                 )
                 .map_err(e("attention_forward"))?;
@@ -459,6 +460,7 @@ mod bench {
                         window: None,
                         bias: None,
                         key_lens: None,
+                        ..Default::default()
                     },
                 )
                 .map_err(e("cpu attention_forward"))?;
@@ -479,6 +481,7 @@ mod bench {
                             window: None,
                             bias: None,
                             key_lens: None,
+                            ..Default::default()
                         },
                     )
                     .map_err(e("cpu attention_forward"))?;

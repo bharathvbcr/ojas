@@ -225,7 +225,7 @@ impl CpuBackend {
         opts: &AttentionOpts<'_>,
     ) -> Result<(Tensor, Tensor), OjasError> {
         let exec = self.exec();
-        let geom = Geom::new(op, dims)?;
+        let geom = Geom::new(op, dims, opts.scale)?;
         let wide = matmul_operands(op, exec, &self.budget, [q, k, v])?;
         let qkv = wide.each_ref().map(Wide::values);
         let bias = opts
@@ -762,7 +762,7 @@ impl Backend for CpuBackend {
     ) -> Result<AttentionGrad, OjasError> {
         const OP: &str = "attention_backward";
         let dims = attention_backward_dims(q, k, v, output, lse, grad_output, &opts, bias_grad)?;
-        let geom = Geom::new(OP, dims)?;
+        let geom = Geom::new(OP, dims, opts.scale)?;
         let exec = self.exec();
         let operands = [q, k, v, output, lse, grad_output];
         let wide = matmul_operands(OP, exec, &self.budget, operands)?;

@@ -187,6 +187,9 @@ pub fn call<B: Backend + ?Sized>(b: &B, name: &str) -> Option<Result<(), OjasErr
         "interpolate_bilinear_forward" => b
             .interpolate_bilinear_forward(&t, [2, 2], false)
             .map(|_| ()),
+        "interpolate_bilinear_backward" => {
+            b.interpolate_bilinear_backward(&t, &t, false).map(|_| ())
+        }
         "rope_interleaved_forward" => b.rope_interleaved_forward(&t, &t, &t).map(|_| ()),
         "rope_interleaved_backward" => b.rope_interleaved_backward(&t, &t, &t).map(|_| ()),
         "silu_forward" => b.silu_forward(&t).map(|_| ()),
@@ -202,8 +205,11 @@ pub fn call<B: Backend + ?Sized>(b: &B, name: &str) -> Option<Result<(), OjasErr
             .channel_layer_norm_backward(&t, &t, &t, &t, 1e-6)
             .map(|_| ()),
         "group_norm_forward" => b.group_norm_forward(&t, &t, &t, 1, 1e-5).map(|_| ()),
+        "group_norm_backward" => b.group_norm_backward(&t, &t, &t, &t, 1, 1e-5).map(|_| ()),
         "gelu_erf_forward" => b.gelu_erf_forward(&t).map(|_| ()),
         "gelu_erf_backward" => b.gelu_erf_backward(&t, &t).map(|_| ()),
+        "gelu_tanh_forward" => b.gelu_tanh_forward(&t).map(|_| ()),
+        "gelu_tanh_backward" => b.gelu_tanh_backward(&t, &t).map(|_| ()),
         "relu_forward" => b.relu_forward(&t).map(|_| ()),
         "concat" => b.concat(&[&t, &t], 0).map(|_| ()),
         "slice" => b.slice(&t, 0, 0, 1).map(|_| ()),
@@ -217,6 +223,8 @@ pub fn call<B: Backend + ?Sized>(b: &B, name: &str) -> Option<Result<(), OjasErr
         "scale_forward" => b.scale_forward(&t, 0.5).map(|_| ()),
         "softmax_forward" => b.softmax_forward(&t).map(|_| ()),
         "softmax_backward" => b.softmax_backward(&t, &t).map(|_| ()),
+        "seq_mean_forward" => b.seq_mean_forward(&t, &t).map(|_| ()),
+        "l2_normalize_forward" => b.l2_normalize_forward(&t, 1e-12).map(|_| ()),
         "cross_entropy_mean_forward" => b.cross_entropy_mean_forward(&t, &t, None).map(|_| ()),
         "cross_entropy_mean_backward" => b.cross_entropy_mean_backward(&t, &t, None).map(|_| ()),
         "clip_grad_norm" => b.clip_grad_norm(&mut gs[..], 1.0).map(|_| ()),

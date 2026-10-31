@@ -206,6 +206,7 @@ mod bench {
                                 window: None,
                                 bias: None,
                                 key_lens: None,
+                                ..Default::default()
                             },
                         )
                         .expect("encoder_attn"),

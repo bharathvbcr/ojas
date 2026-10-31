@@ -188,6 +188,27 @@ fn every_sam_op_is_the_refusing_default_on_wgpu() {
             g.group_norm_forward(&img, &w4, &b4, 2, 1e-5).map(drop),
         ),
         refusal("softmax_forward", g.softmax_forward(&x).map(drop)),
+        refusal(
+            "group_norm_backward",
+            g.group_norm_backward(&img, &w4, &b4, &img, 2, 1e-5)
+                .map(drop),
+        ),
+        refusal("gelu_tanh_forward", g.gelu_tanh_forward(&x).map(drop)),
+        refusal("gelu_tanh_backward", g.gelu_tanh_backward(&x, &x).map(drop)),
+        refusal(
+            "interpolate_bilinear_backward",
+            g.interpolate_bilinear_backward(&img, &dev(32, &[1, 4, 8, 8]), false)
+                .map(drop),
+        ),
+        refusal(
+            "seq_mean_forward",
+            g.seq_mean_forward(&dev(33, &[2, 3, 8]), &up(&host_u32(&[3, 2], &[2])))
+                .map(drop),
+        ),
+        refusal(
+            "l2_normalize_forward",
+            g.l2_normalize_forward(&x, 1e-12).map(drop),
+        ),
         refusal("concat", g.concat(&[&x, &x], 0).map(drop)),
         refusal("slice", g.slice(&x, 0, 0, 1).map(drop)),
         refusal("fill", g.fill(&[2, 2], DType::F32, 1.0).map(drop)),

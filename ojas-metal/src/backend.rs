@@ -479,6 +479,7 @@ impl MetalBackend {
     ) -> Result<(Tensor, Tensor), OjasError> {
         const OP: &str = "attention_forward_saving";
         let dims = attention_forward_saving_dims(q, k, v, &opts)?;
+        refuse_unrouted_attention_opts(OP, &dims, &opts)?;
         let (q, k, v) = (self.widened(q)?, self.widened(k)?, self.widened(v)?);
         let bias = opts.bias.map(|b| self.widened(b)).transpose()?;
         self.attn_forward_with(
@@ -505,6 +506,7 @@ impl MetalBackend {
     ) -> Result<Tensor, OjasError> {
         const OP: &str = "attention_forward";
         let dims = attention_forward_dims(q, k, v, &opts)?;
+        refuse_unrouted_attention_opts(OP, &dims, &opts)?;
         let (q, k, v) = (self.widened(q)?, self.widened(k)?, self.widened(v)?);
         if routes_to_encoder_attn_within(&dims, self.link.has_tensorops(), f64::INFINITY) {
             if let Some(output) = self.encoder_attn_forward(OP, &dims, [&q, &k, &v])? {
@@ -531,6 +533,7 @@ impl MetalBackend {
         opts: AttentionOpts<'_>,
     ) -> Result<&'static str, OjasError> {
         let dims = attention_forward_saving_dims(q, k, v, &opts)?;
+        refuse_unrouted_attention_opts("attention_forward_saving", &dims, &opts)?;
         let geom = attn_launch("attention_forward_saving", &dims)?;
         Ok(if self.link.has_tensorops() && flash_cross_route(&geom) {
             "flash"
@@ -1604,6 +1607,35 @@ fn routes_to_encoder_attn(dims: &AttentionDims, tensorops: bool) -> bool {
     routes_to_encoder_attn_within(dims, tensorops, ENCODER_ATTN_MAX_PAD_RATIO)
 }
 
+/// Every Metal attention kernel scales scores by `sdpa_scale(D)` and masks by
+/// causal, window, bias and key lengths only. An `AttentionOpts::scale` or
+/// `radius` reaches none of them yet, so the call is refused, not run with
+/// the default scale or without the band. The route that will carry them
+/// (tessl `encoder_attn`) replaces this check.
+fn refuse_unrouted_attention_opts(
+    op: &'static str,
+    dims: &AttentionDims,
+    opts: &AttentionOpts<'_>,
+) -> Res<()> {
+    if opts.scale.is_some() {
+        return Err(OjasError::Unsupported {
+            op,
+            detail: "Metal attention scales scores by 1/sqrt(D) only; \
+                     AttentionOpts::scale is not routed yet"
+                .to_string(),
+        });
+    }
+    if dims.radius.is_some() {
+        return Err(OjasError::Unsupported {
+            op,
+            detail: "Metal attention has no symmetric radius band; \
+                     AttentionOpts::radius is not routed yet"
+                .to_string(),
+        });
+    }
+    Ok(())
+}
+
 /// [`routes_to_encoder_attn`] with the pad ratio bound given: the bench's
 /// pad-q arm lifts it to time the route above [`ENCODER_ATTN_MAX_PAD_RATIO`].
 fn routes_to_encoder_attn_within(dims: &AttentionDims, tensorops: bool, max_ratio: f64) -> bool {
@@ -2504,6 +2536,7 @@ impl Backend for MetalBackend {
     ) -> Result<Tensor, OjasError> {
         const OP: &str = "attention_forward";
         let dims = attention_forward_dims(q, k, v, &opts)?;
+        refuse_unrouted_attention_opts(OP, &dims, &opts)?;
         let (q, k, v) = (self.widened(q)?, self.widened(k)?, self.widened(v)?);
         if routes_to_encoder_attn(&dims, self.link.has_tensorops()) {
             if let Some(output) = self.encoder_attn_forward(OP, &dims, [&q, &k, &v])? {
@@ -2535,6 +2568,7 @@ impl Backend for MetalBackend {
     ) -> Result<(Tensor, Tensor), OjasError> {
         const OP: &str = "attention_forward_saving";
         let dims = attention_forward_saving_dims(q, k, v, &opts)?;
+        refuse_unrouted_attention_opts(OP, &dims, &opts)?;
         let (q, k, v) = (self.widened(q)?, self.widened(k)?, self.widened(v)?);
         let bias = opts.bias.map(|b| self.widened(b)).transpose()?;
         self.attn_forward(OP, &dims, [&q, &k, &v], bias.as_ref(), opts.key_lens)
@@ -4994,6 +5028,7 @@ mod tests {
             head_dim: 64,
             causal: false,
             window: None,
+            radius: None,
             bias: None,
             key_lens: false,
         }

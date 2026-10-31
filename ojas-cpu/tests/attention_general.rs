@@ -52,6 +52,11 @@ struct Case {
     /// `[Bb, Hb, Tqb]`; the last axis is `Tk`.
     bias: Option<[usize; 3]>,
     lens: Option<Vec<u32>>,
+    /// `AttentionOpts::scale`; `None` is `1 / sqrt(D)`.
+    scale: Option<f32>,
+    /// `AttentionOpts::radius`: key `j` is visible to query `i` when
+    /// `|i - j| <= radius`.
+    radius: Option<usize>,
 }
 
 impl Case {
@@ -67,11 +72,21 @@ impl Case {
             window: None,
             bias: None,
             lens: None,
+            scale: None,
+            radius: None,
         }
     }
     fn causal(mut self, window: Option<usize>) -> Self {
         self.causal = true;
         self.window = window;
+        self
+    }
+    fn scale(mut self, scale: f32) -> Self {
+        self.scale = Some(scale);
+        self
+    }
+    fn radius(mut self, radius: usize) -> Self {
+        self.radius = Some(radius);
         self
     }
     fn bias(mut self, shape: [usize; 3]) -> Self {
@@ -98,6 +113,9 @@ impl Case {
             .as_ref()
             .map_or(self.tk, |l| (l[b] as usize).min(self.tk));
         if j >= len {
+            return false;
+        }
+        if self.radius.is_some_and(|r| i.abs_diff(j) > r) {
             return false;
         }
         if self.causal {
@@ -140,7 +158,7 @@ type Exact = [Vec<f64>; 6];
 fn oracle(c: &Case, x: &Inputs) -> Exact {
     let (b_n, h, hkv, tq, tk, d) = (c.b, c.h, c.hkv, c.tq, c.tk, c.d);
     let rep = h / hkv;
-    let scale = 1.0 / (d as f64).sqrt();
+    let scale = c.scale.map_or(1.0 / (d as f64).sqrt(), f64::from);
     let q = |plane: usize, i: usize, c: usize| f64::from(x.q[(plane * tq + i) * d + c]);
     let gy = |plane: usize, i: usize, c: usize| f64::from(x.gy[(plane * tq + i) * d + c]);
     let k = |plane: usize, j: usize, c: usize| f64::from(x.k[(plane * tk + j) * d + c]);
@@ -246,6 +264,8 @@ impl Built {
             window: c.window,
             bias: self.bias.as_ref(),
             key_lens: self.lens.as_ref(),
+            scale: c.scale,
+            radius: c.radius,
         }
     }
 }
@@ -335,6 +355,27 @@ fn cases() -> Vec<Case> {
             .bias([2, 2, 6])
             .lens(&[10, 6]),
         Case::new(3, 2, 2, 4, 9, 8).bias([1, 1, 4]).lens(&[2, 0, 9]),
+        // A symmetric band: alone, one wide, grouped heads, with a bias, one
+        // that hides nothing, and a single position. No case pairs a band
+        // with `key_lens` below `Tq`: what a query row past its length
+        // outputs is the padded-row rule's (a separate lane), not pinned here.
+        Case::new(2, 3, 3, 9, 9, 8).radius(2),
+        Case::new(1, 2, 2, 10, 10, 8).radius(1),
+        Case::new(2, 4, 2, 12, 12, 8).radius(3),
+        Case::new(2, 2, 2, 11, 11, 16).radius(4).bias([2, 2, 11]),
+        Case::new(1, 2, 2, 7, 7, 8).radius(6),
+        Case::new(1, 1, 1, 1, 1, 8).radius(1),
+        // An explicit score scale: the usual, larger, smaller, negative, zero.
+        Case::new(2, 3, 3, 9, 9, 8).scale(1.0),
+        Case::new(2, 3, 3, 9, 9, 8).scale(0.3),
+        Case::new(2, 3, 3, 9, 9, 8).scale(-0.7),
+        Case::new(2, 3, 3, 9, 9, 8).scale(0.0),
+        Case::new(2, 4, 2, 7, 10, 8)
+            .scale(1.0)
+            .bias([1, 4, 7])
+            .lens(&[10, 4]),
+        Case::new(1, 2, 2, 10, 10, 8).causal(Some(3)).scale(2.0),
+        Case::new(1, 2, 2, 6, 6, 8).radius(2).scale(1.0),
     ]
 }
 
@@ -365,6 +406,8 @@ fn results_do_not_depend_on_the_thread_count() {
             .causal(None)
             .bias([1, 2, 300]),
         Case::new(1, 2, 2, 260, 340, 32).lens(&[200]),
+        Case::new(1, 3, 3, 200, 200, 32).radius(40),
+        Case::new(2, 2, 2, 130, 130, 16).radius(9).scale(1.0),
     ];
     big.extend(cases().into_iter().take(6));
     for (n, c) in big.iter().enumerate() {
@@ -475,6 +518,176 @@ fn a_window_over_every_key_is_no_window() {
         .attention_forward(&tw.q, &tw.k, &tw.v, tw.opts(&wide))
         .unwrap();
     assert_eq!(bits(&a), bits(&b));
+}
+
+/// Forward, saving forward and backward of `c` on `be`: the bits of
+/// `[y, lse, gq, gk, gv]`.
+fn run_bits(be: &CpuBackend, c: &Case, seed: u64) -> Vec<Vec<u32>> {
+    let x = inputs(c, seed);
+    let t = Built::new(c, &x);
+    let opts = t.opts(c);
+    let y = be.attention_forward(&t.q, &t.k, &t.v, opts).unwrap();
+    let (_, lse) = be.attention_forward_saving(&t.q, &t.k, &t.v, opts).unwrap();
+    let g = be
+        .attention_backward(&t.q, &t.k, &t.v, &y, &lse, &t.gy, opts, false)
+        .unwrap();
+    vec![bits(&y), bits(&lse), bits(&g.q), bits(&g.k), bits(&g.v)]
+}
+
+#[test]
+fn a_radius_that_hides_nothing_is_no_radius_bit_for_bit() {
+    let be = backend(2, Numerics::Exact);
+    let base = Case::new(2, 4, 2, 9, 9, 8).bias([1, 4, 9]).lens(&[9, 5]);
+    let want = run_bits(&be, &base, 21);
+    for radius in [8, 9, 1000, usize::MAX] {
+        assert_eq!(
+            run_bits(&be, &base.clone().radius(radius), 21),
+            want,
+            "radius {radius}"
+        );
+    }
+    // One short of that cuts something: the bits change.
+    assert_ne!(run_bits(&be, &base.clone().radius(7), 21), want);
+}
+
+#[test]
+fn an_explicit_scale_equal_to_the_default_is_the_default_bit_for_bit() {
+    let be = backend(1, Numerics::Exact);
+    for d in [8usize, 16, 5] {
+        let base = Case::new(1, 2, 2, 6, 7, d).lens(&[7]);
+        let same = base.clone().scale(ojas_core::sdpa_scale(d as u32).unwrap());
+        assert_eq!(run_bits(&be, &same, 31), run_bits(&be, &base, 31), "d {d}");
+    }
+}
+
+#[test]
+fn keys_outside_the_band_cannot_change_a_row() {
+    // Perturb the key and value at one position: a query farther than the
+    // radius from it must come out with the same bits, a nearer one must not.
+    let be = backend(1, Numerics::Exact);
+    let (t_len, radius, poked) = (13usize, 2usize, 6usize);
+    let c = Case::new(1, 2, 2, t_len, t_len, 8).radius(radius);
+    let x = inputs(&c, 41);
+    let run = |x: &Inputs| {
+        let t = Built::new(&c, x);
+        be.attention_forward(&t.q, &t.k, &t.v, t.opts(&c))
+            .unwrap()
+            .to_f32_vec()
+            .unwrap()
+    };
+    let before = run(&x);
+    let mut moved = Inputs {
+        q: x.q.clone(),
+        k: x.k.clone(),
+        v: x.v.clone(),
+        gy: x.gy.clone(),
+        bias: None,
+    };
+    for plane in 0..c.hkv {
+        for col in 0..c.d {
+            let at = (plane * t_len + poked) * c.d + col;
+            moved.k[at] += 3.0;
+            moved.v[at] -= 2.0;
+        }
+    }
+    let after = run(&moved);
+    for plane in 0..c.h {
+        for i in 0..t_len {
+            let row = (plane * t_len + i) * c.d..(plane * t_len + i + 1) * c.d;
+            let same = before[row.clone()]
+                .iter()
+                .zip(&after[row])
+                .all(|(a, b)| a.to_bits() == b.to_bits());
+            assert_eq!(same, i.abs_diff(poked) > radius, "head {plane} query {i}");
+        }
+    }
+}
+
+#[test]
+fn a_band_and_a_scale_refuse_what_they_cannot_mean() {
+    let be = backend(1, Numerics::Exact);
+    let c = Case::new(2, 4, 2, 5, 5, 8);
+    let x = inputs(&c, 1);
+    let t = Built::new(&c, &x);
+    let none = AttentionOpts::default();
+    let go = |opts: AttentionOpts<'_>| be.attention_forward(&t.q, &t.k, &t.v, opts);
+    go(AttentionOpts {
+        radius: Some(2),
+        ..none
+    })
+    .unwrap();
+    // Zero would read as "no band" in some kernels and "no key" in others.
+    refused(
+        go(AttentionOpts {
+            radius: Some(0),
+            ..none
+        }),
+        "radius 0",
+    );
+    refused(
+        go(AttentionOpts {
+            radius: Some(2),
+            causal: true,
+            ..none
+        }),
+        "radius with causal",
+    );
+    refused(
+        go(AttentionOpts {
+            radius: Some(2),
+            window: Some(3),
+            ..none
+        }),
+        "radius with a window",
+    );
+    // Cross-attention has no diagonal to centre the band on.
+    let cross = Case::new(2, 4, 2, 5, 7, 8);
+    let xc = inputs(&cross, 2);
+    let tc = Built::new(&cross, &xc);
+    refused(
+        be.attention_forward(
+            &tc.q,
+            &tc.k,
+            &tc.v,
+            AttentionOpts {
+                radius: Some(2),
+                ..none
+            },
+        ),
+        "radius with Tq != Tk",
+    );
+    for scale in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        for result in [
+            go(AttentionOpts {
+                scale: Some(scale),
+                ..none
+            })
+            .map(drop),
+            be.attention_forward_saving(
+                &t.q,
+                &t.k,
+                &t.v,
+                AttentionOpts {
+                    scale: Some(scale),
+                    ..none
+                },
+            )
+            .map(drop),
+        ] {
+            assert!(
+                matches!(result, Err(OjasError::NonFinite { .. })),
+                "{scale}: {result:?}"
+            );
+        }
+    }
+    // A zero or negative scale is legal.
+    for scale in [0.0f32, -1.0] {
+        go(AttentionOpts {
+            scale: Some(scale),
+            ..none
+        })
+        .unwrap();
+    }
 }
 
 fn refused<T: std::fmt::Debug>(result: Result<T, OjasError>, what: &str) -> OjasError {

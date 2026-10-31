@@ -163,6 +163,7 @@ fn run(c: &Case, seed: u64, tol: f64) {
         window: None,
         bias: bias_t.as_ref(),
         key_lens: lens_tensor.as_ref(),
+        ..Default::default()
     };
     let (y, lse) = be.attention_forward_saving(&qt, &kt, &vt, opts).unwrap();
     let e = err(&y, &want);

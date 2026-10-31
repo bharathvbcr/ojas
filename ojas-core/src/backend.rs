@@ -90,6 +90,21 @@ pub fn sdpa_scale(head_dim: u32) -> Result<f32, OjasError> {
     Ok(1.0 / (head_dim as f32).sqrt())
 }
 
+/// The score scale of a general-attention call: `scale` when
+/// [`AttentionOpts::scale`] is set, [`sdpa_scale`]`(head_dim)` when it is
+/// `None`. A non-finite explicit scale is [`OjasError::NonFinite`]; zero and
+/// negative scales are legal (zero makes every visible key equal). Backends
+/// call this for the value, so the default stays one rule.
+pub fn attention_scale(head_dim: u32, scale: Option<f32>) -> Result<f32, OjasError> {
+    match scale {
+        None => sdpa_scale(head_dim),
+        Some(s) if s.is_finite() => Ok(s),
+        Some(_) => Err(OjasError::NonFinite {
+            op: "attention_scale",
+        }),
+    }
+}
+
 /// The order logits are ranked in for decoding: column `a` of `row` against
 /// column `b`, value descending, then column ascending. `+0.0` and `-0.0`
 /// are one value, so a tie between them goes to the lower column, as
@@ -347,8 +362,10 @@ pub struct PerHeadGateGrad {
 }
 
 /// How [`Backend::attention_forward`] masks and biases the scores
-/// `scale * q . k`, with `scale = `[`sdpa_scale`]`(D)`. The default is
-/// bidirectional attention over every key, no bias.
+/// `scale * q . k`, with `scale` from [`attention_scale`]
+/// ([`sdpa_scale`]`(D)` unless [`AttentionOpts::scale`] says otherwise). The default is
+/// bidirectional attention over every key, no bias, `scale` and `radius`
+/// unset, and it is byte for byte the call before those two fields existed.
 ///
 /// A key is visible to query `i` of batch `b` when it passes every mask
 /// that is set, and a row that sees no key outputs zeros (its
@@ -363,18 +380,41 @@ pub struct PerHeadGateGrad {
 /// - `key_lens`: a `U32` tensor `[B]`; also `j < key_lens[b]`. A length
 ///   above `Tk` is `Tk`, and 0 hides every key of that batch row. This is
 ///   the mask of a padded text prompt: the padded keys are the tail.
+/// - `radius` (only without `causal` and `window`, `Tq == Tk`, at least 1):
+///   the symmetric band of a bidirectional sliding window. Key `j` is
+///   visible to query `i` when `|i - j| <= radius`, inclusive on both
+///   sides, so a query sees up to `2 * radius + 1` keys. This is
+///   transformers' `abs(q_idx - kv_idx) <= sliding_window` verbatim (EmbeddingGemma 2
+///   passes its `sliding_window`, 512, unchanged). A radius of at least
+///   `Tk - 1` hides nothing and is no radius. 0 is refused rather than read
+///   as "no band", because tessl's own `window: 0` means every key.
+///
+/// `scale` replaces the `1 / sqrt(D)` score scale, applied to `q . k` as
+/// the default scale is (EmbeddingGemma 2 passes `Some(1.0)`, after its
+/// QK norm). It must be finite. `None` is [`sdpa_scale`]`(D)`. The causal
+/// pair [`Backend::causal_sdpa_forward`] and
+/// [`Backend::causal_sdpa_backward`] has no scale parameter, so
+/// [`Backend::attention_forward`] with `causal` equals the causal pair bit
+/// for bit only with `scale: None` and `radius: None`.
 ///
 /// `bias` is added to the scores before the softmax: `F32` (or `Bf16`)
 /// `[Bb, Hb, Tqb, Tk]` with `Bb` in `{1, B}`, `Hb` in `{1, H}` and `Tqb` in
 /// `{1, Tq}`; an extent of 1 broadcasts. A bias is finite, as every operand
-/// is; a mask that hides a key is `key_lens`, `causal` or `window`, not a
-/// large negative number.
+/// is; a mask that hides a key is `key_lens`, `causal`, `window` or
+/// `radius`, not a large negative number.
+///
+/// `AttentionOpts` is not on the C ABI; build it with `..Default::default()`
+/// so a field added later does not break the call.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AttentionOpts<'a> {
     pub causal: bool,
     pub window: Option<usize>,
     pub bias: Option<&'a Tensor>,
     pub key_lens: Option<&'a Tensor>,
+    /// The score scale; `None` is `1 / sqrt(D)`. See [`attention_scale`].
+    pub scale: Option<f32>,
+    /// The half-width of a non-causal sliding band; `None` is every key.
+    pub radius: Option<usize>,
 }
 
 /// Gradients of [`Backend::attention_backward`].
@@ -839,7 +879,9 @@ pub trait Backend {
     ///
     /// This and [`Self::causal_sdpa_backward`] stay separate methods beside
     /// `attention_*` instead of defaulting to them, though
-    /// [`Self::attention_forward`] with `causal` set equals this bit for bit.
+    /// [`Self::attention_forward`] with `causal` set equals this bit for bit
+    /// (only with [`AttentionOpts`]'s `scale` and `radius` both `None`: the
+    /// causal pair has no scale parameter and no radius).
     /// The causal pair is required: every backend implements it (CPU, Metal,
     /// wgpu and CUDA) and the autograd tape and the model graph call it. The
     /// `attention_*` methods have a refusing default and only the CPU and
@@ -896,8 +938,8 @@ pub trait Backend {
     /// `q` is `[B, H, Tq, D]`; `k` and `v` are `[B, Hkv, Tk, D]`, with `H` a
     /// positive multiple of `Hkv` (query head `h` reads KV head `h / (H /
     /// Hkv)`). Returns the output, shaped like `q`. With `causal` set,
-    /// `Tq == Tk`, no bias and no `key_lens` it equals
-    /// [`Self::causal_sdpa_forward`]. A device may refuse `D` above its own
+    /// `Tq == Tk`, no bias, no `key_lens`, no `scale` and no `radius` it
+    /// equals [`Self::causal_sdpa_forward`]. A device may refuse `D` above its own
     /// limit. Validate with [`crate::attention_forward_dims`].
     ///
     /// The inference form: a backend that does not need the log-sum-exp
@@ -1341,6 +1383,26 @@ pub trait Backend {
         Err(unsupported_op(self.id(), "interpolate_bilinear_forward"))
     }
 
+    /// The input gradient of [`Self::interpolate_bilinear_forward`] for
+    /// `grad_output` `[N, C, out_h, out_w]` (the forward's output shape, which
+    /// is where `out_size` comes from) and the forward's `align_corners`. The
+    /// result is shaped like `input`, which is read for its shape only (as the
+    /// convolution backwards read their bias). Each input pixel gathers, in
+    /// ascending output `(oh, ow)` order, the taps of the output pixels that
+    /// read it, weighted as the forward's coordinate tables weight them; there
+    /// is no scatter, so the bits do not depend on the thread count.
+    /// [`crate::interpolate_bilinear_backward_dims`] validates. The default
+    /// refuses with [`OjasError::Unsupported`].
+    fn interpolate_bilinear_backward(
+        &self,
+        input: &Tensor,
+        grad_output: &Tensor,
+        align_corners: bool,
+    ) -> Result<Tensor, OjasError> {
+        let _ = (input, grad_output, align_corners);
+        Err(unsupported_op(self.id(), "interpolate_bilinear_backward"))
+    }
+
     /// RoPE that rotates adjacent pairs `(x[2i], x[2i + 1])`, the complex
     /// multiplication of SAM2 and SAM3's `apply_rotary_enc`, with no norm:
     ///
@@ -1503,6 +1565,32 @@ pub trait Backend {
         Err(unsupported_op(self.id(), "group_norm_forward"))
     }
 
+    /// The gradients of [`Self::group_norm_forward`] for `grad_output`
+    /// shaped like `input`, from the forward's operands (`bias` is read only
+    /// to check it as the forward does). Each `(image, group)` row is
+    /// handled as [`Self::layer_norm_backward`] handles a row: `xhat = (x -
+    /// mean) * rstd` from the forward's own `f64` statistics over the
+    /// group's `C / groups * H * W` values, `dx = rstd * (g * w - mean(g * w)
+    /// - xhat * mean(g * w * xhat))` with `w` the channel's weight. `dw[c]`
+    /// and `db[c]` sum `g * xhat` and `g` over the positions of channel `c`
+    /// and then the images, ascending. Every sum is `f64` in a fixed
+    /// ascending order and rounded once, so the bits do not depend on the
+    /// thread count. `groups` and `eps` are the forward's.
+    /// [`crate::group_norm_backward_dims`] validates. The default refuses
+    /// with [`OjasError::Unsupported`].
+    fn group_norm_backward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        grad_output: &Tensor,
+        groups: usize,
+        eps: f32,
+    ) -> Result<AffineGrad, OjasError> {
+        let _ = (input, weight, bias, grad_output, groups, eps);
+        Err(unsupported_op(self.id(), "group_norm_backward"))
+    }
+
     /// The exact GELU `x * Phi(x) = 0.5 * x * (1 + erf(x / sqrt(2)))`, torch's
     /// `F.gelu(x, approximate="none")`, not the tanh approximation. On the
     /// CPU it is [`crate::gelu_erf_exact`], the same bits on every platform.
@@ -1522,6 +1610,32 @@ pub trait Backend {
     fn gelu_erf_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
         let _ = (input, grad_output);
         Err(unsupported_op(self.id(), "gelu_erf_backward"))
+    }
+
+    /// The tanh-approximate GELU, torch's `F.gelu(x, approximate="tanh")`
+    /// (`gelu_pytorch_tanh`): `0.5 * x * (1 + tanh(sqrt(2 / pi) * (x + 0.044715
+    /// * x^3)))`. On the CPU it is computed in `f64` and rounded to `f32`
+    /// once. A product that overflows `f32` is [`OjasError::NonFinite`].
+    /// [`crate::gelu_tanh_forward_dims`] validates. The default refuses with
+    /// [`OjasError::Unsupported`].
+    fn gelu_tanh_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        let _ = input;
+        Err(unsupported_op(self.id(), "gelu_tanh_forward"))
+    }
+
+    /// `grad_output * gelu_tanh'(input)` with `gelu_tanh'(x) = 0.5 * (1 + t) +
+    /// 0.5 * x * (1 - t^2) * sqrt(2 / pi) * (1 + 3 * 0.044715 * x^2)` and `t`
+    /// the forward's `tanh`. On the CPU one `f32` rounding of an `f64`
+    /// value; a product that overflows `f32` is [`OjasError::NonFinite`].
+    /// [`crate::gelu_tanh_backward_dims`] validates. The default refuses
+    /// with [`OjasError::Unsupported`].
+    fn gelu_tanh_backward(
+        &self,
+        input: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        let _ = (input, grad_output);
+        Err(unsupported_op(self.id(), "gelu_tanh_backward"))
     }
 
     /// `max(x, 0)`, torch's `F.relu`: `x` where `x >= 0` and `+0` where
@@ -1695,6 +1809,40 @@ pub trait Backend {
     fn softmax_backward(&self, output: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
         let _ = (output, grad_output);
         Err(unsupported_op(self.id(), "softmax_backward"))
+    }
+
+    /// The mean over time of each sequence of `x` `[B, T, D]` (`F32`) under
+    /// `key_lens` (`U32`, `[B]`), the masked mean pooling of a sentence
+    /// embedding model: `out[b, d]` is the mean of `x[b, t, d]` over the rows
+    /// `t < min(key_lens[b], T)`, so it takes the same `key_lens` tensor the
+    /// attention does. The sum is `f64`, ascends from `t = 0` and is divided
+    /// by the count and rounded once, so the bits do not depend on the thread
+    /// count. A length of 0 gives a row of zeros (sentence-transformers
+    /// clamps the count to `1e-9`, and `0 / 1e-9 = 0`). Rows at or past the
+    /// length are never read. Returns `[B, D]`.
+    ///
+    /// There is no backward this batch: nothing in the embedding goal trains
+    /// through the pooling. [`crate::seq_mean_forward_dims`] validates. The
+    /// default refuses with [`OjasError::Unsupported`].
+    fn seq_mean_forward(&self, x: &Tensor, key_lens: &Tensor) -> Result<Tensor, OjasError> {
+        let _ = (x, key_lens);
+        Err(unsupported_op(self.id(), "seq_mean_forward"))
+    }
+
+    /// `x / max(||x||_2, eps)` over the last axis of `x` `[rows, dim]`,
+    /// torch's `F.normalize(x, p=2, dim=-1, eps)` (`norm.clamp_min(eps)`;
+    /// the caller passes `1e-12`). The squared norm is an `f64` sum that
+    /// ascends from index 0, and each output is `x / max(norm, eps)` in `f64`
+    /// rounded once. A zero row stays zero. `eps` is finite and above 0. A
+    /// Matryoshka prefix is [`Self::slice`] first, then this: there is no
+    /// leading-dimension parameter.
+    ///
+    /// There is no backward this batch (not in the embedding goal).
+    /// [`crate::l2_normalize_forward_dims`] validates. The default refuses
+    /// with [`OjasError::Unsupported`].
+    fn l2_normalize_forward(&self, x: &Tensor, eps: f32) -> Result<Tensor, OjasError> {
+        let _ = (x, eps);
+        Err(unsupported_op(self.id(), "l2_normalize_forward"))
     }
 
     /// Scalar mean cross-entropy. Targets are `U32`.
@@ -2187,6 +2335,7 @@ macro_rules! with_backend_methods {
             op fn conv_transpose2d_backward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: Option<&$crate::Tensor>, grad_output: &$crate::Tensor, params: $crate::ConvTranspose2dParams) -> Result<$crate::ConvGrad, $crate::OjasError>;
             op fn max_pool2d_backward(&self, input: &$crate::Tensor, grad_output: &$crate::Tensor, kernel: [usize; 2], stride: [usize; 2]) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn interpolate_bilinear_forward(&self, input: &$crate::Tensor, out_size: [usize; 2], align_corners: bool) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn interpolate_bilinear_backward(&self, input: &$crate::Tensor, grad_output: &$crate::Tensor, align_corners: bool) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn rope_interleaved_forward(&self, x: &$crate::Tensor, cos: &$crate::Tensor, sin: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn rope_interleaved_backward(&self, grad_output: &$crate::Tensor, cos: &$crate::Tensor, sin: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn silu_forward(&self, input: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
@@ -2200,8 +2349,11 @@ macro_rules! with_backend_methods {
             op fn channel_layer_norm_forward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor, eps: f32) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn channel_layer_norm_backward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor, grad_output: &$crate::Tensor, eps: f32) -> Result<$crate::AffineGrad, $crate::OjasError>;
             op fn group_norm_forward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor, groups: usize, eps: f32) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn group_norm_backward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor, grad_output: &$crate::Tensor, groups: usize, eps: f32) -> Result<$crate::AffineGrad, $crate::OjasError>;
             op fn gelu_erf_forward(&self, input: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn gelu_erf_backward(&self, input: &$crate::Tensor, grad_output: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn gelu_tanh_forward(&self, input: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn gelu_tanh_backward(&self, input: &$crate::Tensor, grad_output: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn relu_forward(&self, input: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn concat(&self, inputs: &[&$crate::Tensor], axis: usize) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn slice(&self, input: &$crate::Tensor, axis: usize, start: usize, len: usize) -> Result<$crate::Tensor, $crate::OjasError>;
@@ -2215,6 +2367,8 @@ macro_rules! with_backend_methods {
             op fn scale_forward(&self, input: &$crate::Tensor, scale: f32) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn softmax_forward(&self, input: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn softmax_backward(&self, output: &$crate::Tensor, grad_output: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn seq_mean_forward(&self, x: &$crate::Tensor, key_lens: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn l2_normalize_forward(&self, x: &$crate::Tensor, eps: f32) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn cross_entropy_mean_forward(&self, logits: &$crate::Tensor, targets: &$crate::Tensor, ignore_index: Option<u32>) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn cross_entropy_mean_backward(&self, logits: &$crate::Tensor, targets: &$crate::Tensor, ignore_index: Option<u32>) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn clip_grad_norm(&self, grads: &mut [$crate::Tensor], max_norm: f32) -> Result<f32, $crate::OjasError>;
@@ -2408,6 +2562,30 @@ pub(crate) mod tests {
             next_step(u64::MAX),
             Err(OjasError::OutOfRange { .. })
         ));
+    }
+
+    #[test]
+    fn attention_scale_defaults_to_sdpa_scale_and_takes_any_finite_override() {
+        for d in [1u32, 32, 64, 256, 512] {
+            assert_eq!(
+                attention_scale(d, None).unwrap().to_bits(),
+                sdpa_scale(d).unwrap().to_bits()
+            );
+        }
+        assert!(attention_scale(0, None).is_err());
+        // An explicit scale is returned as given, the head dim notwithstanding.
+        for s in [1.0f32, 0.0, -0.5, 1e-30, f32::MAX] {
+            assert_eq!(
+                attention_scale(512, Some(s)).unwrap().to_bits(),
+                s.to_bits()
+            );
+        }
+        for s in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert!(matches!(
+                attention_scale(64, Some(s)),
+                Err(OjasError::NonFinite { .. })
+            ));
+        }
     }
 
     #[test]
@@ -3010,6 +3188,7 @@ pub(crate) mod tests {
                 .map(drop)),
             op(backend.max_pool2d_backward(&t, &t, [2, 2], [2, 2])),
             op(backend.interpolate_bilinear_forward(&t, [2, 2], false)),
+            op(backend.interpolate_bilinear_backward(&t, &t, false)),
             op(backend.rope_interleaved_forward(&t, &t, &t)),
             op(backend.rope_interleaved_backward(&t, &t, &t)),
             op(backend.silu_forward(&t)),
@@ -3025,8 +3204,13 @@ pub(crate) mod tests {
                 .channel_layer_norm_backward(&t, &t, &t, &t, 1e-6)
                 .map(drop)),
             op(backend.group_norm_forward(&t, &t, &t, 1, 1e-5)),
+            op(backend
+                .group_norm_backward(&t, &t, &t, &t, 1, 1e-5)
+                .map(drop)),
             op(backend.gelu_erf_forward(&t)),
             op(backend.gelu_erf_backward(&t, &t)),
+            op(backend.gelu_tanh_forward(&t)),
+            op(backend.gelu_tanh_backward(&t, &t)),
             op(backend.relu_forward(&t)),
             op(backend.concat(&[&t, &t], 0)),
             op(backend.slice(&t, 0, 0, 1)),
@@ -3040,6 +3224,8 @@ pub(crate) mod tests {
             op(backend.scale_forward(&t, 0.5)),
             op(backend.softmax_forward(&t)),
             op(backend.softmax_backward(&t, &t)),
+            op(backend.seq_mean_forward(&t, &t)),
+            op(backend.l2_normalize_forward(&t, 1e-12)),
             op(backend.cross_entropy_mean_forward(&t, &t, None)),
             op(backend.cross_entropy_mean_backward(&t, &t, None)),
             op(backend.clip_grad_norm(std::slice::from_mut(&mut m), 1.0)),
@@ -3105,6 +3291,7 @@ pub(crate) mod tests {
             "conv_transpose2d_backward",
             "max_pool2d_backward",
             "interpolate_bilinear_forward",
+            "interpolate_bilinear_backward",
             "rope_interleaved_forward",
             "rope_interleaved_backward",
             "silu_forward",
@@ -3118,8 +3305,11 @@ pub(crate) mod tests {
             "channel_layer_norm_forward",
             "channel_layer_norm_backward",
             "group_norm_forward",
+            "group_norm_backward",
             "gelu_erf_forward",
             "gelu_erf_backward",
+            "gelu_tanh_forward",
+            "gelu_tanh_backward",
             "relu_forward",
             "concat",
             "slice",
@@ -3133,6 +3323,8 @@ pub(crate) mod tests {
             "scale_forward",
             "softmax_forward",
             "softmax_backward",
+            "seq_mean_forward",
+            "l2_normalize_forward",
             "cross_entropy_mean_forward",
             "cross_entropy_mean_backward",
             "clip_grad_norm",
@@ -3404,6 +3596,31 @@ pub(crate) mod tests {
         refused(
             backend.rope_interleaved_backward(&x, &x, &x).map(drop),
             "rope_interleaved_backward",
+        );
+        refused(
+            backend
+                .group_norm_backward(&x, &x, &x, &x, 1, 1e-5)
+                .map(drop),
+            "group_norm_backward",
+        );
+        refused(backend.gelu_tanh_forward(&x).map(drop), "gelu_tanh_forward");
+        refused(
+            backend.gelu_tanh_backward(&x, &x).map(drop),
+            "gelu_tanh_backward",
+        );
+        refused(
+            backend
+                .interpolate_bilinear_backward(&x, &x, false)
+                .map(drop),
+            "interpolate_bilinear_backward",
+        );
+        refused(
+            backend.seq_mean_forward(&x, &ids).map(drop),
+            "seq_mean_forward",
+        );
+        refused(
+            backend.l2_normalize_forward(&x, 1e-12).map(drop),
+            "l2_normalize_forward",
         );
     }
 

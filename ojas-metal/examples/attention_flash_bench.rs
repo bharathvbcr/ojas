@@ -408,6 +408,7 @@ mod bench {
                 window: None,
                 bias: bias.as_ref(),
                 key_lens: None,
+                ..Default::default()
             };
 
             // The rows the flash route covers (head dim 32, no bias), and
@@ -548,6 +549,7 @@ mod bench {
                         window: None,
                         bias: cbias.as_ref(),
                         key_lens: None,
+                        ..Default::default()
                     },
                 )
                 .expect("cpu");
@@ -578,6 +580,7 @@ mod bench {
                         window: None,
                         bias: fresh_bias.as_ref(),
                         key_lens: None,
+                        ..Default::default()
                     };
                     metal.sync().expect("sync");
                     let (before, kernels) = (metal.dispatches(), snapshot(&metal));

@@ -13,18 +13,20 @@
 //! state is a running sum over the whole sequence) stay f32. A device tensor
 //! is never downloaded to round it.
 //!
-//! # Policy for the SAM ops
+//! # Policy for the SAM and EmbeddingGemma 2 encoder ops
 //!
-//! Each op added for the SAM encoder has one [`AutocastClass`], assigned
+//! Each op added for the SAM and EmbeddingGemma 2 encoders has one
+//! [`AutocastClass`], assigned
 //! once in `SAM_AUTOCAST_POLICY` below and enforced op by op by
 //! `ojas-cpu/tests/autocast_sam_policy.rs`, which also fails when a
 //! `Backend` method is added without a class. The classes are matmul-class
 //! (round operands, round the output), pointwise (round the output only
 //! when the gating operands are already bf16-tagged), reduction (always
-//! f32) and data movement (never round, carry the tag). GELU, ReLU, scale,
-//! the broadcast ops, max pooling, bilinear resampling and interleaved RoPE
-//! are all pointwise, like SiLU and half-split RoPE before them; only the
-//! three norms and softmax pin f32.
+//! f32) and data movement (never round, carry the tag). GELU (erf and tanh),
+//! ReLU, scale, the broadcast ops, max pooling, bilinear resampling and
+//! interleaved RoPE are all pointwise, like SiLU and half-split RoPE before
+//! them; the three norms, softmax, the masked sequence mean and L2
+//! normalization pin f32, and so do the norm backwards (GroupNorm's too).
 //!
 //! [`Backend`]: crate::Backend
 
@@ -131,8 +133,8 @@ pub enum AutocastClass {
     Source,
 }
 
-/// The class of every op added for the SAM encoder (the attention, encoder
-/// and spatial ops): the specification of the policy. The methods of
+/// The class of every op added for the SAM and EmbeddingGemma 2 encoders (the
+/// attention, encoder and spatial ops): the specification of the policy. The methods of
 /// [`Autocast`] implement it and nothing reads this table at run time; the
 /// test named below is what keeps the two in agreement. `rope_interleaved_*`
 /// gate on the data operand only; the cos and sin tables do not. The
@@ -145,6 +147,13 @@ pub enum AutocastClass {
 /// incoming gradient, not the input. The norm and softmax backwards are
 /// reductions like their forwards: `F32` whatever the tags. The pointwise
 /// backwards gate on every operand they read, as `silu_backward` does.
+/// `interpolate_bilinear_backward` gates on the incoming gradient only (the
+/// input is read for its shape), as `max_pool2d_backward` does.
+/// `seq_mean_forward` and `l2_normalize_forward` are reductions: the mean's
+/// `f64` sum and the norm stay `f32` whatever the tags (the `key_lens`
+/// operand is an integer and passes through). `attention` with a `scale` or
+/// `radius` follows the attention entries unchanged: the options pass to the
+/// inner backend as given.
 ///
 /// `ojas-cpu/tests/autocast_sam_policy.rs` runs each entry against
 /// `Autocast<CpuBackend>`, so an op added to the `Backend` trait or changed
@@ -222,6 +231,14 @@ pub const SAM_AUTOCAST_POLICY: &[(&str, AutocastClass)] = &[
         "gelu_erf_backward",
         AutocastClass::Pointwise { tag_from: &[0, 1] },
     ),
+    (
+        "gelu_tanh_forward",
+        AutocastClass::Pointwise { tag_from: &[0] },
+    ),
+    (
+        "gelu_tanh_backward",
+        AutocastClass::Pointwise { tag_from: &[0, 1] },
+    ),
     ("relu_forward", AutocastClass::Pointwise { tag_from: &[0] }),
     ("scale_forward", AutocastClass::Pointwise { tag_from: &[0] }),
     (
@@ -257,6 +274,10 @@ pub const SAM_AUTOCAST_POLICY: &[(&str, AutocastClass)] = &[
         AutocastClass::Pointwise { tag_from: &[0] },
     ),
     (
+        "interpolate_bilinear_backward",
+        AutocastClass::Pointwise { tag_from: &[1] },
+    ),
+    (
         "rope_interleaved_forward",
         AutocastClass::Pointwise { tag_from: &[0] },
     ),
@@ -269,8 +290,11 @@ pub const SAM_AUTOCAST_POLICY: &[(&str, AutocastClass)] = &[
     ("channel_layer_norm_forward", AutocastClass::Reduction),
     ("channel_layer_norm_backward", AutocastClass::Reduction),
     ("group_norm_forward", AutocastClass::Reduction),
+    ("group_norm_backward", AutocastClass::Reduction),
     ("softmax_forward", AutocastClass::Reduction),
     ("softmax_backward", AutocastClass::Reduction),
+    ("seq_mean_forward", AutocastClass::Reduction),
+    ("l2_normalize_forward", AutocastClass::Reduction),
     ("concat", AutocastClass::Move),
     ("slice", AutocastClass::Move),
     ("fill", AutocastClass::Source),
@@ -1317,6 +1341,22 @@ impl<B: Backend> Backend for Autocast<B> {
         self.promote(on, tagged, out)
     }
 
+    /// Pointwise, like [`Backend::max_pool2d_backward`]: gated on the
+    /// incoming gradient, since the input is read for its shape only.
+    fn interpolate_bilinear_backward(
+        &self,
+        input: &Tensor,
+        grad_output: &Tensor,
+        align_corners: bool,
+    ) -> Result<Tensor, OjasError> {
+        let on = self.region()?;
+        let tagged = grad_output.compute_tag() == COMPUTE_BF16;
+        let out = self
+            .inner
+            .interpolate_bilinear_backward(input, grad_output, align_corners)?;
+        self.promote(on, tagged, out)
+    }
+
     fn rope_interleaved_forward(
         &self,
         x: &Tensor,
@@ -1429,12 +1469,38 @@ impl<B: Backend> Backend for Autocast<B> {
         Ok(self.keep_f32(out))
     }
 
+    /// A reduction like [`Backend::group_norm_forward`]: the group statistics
+    /// and the sums stay `f32` and no gradient is rounded.
+    fn group_norm_backward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        grad_output: &Tensor,
+        groups: usize,
+        eps: f32,
+    ) -> Result<AffineGrad, OjasError> {
+        self.pass()?;
+        let grad = self
+            .inner
+            .group_norm_backward(input, weight, bias, grad_output, groups, eps)?;
+        Ok(self.keep_affine_f32(grad))
+    }
+
     /// Pointwise, like SiLU: an output computed from a bf16-tagged input
     /// is rounded and tagged; one from an untagged input is left alone.
     fn gelu_erf_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
         let on = self.region()?;
         let tagged = input.compute_tag() == COMPUTE_BF16;
         let out = self.inner.gelu_erf_forward(input)?;
+        self.promote(on, tagged, out)
+    }
+
+    /// Pointwise, like [`Backend::gelu_erf_forward`].
+    fn gelu_tanh_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        let on = self.region()?;
+        let tagged = input.compute_tag() == COMPUTE_BF16;
+        let out = self.inner.gelu_tanh_forward(input)?;
         self.promote(on, tagged, out)
     }
 
@@ -1570,6 +1636,36 @@ impl<B: Backend> Backend for Autocast<B> {
             input.compute_tag() == COMPUTE_BF16 && grad_output.compute_tag() == COMPUTE_BF16;
         let out = self.inner.gelu_erf_backward(input, grad_output)?;
         self.promote(on, tagged, out)
+    }
+
+    /// Pointwise, like [`Backend::gelu_erf_backward`].
+    fn gelu_tanh_backward(
+        &self,
+        input: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        let on = self.region()?;
+        let tagged =
+            input.compute_tag() == COMPUTE_BF16 && grad_output.compute_tag() == COMPUTE_BF16;
+        let out = self.inner.gelu_tanh_backward(input, grad_output)?;
+        self.promote(on, tagged, out)
+    }
+
+    /// A reduction: the `f64` sum over each sequence stays `f32` and the
+    /// output is not rounded to the compute dtype. `key_lens` is an integer
+    /// tensor and passes through.
+    fn seq_mean_forward(&self, x: &Tensor, key_lens: &Tensor) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self.inner.seq_mean_forward(x, key_lens)?;
+        Ok(self.keep_f32(out))
+    }
+
+    /// A reduction: the norm stays `f32` and the output is not rounded to
+    /// the compute dtype.
+    fn l2_normalize_forward(&self, x: &Tensor, eps: f32) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self.inner.l2_normalize_forward(x, eps)?;
+        Ok(self.keep_f32(out))
     }
 
     /// As [`Backend::linear_backward`]: the operands rounded, the input

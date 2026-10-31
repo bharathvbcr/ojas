@@ -394,6 +394,7 @@ mod bench {
                 window: None,
                 bias: self.bias.as_ref(),
                 key_lens: self.lens.as_ref(),
+                ..Default::default()
             };
             let out = match self.entry {
                 Entry::Forward => self
@@ -839,6 +840,7 @@ mod bench {
                         window: None,
                         bias: bias.as_ref(),
                         key_lens: lens.as_ref(),
+                        ..Default::default()
                     },
                 )
                 .map_err(e("cpu attention_forward"))?;

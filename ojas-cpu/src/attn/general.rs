@@ -3,7 +3,8 @@
 //! per-batch key lengths ([`ojas_core::AttentionOpts`]).
 //!
 //! Layout is `[batch, heads, time, head_dim]`; K and V have `kv_heads`
-//! heads and `Tk` positions. Scale is `1/sqrt(head_dim)`. Every mask these
+//! heads and `Tk` positions. Scale is `1/sqrt(head_dim)` unless the options
+//! carry one ([`ojas_core::attention_scale`]). Every mask these
 //! options can express leaves each query a contiguous run of keys
 //! ([`Geom::keys`]), so the row kernels of [`super`] (`score_range`,
 //! `softmax_range`, `mix_values`) apply unchanged and give the same bits as
@@ -24,7 +25,7 @@
 
 use std::ops::Range;
 
-use ojas_core::{exp_exact, sdpa_scale, AttentionBias, AttentionDims, Budget, OjasError};
+use ojas_core::{attention_scale, exp_exact, AttentionBias, AttentionDims, Budget, OjasError};
 
 use super::{
     dot_up, fill_parts, mix_values, pack_keys, row, saxpy_up, score_range, softmax_range, TASK_WORK,
@@ -59,13 +60,19 @@ pub(crate) struct Geom {
     scale: f32,
     causal: bool,
     window: Option<usize>,
+    radius: Option<usize>,
     bias: Option<AttentionBias>,
 }
 
 impl Geom {
     /// A head dimension past `u32` is this backend's limit (shape-contract
     /// D15), checked after the validator and before anything is charged.
-    pub(crate) fn new(op: &'static str, dims: AttentionDims) -> Result<Self, OjasError> {
+    /// `scale` is [`ojas_core::AttentionOpts::scale`]: `None` is `1/sqrt(D)`.
+    pub(crate) fn new(
+        op: &'static str,
+        dims: AttentionDims,
+        scale: Option<f32>,
+    ) -> Result<Self, OjasError> {
         let dim = dims.head_dim;
         let dim_u32 = u32::try_from(dim).map_err(|_| OjasError::OutOfRange {
             op,
@@ -78,9 +85,10 @@ impl Geom {
             q_len: dims.q_len,
             kv_len: dims.kv_len,
             dim,
-            scale: sdpa_scale(dim_u32)?,
+            scale: attention_scale(dim_u32, scale)?,
             causal: dims.causal,
             window: dims.window,
+            radius: dims.radius,
             bias: dims.bias,
         })
     }
@@ -117,7 +125,8 @@ impl Geom {
     }
 
     /// Keys query `i` of a batch row whose key length is `len` sees. A
-    /// causal query `i` sits at position `i + Tk - Tq`.
+    /// causal query `i` sits at position `i + Tk - Tq`; with a `radius`
+    /// (never causal, `Tq == Tk`) it sees `i - radius..=i + radius`.
     fn keys(&self, len: usize, i: usize) -> Range<usize> {
         let len = len.min(self.kv_len);
         let (lo, hi) = if self.causal {
@@ -128,6 +137,14 @@ impl Geom {
             };
             let lo = self.window.map_or(0, |w| seen.saturating_sub(w));
             (lo, seen.min(len))
+        } else if let Some(r) = self.radius {
+            // The band's far edge is exclusive: `i + r + 1`. Saturating, so a
+            // radius near `usize::MAX` cannot wrap (the validator already
+            // dropped a radius of at least `Tk - 1`).
+            (
+                i.saturating_sub(r),
+                i.saturating_add(r).saturating_add(1).min(len),
+            )
         } else {
             (0, len)
         };
