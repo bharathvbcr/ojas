@@ -104,12 +104,12 @@ use ojas_core::{
     scale_forward_dims, sigmoid_backward_dims, sigmoid_forward_dims, silu_backward_dims,
     silu_forward_dims, slice_dims, softmax_forward_dims, topk_rows_dims,
     value_residual_blend_backward_dims, value_residual_blend_forward_dims, AdamWConfig,
-    AttentionDims, AttentionOpts, Backend, BackendId, BroadcastDims, Budget, CeChunk, CeGrads,
-    Conv1dDims, Conv2dDims, Conv2dParams, ConvTranspose2dDims, ConvTranspose2dParams, DType,
-    DeviceBuffer, GateDims, GatedRmsGrad, GdnDecayGrad, GdnDims, GdnForward, GdnGrad, GdnInputs,
-    InterleavedRopeDims, LinearCe, MuonNs5Config, Ns5Precision, Numerics, OjasError, OptimizerKind,
-    PartialRopeDims, PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
-    ValueResidualGrad, MAX_PERMUTE_RANK,
+    AttentionDims, AttentionGrad, AttentionOpts, Backend, BackendId, BroadcastDims, Budget,
+    CeChunk, CeGrads, Conv1dDims, Conv2dDims, Conv2dParams, ConvTranspose2dDims,
+    ConvTranspose2dParams, DType, DeviceBuffer, GateDims, GatedRmsGrad, GdnDecayGrad, GdnDims,
+    GdnForward, GdnGrad, GdnInputs, InterleavedRopeDims, LinearCe, MuonNs5Config, Ns5Precision,
+    Numerics, OjasError, OptimizerKind, PartialRopeDims, PerHeadGateGrad, Reservation, RmsDims,
+    RopeDims, RopeLayout, SdpaDims, Tensor, ValueResidualGrad, MAX_PERMUTE_RANK,
 };
 
 use crate::link::{
@@ -119,6 +119,8 @@ use crate::link::{
     WaitCounts, Waits, SQ_OUT_WORDS,
 };
 use crate::permute;
+
+mod attn_bwd;
 
 /// A Metal allocation owned by the device thread, named by id.
 pub struct MetalBuffer {
@@ -2524,8 +2526,8 @@ impl Backend for MetalBackend {
     /// (`ojas_xattn_part_dD`); the scalar `ojas_attn_gen_fwd` runs causal,
     /// windowed and other head dims, and a split-K call when the budget
     /// cannot hold the tiled partials (so the bits of such a call can depend
-    /// on the budget; the values agree to rounding). There is no backward on
-    /// Metal yet: `attention_backward` is `Unsupported`, as the default says.
+    /// on the budget; the values agree to rounding). Its gradients are
+    /// [`Self::attention_backward`]'s.
     fn attention_forward_saving(
         &self,
         q: &Tensor,
@@ -2538,6 +2540,29 @@ impl Backend for MetalBackend {
         let (q, k, v) = (self.widened(q)?, self.widened(k)?, self.widened(v)?);
         let bias = opts.bias.map(|b| self.widened(b)).transpose()?;
         self.attn_forward(OP, &dims, [&q, &k, &v], bias.as_ref(), opts.key_lens)
+    }
+
+    /// The gradients of [`Self::attention_forward_saving`] from its output
+    /// and log-sum-exp, on the general tiled backward (`attn_gen_bwd.metal`):
+    /// bidirectional or causal with a window, `Tq != Tk`, a bias in every
+    /// broadcast layout with its gradient, key lengths, grouped-query heads,
+    /// head dims through 256. No atomics: every gradient element is written
+    /// by one threadgroup in a fixed order, and a bias gradient summed over
+    /// the batch or heads is summed in the CPU reference's order, so a result
+    /// repeats bit for bit. Scratch is `B * H * Tq` values.
+    #[allow(clippy::too_many_arguments)]
+    fn attention_backward(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        output: &Tensor,
+        lse: &Tensor,
+        grad_output: &Tensor,
+        opts: AttentionOpts<'_>,
+        bias_grad: bool,
+    ) -> Result<AttentionGrad, OjasError> {
+        self.attn_backward(q, k, v, output, lse, grad_output, opts, bias_grad)
     }
 
     fn per_head_sigmoid_gate_forward(

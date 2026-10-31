@@ -5,8 +5,8 @@
 //! at its limit; plus its error contract.
 //!
 //! The kernel is scalar f32 (`ojas_attn_gen_fwd`), so unlike the tiled causal
-//! kernels it needs no matrix units. There is no Metal backward yet:
-//! `attention_backward` is `Unsupported`.
+//! kernels it needs no matrix units. The backward is
+//! `attention_backward_general.rs`.
 
 #![cfg(target_os = "macos")]
 
@@ -399,36 +399,4 @@ fn a_non_finite_operand_is_reported_at_the_next_sync() {
     let dev = host.up(&m);
     let r = m.attention_forward_saving(&dev.q, &dev.k, &dev.v, AttentionOpts::default());
     deferred(&m, "nan key", r, "attention_forward_saving");
-}
-
-#[test]
-fn there_is_no_metal_backward_yet() {
-    let m = metal();
-    let c = Case::new(1, 2, 2, 3, 4, 64);
-    let host = Operands::host(&c, 13);
-    let dev = host.up(&m);
-    let (y, lse) = ok(
-        "forward",
-        m.attention_forward_saving(&dev.q, &dev.k, &dev.v, AttentionOpts::default()),
-    );
-    let r = m.attention_backward(
-        &dev.q,
-        &dev.k,
-        &dev.v,
-        &y,
-        &lse,
-        &dev.q,
-        AttentionOpts::default(),
-        false,
-    );
-    assert!(
-        matches!(
-            r,
-            Err(OjasError::Unsupported {
-                op: "attention_backward",
-                ..
-            })
-        ),
-        "{r:?}"
-    );
 }

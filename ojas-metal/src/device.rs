@@ -45,6 +45,8 @@ use crate::link::{
 };
 use crate::permute::{self, Plan};
 
+mod attn_bwd;
+
 /// Threads of an `ojas_permute_tile` threadgroup (`PERMUTE_TILE_THREADS`).
 const PERMUTE_TILE_THREADS: usize = 256;
 /// The status word that tells `ojas_permute_runs` and `ojas_permute_tile` not
@@ -233,6 +235,21 @@ const KERNELS: &[&str] = &[
     "ojas_per_head_gate_scale",
     "ojas_per_head_gate_bwd_saved",
     "ojas_per_head_gate_dbias",
+    "ojas_attn_gen_bwd_dq_d16",
+    "ojas_attn_gen_bwd_dq_d32",
+    "ojas_attn_gen_bwd_dq_d64",
+    "ojas_attn_gen_bwd_dq_d128",
+    "ojas_attn_gen_bwd_dq_d256",
+    "ojas_attn_gen_bwd_dkv_d16",
+    "ojas_attn_gen_bwd_dkv_d32",
+    "ojas_attn_gen_bwd_dkv_d64",
+    "ojas_attn_gen_bwd_dkv_d128",
+    "ojas_attn_gen_bwd_dkv_d256",
+    "ojas_attn_gen_bwd_dbias_d16",
+    "ojas_attn_gen_bwd_dbias_d32",
+    "ojas_attn_gen_bwd_dbias_d64",
+    "ojas_attn_gen_bwd_dbias_d128",
+    "ojas_attn_gen_bwd_dbias_d256",
 ];
 
 /// tessl's dims for a dense GDN call (one key head per value head).
@@ -1601,6 +1618,13 @@ impl Worker {
             Cmd::Fill { bytes, word } => self.fill(bytes, word),
             Cmd::GroupNorm { x, w, b, geom, eps } => self.group_norm([x, w, b], geom, eps),
             Cmd::SdpaBwd { args, geom } => self.sdpa_bwd(args, geom),
+            Cmd::AttnBwd {
+                op,
+                args,
+                bias,
+                lens,
+                geom,
+            } => self.attn_gen_bwd(op, args, bias, lens, geom),
             Cmd::Gate {
                 x,
                 w,

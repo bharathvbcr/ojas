@@ -9,14 +9,16 @@ use std::env;
 use std::path::PathBuf;
 use std::process::Command;
 
-const SOURCES: [&str; 3] = [
+const SOURCES: [&str; 4] = [
     "per_head_gate.metal",
     "causal_attn_bwd.metal",
     "ojas_backend.metal",
+    "attn_gen_bwd.metal",
 ];
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=kernels/attn_bwd_tiled.h");
     for name in SOURCES {
         println!("cargo:rerun-if-changed=kernels/{name}");
     }

@@ -392,6 +392,22 @@ pub(crate) struct AttnGeom {
     pub flash: bool,
 }
 
+/// One general attention backward launch (`attn_gen_bwd.metal`): the forward's
+/// geometry (`splits`, `per_split` and `flash` are 0 and false), the score
+/// `scale`, the symmetric `radius` (`0`: none; bidirectional, `Tq == Tk` only)
+/// and whether query rows past the key length are dead (`key_lens` with `Tq ==
+/// Tk`: they sit outside the sequence, see no key and have no gradient). With
+/// `bias_grad` the bias is bound and its gradient is returned after dQ, dK
+/// and dV.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AttnBwdGeom {
+    pub attn: AttnGeom,
+    pub scale: f32,
+    pub radius: u32,
+    pub dead_rows: bool,
+    pub bias_grad: bool,
+}
+
 /// One bidirectional attention launch on tessl's `encoder_attn`: `k` and `v`
 /// are `[batch, heads, seq, d]`, every key visible, and `q` is `[batch,
 /// heads, q_len, d]` with `q_len <= seq`. A shorter `q` is zero-padded to
@@ -1030,6 +1046,17 @@ pub(crate) enum Cmd {
         alpha: f32,
         /// Newton-Schulz at `Ns5Precision::Bf16`.
         bf16: bool,
+    },
+    /// `attention_backward` (the general tiled backward, `attn_gen_bwd.metal`):
+    /// `[q, k, v, output, lse, grad_output]` and the bias and key lengths when
+    /// the call has them. Replies with dQ, dK, dV, then the bias gradient when
+    /// `geom.bias_grad`. `op` names a fault.
+    AttnBwd {
+        op: &'static str,
+        args: [Arg; 6],
+        bias: Option<Arg>,
+        lens: Option<Arg>,
+        geom: AttnBwdGeom,
     },
 }
 
