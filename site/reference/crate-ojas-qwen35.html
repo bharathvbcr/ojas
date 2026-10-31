@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ojas-qwen35 · ojas reference</title>
-  <meta name="description" content="A Qwen3.5 text-tower training-step provider for ojas, run on canonical tessl&#39;s Metal kernels (a sibling checkout, not part of this repository).">
+  <meta name="description" content="The host-neutral half of ojas&#39;s Qwen3.5 training route: the config reader, the tower&#39;s tensor names, the optimizer groups and the state-directory format. It has no training step.">
   <meta name="keywords" content="ojas, ojas-qwen35, rust deep learning, machine learning, pytorch alternative, neural network, autograd, tensors, metal, wgpu">
   <meta name="author" content="Bharath Chandra Vaddaram">
   <meta name="robots" content="index, follow">
@@ -14,7 +14,7 @@
   <meta property="og:site_name" content="ojas">
   <meta property="og:url" content="https://ojas.vbcr.dev/reference/crate-ojas-qwen35.html">
   <meta property="og:title" content="ojas-qwen35 · ojas reference">
-  <meta property="og:description" content="A Qwen3.5 text-tower training-step provider for ojas, run on canonical tessl&#39;s Metal kernels (a sibling checkout, not part of this repository).">
+  <meta property="og:description" content="The host-neutral half of ojas&#39;s Qwen3.5 training route: the config reader, the tower&#39;s tensor names, the optimizer groups and the state-directory format. It has no training step.">
   <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
@@ -22,7 +22,7 @@
   <meta property="og:locale" content="en_US">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="ojas-qwen35 · ojas reference">
-  <meta name="twitter:description" content="A Qwen3.5 text-tower training-step provider for ojas, run on canonical tessl&#39;s Metal kernels (a sibling checkout, not part of this repository).">
+  <meta name="twitter:description" content="The host-neutral half of ojas&#39;s Qwen3.5 training route: the config reader, the tower&#39;s tensor names, the optimizer groups and the state-directory format. It has no training step.">
   <meta name="twitter:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
   <meta name="twitter:image:alt" content="ojas-qwen35 · ojas reference">
   <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
@@ -40,7 +40,7 @@
     "@context": "https://schema.org",
     "@type": "TechArticle",
     "headline": "ojas-qwen35 · ojas reference",
-    "description": "A Qwen3.5 text-tower training-step provider for ojas, run on canonical tessl's Metal kernels (a sibling checkout, not part of this repository).",
+    "description": "The host-neutral half of ojas's Qwen3.5 training route: the config reader, the tower's tensor names, the optimizer groups and the state-directory format. It has no training step.",
     "url": "https://ojas.vbcr.dev/reference/crate-ojas-qwen35.html",
     "image": "https://ojas.vbcr.dev/assets/ojas-og.png",
     "author": {
@@ -146,271 +146,25 @@
       <p class="ref-crumb"><a href="./">Reference</a> / Crates</p>
       <article class="prose-ojas">
 <h1 id="ojas-qwen35">ojas-qwen35 <a class="anchor" href="#ojas-qwen35" aria-label="Link to this section">#</a></h1>
-<p>A Qwen3.5 text-tower <strong>training-step provider</strong> for ojas, run on canonical <code>tessl</code>&#39;s Metal kernels (a sibling checkout, not part of this repository).</p>
+<p>The host-neutral half of ojas&#39;s Qwen3.5 training route: the config reader, the tower&#39;s tensor names, the optimizer groups and the state-directory format. <strong>It has no training step.</strong></p>
+<blockquote><p><strong>DO-NOT-MERGE-BEFORE-AB.</strong> This branch deletes the tessl whole-step provider shell (<code>Qwen35Step</code>, its gradient bank and host AdamW) that used to live here, and with it the only in-tree comparator for the paired Tape-vs-tessl-provider A/B at Qwen3.5-0.8B-Base, T=2,048 (owner decision D5). Merge only after that A/B has passed.</p>
+</blockquote>
+<h2 id="where-the-step-went">Where the step went <a class="anchor" href="#where-the-step-went" aria-label="Link to this section">#</a></h2>
+<p>ojas owns Metal training, through the Tape. A caller that ran <code>Qwen35Step</code> now builds the tower with <code>Qwen35TextConfig::tape_spec()</code> and steps it with <code>ojas_model::qwen35::TapeStepProvider</code>, which implements <code>ojas-train</code>&#39;s <code>StepProvider</code> contract. tessl stays underneath as the Metal extension: the training kernels and per-op launchers (<code>gdn_train</code>, <code>qwen35_bwd</code>, <code>attn_train</code>, <code>cross_entropy</code>, <code>sq_norm</code>) are what <code>ojas-metal</code> dispatches. The same tower on the Tape is measured in <code>bench/results/2026-10-15-qwen35-2b-tape-gate/</code> and <code>bench/results/2026-10-21-lora-stepcost-ab/</code>.</p>
+<h2 id="what-stays">What stays <a class="anchor" href="#what-stays" aria-label="Link to this section">#</a></h2>
 <ul>
-<li><strong>Metal only.</strong> tessl builds only on macOS on Apple silicon. On any other target this crate compiles to an empty library, and its tests compile to nothing.
+<li><strong><code>config</code></strong>: <code>Qwen35TextConfig</code> reads <code>config.json</code> and refuses, by name, every field the Tape tower does not implement. It cross-checks against tessl&#39;s own reader (<code>tessl::qwen35_model::Qwen35Config</code>) and tessl&#39;s kernel constants (<code>GDN_TRAIN_DK</code>, <code>GDN_TRAIN_BV</code>, <code>ATTN_TRAIN_HEAD_DIM</code>), which is why this crate still depends on tessl on macOS. <code>tape_spec()</code> feeds the Tape tower.
 </li>
-<li><p><strong>Not an ojas <code>Backend</code>.</strong> The whole step is one provider-level unit:</p>
-<ul>
-<li>the forward and backward over GDN, head-dim-256 grouped-query attention, Qwen&#39;s <code>(1 + w)</code> RMSNorm and gated RMSNorm, and partial RoPE;
+<li><strong><code>names</code></strong>: <code>tower_tensors</code>, <code>Snapshot</code> and <code>check_header</code> list the tower&#39;s tensors and pre-flight a snapshot&#39;s header through ojas-io before any weight is read.
 </li>
-<li>cross-entropy over the tied 248,320-row head, computed in vocabulary chunks;
+<li><strong><code>groups</code></strong>: <code>OptimizerPlan</code> builds per-parameter learning-rate scales and weight decays from the caller&#39;s rules, with no built-in exclusions.
 </li>
-<li>hidden rows exposed for a loss outside the crate;
-</li>
-<li>the gradient bank, its global norm, and AdamW.
+<li><strong><code>state</code></strong>: the masters / <code>exp_avg</code> / <code>exp_avg_sq</code> shard format on disk (<code>plan_shards</code>, <code>write_kind</code>, <code>StateIndex</code>, <code>check_new_state_dir</code>). The provider that wrote and loaded it is gone; the format and its checked reader remain.
 </li>
 </ul>
-<p>This crate&#39;s step does not go through <code>ojas_core::Backend</code>. The gated delta rule alone is now also a trait op (<code>Backend::chunked_gdn_forward</code> / <code>chunked_gdn_backward</code>), on the CPU (any dims) and Metal (tessl&#39;s <code>gdn_train</code>, key dim 128). wgpu, CUDA and HIP refuse it with <code>Unsupported</code> through the trait default, as they do <code>permute</code>. Head-dim-256 attention, gated RMSNorm, causal conv1d and the gates are not trait ops.</p>
-</li>
-</ul>
-<p>The crate exists so that &#34;trained with ojas&#34; can rest on ojas code. Lappi&#39;s trainer (<code>crates/qd-train-metal</code>) depends on it by path and adapts this concrete API to its own step-provider trait. This crate does not depend on Lappi.</p>
-<h2 id="the-loop-it-serves">The loop it serves <a class="anchor" href="#the-loop-it-serves" aria-label="Link to this section">#</a></h2>
-<div class="code"><span class="code-lang">text</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>let snap = Snapshot::from_dir(dir)?;                       // CPU: config + header pre-flight
-let mut step = Qwen35Step::open(&amp;snap, Numerics::Bf16Operands, Precision::F32, budget)?; // GPU
-let plan = OptimizerPlan::build(step.parameter_table(), &amp;group_spec)?;
-
-for batch in batches {
-    for seq in batch {                                      // one sequence at a time
-        let pending = step.forward(&amp;Sequence { ids, letter_rows, letter_targets,
-                                               letter_scale: 1.0 / n_letter_rows_in_batch,
-                                               span_positions })?;
-        // pending.letter_ce_sum(), pending.hidden(): [n_span, hidden] f32 host tensor
-        let dh = span_head_backward(pending.hidden());     // caller&#39;s, on the host
-        step.backward(pending, Some(ExternalGrad { positions: &amp;distinct, dh: &amp;dh }))?;
-    }
-    let clip = clip_coefficient(1.0, step.grad_sq_norm()?, span_head_sq_norm)?;
-    step.adamw_step(&amp;AdamWHyper { lr, beta1, beta2, eps, grad_scale: clip }, &amp;plan)?;
-}
-step.save_state(&amp;dir)?;    // masters + exp_avg + exp_avg_sq + step count</code></pre></div>
-<p>The step works on one sequence at a time. tessl&#39;s pending step holds every layer&#39;s <code>T x hidden</code> input between its forward and its backward, so the API does not offer a batch-level step.</p>
-<p>The first backward after an AdamW step overwrites the bank. Later backwards add to it. <code>bank_state()</code> reports which case applies.</p>
-<h2 id="numerics">Numerics <a class="anchor" href="#numerics" aria-label="Link to this section">#</a></h2>
-<p><code>Numerics::ExactF32</code> gives exact f32 GEMMs. <code>Numerics::Bf16Operands</code> rounds GEMM operands to bf16 and accumulates in f32. At <code>Precision::F32</code> the weights, activations, gradients, GDN state, attention and optimizer stay f32 in both modes. There is no default, and the choice is made at <code>open</code>.</p>
-<p><code>Precision</code> is how the weights are stored, also chosen at <code>open</code>:</p>
-<ul>
-<li><code>Precision::F32</code> keeps f32 weights, bank and moments.
-</li>
-<li><code>Precision::Bf16</code> is tessl&#39;s bf16 model, loaded with <code>load_tower</code>: tessl&#39;s AdamW refuses <code>load</code>&#39;s packed head copy for a model that trains. Its weights are bf16 and every GEMM input is rounded to bf16, while accumulation, the residual stream, the GDN state and attention stay f32. AdamW updates an f32 master of each weight with f32 moments (<code>UpdateRule::F32Master</code>).
-</li>
-<li>tessl keeps a bf16 model&#39;s gradient bank in bf16, so gradients summed over sequences are summed in bf16.
-</li>
-<li><code>Precision::Bf16</code> trains only with <code>Numerics::Bf16Operands</code>; <code>ExactF32</code> is refused before the GPU opens.
-</li>
-<li><code>save_state</code> and <code>load_state</code> refuse a bf16 provider, because tessl reads out the bf16 weights rather than the f32 masters.
-</li>
-</ul>
-<p>Both precisions hold 16 bytes per parameter. The 2B measurements are in <code>bench/results/2026-10-11-bf16-frozen-base/</code>.</p>
-<h2 id="refused-never-defaulted">Refused, never defaulted <a class="anchor" href="#refused-never-defaulted" aria-label="Link to this section">#</a></h2>
-<p>Every refusal names the field and fires before any GPU work runs.</p>
-<h3 id="config-refusals">Config refusals <a class="anchor" href="#config-refusals" aria-label="Link to this section">#</a></h3>
-<ul>
-<li>Any <code>config.json</code> key the crate does not know, in the root, in <code>text_config</code> or in <code>rope_parameters</code>. The tables in <code>src/config.rs</code> list every key and say whether it is read, checked, or has no effect on the text tower&#39;s step (with the reason).
-</li>
-<li><code>head_dim</code> other than 256, the value tessl&#39;s attention training kernels are compiled for.
-</li>
-<li>A GDN key head dim other than 128.
-</li>
-<li>A GDN value dim that is not a multiple of 16.
-</li>
-<li>Query heads that are not a multiple of KV heads.
-</li>
-<li>GDN value heads that differ from key heads, because <code>gdn_train</code> has no head grouping.
-</li>
-<li>A conv width outside 2..=8.
-</li>
-<li><code>rope_type</code> other than <code>default</code>, and any non-null <code>rope_scaling</code>.
-</li>
-<li><code>mrope_section</code> unless its entries are positive and sum to <code>rotary_dim / 2</code>. Only in that case does text-only MRoPE equal the plain partial RoPE that tessl computes.
-</li>
-<li><code>attention_dropout != 0</code>.
-</li>
-<li><code>mamba_ssm_dtype</code> other than <code>float32</code>.
-</li>
-<li>An untied LM head, MoE, attention bias, or an ungated attention output.
-</li>
-<li>Any field on which tessl&#39;s own <code>Qwen35Config::from_config_json</code> reading disagrees with this crate&#39;s.
-</li>
-</ul>
-<h3 id="input-refusals">Input refusals <a class="anchor" href="#input-refusals" aria-label="Link to this section">#</a></h3>
-<ul>
-<li>Token ids at or above the vocabulary size.
-</li>
-<li>The config&#39;s vision special tokens (<code>image_token_id</code> and the others). They switch transformers to multimodal positions.
-</li>
-<li>Letter rows that repeat or that fall outside the sequence.
-</li>
-<li>A scale that is not finite.
-</li>
-<li>External-gradient positions that repeat. Sum duplicate rows before passing them.
-</li>
-<li>A non-finite <code>dh</code>.
-</li>
-<li>A backward on a non-finite letter loss.
-</li>
-<li>A pending step whose weights have changed since its forward.
-</li>
-</ul>
-<h3 id="weights-file-refusals">Weights-file refusals <a class="anchor" href="#weights-file-refusals" aria-label="Link to this section">#</a></h3>
-<ul>
-<li>A tower tensor missing from the file, or present with the wrong shape.
-</li>
-<li>A tensor under the tower prefix that is not a tower parameter.
-</li>
-<li>An <code>lm_head.weight</code>.
-</li>
-</ul>
-<h2 id="optimizer-groups-are-data">Optimizer groups are data <a class="anchor" href="#optimizer-groups-are-data" aria-label="Link to this section">#</a></h2>
-<p><code>GroupSpec</code> holds two rule lists:</p>
-<ul>
-<li>learning-rate scale per parameter;
-</li>
-<li>weight decay per parameter.
-</li>
-</ul>
-<p>Each list must partition the parameters. Every parameter matches exactly one rule in each list, and every rule matches at least one parameter. Anything else is refused.</p>
-<p>No exclusion is built in. tessl&#39;s <code>default_weight_decay</code> is never called. The tests express transformers&#39; norm and <code>dt_bias</code> exclusions as data, and also decay everything, to show this.</p>
-<p><strong>Per-parameter learning rates are torch param groups.</strong> <code>Qwen35Step::adamw_step</code> passes the plan&#39;s scales to tessl&#39;s <code>Qwen35Model::adamw_step_scaled</code>, so entry <code>i</code> learns at <code>lr * lr_scale[i]</code>. The scaled learning rate forms both the decoupled decay and the step size, as a torch param group at that rate would. A scale of 0 freezes a parameter while its moments still update. Each distinct effective <code>(lr * scale, weight decay)</code> pair goes through ojas-core&#39;s <code>check_adamw</code> before any device work. <code>gpu_tiny_per_group_lr_scales_the_update</code> checks each group against torch&#39;s update at its own rate.</p>
-<h2 id="loading-and-why-tessls-loader">Loading, and why tessl&#39;s loader <a class="anchor" href="#loading-and-why-tessls-loader" aria-label="Link to this section">#</a></h2>
-<p><code>Snapshot::from_dir</code> runs on the CPU:</p>
-<ol>
-<li>It parses <code>config.json</code>.
-</li>
-<li>It resolves the weights file. With <code>model.safetensors.index.json</code>, every tower tensor must be in one file, because tessl&#39;s loader reads one file.
-</li>
-<li>It checks that file&#39;s header against the tower map through ojas-io. Only the header is read.
-</li>
-</ol>
-<p>On the 2B, the check finds 320 tower tensors. It reports the vision tower and the MTP block as not loaded.</p>
-<p><code>Qwen35Step::open</code> then calls tessl&#39;s <code>Qwen35Model::load</code>, or <code>load_tower</code> at <code>Precision::Bf16</code>. ojas-io cannot do this bulk read, because tessl&#39;s loaders are the model&#39;s only constructors and its fields are <code>pub(crate)</code>.</p>
-<p><code>open</code> compares tessl&#39;s live parameter table with the crate&#39;s map: names, shapes and order. It refuses any difference. Per-entry vectors are always built against the live table.</p>
-<h2 id="state-on-disk">State on disk <a class="anchor" href="#state-on-disk" aria-label="Link to this section">#</a></h2>
-<p><code>save_state</code> and <code>load_state</code> store three kinds of f32 safetensors shards, written and read with ojas-io:</p>
-<ul>
-<li>the masters;
-</li>
-<li>AdamW&#39;s <code>exp_avg</code>;
-</li>
-<li>AdamW&#39;s <code>exp_avg_sq</code>.
-</li>
-</ul>
-<p>Tensors use transformers&#39; names and layout, so a torch oracle can read them directly. Each file&#39;s metadata records:</p>
-<ul>
-<li>the format;
-</li>
-<li>the kind and the shard;
-</li>
-<li>the step count;
-</li>
-<li>the config&#39;s canonical summary.
-</li>
-</ul>
-<p><code>load_state</code> checks every header before it writes anything. A failure after the first device write poisons the provider.</p>
-<p>A save goes through ojas-io&#39;s <code>replace_dir_with</code>. The files are written into a staging directory, the tree is synced, and only then is it renamed into place. On failure the stage is removed. Refused before anything is written:</p>
-<ul>
-<li>a target that exists in any form (a state directory is never overwritten);
-</li>
-<li>a target that is a symbolic link, dangling or not;
-</li>
-<li>a parent directory that is a symbolic link (refused by ojas-io).
-</li>
-</ul>
-<p>Two limits come from ojas-io. Saves into one parent directory are serialized by an <code>flock</code> with no timeout. A directory someone else creates at the target between the check and the swap would be replaced.</p>
-<p>A resume opens the base snapshot and then loads the state over it.</p>
-<p>Memory on the 2B, from the shape of tessl&#39;s API:</p>
-<ul>
-<li><code>open</code> holds 16 bytes per parameter of the 1.88 B: 30,126,456,832 bytes, measured. That is four f32 copies (weights, bank and two moments) at <code>Precision::F32</code>. At <code>Precision::Bf16</code> it is bf16 weights and bank, an f32 master and f32 moments, the same total.
-</li>
-<li>A table read (<code>read_entries</code>, <code>read_table</code>), and each kind of a save or load, also stages a whole table (7.53 GB requested) in device tensors, because tessl copies a whole table per call.
-</li>
-<li>On the host, a save holds one entry at a time: each streams into its shard through ojas-io&#39;s <code>SafeTensorsWriter</code> in 1 MiB pieces. The peak is the 2 GB embedding, which also gets a shard of its own.
-</li>
-</ul>
-<h3 id="device-working-set">Device working set <a class="anchor" href="#device-working-set" aria-label="Link to this section">#</a></h3>
-<p>Every staging goes through one helper, <code>staging_tensors</code>.</p>
-<ol>
-<li>It synchronizes first, so tessl recycles what the last step freed.
-</li>
-<li>It allocates the table.
-</li>
-<li>It refuses if the device is then over <code>recommendedMaxWorkingSetSize</code>, before any GPU work. The figure checked is the measured allocation, not a projection.
-</li>
-</ol>
-<p>Past that size, Metal pages the resident set. On the 2B the next command buffer timed out (<code>MTL4CommandQueueErrorTimeout</code>) and poisoned the runtime.</p>
-<p>Measured on a 64 GB M5 Pro, where the working set is 51.54 GB:</p>
-<div class="table-wrap"><table>
-<thead><tr><th>Point</th><th>Allocated</th></tr></thead>
-<tbody>
-<tr><td>After a 2B step</td><td>43.59 GB</td></tr>
-<tr><td>Recycle done</td><td>41.44 GB</td></tr>
-<tr><td>With staging</td><td>50.20 GB</td></tr>
-</tbody></table></div>
-<p>That leaves <strong>1.34 GB of headroom</strong>.</p>
-<p>Without the recycle, the same staging reached 52.44 GB and faulted, 4 of 4 runs. These numbers are from the gradient read after one step at 128 tokens with <code>Numerics::ExactF32</code>.</p>
-<p>Retired, not measured:</p>
-<ul>
-<li>a 2B <code>save_state</code> and <code>load_state</code> on the provider. Fable retired the row on 2026-10-15 (gp-qwen35-2b-metal-tape-run). It is not measurable under this Mac&#39;s 32 GiB memory guard: 30.13 GB resident plus about 7.5 GB of staging per table. The LoRA run&#39;s checkpoint is the adapters, measured on the Tape under gp-ft-trainer-loop. The state format stays pinned at tiny scale (<code>gpu_tiny_state_round_trip_is_bit_exact</code>).
-</li>
-</ul>
-<p>Not measured to completion:</p>
-<ul>
-<li>the provider at <code>Precision::Bf16</code> with <code>Numerics::Bf16Operands</code>. At T = 2,048 it reached 32.98 GB after the forward and was then stopped in the backward, and at T = 9,638 it printed nothing past open (30.13 GB). The memguard (<code>-cap-gib 32</code>) is the inferred cause, not a Metal failure (<code>bench/results/2026-10-11-bf16-frozen-base/README.md</code>, Provider rows).
-</li>
-<li>the provider at T = 9,638 at either precision, for the same reason.
-</li>
-</ul>
-<p>Measured on the Tape, not the provider, at the longer sequences (Qwen3.5-2B weights, identical <code>text_config</code> to 2B-Base; every layer checkpointed except the last row):</p>
-<div class="table-wrap"><table>
-<thead><tr><th>Row</th><th style="text-align:right">T</th><th style="text-align:right">Device peak</th><th>Source</th></tr></thead>
-<tbody>
-<tr><td>Full-gradient step, f32 linears</td><td style="text-align:right">2,048</td><td style="text-align:right">19.14 GB</td><td><code>bench/results/2026-10-11-bf16-frozen-base/README.md</code>, Tape rows</td></tr>
-<tr><td>Full-gradient step, bf16 linears</td><td style="text-align:right">2,048</td><td style="text-align:right">16.37 GB</td><td>same</td></tr>
-<tr><td>Full-gradient step, f32 linears</td><td style="text-align:right">9,638</td><td style="text-align:right">22.73 GB</td><td>same</td></tr>
-<tr><td>Full-gradient step, bf16 linears</td><td style="text-align:right">9,638</td><td style="text-align:right">18.97 GB</td><td>same</td></tr>
-<tr><td>Real 2B-Base step against transformers</td><td style="text-align:right">128</td><td style="text-align:right">17.60 GB</td><td><code>bench/results/2026-10-15-qwen35-2b-tape-gate/README.md</code></td></tr>
-<tr><td>LoRA step, 2B-Base, rank 16, checkpointing on</td><td style="text-align:right">2,048</td><td style="text-align:right">6.65 GB (335.9 tokens/s)</td><td><code>bench/results/2026-10-17-lora-step/README.md</code></td></tr>
-<tr><td>LoRA step, 2B-Base, rank 16, checkpointing on</td><td style="text-align:right">9,638</td><td style="text-align:right">13.10 GB (261.6 tokens/s)</td><td>same</td></tr>
-<tr><td>LoRA step, 2B-Base, rank 16, checkpointing off</td><td style="text-align:right">9,638</td><td style="text-align:right">refused at the forward (<code>CapacityExceeded</code>, 28 GiB budget)</td><td><code>bench/results/2026-10-17-lora-step/rows.jsonl</code>, row 5</td></tr>
-</tbody></table></div>
-<p>The full-gradient rows over-count a LoRA step by the frozen base&#39;s gradients, and the 2026-10-15 row is the 128-token gate, not a long-sequence row. The LoRA rows also carry 0.8B-Base: 3.94 GB at T = 2,048 and 7.83 GB at T = 9,638 (same README). They record the exact device peak and the host footprint (14.31 GB for 2B-Base at T = 9,638), and no column for the per-call bf16 widening transient.</p>
-<p>Anything that ends over the working set gets the refusal, not a timeout. Tessl reads that take one entry at a time would remove the staging, and the headroom question with it.</p>
-<h2 id="threading">Threading <a class="anchor" href="#threading" aria-label="Link to this section">#</a></h2>
-<p><code>Qwen35Step</code> is not <code>Send</code>, because tessl&#39;s <code>GpuRuntime</code> is not. Keep a provider on one thread.</p>
+<p>Off macOS the crate is empty: tessl builds only there.</p>
 <h2 id="tests">Tests <a class="anchor" href="#tests" aria-label="Link to this section">#</a></h2>
-<p><code>cargo test -p ojas-qwen35</code> (from the ojas workspace root) runs only CPU tests and never opens a GPU runtime. It covers:</p>
-<ul>
-<li>config parsing and every refusal;
-</li>
-<li>the tower map against the real 2B config;
-</li>
-<li>tessl&#39;s tiny fixture header;
-</li>
-<li>optimizer-plan construction and per-entry learning-rate scales;
-</li>
-<li><code>Qwen35TextConfig::tape_spec</code> against the tower map, for the real 2B config and tessl&#39;s tiny fixture (<code>tests/cpu_tape_spec.rs</code>);
-</li>
-<li>sequence, gradient and clip checks;
-</li>
-<li>state-format round trips and refusals through ojas-io;
-</li>
-<li>save-target refusals: anything present, and symbolic links.
-</li>
-</ul>
-<p>These tests are <code>#[ignore]</code>d:</p>
-<ul>
-<li><code>snapshot_header_matches_the_name_map</code> (CPU only) reads the real 2B snapshot&#39;s header from the Hugging Face cache.
-</li>
-<li>All tests in <code>tests/gpu_parity.rs</code> are named <code>gpu_*</code>. They open a Metal runtime and run serialized in an agreed GPU window:
-</li>
-</ul>
-<div class="code"><span class="code-lang">text</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>cargo test -p ojas-qwen35 --release --test gpu_parity -- --ignored --test-threads=1 gpu_tiny
-cargo test -p ojas-qwen35 --release --test gpu_parity -- --ignored --test-threads=1 gpu_real_2b
-cargo test -p ojas-qwen35 --release --test gpu_tape_2b -- --ignored --test-threads=1 --nocapture gpu_real_2b</code></pre></div>
-<h2 id="the-same-tower-on-ojass-tape">The same tower on ojas&#39;s Tape <a class="anchor" href="#the-same-tower-on-ojass-tape" aria-label="Link to this section">#</a></h2>
-<p><code>ojas_model::qwen35</code> writes the Qwen3.5 text tower once over ojas-model&#39;s <code>Graph</code>, so it trains on <code>ojas_autograd::Tape</code> on any backend with the hybrid ops (CPU and Metal natively) instead of through tessl&#39;s monolithic step. <code>Qwen35TextConfig::tape_spec</code> hands it the shape this crate&#39;s parser validated, so <code>config.json</code> still has one reader. On tessl&#39;s tiny fixture it matches transformers on the CPU and on Metal (<code>ojas-model/tests/qwen35_{fixture,metal_tape}.rs</code>). <code>tests/gpu_tape_2b.rs</code> runs the real 2B-Base through the Metal tape, each layer a checkpointed segment, against transformers&#39; own float32 step on tessl&#39;s real-2B reference (<code>make_train_fixture.py 2b</code>): loss within 4.54e-5, every one of the 149 reference gradients within 4.05e-3 of its peak, a 17.60 GB step peak (<code>bench/results/2026-10-15-qwen35-2b-tape-gate</code>). This provider is not in that process: it would not fit beside the reference read-back under the machine&#39;s memory guard.</p>
-<h2 id="json">JSON <a class="anchor" href="#json" aria-label="Link to this section">#</a></h2>
-<p><code>config.json</code> and <code>model.safetensors.index.json</code> are read with ojas-io&#39;s strict reader (<code>parse_json_with</code>). The limits are depth 32 and 16 MiB of input. Duplicate keys are refused.</p>
-<p>A dimension must be an integer literal; <code>2048.0</code> is refused. A float field written as an integer must be exact in <code>f64</code>, so <code>9007199254740993</code> is refused, not rounded. An integer literal beyond the <code>u64</code>/<code>i64</code> range is refused anywhere in the file.</p>
+<p>CPU tests (macOS, no GPU): <code>cpu_config</code>, <code>cpu_names</code>, <code>cpu_groups</code>, <code>cpu_state_read</code>, <code>cpu_state_prevalidation</code>, <code>cpu_tape_spec</code> and <code>cpu_surface</code> (the retirement pin: no source file names tessl&#39;s retired training layer, and <code>src/step.rs</code> is absent). GPU tests: <code>gpu_tape_provider</code> and <code>gpu_tape_2b</code> exercise the Tape provider on Metal; <code>sharded_checkpoint_adversarial</code> covers the header pre-flight.</p>
       </article>
       <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-qwen35/README.md" rel="noopener"><code>ojas-qwen35/README.md</code></a>. If this page and the repository disagree, the repository wins.</p>
       <nav class="ref-pager" aria-label="Previous and next">
@@ -419,20 +173,9 @@ cargo test -p ojas-qwen35 --release --test gpu_tape_2b -- --ignored --test-threa
       </nav>
     </main>
     <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
-<li><a href="#the-loop-it-serves">The loop it serves</a></li>
-<li><a href="#numerics">Numerics</a></li>
-<li><a href="#refused-never-defaulted">Refused, never defaulted</a></li>
-<li class="sub"><a href="#config-refusals">Config refusals</a></li>
-<li class="sub"><a href="#input-refusals">Input refusals</a></li>
-<li class="sub"><a href="#weights-file-refusals">Weights-file refusals</a></li>
-<li><a href="#optimizer-groups-are-data">Optimizer groups are data</a></li>
-<li><a href="#loading-and-why-tessls-loader">Loading, and why tessl&#39;s loader</a></li>
-<li><a href="#state-on-disk">State on disk</a></li>
-<li class="sub"><a href="#device-working-set">Device working set</a></li>
-<li><a href="#threading">Threading</a></li>
+<li><a href="#where-the-step-went">Where the step went</a></li>
+<li><a href="#what-stays">What stays</a></li>
 <li><a href="#tests">Tests</a></li>
-<li><a href="#the-same-tower-on-ojass-tape">The same tower on ojas&#39;s Tape</a></li>
-<li><a href="#json">JSON</a></li>
 </ol></nav>
   </div>
   <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
