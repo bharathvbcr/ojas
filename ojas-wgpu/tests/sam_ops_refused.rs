@@ -211,6 +211,11 @@ fn every_sam_op_is_the_refusing_default_on_wgpu() {
         ),
         refusal("concat", g.concat(&[&x, &x], 0).map(drop)),
         refusal("slice", g.slice(&x, 0, 0, 1).map(drop)),
+        refusal(
+            "slice_backward",
+            g.slice_backward(&dev(34, &[1, 8]), &[2, 8], 0, 0).map(drop),
+        ),
+        refusal("relu_backward", g.relu_backward(&x, &x).map(drop)),
         refusal("fill", g.fill(&[2, 2], DType::F32, 1.0).map(drop)),
     ];
 
