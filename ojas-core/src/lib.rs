@@ -47,7 +47,9 @@ pub use dtype::DType;
 pub use erf_exact::{erf_exact, erf_f64, gelu_erf_backward_exact, gelu_erf_exact};
 pub use error::OjasError;
 pub use exp_exact::{exp_exact, log1p_exact, log_sum_exp_exact};
-pub use limits::{shape_product, CPU_THREAD_CEILING, GIBIBYTE, KIBIBYTE, MEBIBYTE};
+pub use limits::{
+    checked_product, shape_product, CPU_THREAD_CEILING, GIBIBYTE, KIBIBYTE, MEBIBYTE,
+};
 pub use rope::{mrope_tables, mrope_text_tables, MropeSection};
 pub use shapes::{
     accumulate_grad_dims, adamw_step_dims, argmax_rows_dims, attention_backward_dims,
@@ -76,6 +78,9 @@ pub use shapes::{
     GroupNormDims, KvDims, LinearCeDims, LinearDims, MuonDims, PartialRopeDims, RmsDims, RopeDims,
     RopeLayout, SdpaDims, SliceDims, MAX_BROADCAST_RANK, MAX_PERMUTE_RANK,
 };
+// Launch-geometry rules the GPU backends share: the cached-attention window
+// origin and the split-decode scratch.
+pub use shapes::{cached_attention_partial_elems, window_start};
 pub use spatial::{
     axial_rope_2d_tables, conv2d_backward_dims, conv2d_forward_dims,
     conv_transpose2d_backward_dims, conv_transpose2d_forward_dims,

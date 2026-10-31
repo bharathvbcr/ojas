@@ -1389,10 +1389,10 @@ fn plus(op: &'static str, a: usize, b: usize) -> Res<usize> {
     a.checked_add(b).ok_or_else(|| overflow(op))
 }
 
+/// The checked shape product, `ojas_core`'s, so an overflow reads the same
+/// here as on the CPU and wgpu backends.
 fn product(op: &'static str, dims: &[usize]) -> Res<usize> {
-    dims.iter()
-        .try_fold(1usize, |acc, &d| acc.checked_mul(d))
-        .ok_or_else(|| overflow(op))
+    ojas_core::checked_product(op, dims)
 }
 
 /// The per-step f32 scalars of `ojas_adamw_*`, formed in f64 from the bias

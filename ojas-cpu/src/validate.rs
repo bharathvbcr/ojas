@@ -7,6 +7,10 @@ use ojas_core::{Budget, DType, OjasError, Reservation, Scratch, Tensor};
 /// every scan passed to [`Tensor::all_finite_cached`], applies it.
 pub(crate) use ojas_core::f32_all_finite as all_finite;
 
+/// The op-named checked shape product has one owner too, ojas-core; the wgpu
+/// and Metal backends call the same function.
+pub(crate) use ojas_core::checked_product as product;
+
 use crate::pool::scoped;
 use crate::pool::Exec;
 
@@ -351,17 +355,6 @@ fn check_layout(op: &'static str, t: &Tensor, dtype: DType) -> Result<(), OjasEr
         return Err(shape(op, "empty tensor"));
     }
     Ok(())
-}
-
-pub(crate) fn product(op: &'static str, dims: &[usize]) -> Result<usize, OjasError> {
-    let mut n = 1usize;
-    for &dim in dims {
-        n = n.checked_mul(dim).ok_or_else(|| OjasError::OutOfRange {
-            op,
-            detail: "shape product overflows".to_string(),
-        })?;
-    }
-    Ok(n)
 }
 
 pub(crate) fn payload_bytes(op: &'static str, elements: usize) -> Result<u64, OjasError> {
