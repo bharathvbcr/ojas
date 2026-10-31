@@ -5218,7 +5218,7 @@ mod tests {
     }
 
     #[test]
-    fn only_plain_attention_at_head_dim_32_or_64_with_tq_at_most_tk_routes_to_encoder_attn() {
+    fn only_plain_attention_at_head_dim_32_64_or_256_with_tq_at_most_tk_routes_to_encoder_attn() {
         let base = vision_dims();
         assert!(routes_to_encoder_attn(&base, true));
         assert!(
@@ -5232,6 +5232,16 @@ mod tests {
                 true
             ),
             "head dim 32 routes"
+        );
+        assert!(
+            routes_to_encoder_attn(
+                &AttentionDims {
+                    head_dim: 256,
+                    ..base
+                },
+                true
+            ),
+            "head dim 256 routes"
         );
         // Cross-attention pads Q: the memory encoder's one-frame and
         // two-frame lengths route (F = 2 spans ratios 2.003 to 2.049), up to a
@@ -5357,13 +5367,6 @@ mod tests {
                 "head dim 128",
                 AttentionDims {
                     head_dim: 128,
-                    ..base
-                },
-            ),
-            (
-                "head dim 256",
-                AttentionDims {
-                    head_dim: 256,
                     ..base
                 },
             ),
