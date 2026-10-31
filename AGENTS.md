@@ -54,6 +54,17 @@ Two sibling checkouts are path dependencies and must exist for any build:
   contain `unsafe` blocks. Keep new code safe, and keep `unsafe` inside
   those crates. Release builds keep `overflow-checks = true`, so size
   arithmetic should be checked and refuse, not panic.
+  The one sanctioned exception outside these crates is in the sibling tessl
+  checkout, not in this workspace: tessl's `SharedBuf` (`src/shared_buf.rs`)
+  carries a single audited `unsafe impl Send + Sync` over a pooled
+  `StorageModeShared` Metal buffer (host pointer, length, retained
+  `MTLBuffer`), so CPU threads can read and write the bytes a Metal kernel
+  uses without a copy. It is guarded by per-buffer fences on tessl's commit
+  timeline (`last_use` / `last_write` stamps set at bind time, whole-buffer
+  leases, poison checked on every fence). ojas code reaches shared memory only
+  through tessl's safe `SharedBuf` API; `ojas-core` and `ojas-metal` stay
+  `#![forbid(unsafe_code)]` and must not add their own `unsafe impl Send` or
+  `Sync` for a device buffer.
 
 ## Adding a `Backend` method
 
