@@ -41,7 +41,7 @@ use crate::link::{
     cached_attn_origin, cached_attn_part, cached_attn_splits, copied_at, device_lost, metal_err,
     norm_chunks, reduce_groups, rms_w_chunks, Arg, AttnGeom, BilinearGeom, Cmd, Conv1dGeom,
     ConvGeom, DeviceInfo, EmbedRows, EncAttnGeom, GdnArgs, GroupNormGeom, Lane, LceGeom, Msg,
-    NewBuf, ReadAs, Reply, Res, RmsSide, RopeMode, SdpaGeom, Wait, Waits, SQ_OUT_WORDS, SQ_PIECE,
+    NewBuf, ReadAs, Reply, Res, RmsSide, RopeMode, SdpaGeom, Wait, Waits, SQ_OUT_WORDS,
 };
 use crate::permute::{self, Plan};
 
@@ -63,10 +63,6 @@ const ST_BYTES: usize = ST_WORDS * 4;
 /// Metal source).
 const NORM_SLOTS: usize = 24;
 
-// link.rs builds without tessl, so it mirrors these; they must agree.
-const _: () = assert!(SQ_PIECE == tessl::sq_norm::SQ_PIECE);
-const _: () = assert!(SQ_OUT_WORDS == tessl::sq_norm::SQ_OUT_WORDS);
-
 /// Status slots in the slab. A full slab forces a waited commit.
 const SLAB_SLOTS: usize = 4096;
 /// Dispatches between unwaited commits.
@@ -75,10 +71,13 @@ const OVERLAP_DISPATCHES: usize = 256;
 /// recorded. Larger uploads wait and map.
 const INLINE_UPLOAD_BYTES: usize = 64 << 10;
 /// Inline upload bytes allowed between waited commits. tessl resets its
-/// 16 MiB constant arena only at a waited commit, and an exhausted arena
-/// poisons the runtime, so inline uploads keep to a sixteenth of it and the
-/// rest stays for the dispatches' own constants.
-const INLINE_ARENA_BYTES: usize = 1 << 20;
+/// constant arena (`METAL4_CONST_ARENA_BYTES`, 16 MiB) only at a waited
+/// commit, and an exhausted arena poisons the runtime, so inline uploads keep
+/// to a sixteenth of it and the rest stays for the dispatches' own constants.
+const INLINE_ARENA_BYTES: usize = tessl::runtime::METAL4_CONST_ARENA_BYTES / 16;
+// One inline upload must always fit the share, or `inline_upload_fits` would
+// refuse every inline upload.
+const _: () = assert!(INLINE_UPLOAD_BYTES <= INLINE_ARENA_BYTES);
 
 /// Whether `len` upload bytes may ride inline after `used` inline bytes
 /// since the last wait: non-empty, whole words, and inside both caps.

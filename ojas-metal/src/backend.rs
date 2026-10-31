@@ -112,6 +112,7 @@ use ojas_core::{
     ValueResidualGrad, MAX_PERMUTE_RANK,
 };
 
+use crate::layout::{CONV1D_BWD_ROWS, CONV1D_WIDTHS, GATED_RMS_BWD_MAX_DIM, GATED_RMS_BWD_ROWS};
 use crate::link::{
     cached_attn_origin, cached_attn_part, check_mem_cap, metal_err, norm_chunks, rms_w_chunks, Arg,
     AttnGeom, BilinearGeom, Cmd, Conv1dGeom, ConvGeom, EmbedRows, EncAttnGeom, GdnArgs,
@@ -1302,17 +1303,6 @@ fn muon_scratch_elems(op: &'static str, rows: usize, cols: usize) -> Res<usize> 
         .ok_or_else(|| overflow(op))
 }
 
-/// Widths tessl's `qwen35_conv1d_silu*` kernels take
-/// (`CONV_BWD_MAX_KW` in tessl's source).
-const METAL_CONV1D_WIDTHS: std::ops::RangeInclusive<usize> = 2..=8;
-/// Flattened rows per weight-gradient block of tessl's conv backward
-/// (`CONV_ROWS_PER_BLOCK` in `qwen35_bwd.rs`).
-const METAL_CONV1D_BWD_ROWS: usize = 256;
-/// Widest row tessl's gated-norm backward takes (`32 * MAX_COLS`).
-const METAL_GATED_RMS_BWD_MAX_DIM: usize = 512;
-/// Rows per weight-gradient block of tessl's gated-norm backward
-/// (`GATED_UNITS_PER_BLOCK`).
-const METAL_GATED_RMS_BWD_ROWS: usize = 64;
 /// Largest `k` `ojas_topk_rows` takes. The kernel walks the whole row once
 /// per leader, so its cost grows as `k * cols`; sampling's top-k sits far
 /// below this, and a larger `k` belongs to a sort, not `k` selection rounds.
@@ -1321,11 +1311,11 @@ pub const METAL_TOPK_MAX_K: usize = 1024;
 /// The conv kernels' geometry of validated `d`: a width tessl is compiled
 /// for, and `batch * seq` within 32-bit indexing.
 fn conv1d_geom(op: &'static str, d: &Conv1dDims) -> Res<Conv1dGeom> {
-    if !METAL_CONV1D_WIDTHS.contains(&d.width) {
+    if !CONV1D_WIDTHS.contains(&d.width) {
         return Err(OjasError::Unsupported {
             op,
             detail: format!(
-                "Metal's conv1d kernels take widths {METAL_CONV1D_WIDTHS:?}, got {}",
+                "Metal's conv1d kernels take widths {CONV1D_WIDTHS:?}, got {}",
                 d.width
             ),
         });
@@ -1340,10 +1330,18 @@ fn conv1d_geom(op: &'static str, d: &Conv1dDims) -> Res<Conv1dGeom> {
 }
 
 /// f32 values of weight-gradient scratch the conv backward needs; the device
-/// checks this against tessl's `conv1d_silu_bwd_part_len`.
-fn conv1d_part_elems(op: &'static str, d: &Conv1dDims) -> Res<usize> {
-    let blocks = product(op, &[d.batch, d.time])?.div_ceil(METAL_CONV1D_BWD_ROWS);
+/// checks this against tessl's `conv1d_silu_bwd_part_len`, which
+/// `layout::tests` pins it to.
+pub(crate) fn conv1d_part_elems(op: &'static str, d: &Conv1dDims) -> Res<usize> {
+    let blocks = product(op, &[d.batch, d.time])?.div_ceil(CONV1D_BWD_ROWS);
     product(op, &[blocks, d.channels, d.width])
+}
+
+/// f32 values of weight-gradient scratch the gated-norm backward needs: one
+/// row of `dim` per block of rows, as tessl's `gated_rms_norm_bwd_part_len`
+/// with one head per row, which `layout::tests` pins it to.
+pub(crate) fn gated_rms_part_elems(op: &'static str, d: &RmsDims) -> Res<usize> {
+    product(op, &[d.rows.div_ceil(GATED_RMS_BWD_ROWS), d.dim])
 }
 
 /// `(rows, dim)` of validated `d` within 32-bit indexing, every element too.
@@ -1530,7 +1528,7 @@ fn refuse_unsupported_conv_transpose2d(op: &'static str, d: &ConvTranspose2dDims
 const GROUP_NORM_TARGET_GROUPS: usize = 512;
 const GROUP_NORM_MIN_CHUNK: usize = 1024;
 /// Threads of a GroupNorm threadgroup (`GN_THREADS`).
-const GROUP_NORM_THREADS: usize = 256;
+pub(crate) const GROUP_NORM_THREADS: usize = 256;
 
 /// `(chunks, chunk_len)` of a GroupNorm row of `width` values among `rows`
 /// rows: enough chunks to reach the target, but no more than one per
@@ -2748,21 +2746,18 @@ impl Backend for MetalBackend {
             self.f32(OP, weight)?,
         );
         let gy = self.f32(OP, grad_output)?;
-        if dims.dim > METAL_GATED_RMS_BWD_MAX_DIM {
+        if dims.dim > GATED_RMS_BWD_MAX_DIM {
             return Err(OjasError::Unsupported {
                 op: OP,
                 detail: format!(
                     "Metal's gated-norm backward takes rows of at most \
-                     {METAL_GATED_RMS_BWD_MAX_DIM}, got {}",
+                     {GATED_RMS_BWD_MAX_DIM}, got {}",
                     dims.dim
                 ),
             });
         }
         let (rows, dim) = gated_rms_geom(OP, &dims)?;
-        let part = product(
-            OP,
-            &[dims.rows.div_ceil(METAL_GATED_RMS_BWD_ROWS), dims.dim],
-        )?;
+        let part = gated_rms_part_elems(OP, &dims)?;
         let scratch = plus(OP, part, copied_elems(OP, ReadAs::Whole, &[x, z, w, gy])?)?;
         let shapes = [input.shape(), gate.shape(), weight.shape()];
         let cmd = Cmd::GatedRmsBwd {

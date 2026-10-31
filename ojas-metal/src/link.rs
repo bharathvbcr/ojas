@@ -1209,14 +1209,11 @@ fn needs_stage(off: usize, step: usize, tile: usize, rows: usize) -> bool {
     !(off.is_multiple_of(16) && (tiles == 1 || tile_bytes.is_multiple_of(16)))
 }
 
-/// Elements of one tessl `sq_norm` piece (`tessl::sq_norm::SQ_PIECE`, which
-/// `device.rs` asserts at compile time) and of one `ojas_scale_multi`
-/// threadgroup (`NORM_CHUNK` in the Metal source).
-pub(crate) const SQ_PIECE: usize = 4096;
-
-/// Result words of tessl's `sq_norm` (`tessl::sq_norm::SQ_OUT_WORDS`,
-/// asserted in `device.rs`).
-pub(crate) const SQ_OUT_WORDS: usize = 6;
+// `SQ_PIECE` (elements of one tessl `sq_norm` piece and of one
+// `ojas_scale_multi` threadgroup, `NORM_CHUNK` in the Metal source) and
+// `SQ_OUT_WORDS` (result words of `sq_norm`) are tessl's own constants,
+// owned by `crate::layout`, which also covers a build without tessl.
+pub(crate) use crate::layout::{SQ_OUT_WORDS, SQ_PIECE};
 
 /// Chunks `clip_grad_norm` cuts `n` gradient values into: tessl `sq_norm`'s
 /// pieces (two words each in its parts buffer, `SqNormPlan::parts_words`)
