@@ -2248,6 +2248,7 @@ impl Worker {
         Ok(self.keep(vec![y]))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn linear_bias(
         &mut self,
         x: Arg,

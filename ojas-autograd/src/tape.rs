@@ -491,11 +491,7 @@ impl Rec {
                 out_size,
                 align_corners,
             },
-            Rec::RopeInterleaved { x, cos, sin } => Rec::RopeInterleaved {
-                x: m(x),
-                cos,
-                sin,
-            },
+            Rec::RopeInterleaved { x, cos, sin } => Rec::RopeInterleaved { x: m(x), cos, sin },
             Rec::Concat { inputs, axis, lens } => Rec::Concat {
                 inputs: inputs.into_iter().map(m).collect(),
                 axis,
@@ -984,12 +980,7 @@ impl<B: Backend> Tape<B> {
 
     /// Interleaved RoPE ([`Backend::rope_interleaved_forward`]): `x` `[..., D]`
     /// rotated pairwise with `cos` and `sin`.
-    pub fn rope_interleaved(
-        &mut self,
-        x: Var,
-        cos: Tensor,
-        sin: Tensor,
-    ) -> Result<Var, OjasError> {
+    pub fn rope_interleaved(&mut self, x: Var, cos: Tensor, sin: Tensor) -> Result<Var, OjasError> {
         let x = self.index(x, "Tape::rope_interleaved")?;
         let cos = self.place(cos)?;
         let sin = self.place(sin)?;

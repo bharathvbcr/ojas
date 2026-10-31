@@ -1549,7 +1549,9 @@ impl<B: Backend> Backend for Autocast<B> {
         start: usize,
     ) -> Result<Tensor, OjasError> {
         self.pass()?;
-        let out = self.inner.slice_backward(grad_output, in_shape, axis, start)?;
+        let out = self
+            .inner
+            .slice_backward(grad_output, in_shape, axis, start)?;
         Ok(self.copy_tag(grad_output, out))
     }
 

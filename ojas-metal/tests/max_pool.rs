@@ -85,7 +85,7 @@ fn sam_neck_shape_matches_cpu() {
 #[test]
 fn odd_floor_overlapping_and_strided_shapes_match_cpu() {
     let m = metal();
-    let cases: [(&str, [usize; 4], [usize; 2], [usize; 2]); 12] = [
+    let cases = [
         (
             "odd 7x9 k2 s2 (floor remainder)",
             [2, 3, 7, 9],

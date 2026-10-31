@@ -3490,10 +3490,7 @@ impl Backend for MetalBackend {
         const OP: &str = "linear_bias_forward";
         let dims = linear_bias_forward_dims(input, weight, bias)?;
         let lane = self.link.lane(input.bf16_exact(), weight.bf16_exact());
-        if self.link.has_tensorops()
-            && lane == Lane::Bf16
-            && bias.shape() == [dims.out_features]
-        {
+        if self.link.has_tensorops() && lane == Lane::Bf16 && bias.shape() == [dims.out_features] {
             let (input, weight) = (self.widened(input)?, self.widened(weight)?);
             let x = self.f32(OP, &input)?;
             let w = self.f32(OP, &weight)?;

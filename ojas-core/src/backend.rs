@@ -3739,10 +3739,7 @@ pub(crate) mod tests {
             backend.seq_mean_forward(&x, &ids).map(drop),
             "seq_mean_forward",
         );
-        refused(
-            backend.relu_backward(&x, &x).map(drop),
-            "relu_backward",
-        );
+        refused(backend.relu_backward(&x, &x).map(drop), "relu_backward");
         refused(
             backend.slice_backward(&x, &[1], 0, 0).map(drop),
             "slice_backward",

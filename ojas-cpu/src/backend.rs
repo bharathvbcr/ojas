@@ -7,8 +7,7 @@ use ojas_core::{
     gelu_erf_forward_dims, group_norm_forward_dims, layer_norm_backward_dims,
     layer_norm_forward_dims, linear_bias_backward_dims, linear_bias_forward_dims,
     relu_backward_dims, relu_forward_dims, scale_forward_dims, slice_backward_dims, slice_dims,
-    softmax_backward_dims, softmax_forward_dims,
-    AffineGrad, LinearDims,
+    softmax_backward_dims, softmax_forward_dims, AffineGrad, LinearDims,
 };
 use ojas_core::{
     causal_conv1d_silu_backward_dims, causal_conv1d_silu_forward_dims, clip_scale,

@@ -142,6 +142,7 @@ fn tier1_feat2_01_local_window_attention_9_windows() {
         window: None,
         key_lens: None,
         bias: None,
+        ..Default::default()
     };
     let out = be.attention_forward(&q, &k, &v, opts).expect("attn");
     assert_eq!(out.shape(), &[2, 4, 64, 64]);
@@ -165,6 +166,7 @@ fn tier1_feat2_02_global_attention_tokens() {
         window: None,
         key_lens: None,
         bias: None,
+        ..Default::default()
     };
     let out = be.attention_forward(&q, &k, &v, opts).expect("global attn");
     assert_eq!(out.shape(), &[1, 4, 128, 64]);
@@ -182,6 +184,7 @@ fn tier1_feat2_03_attention_softmax_scale_invariance() {
         window: None,
         key_lens: None,
         bias: None,
+        ..Default::default()
     };
     let out = be.attention_forward(&q, &k, &v, opts).expect("attn");
     let out_data = host(&be, &out);
@@ -202,6 +205,7 @@ fn tier1_feat2_04_attention_with_key_padding_mask() {
         window: None,
         key_lens: Some(&lens_tensor),
         bias: None,
+        ..Default::default()
     };
     let out = be.attention_forward(&q, &k, &v, opts).expect("masked attn");
     let out_data = host(&be, &out);
@@ -219,6 +223,7 @@ fn tier1_feat2_05_attention_saving_lse() {
         window: None,
         key_lens: None,
         bias: None,
+        ..Default::default()
     };
     let (out, lse) = be
         .attention_forward_saving(&q, &k, &v, opts)
@@ -635,6 +640,7 @@ fn tier1_feat8_05_bidirectional_non_causal_general_attention() {
         window: None,
         key_lens: None,
         bias: None,
+        ..Default::default()
     };
     let out = be
         .attention_forward(&q, &k, &v, opts)

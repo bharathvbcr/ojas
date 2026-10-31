@@ -92,6 +92,7 @@ fn tier2_feat2_01_attention_zero_length_sequence_refused() {
                 window: None,
                 key_lens: None,
                 bias: None,
+                ..Default::default()
             };
             be.attention_forward(&t, &t, &t, opts).is_err()
         }
@@ -113,6 +114,7 @@ fn tier2_feat2_02_attention_nan_query_refused() {
                 window: None,
                 key_lens: None,
                 bias: None,
+                ..Default::default()
             };
             let res = be.attention_forward(&uploaded_q, &k, &k, opts);
             assert!(matches!(res, Err(OjasError::NonFinite { .. })));
@@ -133,6 +135,7 @@ fn tier2_feat2_03_attention_inf_key_refused() {
                 window: None,
                 key_lens: None,
                 bias: None,
+                ..Default::default()
             };
             let res = be.attention_forward(&q, &uploaded_k, &q, opts);
             assert!(matches!(res, Err(OjasError::NonFinite { .. })));
@@ -150,6 +153,7 @@ fn tier2_feat2_04_attention_dimension_mismatch() {
         window: None,
         key_lens: None,
         bias: None,
+        ..Default::default()
     };
     let res = be.attention_forward(&q, &k, &k, opts);
     assert!(matches!(res, Err(OjasError::Shape { .. })));
@@ -167,6 +171,7 @@ fn tier2_feat2_05_attention_prime_dimensions() {
         window: None,
         key_lens: None,
         bias: None,
+        ..Default::default()
     };
     let out = be.attention_forward(&q, &k, &v, opts).expect("prime dims");
     assert_eq!(out.shape(), &[1, 2, 37, 32]);

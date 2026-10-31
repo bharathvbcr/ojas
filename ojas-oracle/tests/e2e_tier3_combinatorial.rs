@@ -66,6 +66,7 @@ fn tier3_01_rope_with_window_partition_attention_and_merge() {
         window: None,
         key_lens: None,
         bias: None,
+        ..Default::default()
     };
     let attn_out = be.attention_forward(&q, &q, &q, opts).expect("attn");
     assert_eq!(attn_out.shape(), &[4, 4, 16, 4]);
@@ -206,6 +207,7 @@ fn tier3_06_additive_bias_attention_with_window_masking() {
         window: Some(4), // causal window size 4
         key_lens: None,
         bias: Some(&bias),
+        ..Default::default()
     };
     let out = be
         .attention_forward(&q, &k, &v, opts)
