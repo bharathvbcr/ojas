@@ -17,12 +17,52 @@ mod common;
 
 use common::*;
 use ojas_core::Backend;
+use ojas_metal::MetalBackend;
 
 fn dy(r: usize, h: usize) -> f32 {
     match (r * 7 + h * 3) % 5 {
         0 => 3.0e7,
         2 => -3.0e7,
         k => 0.37 + (r % 11) as f32 * 0.13 + k as f32 + h as f32 * 0.01,
+    }
+}
+
+/// One gate-backward input: `dy` with a zero `x`, `W` and bias, so
+/// `d_pre = dy / 4`.
+struct Case {
+    rows: usize,
+    heads: usize,
+    gy: Vec<f32>,
+}
+
+impl Case {
+    fn new(rows: usize, heads: usize) -> Self {
+        let gy = (0..rows * heads)
+            .map(|i| dy(i / heads, i % heads))
+            .collect();
+        Self { rows, heads, gy }
+    }
+
+    /// The f32 fold of `dy / 4` down the rows, ascending from 0.
+    fn want(&self) -> Vec<f32> {
+        (0..self.heads)
+            .map(|h| (0..self.rows).fold(0.0f32, |s, r| s + self.gy[r * self.heads + h] * 0.25))
+            .collect()
+    }
+
+    fn run(&self, m: &MetalBackend) -> Vec<f32> {
+        let (rows, heads) = (self.rows, self.heads);
+        let x = up(m, &host(&vec![0.0; rows], &[rows, 1]));
+        let w = up(m, &host(&vec![0.0; heads], &[heads, 1]));
+        let bias = up(m, &host(&vec![0.0; heads], &[heads]));
+        let attn = up(m, &host(&vec![1.0; rows * heads], &[rows, heads, 1]));
+        let gy = up(m, &host(&self.gy, &[rows, heads, 1]));
+        let grads = ok(
+            "gate backward",
+            m.per_head_sigmoid_gate_backward(&x, &w, &bias, &attn, &gy),
+        );
+        ok("sync", m.sync());
+        down(&grads.bias)
     }
 }
 
@@ -33,28 +73,26 @@ fn the_bias_gradient_sums_rows_in_ascending_order_bit_for_bit() {
         for rows in [
             1usize, 31, 32, 33, 64, 65, 127, 128, 129, 1024, 2047, 2048, 2049, 4096, 4097,
         ] {
-            let gy: Vec<f32> = (0..rows * heads).map(|i| dy(i / heads, i % heads)).collect();
-            let want: Vec<f32> = (0..heads)
-                .map(|h| (0..rows).fold(0.0f32, |s, r| s + gy[r * heads + h] * 0.25))
-                .collect();
-
-            let x = up(&m, &host(&vec![0.0; rows], &[rows, 1]));
-            let w = up(&m, &host(&vec![0.0; heads], &[heads, 1]));
-            let bias = up(&m, &host(&vec![0.0; heads], &[heads]));
-            let attn = up(&m, &host(&vec![1.0; rows * heads], &[rows, heads, 1]));
-            let gy = up(&m, &host(&gy, &[rows, heads, 1]));
-            let grads = ok(
-                "gate backward",
-                m.per_head_sigmoid_gate_backward(&x, &w, &bias, &attn, &gy),
-            );
-            ok("sync", m.sync());
-
-            let got = down(&grads.bias);
+            let case = Case::new(rows, heads);
+            let (got, want) = (case.run(&m), case.want());
             assert_eq!(
                 bits(&got),
                 bits(&want),
                 "rows {rows}, heads {heads}: {got:?} vs {want:?}"
             );
         }
+    }
+}
+
+/// The same inputs give the same bits on every dispatch: the retired tiny
+/// step's overlay tests repeated the gate kernel 1000 times for this.
+#[test]
+fn the_bias_gradient_is_the_same_bits_on_every_dispatch() {
+    let m = metal();
+    let case = Case::new(4097, 12);
+    let first = bits(&case.run(&m));
+    assert_eq!(first, bits(&case.want()), "first dispatch");
+    for round in 1..200 {
+        assert_eq!(bits(&case.run(&m)), first, "dispatch {round}");
     }
 }
