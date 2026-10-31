@@ -68,11 +68,12 @@ fn the_call_table_covers_every_op() {
     // broadcast_mul, softmax): polled ops, admitted like every other compute
     // op; 96 since the six EmbeddingGemma 2 and SAM-training ops
     // (gelu_tanh_forward, gelu_tanh_backward, group_norm_backward,
-    // interpolate_bilinear_backward, seq_mean_forward, l2_normalize_forward),
+    // interpolate_bilinear_backward, seq_mean_forward, l2_normalize_forward);
+    // 98 since the two vision backwards (relu_backward, slice_backward),
     // polled like the rest.
     assert_eq!(
         ops.len(),
-        96,
+        98,
         "op count changed: pin the new op's admission"
     );
 }
@@ -166,8 +167,9 @@ fn a_tripped_gate_refuses_polling_ops_without_repolling_and_keeps_commit_ops_ope
     }
     // 90 ops less the four commit ops; 79 since the three spatial backwards,
     // 86 since the seven encoder backwards, 92 since the six
-    // EmbeddingGemma 2 and SAM-training ops (96 ops less the four commit ops).
-    assert_eq!(refused, 92);
+    // EmbeddingGemma 2 and SAM-training ops, 94 since the two vision backwards
+    // (relu_backward, slice_backward: 98 ops less the four commit ops).
+    assert_eq!(refused, 94);
     assert_eq!(
         polls.load(Ordering::SeqCst),
         1,
