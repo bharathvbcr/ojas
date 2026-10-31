@@ -4029,7 +4029,6 @@ impl Backend for MetalBackend {
     ) -> Result<ConvGrad, OjasError> {
         self.conv_transpose2d_backward_routed(input, weight, bias, grad_output, params)
     }
-    }
 }
 
 /// Rope of validated `dims`: the operands placed, then the 32-bit caps.

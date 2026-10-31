@@ -1173,7 +1173,6 @@ pub(crate) enum Cmd {
         lens: Option<Arg>,
         geom: AttnBwdGeom,
     },
-    },
 }
 
 #[derive(Debug)]
