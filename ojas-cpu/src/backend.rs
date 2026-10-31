@@ -6,7 +6,8 @@ use ojas_core::{
     channel_layer_norm_forward_dims, concat_dims, fill_dims, gelu_erf_backward_dims,
     gelu_erf_forward_dims, group_norm_forward_dims, layer_norm_backward_dims,
     layer_norm_forward_dims, linear_bias_backward_dims, linear_bias_forward_dims,
-    relu_forward_dims, scale_forward_dims, slice_dims, softmax_backward_dims, softmax_forward_dims,
+    relu_backward_dims, relu_forward_dims, scale_forward_dims, slice_backward_dims, slice_dims,
+    softmax_backward_dims, softmax_forward_dims,
     AffineGrad, LinearDims,
 };
 use ojas_core::{
@@ -47,8 +48,8 @@ use crate::attn::{causal_sdpa_backward, causal_sdpa_forward, Dims as SdpaKernelD
 use crate::encoder_ops::{
     add_row_bias, broadcast_grad, broadcast_zip, channel_layer_norm_backward,
     channel_layer_norm_forward, gelu_erf_backward, gelu_erf_forward, group_norm_forward,
-    layer_norm_backward, layer_norm_forward, relu_forward, scale_forward, softmax_backward,
-    softmax_forward, Operand,
+    layer_norm_backward, layer_norm_forward, relu_backward, relu_forward, scale_forward,
+    softmax_backward, softmax_forward, Operand,
 };
 use crate::gdn::{self, GradsOut, Operands as GdnOperands};
 use crate::gemm::whole_call;
@@ -57,7 +58,7 @@ use crate::hybrid::{
     gdn_log_decay_backward, gdn_log_decay_forward, rope_partial, sigmoid_backward, sigmoid_forward,
     Turn,
 };
-use crate::layout::{concat, fill, permute, slice};
+use crate::layout::{concat, fill, permute, slice, slice_backward};
 use crate::linalg::{linear_backward, linear_backward_input, linear_forward};
 use crate::norm::{rms_backward, rms_forward, rope_backward, rope_forward};
 use crate::optim::{
@@ -1522,6 +1523,13 @@ impl Backend for CpuBackend {
         relu_forward(OP, &self.budget, self.exec(), x, input.shape())
     }
 
+    fn relu_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "relu_backward";
+        relu_backward_dims(input, grad_output)?;
+        let [x, gy] = f32_operands(OP, self.exec(), [input, grad_output])?;
+        relu_backward(OP, &self.budget, self.exec(), x, gy, input.shape())
+    }
+
     fn concat(&self, inputs: &[&Tensor], axis: usize) -> Result<Tensor, OjasError> {
         let dims = concat_dims(inputs, axis)?;
         concat("concat", &self.budget, self.exec(), inputs, dims)
@@ -1536,6 +1544,18 @@ impl Backend for CpuBackend {
     ) -> Result<Tensor, OjasError> {
         let dims = slice_dims(input, axis, start, len)?;
         slice("slice", &self.budget, self.exec(), input, dims)
+    }
+
+    fn slice_backward(
+        &self,
+        grad_output: &Tensor,
+        in_shape: &[usize],
+        axis: usize,
+        start: usize,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "slice_backward";
+        let dims = slice_backward_dims(grad_output, in_shape, axis, start)?;
+        slice_backward(OP, &self.budget, self.exec(), grad_output, dims)
     }
 
     fn fill(&self, shape: &[usize], dtype: DType, value: f32) -> Result<Tensor, OjasError> {

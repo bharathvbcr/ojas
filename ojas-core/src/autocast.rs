@@ -240,6 +240,10 @@ pub const SAM_AUTOCAST_POLICY: &[(&str, AutocastClass)] = &[
         AutocastClass::Pointwise { tag_from: &[0, 1] },
     ),
     ("relu_forward", AutocastClass::Pointwise { tag_from: &[0] }),
+    (
+        "relu_backward",
+        AutocastClass::Pointwise { tag_from: &[0, 1] },
+    ),
     ("scale_forward", AutocastClass::Pointwise { tag_from: &[0] }),
     (
         "broadcast_add_forward",
@@ -297,6 +301,7 @@ pub const SAM_AUTOCAST_POLICY: &[(&str, AutocastClass)] = &[
     ("l2_normalize_forward", AutocastClass::Reduction),
     ("concat", AutocastClass::Move),
     ("slice", AutocastClass::Move),
+    ("slice_backward", AutocastClass::Move),
     ("fill", AutocastClass::Source),
 ];
 
@@ -1536,10 +1541,30 @@ impl<B: Backend> Backend for Autocast<B> {
         Ok(self.copy_tag(input, out))
     }
 
+    fn slice_backward(
+        &self,
+        grad_output: &Tensor,
+        in_shape: &[usize],
+        axis: usize,
+        start: usize,
+    ) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self.inner.slice_backward(grad_output, in_shape, axis, start)?;
+        Ok(self.copy_tag(grad_output, out))
+    }
+
     fn relu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
         let on = self.region()?;
         let tagged = input.compute_tag() == COMPUTE_BF16;
         let out = self.inner.relu_forward(input)?;
+        self.promote(on, tagged, out)
+    }
+
+    fn relu_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        let on = self.region()?;
+        let tagged =
+            input.compute_tag() == COMPUTE_BF16 && grad_output.compute_tag() == COMPUTE_BF16;
+        let out = self.inner.relu_backward(input, grad_output)?;
         self.promote(on, tagged, out)
     }
 

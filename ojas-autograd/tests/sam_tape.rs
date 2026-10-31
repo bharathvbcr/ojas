@@ -236,6 +236,9 @@ fn a_record_the_backend_refuses_pushes_nothing() {
             tape.interpolate_bilinear(ghost, [4, 4], true),
             "Tape::interpolate_bilinear",
         ),
+        (tape.relu(ghost), "Tape::relu"),
+        (tape.slice(ghost, 1, 0, 1), "Tape::slice"),
+        (tape.concat(&[ghost], 0), "Tape::concat"),
     ] {
         match r {
             Err(OjasError::OutOfRange { op, .. }) => assert_eq!(op, name),
@@ -243,4 +246,56 @@ fn a_record_the_backend_refuses_pushes_nothing() {
         }
     }
     assert!(not_pushed(&tape));
+}
+
+#[test]
+fn the_tape_chains_relu_backward() {
+    let be = cpu();
+    let x = tensor(&be, 101, &[2, 4, 3]);
+    let mut tape = Tape::new(be.clone());
+    let vx = tape.leaf(x.clone()).unwrap();
+    let vy = tape.relu(vx).unwrap();
+    tape.backward(vy).unwrap();
+    let seed = ones_like(&be, &x);
+    let want = be.relu_backward(&x, &seed).unwrap();
+    assert_eq!(bits(tape.grad(vx).unwrap()), bits(&want));
+}
+
+#[test]
+fn the_tape_chains_slice_and_concat_backwards() {
+    let be = cpu();
+    let a = tensor(&be, 201, &[2, 3, 4]);
+    let b = tensor(&be, 202, &[2, 5, 4]);
+    let mut tape = Tape::new(be.clone());
+    let va = tape.leaf(a.clone()).unwrap();
+    let vb = tape.leaf(b.clone()).unwrap();
+    let cat = tape.concat(&[va, vb], 1).unwrap();
+    assert_eq!(tape.value(cat).unwrap().shape(), &[2, 8, 4]);
+    let sl = tape.slice(cat, 1, 1, 4).unwrap();
+    assert_eq!(tape.value(sl).unwrap().shape(), &[2, 4, 4]);
+    tape.backward(sl).unwrap();
+
+    let ones_sl = ones_like(&be, tape.value(sl).unwrap());
+    let g_cat = be.slice_backward(&ones_sl, &[2, 8, 4], 1, 1).unwrap();
+    let want_a = be.slice(&g_cat, 1, 0, 3).unwrap();
+    let want_b = be.slice(&g_cat, 1, 3, 5).unwrap();
+
+    assert_eq!(bits(tape.grad(va).unwrap()), bits(&want_a));
+    assert_eq!(bits(tape.grad(vb).unwrap()), bits(&want_b));
+}
+
+#[test]
+fn the_tape_chains_rope_interleaved_backward() {
+    let be = cpu();
+    let x = tensor(&be, 301, &[2, 4, 3, 6]);
+    let cos = tensor(&be, 302, &[4, 3]);
+    let sin = tensor(&be, 303, &[4, 3]);
+    let mut tape = Tape::new(be.clone());
+    let vx = tape.leaf(x.clone()).unwrap();
+    let vy = tape.rope_interleaved(vx, cos.clone(), sin.clone()).unwrap();
+    tape.backward(vy).unwrap();
+
+    let seed = ones_like(&be, tape.value(vy).unwrap());
+    let want = be.rope_interleaved_backward(&seed, &cos, &sin).unwrap();
+    assert_eq!(bits(tape.grad(vx).unwrap()), bits(&want));
 }

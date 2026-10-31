@@ -306,6 +306,24 @@ pub(crate) fn relu_forward(
     })
 }
 
+/// Gradient of `max(x, 0)`: `g` where `v > 0.0` and `0.0` elsewhere.
+pub(crate) fn relu_backward(
+    op: &'static str,
+    budget: &Budget,
+    exec: Exec<'_>,
+    x: &[f32],
+    gy: &[f32],
+    shape: &[usize],
+) -> Result<Tensor, OjasError> {
+    fill_rows(op, budget, exec, shape, x.len(), 1, |range, out| {
+        let each = x[range.clone()].iter().zip(&gy[range]);
+        for (o, (&v, &g)) in out.iter_mut().zip(each) {
+            *o = if v > 0.0 { g } else { 0.0 };
+        }
+        Ok(())
+    })
+}
+
 /// `y[r, :] += bias` over `[rows, out]` rows in place: the one `f32` add
 /// [`ojas_core::Backend::linear_bias_forward`] makes after the product.
 pub(crate) fn add_row_bias(op: &'static str, y: &mut [f32], bias: &[f32]) -> Result<(), OjasError> {

@@ -80,8 +80,10 @@ const GELU_TANH_BACKWARD: &str = "gelu_tanh_backward";
 const SEQ_MEAN_FORWARD: &str = "seq_mean_forward";
 const L2_NORMALIZE_FORWARD: &str = "l2_normalize_forward";
 const RELU_FORWARD: &str = "relu_forward";
+const RELU_BACKWARD: &str = "relu_backward";
 const CONCAT: &str = "concat";
 const SLICE: &str = "slice";
+const SLICE_BACKWARD: &str = "slice_backward";
 const FILL: &str = "fill";
 const LINEAR_BIAS_FORWARD: &str = "linear_bias_forward";
 const LINEAR_BIAS_BACKWARD: &str = "linear_bias_backward";
@@ -1703,6 +1705,11 @@ pub fn relu_forward_dims(input: &Tensor) -> Result<usize, OjasError> {
     same_shape(RELU_FORWARD, &[input])
 }
 
+/// [`crate::Backend::relu_backward`]: `grad_output` shaped like `input`.
+pub fn relu_backward_dims(input: &Tensor, grad_output: &Tensor) -> Result<usize, OjasError> {
+    same_shape(RELU_BACKWARD, &[input, grad_output])
+}
+
 /// [`crate::Backend::concat`]: at least one `F32` tensor, all of one rank
 /// and all equal on every axis but `axis`, which must be below that rank.
 /// Refused in this order: no inputs, each operand's own rules in turn (dtype,
@@ -1855,6 +1862,69 @@ pub fn slice_dims(
         start,
         len,
         out_shape,
+    })
+}
+
+/// [`crate::Backend::slice_backward`]: places `grad_output` at rows `start..start + len` of `axis`
+/// within a zeroed tensor of shape `in_shape`.
+pub fn slice_backward_dims(
+    grad_output: &Tensor,
+    in_shape: &[usize],
+    axis: usize,
+    start: usize,
+) -> Result<SliceDims, OjasError> {
+    const OP: &str = SLICE_BACKWARD;
+    f32_operand(OP, grad_output)?;
+    let g_shape = grad_output.shape();
+    if in_shape.is_empty() || axis >= in_shape.len() {
+        return Err(refuse(
+            OP,
+            format!("axis {axis} is not below the rank {}", in_shape.len()),
+        ));
+    }
+    if g_shape.len() != in_shape.len() {
+        return Err(refuse(
+            OP,
+            format!(
+                "grad_output rank {} does not match in_shape rank {}",
+                g_shape.len(),
+                in_shape.len()
+            ),
+        ));
+    }
+    for (i, (&g_dim, &in_dim)) in g_shape.iter().zip(in_shape).enumerate() {
+        if in_dim == 0 {
+            return Err(refuse(OP, "empty tensor: axis extent 0"));
+        }
+        if i != axis && g_dim != in_dim {
+            return Err(refuse(
+                OP,
+                format!("axis {i} extent {g_dim} does not match input {in_dim}"),
+            ));
+        }
+    }
+    let len = g_shape[axis];
+    if len == 0 {
+        return Err(refuse(OP, "empty slice: len 0"));
+    }
+    let axis_len = in_shape[axis];
+    let end = start
+        .checked_add(len)
+        .ok_or_else(|| too_large(OP, format!("start {start} + len {len} overflows")))?;
+    if end > axis_len {
+        return Err(too_large(
+            OP,
+            format!("rows {start}..{end} pass the extent {axis_len} of axis {axis}"),
+        ));
+    }
+    let _ = f32_product(OP, in_shape)?;
+    Ok(SliceDims {
+        outer: in_shape[..axis].iter().product(),
+        inner: in_shape[axis + 1..].iter().product(),
+        axis_len,
+        start,
+        len,
+        out_shape: in_shape.to_vec(),
     })
 }
 

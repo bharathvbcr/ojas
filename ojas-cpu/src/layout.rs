@@ -188,6 +188,38 @@ pub(crate) fn slice(
     Tensor::from_scratch(out, &out_shape)
 }
 
+/// Places `grad_output` at rows `start..start + len` of `axis` within a zeroed tensor of shape `out_shape`.
+pub(crate) fn slice_backward(
+    op: &'static str,
+    budget: &Budget,
+    exec: Exec<'_>,
+    grad_output: &Tensor,
+    dims: SliceDims,
+) -> Result<Tensor, OjasError> {
+    let src = f32_checked(op, exec, grad_output)?;
+    let SliceDims {
+        outer,
+        inner,
+        axis_len,
+        start,
+        len,
+        out_shape,
+    } = dims;
+    let stride = product(op, &[axis_len, inner])?;
+    let run = product(op, &[len, inner])?;
+    let head = product(op, &[start, inner])?;
+    let total_len = product(op, &out_shape)?;
+    if src.len() != product(op, &[outer, run])? || start.saturating_add(len) > axis_len {
+        return Err(shape(op, "slice backward data length does not match shape"));
+    }
+    let mut out = Scratch::<f32>::try_extend(total_len, budget, |v| v.resize(total_len, 0.0))?;
+    for (o, src_chunk) in src.chunks_exact(run).enumerate() {
+        let to = o * stride + head;
+        out.as_mut_slice()[to..to + run].copy_from_slice(src_chunk);
+    }
+    Tensor::from_scratch(out, &out_shape)
+}
+
 /// A tensor of `shape` and `dtype` with every element `value`. `dtype` and
 /// `value` come from [`ojas_core::fill_dims`], which refused a value the
 /// dtype cannot hold exactly: an `F32` fill stores `value`'s bits, a `U32`

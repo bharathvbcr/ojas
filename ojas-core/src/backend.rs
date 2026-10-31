@@ -1739,6 +1739,14 @@ pub trait Backend {
         Err(unsupported_op(self.id(), "relu_forward"))
     }
 
+    /// Gradient of [`Self::relu_forward`]: `grad_output` where `input > 0`
+    /// and zero elsewhere. [`crate::relu_backward_dims`] validates. The
+    /// default refuses with [`OjasError::Unsupported`].
+    fn relu_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        let _ = (input, grad_output);
+        Err(unsupported_op(self.id(), "relu_backward"))
+    }
+
     /// Join `inputs` along `axis`, torch's `torch.cat(inputs, axis)`: every
     /// input has the first one's shape except on `axis`, and the output's
     /// extent there is their sum. Values move without arithmetic, so an
@@ -1765,6 +1773,21 @@ pub trait Backend {
     ) -> Result<Tensor, OjasError> {
         let _ = (input, axis, start, len);
         Err(unsupported_op(self.id(), "slice"))
+    }
+
+    /// Gradient of [`Self::slice`]: a tensor of shape `in_shape` with zeros
+    /// everywhere except `start..start + len` along `axis`, where
+    /// `grad_output` is placed. [`crate::slice_backward_dims`] validates. The
+    /// default refuses with [`OjasError::Unsupported`].
+    fn slice_backward(
+        &self,
+        grad_output: &Tensor,
+        in_shape: &[usize],
+        axis: usize,
+        start: usize,
+    ) -> Result<Tensor, OjasError> {
+        let _ = (grad_output, in_shape, axis, start);
+        Err(unsupported_op(self.id(), "slice_backward"))
     }
 
     /// A new tensor of `shape` and `dtype` with every element `value`, torch's
@@ -2447,8 +2470,10 @@ macro_rules! with_backend_methods {
             op fn gelu_tanh_forward(&self, input: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn gelu_tanh_backward(&self, input: &$crate::Tensor, grad_output: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn relu_forward(&self, input: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn relu_backward(&self, input: &$crate::Tensor, grad_output: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn concat(&self, inputs: &[&$crate::Tensor], axis: usize) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn slice(&self, input: &$crate::Tensor, axis: usize, start: usize, len: usize) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn slice_backward(&self, grad_output: &$crate::Tensor, in_shape: &[usize], axis: usize, start: usize) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn fill(&self, shape: &[usize], dtype: $crate::DType, value: f32) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn linear_bias_forward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn linear_bias_backward(&self, input: &$crate::Tensor, weight: &$crate::Tensor, bias: &$crate::Tensor, grad_output: &$crate::Tensor) -> Result<$crate::AffineGrad, $crate::OjasError>;
@@ -3304,8 +3329,10 @@ pub(crate) mod tests {
             op(backend.gelu_tanh_forward(&t)),
             op(backend.gelu_tanh_backward(&t, &t)),
             op(backend.relu_forward(&t)),
+            op(backend.relu_backward(&t, &t)),
             op(backend.concat(&[&t, &t], 0)),
             op(backend.slice(&t, 0, 0, 1)),
+            op(backend.slice_backward(&t, &[1], 0, 0)),
             op(backend.fill(&[1], DType::F32, 0.0)),
             op(backend.linear_bias_forward(&t, &t, &t)),
             op(backend.linear_bias_backward(&t, &t, &t, &t).map(drop)),
@@ -3403,8 +3430,10 @@ pub(crate) mod tests {
             "gelu_tanh_forward",
             "gelu_tanh_backward",
             "relu_forward",
+            "relu_backward",
             "concat",
             "slice",
+            "slice_backward",
             "fill",
             "linear_bias_forward",
             "linear_bias_backward",
@@ -3709,6 +3738,14 @@ pub(crate) mod tests {
         refused(
             backend.seq_mean_forward(&x, &ids).map(drop),
             "seq_mean_forward",
+        );
+        refused(
+            backend.relu_backward(&x, &x).map(drop),
+            "relu_backward",
+        );
+        refused(
+            backend.slice_backward(&x, &[1], 0, 0).map(drop),
+            "slice_backward",
         );
         refused(
             backend.l2_normalize_forward(&x, 1e-12).map(drop),

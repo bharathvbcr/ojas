@@ -262,6 +262,26 @@ enum Rec {
         out_size: [usize; 2],
         align_corners: bool,
     },
+    RopeInterleaved {
+        x: usize,
+        cos: Tensor,
+        sin: Tensor,
+    },
+    Concat {
+        inputs: Vec<usize>,
+        axis: usize,
+        lens: Vec<usize>,
+    },
+    Slice {
+        x: usize,
+        axis: usize,
+        start: usize,
+        len: usize,
+        in_shape: Vec<usize>,
+    },
+    Relu {
+        x: usize,
+    },
 }
 
 impl Rec {
@@ -471,6 +491,30 @@ impl Rec {
                 out_size,
                 align_corners,
             },
+            Rec::RopeInterleaved { x, cos, sin } => Rec::RopeInterleaved {
+                x: m(x),
+                cos,
+                sin,
+            },
+            Rec::Concat { inputs, axis, lens } => Rec::Concat {
+                inputs: inputs.into_iter().map(m).collect(),
+                axis,
+                lens,
+            },
+            Rec::Slice {
+                x,
+                axis,
+                start,
+                len,
+                in_shape,
+            } => Rec::Slice {
+                x: m(x),
+                axis,
+                start,
+                len,
+                in_shape,
+            },
+            Rec::Relu { x } => Rec::Relu { x: m(x) },
         }
     }
 
@@ -938,6 +982,75 @@ impl<B: Backend> Tape<B> {
         })
     }
 
+    /// Interleaved RoPE ([`Backend::rope_interleaved_forward`]): `x` `[..., D]`
+    /// rotated pairwise with `cos` and `sin`.
+    pub fn rope_interleaved(
+        &mut self,
+        x: Var,
+        cos: Tensor,
+        sin: Tensor,
+    ) -> Result<Var, OjasError> {
+        let x = self.index(x, "Tape::rope_interleaved")?;
+        let cos = self.place(cos)?;
+        let sin = self.place(sin)?;
+        self.record(Rec::RopeInterleaved { x, cos, sin })
+    }
+
+    /// Concatenate `inputs` along `axis` ([`Backend::concat`]).
+    pub fn concat(&mut self, inputs: &[Var], axis: usize) -> Result<Var, OjasError> {
+        const OP: &str = "Tape::concat";
+        if inputs.is_empty() {
+            return Err(OjasError::Shape {
+                op: OP,
+                detail: "concat requires at least one input".to_string(),
+            });
+        }
+        let mut indices = Vec::with_capacity(inputs.len());
+        let mut lens = Vec::with_capacity(inputs.len());
+        for &v in inputs {
+            let i = self.index(v, OP)?;
+            let shape = self.values[i].shape();
+            if axis >= shape.len() {
+                return Err(OjasError::Shape {
+                    op: OP,
+                    detail: format!("axis {axis} is not below rank {}", shape.len()),
+                });
+            }
+            lens.push(shape[axis]);
+            indices.push(i);
+        }
+        self.record(Rec::Concat {
+            inputs: indices,
+            axis,
+            lens,
+        })
+    }
+
+    /// Narrow `x` to rows `start..start + len` along `axis` ([`Backend::slice`]).
+    pub fn slice(
+        &mut self,
+        x: Var,
+        axis: usize,
+        start: usize,
+        len: usize,
+    ) -> Result<Var, OjasError> {
+        let xi = self.index(x, "Tape::slice")?;
+        let in_shape = self.values[xi].shape().to_vec();
+        self.record(Rec::Slice {
+            x: xi,
+            axis,
+            start,
+            len,
+            in_shape,
+        })
+    }
+
+    /// The exact ReLU (`max(x, 0)`) ([`Backend::relu_forward`]).
+    pub fn relu(&mut self, x: Var) -> Result<Var, OjasError> {
+        let x = self.index(x, "Tape::relu")?;
+        self.record(Rec::Relu { x })
+    }
+
     /// The exact GELU ([`Backend::gelu_erf_forward`]).
     pub fn gelu_erf(&mut self, x: Var) -> Result<Var, OjasError> {
         let x = self.index(x, "Tape::gelu_erf")?;
@@ -1369,6 +1482,37 @@ impl<B: Backend> Tape<B> {
                 be.interpolate_bilinear_forward(&v[x], out_size, align_corners)?,
                 rec,
             ),
+            Rec::RopeInterleaved { x, cos, sin } => {
+                let y = be.rope_interleaved_forward(&v[x], &cos, &sin)?;
+                (y, Rec::RopeInterleaved { x, cos, sin })
+            }
+            Rec::Concat { inputs, axis, .. } => {
+                let refs: Vec<&Tensor> = inputs.iter().map(|&i| &v[i]).collect();
+                let lens: Vec<usize> = inputs.iter().map(|&i| v[i].shape()[axis]).collect();
+                let y = be.concat(&refs, axis)?;
+                (y, Rec::Concat { inputs, axis, lens })
+            }
+            Rec::Slice {
+                x,
+                axis,
+                start,
+                len,
+                ..
+            } => {
+                let in_shape = v[x].shape().to_vec();
+                let y = be.slice(&v[x], axis, start, len)?;
+                (
+                    y,
+                    Rec::Slice {
+                        x,
+                        axis,
+                        start,
+                        len,
+                        in_shape,
+                    },
+                )
+            }
+            Rec::Relu { x } => (be.relu_forward(&v[x])?, rec),
             Rec::Gelu { x } => (be.gelu_erf_forward(&v[x])?, rec),
             Rec::LinearBias { x, w, b } => (be.linear_bias_forward(&v[x], &v[w], &v[b])?, rec),
             Rec::BroadcastAdd { a, b } => (be.broadcast_add_forward(&v[a], &v[b])?, rec),
@@ -1936,6 +2080,38 @@ impl<B: Backend> Tape<B> {
                 let gx = self
                     .backend
                     .interpolate_bilinear_backward(&xv, grad, align_corners)?;
+                self.acc(x, gx)
+            }
+            Rec::RopeInterleaved { x, cos, sin } => {
+                let gx = self.backend.rope_interleaved_backward(grad, &cos, &sin)?;
+                self.acc(x, gx)
+            }
+            Rec::Concat {
+                ref inputs,
+                axis,
+                ref lens,
+            } => {
+                let mut offset = 0;
+                for (&inp, &len) in inputs.iter().zip(lens) {
+                    let gi = self.backend.slice(grad, axis, offset, len)?;
+                    self.acc(inp, gi)?;
+                    offset += len;
+                }
+                Ok(())
+            }
+            Rec::Slice {
+                x,
+                axis,
+                start,
+                ref in_shape,
+                ..
+            } => {
+                let gx = self.backend.slice_backward(grad, in_shape, axis, start)?;
+                self.acc(x, gx)
+            }
+            Rec::Relu { x } => {
+                let xv = self.values[x].clone();
+                let gx = self.backend.relu_backward(&xv, grad)?;
                 self.acc(x, gx)
             }
             Rec::Gelu { x } => {
