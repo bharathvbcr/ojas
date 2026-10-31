@@ -21,9 +21,11 @@ mod limits;
 mod rope;
 mod shapes;
 mod spatial;
-/// The step-provider contract a training loop drives (one definition, below every backend).
-/// A public module rather than root re-exports: its names (`AdamWHyper`, `ParamSpec`,
-/// `StepError`, ...) are generic enough to be read as `ojas_core::step::...`.
+// The step-provider contract a training loop drives (one definition, below every backend).
+// A public module rather than root re-exports: its names (`AdamWHyper`, `ParamSpec`,
+// `StepError`, ...) are generic enough to be read as `ojas_core::step::...`.
+// A plain comment, not `///`: an outer doc on the declaration is merged with step.rs's `//!`
+// docs and rustdoc then resolves their intra-doc links from this scope, not the module's.
 pub mod step;
 mod tensor;
 
