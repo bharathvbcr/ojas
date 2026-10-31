@@ -610,7 +610,7 @@ fn bilinear_backward_refuses_what_it_cannot_mean() {
     assert_shape(be.interpolate_bilinear_backward(&x, &t(&[1.0; 8], &[1, 1, 4, 2]), false));
     assert_shape(be.interpolate_bilinear_backward(&x, &t(&[1.0; 16], &[2, 1, 4, 2]), false));
     // Both must be images.
-    assert_shape(be.interpolate_bilinear_backward(&x, &t(&[1.0; 8], &[2, 4, 2]), false));
+    assert_shape(be.interpolate_bilinear_backward(&x, &t(&[1.0; 16], &[2, 4, 2]), false));
     // A NaN or infinity in the gradient (or the input) is refused under the
     // backward's name.
     for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
