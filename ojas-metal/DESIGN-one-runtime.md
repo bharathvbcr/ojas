@@ -139,5 +139,25 @@ backend exactly like any device-thread panic).
 
 ## Status
 
-Written and self-reviewed; **not compiled, not run** at the time of writing.
-The queued command and its result are in the lane report.
+Written and self-reviewed twice by reading against the definitions it calls
+(imports, signatures, visibility, `Cmd`/`Reply` matches, drop order, rustfmt
+clean on every touched file); **not compiled, not run**. The owner deferred
+all runs on 2026-10-31. Run, in the GPU window, with one build dir:
+
+```text
+bash /Users/bharath/Code/research/Lappi-decision/tools/mac_heavy.sh ug-one-runtime \
+  env CARGO_TARGET_DIR=/Users/bharath/Code/research/ojas-ug-one-runtime-build \
+  cargo clippy --manifest-path /Users/bharath/Code/research/ojas-ug-one-runtime/Cargo.toml \
+  -p ojas-metal -p ojas-qwen35 --all-targets -- -D warnings
+# then, same wrapper and env:
+cargo test --manifest-path .../Cargo.toml --release -p ojas-metal --test with_runtime -- --test-threads=2
+cargo test --manifest-path .../Cargo.toml --release -p ojas-qwen35 --test gpu_shared_runtime -- --ignored --test-threads=1
+cargo test --manifest-path .../Cargo.toml --release -p ojas-qwen35 -- --test-threads=2
+cargo test --manifest-path .../Cargo.toml --release -p ojas-metal --lib -- --test-threads=2
+```
+
+Tests that pin it: `ojas-metal/tests/with_runtime.rs` (one runtime per
+backend across calls and clones, on the device thread; the closure's error
+returned; a panic poisons) and `ojas-qwen35/tests/gpu_shared_runtime.rs`
+(`Arc::ptr_eq` with the step's runtime; budget charged and released;
+refusal one byte short; parameter bits equal to a standalone runtime).
