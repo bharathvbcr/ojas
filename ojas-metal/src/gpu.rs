@@ -13,7 +13,7 @@ use tessl::dispatch::{self, set_gpu_buf, set_gpu_buf_offset, set_u32};
 use tessl::gemm::GemmOperands;
 use tessl::nn::{self, AttnDims};
 use tessl::qwen35::{self, AttnShape, AttnTargets, Cols, OutCols};
-use tessl::runtime::GpuRuntime;
+use tessl::runtime::{BufferKind, GpuRuntime};
 use tessl::tensor::Tensor;
 use tessl::DType;
 
@@ -128,8 +128,8 @@ fn ce_chunk(vocab: u32) -> u32 {
 /// Freelist cap installed by [`Session::open`]. tessl's own default is 2 GiB.
 const SESSION_POOL_CACHE_BYTES: usize = 64 * 1024 * 1024;
 
-/// Logical bytes `tiny_train_step` allocates, rounded the way tessl's pool
-/// rounds: each buffer is `next_power_of_two`, and no smaller than 256.
+/// Device bytes `tiny_train_step` allocates, each buffer at the size tessl's
+/// pool makes it ([`GpuRuntime::allocated_bytes_for`]).
 pub fn scratch_bytes(shape: &TinyShape) -> Result<u64, OjasError> {
     validate_tiny_shape(shape)?;
     let rows = u64::from(shape.rows()?);
@@ -167,7 +167,7 @@ pub fn scratch_bytes(shape: &TinyShape) -> Result<u64, OjasError> {
     let score_planes = repeat_buckets("scratch_bytes", 4, score_elems)?;
     // Three `alloc_buffer(4)` calls in causal attention.
     let scalars = 3u64
-        .checked_mul(device_bucket(4)?)
+        .checked_mul(pool_bytes("scratch_bytes", 4)?)
         .ok_or_else(|| overflow("scratch_bytes"))?;
     let ce = ce_device_bytes(shape.rows()?, shape.d_model, ce_chunk(shape.vocab))?;
     acts.checked_add(dh)
@@ -193,7 +193,7 @@ fn ce_device_bytes(rows: u32, hidden: u32, chunk: u32) -> Result<u64, OjasError>
 }
 
 /// Parameter and Adam moments, in bytes. The Q projection and the LM head
-/// each carry two moments. Each matrix is one tessl power-of-two bucket.
+/// each carry two moments. Each matrix is one tessl pool buffer.
 pub fn param_bytes(shape: &TinyShape) -> Result<u64, OjasError> {
     validate_tiny_shape(shape)?;
     let d = u64::from(shape.d_model);
@@ -211,24 +211,24 @@ pub fn param_bytes(shape: &TinyShape) -> Result<u64, OjasError> {
     )
 }
 
-/// tessl `BufferPool` rounds every allocation to the next power of two, and
-/// never below 256 bytes.
-pub fn device_bucket(nbytes: u64) -> Result<u64, OjasError> {
-    if nbytes == 0 {
-        return Ok(256);
+/// Device bytes of one `Cold` allocation of `nbytes`, as tessl's pool makes
+/// it: [`GpuRuntime::allocated_bytes_for`] owns the rounding. Refuses where
+/// that rounding overflows.
+fn pool_bytes(op: &'static str, nbytes: u64) -> Result<u64, OjasError> {
+    let n = usize::try_from(nbytes).map_err(|_| overflow(op))?;
+    match GpuRuntime::allocated_bytes_for(n, BufferKind::Cold) {
+        u64::MAX => Err(overflow(op)),
+        bytes => Ok(bytes),
     }
-    if nbytes > (1u64 << 63) {
-        return Err(overflow("device_bucket"));
-    }
-    Ok(nbytes.next_power_of_two().max(256))
 }
 
 fn sum_f32_buckets(op: &'static str, elems: &[u64]) -> Result<u64, OjasError> {
     let mut total = 0u64;
     for &n in elems {
         let bytes = n.checked_mul(4).ok_or_else(|| overflow(op))?;
-        let bucket = device_bucket(bytes)?;
-        total = total.checked_add(bucket).ok_or_else(|| overflow(op))?;
+        total = total
+            .checked_add(pool_bytes(op, bytes)?)
+            .ok_or_else(|| overflow(op))?;
     }
     Ok(total)
 }
@@ -1439,7 +1439,7 @@ fn f32_bytes_of(op: &'static str, parts: &[usize]) -> Result<u64, OjasError> {
     sum_f32_buckets(op, &elems)
 }
 
-/// Logical bytes `per_head_gate_forward` allocates.
+/// Device bytes `per_head_gate_forward` allocates, each buffer at its pool size.
 pub fn gate_fwd_bytes(
     rows: usize,
     n_head: usize,
@@ -1465,7 +1465,7 @@ pub(crate) fn gate_dbias_threads(n_head: usize) -> Result<usize, OjasError> {
         .ok_or_else(|| overflow("gate_dbias_threads"))
 }
 
-/// Logical bytes `per_head_gate_backward` allocates: the shared uploads plus
+/// Device bytes `per_head_gate_backward` allocates (pool sizes): the shared uploads plus
 /// dy, d_attn, d_pre, d_bias, d_weight, and d_input.
 pub fn gate_bwd_bytes(
     rows: usize,
@@ -2012,6 +2012,42 @@ mod tests {
         ));
     }
 
+    /// The budget is tessl's own figure for each buffer, not an ojas copy of
+    /// its rounding. Past 1 MiB the pool rounds a `Cold` buffer to a 16 KiB
+    /// page, where the removed `device_bucket` took the next power of two:
+    /// 3,000,000 bytes was 4,194,304 and is 3,014,656. This fails on the old
+    /// helper and holds with no Metal device (the rounding is a pure function).
+    #[test]
+    fn gate_budgets_use_tessl_pool_sizes_past_one_mib() {
+        let (rows, n_head, d_model, head_dim) = (1000usize, 2usize, 750usize, 64usize);
+        let x = (rows * d_model * 4) as u64;
+        assert_eq!(x, 3_000_000);
+        assert_eq!(pool_bytes("t", x).unwrap(), 3_014_656);
+        assert_ne!(pool_bytes("t", x).unwrap(), x.next_power_of_two());
+        assert_eq!(pool_bytes("t", 0).unwrap(), 256);
+        assert!(pool_bytes("t", u64::MAX).is_err());
+
+        let elems = |n: usize| pool_bytes("t", (n * 4) as u64).unwrap();
+        let attn = rows * n_head * head_dim;
+        let pre = rows * n_head;
+        let weight = n_head * d_model;
+        let want = elems(rows * d_model)
+            + elems(weight)
+            + elems(n_head)
+            + elems(attn)
+            + elems(pre)
+            + elems(attn);
+        assert_eq!(
+            gate_fwd_bytes(rows, n_head, d_model, head_dim).unwrap(),
+            want
+        );
+        let old: u64 = [rows * d_model, weight, n_head, attn, pre, attn]
+            .iter()
+            .map(|&n| ((n * 4) as u64).next_power_of_two().max(256))
+            .sum();
+        assert_ne!(want, old, "the old and new budgets agree at this size");
+    }
+
     #[test]
     fn param_bytes_rounds_each_buffer_up_to_a_power_of_two_bucket() {
         let mut shape = shape();
@@ -2024,7 +2060,7 @@ mod tests {
         let logical = logical_elems * 4;
         assert!(
             got > logical,
-            "device budget {got} did not account for power-of-two buckets above logical {logical}"
+            "device budget {got} did not account for pool rounding above logical {logical}"
         );
     }
 
