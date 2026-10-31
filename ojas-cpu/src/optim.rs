@@ -35,7 +35,7 @@
 //! Muon `momentum`) are [`OjasError::OutOfRange`], matching the Metal path.
 
 use ojas_core::{
-    check_adamw, require_ns5, round_f32_to_bf16, AdamWConfig, MuonNs5Config, Ns5Precision,
+    require_ns5, round_f32_to_bf16, AdamWConfig, AdamWScalars, MuonNs5Config, Ns5Precision,
     Numerics, OjasError, Tensor, MUON_NS5_A, MUON_NS5_B, MUON_NS5_C, MUON_NS_EPS,
 };
 
@@ -155,8 +155,9 @@ pub(crate) fn scale_in_place(
     Ok(())
 }
 
-/// The scalars of one AdamW step, checked by [`check_adamw`], the one owner
-/// every backend shares, so the f64 bits of `1 - beta^step` match.
+/// The scalars of one AdamW step, formed by [`AdamWScalars`] (which runs
+/// `check_adamw`), the one owner every backend shares, so the f64 bits of
+/// `1 - beta^step` and of everything formed from them match.
 #[derive(Clone, Copy)]
 pub(crate) struct AdamCoeffs {
     beta1: f64,
@@ -172,17 +173,17 @@ pub(crate) struct AdamCoeffs {
 
 impl AdamCoeffs {
     pub(crate) fn new(config: AdamWConfig, step_before: u64) -> Result<Self, OjasError> {
-        let (_, bc1, bc2) = check_adamw(config, step_before)?;
+        let s = AdamWScalars::new(config, step_before)?;
         Ok(Self {
-            beta1: config.beta1,
-            beta2: config.beta2,
-            one_minus_b1: 1.0 - config.beta1,
-            one_minus_b2: 1.0 - config.beta2,
-            step_size: config.lr / bc1,
-            bc2_sqrt: bc2.sqrt(),
-            eps: config.eps,
-            decay: 1.0 - config.lr * config.weight_decay,
-            decays: config.weight_decay != 0.0,
+            beta1: s.beta1,
+            beta2: s.beta2,
+            one_minus_b1: s.one_minus_b1,
+            one_minus_b2: s.one_minus_b2,
+            step_size: s.step_size,
+            bc2_sqrt: s.bc2_sqrt,
+            eps: s.eps,
+            decay: s.decay,
+            decays: s.decays,
         })
     }
 

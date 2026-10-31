@@ -32,6 +32,8 @@
 //! values `tools/qd_train_oracle_trainer.py` dumped from torch itself, and reports how many
 //! elements are bit-identical.
 
+use ojas_core::{AdamWConfig, AdamWScalars};
+
 use super::recipe::EntryHyper;
 use super::step::{AdamWHyper, StepError};
 
@@ -159,16 +161,28 @@ pub fn adamw_update(
     }
     let t = step as f64;
     let scale = hyper.grad_scale as f32;
-    let decay = (1.0 - lr * weight_decay) as f32;
-    let w1 = (1.0 - hyper.beta1) as f32;
-    let b2 = hyper.beta2 as f32;
-    let w2 = (1.0 - hyper.beta2) as f32;
     let bc1 = 1.0 - hyper.beta1.powf(t);
     let bc2 = 1.0 - hyper.beta2.powf(t);
-    let step_size = lr / bc1;
-    let bc2_sqrt = bc2.powf(0.5) as f32;
-    let eps = hyper.eps as f32;
-    let neg_step = (-step_size) as f32;
+    // ojas-core forms every other scalar from torch's libm bias corrections.
+    let scalars = AdamWScalars::from_bias_corrections(
+        AdamWConfig {
+            lr,
+            beta1: hyper.beta1,
+            beta2: hyper.beta2,
+            eps: hyper.eps,
+            weight_decay,
+        },
+        step,
+        bc1,
+        bc2,
+    );
+    let decay = scalars.decay as f32;
+    let w1 = scalars.one_minus_b1 as f32;
+    let b2 = scalars.beta2 as f32;
+    let w2 = scalars.one_minus_b2 as f32;
+    let bc2_sqrt = scalars.bc2_sqrt as f32;
+    let eps = scalars.eps as f32;
+    let neg_step = (-scalars.step_size) as f32;
     for i in 0..n {
         let g = grad[i] * scale;
         let mut p = param[i];
