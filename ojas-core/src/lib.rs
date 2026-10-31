@@ -48,7 +48,9 @@ pub use dtype::DType;
 pub use erf_exact::{erf_exact, erf_f64, gelu_erf_backward_exact, gelu_erf_exact};
 pub use error::OjasError;
 pub use exp_exact::{exp_exact, log1p_exact, log_sum_exp_exact};
-pub use hal::{AllocError, FenceError, HostLease, HostLeaseMut, MappedBuffer, Provenance, Timeline};
+pub use hal::{
+    AllocError, FenceError, HostLease, HostLeaseMut, MappedBuffer, Provenance, Timeline,
+};
 pub use limits::{shape_product, CPU_THREAD_CEILING, GIBIBYTE, KIBIBYTE, MEBIBYTE};
 pub use rope::{mrope_tables, mrope_text_tables, MropeSection};
 pub use shapes::{
