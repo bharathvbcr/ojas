@@ -102,6 +102,7 @@ fn tier4_scenario_a_sam31_video_tracker_multiplex_pipeline() {
             window: None,
             bias: None,
             key_lens: None,
+            ..Default::default()
         };
         let attn_out = be
             .attention_forward(&q_attn, &k_attn, &v_attn, attn_opts)
@@ -161,6 +162,7 @@ fn tier4_scenario_a_sam31_video_tracker_multiplex_pipeline() {
             window: None,
             bias: None,
             key_lens: None,
+            ..Default::default()
         };
         let mem_out = be
             .attention_forward(&curr_q, &mem_k, &mem_v, mem_opts)
@@ -175,6 +177,7 @@ fn tier4_scenario_a_sam31_video_tracker_multiplex_pipeline() {
             window: None,
             bias: Some(&rpb_bias),
             key_lens: None,
+            ..Default::default()
         };
         let detr_out = be
             .attention_forward(&mem_out, &mem_out, &mem_out, detr_opts)
@@ -282,6 +285,7 @@ fn tier4_scenario_b_gemma_embedding_production_inference_pipeline() {
         window: Some(4),
         bias: None,
         key_lens: None,
+        ..Default::default()
     };
     let attn_out = be
         .attention_forward(&q_norm, &k_norm, &v, attn_opts)
