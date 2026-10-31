@@ -183,27 +183,33 @@ impl HostData {
         })
     }
 
-    /// Decode `bytes` into the elements starting at element `start`.
-    /// `bytes.len()` is a whole number of elements that fits.
-    fn decode_into(&mut self, start: usize, bytes: &[u8], endian: Endian) {
+    /// No elements yet, with room for `n` of `dtype`, or `None` when the
+    /// allocator refuses. Unlike [`Self::try_zeroed`] it writes nothing, so
+    /// filling it with [`Self::extend_decoded`] touches each byte once.
+    fn try_with_capacity(dtype: DType, n: usize) -> Option<Self> {
+        Some(match dtype {
+            DType::F32 => HostData::F32(try_empty_vec(n)?),
+            DType::U32 => HostData::U32(try_empty_vec(n)?),
+            DType::Bf16 | DType::F16 => HostData::Half(try_empty_vec(n)?),
+        })
+    }
+
+    /// Append the elements `bytes` encodes. `bytes.len()` is a whole number
+    /// of elements, and the total stays within the capacity
+    /// [`Self::try_with_capacity`] reserved, so nothing reallocates.
+    fn extend_decoded(&mut self, bytes: &[u8], endian: Endian) {
         match self {
             HostData::F32(v) => {
                 let (words, _) = bytes.as_chunks::<4>();
-                for (slot, word) in v[start..start + words.len()].iter_mut().zip(words) {
-                    *slot = f32::from_bits(endian.u32(*word));
-                }
+                v.extend(words.iter().map(|w| f32::from_bits(endian.u32(*w))));
             }
             HostData::U32(v) => {
                 let (words, _) = bytes.as_chunks::<4>();
-                for (slot, word) in v[start..start + words.len()].iter_mut().zip(words) {
-                    *slot = endian.u32(*word);
-                }
+                v.extend(words.iter().map(|w| endian.u32(*w)));
             }
             HostData::Half(v) => {
                 let (halves, _) = bytes.as_chunks::<2>();
-                for (slot, half) in v[start..start + halves.len()].iter_mut().zip(halves) {
-                    *slot = endian.u16(*half);
-                }
+                v.extend(halves.iter().map(|h| endian.u16(*h)));
             }
         }
     }
@@ -247,9 +253,14 @@ fn try_copy<T: Copy>(src: &[T]) -> Result<Vec<T>, OjasError> {
     Ok(v)
 }
 
-fn try_zeroed_vec<T: Copy + Default>(n: usize) -> Option<Vec<T>> {
+fn try_empty_vec<T>(n: usize) -> Option<Vec<T>> {
     let mut v = Vec::new();
     v.try_reserve_exact(n).ok()?;
+    Some(v)
+}
+
+fn try_zeroed_vec<T: Copy + Default>(n: usize) -> Option<Vec<T>> {
+    let mut v = try_empty_vec(n)?;
     v.resize(n, T::default());
     Some(v)
 }
@@ -352,22 +363,41 @@ impl Tensor {
         mut read: impl FnMut(u64, &mut [u8]) -> Result<(), E>,
     ) -> Result<Self, E> {
         const OP: &str = "Tensor::from_le_reader";
-        let mut tensor = Self::zeros(shape, dtype, budget)?;
+        let strides = contiguous_strides(shape)?;
         let total = contiguous_nbytes(shape, dtype)?;
+        let total_u64 = u64_len(total, OP)?;
+        let reservation = budget.try_reserve(total_u64)?;
+        // Reserved but not zeroed: every element is written once by the
+        // decode below, and an error drops the half-built data first.
+        let Some(mut data) = HostData::try_with_capacity(dtype, total / dtype.size()) else {
+            drop(reservation);
+            return Err(OjasError::CapacityExceeded {
+                requested: total_u64,
+                cap: budget.cap_bytes(),
+                live: budget.live_bytes()?,
+            }
+            .into());
+        };
         let chunk_len = total.min(LE_READ_CHUNK_BYTES);
         let mut chunk = Scratch::<u8>::try_alloc(chunk_len, budget)?;
-        let data = tensor.host_data_mut(OP)?;
-        let size = dtype.size();
         let mut offset = 0usize;
         while offset < total {
             let n = (total - offset).min(chunk_len);
             let buf = &mut chunk.as_mut_slice()[..n];
             buf.fill(0);
             read(u64_len(offset, OP)?, buf)?;
-            data.decode_into(offset / size, buf, Endian::Little);
+            data.extend_decoded(buf, Endian::Little);
             offset += n;
         }
         drop(chunk);
+        let tensor = Self {
+            storage: Arc::new(Storage::new(Payload::Host(data), reservation)),
+            shape: shape.to_vec().into_boxed_slice(),
+            strides: strides.into_boxed_slice(),
+            dtype,
+            byte_offset: 0,
+        };
+        tensor.check_window()?;
         Ok(tensor)
     }
 
@@ -1131,10 +1161,11 @@ impl Tensor {
     ///
     /// The window is read with [`DeviceBuffer::read_bytes`] in pieces of at
     /// most [`READBACK_CHUNK_BYTES`], each decoded straight into the typed
-    /// result. `budget` is charged for the result and for one piece; the
-    /// piece's charge is released before this returns, so the peak is the
-    /// window plus one piece, not twice the window. A short read is
-    /// [`OjasError::Backend`] and nothing is kept.
+    /// result, which is reserved up front and never zero-filled, so each
+    /// result byte is written once. `budget` is charged for the result and
+    /// for one piece; the piece's charge is released before this returns, so
+    /// the peak is the window plus one piece, not twice the window. A short
+    /// read is [`OjasError::Backend`] and nothing is kept.
     pub fn to_host(&self, budget: &Budget) -> Result<Self, OjasError> {
         const OP: &str = "Tensor::to_host";
         let buf = match &self.storage.payload {
@@ -1181,7 +1212,8 @@ impl Tensor {
         let reservation = budget.try_reserve(len_u64)?;
         let chunk_len = len.min(READBACK_CHUNK_BYTES);
         let transient = budget.try_reserve(u64_len(chunk_len, OP)?)?;
-        let Some(mut data) = HostData::try_zeroed(self.dtype, len / size) else {
+        // Reserved, not zeroed: the pieces below append every element once.
+        let Some(mut data) = HostData::try_with_capacity(self.dtype, len / size) else {
             drop(transient);
             drop(reservation);
             return Err(OjasError::CapacityExceeded {
@@ -1204,7 +1236,7 @@ impl Tensor {
                     ),
                 });
             }
-            data.decode_into(done / size, &bytes, Endian::Native);
+            data.extend_decoded(&bytes, Endian::Native);
             done += n;
         }
         drop(transient);
@@ -2574,6 +2606,96 @@ mod tests {
             .map(|c| u16::from_ne_bytes(*c))
             .collect();
         assert_eq!(back, bits);
+    }
+
+    /// `to_host` and `from_le_reader` build their result by appending decoded
+    /// pieces to reserved, unzeroed storage. The bytes must equal the
+    /// device's (or the reader's) for every dtype, with arbitrary bit
+    /// patterns (NaN payloads, infinities, negative zero, subnormals) and
+    /// element counts on both sides of a piece boundary.
+    #[test]
+    fn readback_and_le_load_are_bit_exact_for_every_dtype_across_pieces() {
+        let budget = Budget::new(1 << 30);
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for dtype in [DType::F32, DType::U32, DType::Bf16, DType::F16] {
+            let size = dtype.size();
+            let per_piece = READBACK_CHUNK_BYTES / size;
+            for n in [
+                1,
+                7,
+                per_piece - 1,
+                per_piece,
+                per_piece + 1,
+                2 * per_piece + 3,
+            ] {
+                let mut bytes: Vec<u8> = (0..n * size).map(|_| next() as u8).collect();
+                // Plant the special values at the start and at a piece edge.
+                if dtype == DType::F32 {
+                    let specials = [f32::NAN, f32::INFINITY, -0.0, f32::MIN_POSITIVE / 4.0];
+                    for (i, v) in specials.iter().enumerate().take(n) {
+                        bytes[i * 4..i * 4 + 4].copy_from_slice(&v.to_ne_bytes());
+                    }
+                }
+                let device = Arc::new(FakeDevice {
+                    bytes: bytes.clone(),
+                    short_read: false,
+                    reads: AtomicU64::new(0),
+                });
+                let t = Tensor::from_device(device, &[n], dtype, &budget).unwrap();
+                let host = t.to_host(&budget).unwrap();
+                assert_eq!(host.dtype(), dtype);
+                assert_eq!(host.storage_len(), n * size);
+                let mut out = vec![0u8; n * size];
+                host.write_ne_bytes(&mut out).unwrap();
+                assert!(out == bytes, "to_host {dtype:?} n={n} differs");
+                drop((t, host));
+
+                if cfg!(target_endian = "little") {
+                    let loaded = Tensor::from_le_reader(&[n], dtype, &budget, |off, chunk| {
+                        let off = off as usize;
+                        chunk.copy_from_slice(&bytes[off..off + chunk.len()]);
+                        Ok::<(), OjasError>(())
+                    })
+                    .unwrap();
+                    let mut out = vec![0u8; n * size];
+                    loaded.write_ne_bytes(&mut out).unwrap();
+                    assert!(out == bytes, "from_le_reader {dtype:?} n={n} differs");
+                }
+            }
+        }
+        assert_eq!(budget.live_bytes().unwrap(), 0, "every charge was released");
+    }
+
+    #[test]
+    fn from_le_reader_releases_everything_when_the_reader_fails() {
+        let budget = Budget::new(1 << 20);
+        let err = Tensor::from_le_reader(&[1000], DType::F32, &budget, |off, _| {
+            if off == 0 {
+                Err(OjasError::Shape {
+                    op: "test",
+                    detail: "reader refused".to_string(),
+                })
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+        assert!(matches!(err, OjasError::Shape { op: "test", .. }));
+        assert_eq!(budget.live_bytes().unwrap(), 0);
+
+        // The tensor charge alone does not fit: nothing stays reserved.
+        let tight = Budget::new(3999);
+        let err =
+            Tensor::from_le_reader(&[1000], DType::F32, &tight, |_, _| Ok::<(), OjasError>(()))
+                .unwrap_err();
+        assert!(matches!(err, OjasError::CapacityExceeded { .. }));
+        assert_eq!(tight.live_bytes().unwrap(), 0);
     }
 
     #[test]
