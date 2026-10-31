@@ -281,49 +281,18 @@ impl Pending {
 #[derive(Debug, Default)]
 pub struct GradientBank;
 
-/// StepProvider trait proposed in `docs/cuda-backend-scoping.md` §2.B.1.
-pub trait StepProvider {
-    type Pending;
-    type Bank;
-
-    fn train_forward(
-        &self,
-        ids: &[u32],
-        ops: GemmOperands,
-        sup: Supervise<'_>,
-    ) -> Result<Self::Pending, OjasError>;
-
-    fn hidden(
-        &self,
-        p: &Self::Pending,
-        positions: &[u32],
-        out: &mut [f32],
-    ) -> Result<(), OjasError>;
-
-    fn train_backward_into(
-        &self,
-        p: Self::Pending,
-        dh: Option<(&[u32], &[f32])>,
-        bank: &Self::Bank,
-        accumulate: bool,
-    ) -> Result<(), OjasError>;
-
-    fn grad_sq_norm(&self, bank: &Self::Bank) -> Result<f64, OjasError>;
-
-    fn adamw_step(
-        &mut self,
-        bank: &Self::Bank,
-        hyper: AdamWHyper,
-        wd: &[f32],
-        lr_scale: &[f32],
-    ) -> Result<(), OjasError>;
-}
-
-/// The Qwen3.5 whole-step provider on CUDA.
+/// The Qwen3.5 whole-step engine on CUDA.
 ///
 /// Every compute method refuses with [`OjasError::Unsupported`] until
 /// ft-7162 wires the kernels. A refusal leaves the step count and the bank
 /// state as they were.
+///
+/// This is the tessl-shaped engine seam (`train_forward`, `hidden`,
+/// `train_backward_into`, `grad_sq_norm`, `adamw_step`), not the loop-facing
+/// contract. The training loop drives [`ojas_core::step::StepProvider`], which
+/// has one definition in `ojas-core`; a CUDA provider will implement it as an
+/// adapter over this engine once it holds weights, as Lappi's
+/// `qd-train-metal` does over `ojas-qwen35`'s `Qwen35Step`.
 pub struct Qwen35Step {
     pub(crate) numerics: Numerics,
     pub(crate) bank_state: BankState,
@@ -387,52 +356,36 @@ impl Qwen35Step {
     ) -> Result<u64, OjasError> {
         Err(not_wired("Qwen35Step::adamw_step"))
     }
-}
 
-impl StepProvider for Qwen35Step {
-    type Pending = Pending;
-    type Bank = GradientBank;
-
-    fn train_forward(
+    /// Forward one token sequence under `sup`, holding what the backward needs.
+    pub fn train_forward(
         &self,
         _ids: &[u32],
         _ops: GemmOperands,
         _sup: Supervise<'_>,
-    ) -> Result<Self::Pending, OjasError> {
+    ) -> Result<Pending, OjasError> {
         Err(not_wired("Qwen35Step::train_forward"))
     }
 
-    fn hidden(
+    /// Final hidden states of `_p` at `_positions`, written into `_out`.
+    pub fn hidden(
         &self,
-        _p: &Self::Pending,
+        _p: &Pending,
         _positions: &[u32],
         _out: &mut [f32],
     ) -> Result<(), OjasError> {
         Err(not_wired("Qwen35Step::hidden"))
     }
 
-    fn train_backward_into(
+    /// Backward `_p` into `_bank`, adding `_dh` at the final norm's output.
+    pub fn train_backward_into(
         &self,
-        _p: Self::Pending,
+        _p: Pending,
         _dh: Option<(&[u32], &[f32])>,
-        _bank: &Self::Bank,
+        _bank: &GradientBank,
         _accumulate: bool,
     ) -> Result<(), OjasError> {
         Err(not_wired("Qwen35Step::train_backward_into"))
-    }
-
-    fn grad_sq_norm(&self, _bank: &Self::Bank) -> Result<f64, OjasError> {
-        Err(not_wired("Qwen35Step::grad_sq_norm"))
-    }
-
-    fn adamw_step(
-        &mut self,
-        _bank: &Self::Bank,
-        _hyper: AdamWHyper,
-        _wd: &[f32],
-        _lr_scale: &[f32],
-    ) -> Result<(), OjasError> {
-        Err(not_wired("Qwen35Step::adamw_step"))
     }
 }
 
@@ -644,7 +597,7 @@ mod tests {
 
         let mut out = [7.0f32; 4];
         assert_not_wired(
-            StepProvider::hidden(&step, &pending(&budget), &[0], &mut out),
+            step.hidden(&pending(&budget), &[0], &mut out),
             "Qwen35Step::hidden",
         );
         assert_eq!(out, [7.0; 4], "a refused hidden must not write zeros");

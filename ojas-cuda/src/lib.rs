@@ -17,8 +17,10 @@
 //! - [`backend`]: [`CudaBackend`]. [`CudaBackend::open`] is the device probe:
 //!   without `cuda` it is `DeviceError::NotCompiled`, with it the runtime
 //!   opens under the caller's budget and every failure keeps its kind.
-//! - [`step`]: [`Qwen35Step`] and its contract. Every compute method refuses
-//!   with `Unsupported` until its kernels are wired and run on a device.
+//! - [`step`]: [`Qwen35Step`], the whole-step engine. Every compute method
+//!   refuses with `Unsupported` until its kernels are wired and run on a
+//!   device. The loop-facing `StepProvider` contract is
+//!   `ojas_core::step::StepProvider`; this crate defines no copy of it.
 //! - [`error`]: [`CudaError`], the crate's one error enum, and its one
 //!   mapping to `OjasError` and `DeviceError`.
 //! - Behind `cuda`, what `CudaBackend::with_runtime` and
@@ -180,5 +182,5 @@ pub use error::CudaError;
 pub use runtime::{CudaRuntime, DeviceInfo, RuntimeConfig};
 pub use step::{
     clip_coefficient, validate_external_grad, AdamWHyper, BankState, ExternalGrad, GemmOperands,
-    Numerics, Pending, Qwen35Step, Sequence, StepProvider, Supervise,
+    GradientBank, Numerics, Pending, Qwen35Step, Sequence, Supervise,
 };
