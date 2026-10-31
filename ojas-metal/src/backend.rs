@@ -3693,8 +3693,9 @@ impl Backend for MetalBackend {
             self.f32(OP, moment1)?,
             self.f32(OP, moment2)?,
         );
-        // `ojas_adamw_*` reads the seven f32 words in `OjasAdamW` field order.
-        let scalars = AdamWScalars::new(config, step)?.f32_words(OP)?;
+        // `ojas_adamw_*` reads the eight f32 words in `Qwen35AdamW` field order.
+        let w = AdamWScalars::new(config, step)?.f32_words(OP)?;
+        let scalars = [w[0], w[1], w[2], w[3], w[4], w[5], w[6], 1.0];
         self.unique(OP, param)?;
         self.unique(OP, moment1)?;
         self.unique(OP, moment2)?;
