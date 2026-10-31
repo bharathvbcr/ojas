@@ -20,6 +20,9 @@
 //!   `Backend::bf16_operands`, run on any backend that reports it.
 //! - [`gdn`]: the gated delta rule's f64 forward and transformers' published
 //!   goldens for it (`Backend::chunked_gdn_forward` / `_backward`).
+//! - [`encoder_golden`]: the encoder backwards (LayerNorm, channel LayerNorm,
+//!   GELU, biased linear, broadcast add and multiply, softmax) against torch
+//!   autograd (`fixtures/encoder_bwd/golden.txt`), generic over the backend.
 //!
 //! JSON is read with `ojas-io`'s strict RFC 8259 reader ([`ojas_io::json`]),
 //! held to the fixture limits (4 MiB, depth 16, a tree budget per input
@@ -31,6 +34,7 @@
 #![forbid(unsafe_code)]
 
 pub mod bf16_operands;
+pub mod encoder_golden;
 pub mod gdn;
 pub mod golden;
 pub mod parity;

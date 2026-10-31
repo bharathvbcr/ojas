@@ -591,7 +591,7 @@ impl Worker {
             return Err(metal_err("embedded ojas-metal metallib is empty"));
         }
         rt.add_metallib_bytes(lib).map_err(metal_err)?;
-        for name in KERNELS {
+        for name in KERNELS.iter().chain(crate::encoder_bwd::KERNELS) {
             rt.pipeline(name).map_err(metal_err)?;
         }
         for name in spatial_bwd::KERNELS {
@@ -1805,6 +1805,31 @@ impl Worker {
                 gy,
                 geom,
             } => self.conv_transpose2d_bwd(op, [x, w, gy], bias, geom),
+            Cmd::LnBwd {
+                x,
+                w,
+                b,
+                gy,
+                geom,
+                eps,
+            } => self.ln_bwd([x, w, b, gy], geom, eps),
+            Cmd::ClnBwd {
+                x,
+                w,
+                b,
+                gy,
+                geom,
+                eps,
+            } => self.cln_bwd([x, w, b, gy], geom, eps),
+            Cmd::GeluErfBwd { x, gy } => self.gelu_erf_bwd(x, gy),
+            Cmd::SoftmaxBwd { y, gy, rows, dim } => self.softmax_bwd(y, gy, rows, dim),
+            Cmd::BcastGrad {
+                op,
+                g,
+                other,
+                scan,
+                geom,
+            } => self.bcast_grad(op, g, other, &scan, &geom),
         }
     }
 
@@ -4979,6 +5004,8 @@ impl Worker {
         Ok(Reply::Done)
     }
 }
+
+mod enc_bwd_dev;
 
 #[cfg(test)]
 mod tests {

@@ -1092,6 +1092,51 @@ pub(crate) enum Cmd {
         gy: Arg,
         geom: ConvGeom,
     },
+    /// `layer_norm_backward` (`kernels/encoder_bwd.metal`): `dx`, `dw`, then
+    /// `db`. `b` is read only to be checked, as the forward's operand.
+    LnBwd {
+        x: Arg,
+        w: Arg,
+        b: Arg,
+        gy: Arg,
+        geom: crate::encoder_bwd::LnBwdGeom,
+        eps: f32,
+    },
+    /// `channel_layer_norm_backward` over `[batch, channels, spatial]`
+    /// (`spatial > 1`): `dx`, `dw`, then `db`.
+    ClnBwd {
+        x: Arg,
+        w: Arg,
+        b: Arg,
+        gy: Arg,
+        geom: crate::encoder_bwd::ClnBwdGeom,
+        eps: f32,
+    },
+    /// `gelu_erf_backward`: `gy * gelu'(x)`.
+    GeluErfBwd {
+        x: Arg,
+        gy: Arg,
+    },
+    /// `softmax_backward` from the forward's output `y`, over `rows` rows of
+    /// `dim`.
+    SoftmaxBwd {
+        y: Arg,
+        gy: Arg,
+        rows: u32,
+        dim: u32,
+    },
+    /// One operand's gradient of a broadcast add or multiply: `g` summed
+    /// over the axes the operand was stretched along (each term times
+    /// `other`, the other operand, for a multiply). `scan` names operands
+    /// the kernel does not read that are checked for NaN and infinity.
+    BcastGrad {
+        op: &'static str,
+        g: Arg,
+        other: Option<Arg>,
+        scan: Vec<Arg>,
+        geom: crate::encoder_bwd::BcastGradGeom,
+    },
+    },
 }
 
 #[derive(Debug)]

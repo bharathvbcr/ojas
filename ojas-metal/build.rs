@@ -10,10 +10,11 @@ use std::env;
 use std::path::PathBuf;
 use std::process::Command;
 
-const SOURCES: [&str; 5] = [
+const SOURCES: [&str; 6] = [
     "per_head_gate.metal",
     "causal_attn_bwd.metal",
     "ojas_backend.metal",
+    "encoder_bwd.metal",
     "max_pool.metal",
     "spatial_bwd.metal",
 ];
