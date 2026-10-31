@@ -1018,17 +1018,17 @@ fn an_over_budget_backward_is_refused_and_leaves_no_charge() {
 
 #[test]
 fn a_broadcast_gradients_partial_sums_are_charged_to_the_budget() {
+    // `a` has the output's shape, so its gradient is a copy with no partials.
     // `b`'s gradient sums 512 rows of 4096 in 16 splits: 16 * 4096 * 2 f32 of
     // partials (512 KiB), past the 100 KiB of room left over.
     let (rows, cols) = (512usize, 4096usize);
-    let operand_bytes = 4 * (rows * cols + 1 + cols) as u64;
-    let outputs = 4 * (1 + cols) as u64;
-    let a_scratch = 8 * 1024; // `a`'s gradient: 1024 splits of one element, two f32 each.
-    let m = MetalBackend::new(Budget::new(
-        operand_bytes + outputs + a_scratch + (100 << 10),
-    ))
-    .expect("device");
-    let (a, b) = (up(&m, &host(&[0.5], &[1])), up(&m, &rand(&[cols], 1, 1.0)));
+    let operand_bytes = 4 * (2 * rows * cols + cols) as u64;
+    let outputs = 4 * (rows * cols + cols) as u64;
+    let m = MetalBackend::new(Budget::new(operand_bytes + outputs + (100 << 10))).expect("device");
+    let (a, b) = (
+        up(&m, &rand(&[rows, cols], 3, 1.0)),
+        up(&m, &rand(&[cols], 1, 1.0)),
+    );
     let g = up(&m, &rand(&[rows, cols], 2, 1.0));
     let before = ok("live", m.budget().live_bytes());
     let e = m.broadcast_add_backward(&a, &b, &g).unwrap_err();
@@ -1041,7 +1041,7 @@ fn a_broadcast_gradients_partial_sums_are_charged_to_the_budget() {
     // With room for the partials the same call is exact to the CPU.
     let roomy = MetalBackend::new(Budget::new(1 << 30)).expect("device");
     let (a, b) = (
-        up(&roomy, &host(&[0.5], &[1])),
+        up(&roomy, &rand(&[rows, cols], 3, 1.0)),
         up(&roomy, &rand(&[cols], 1, 1.0)),
     );
     let g = up(&roomy, &rand(&[rows, cols], 2, 1.0));
@@ -1049,7 +1049,7 @@ fn a_broadcast_gradients_partial_sums_are_charged_to_the_budget() {
     let want = ok(
         "cpu",
         cpu().broadcast_add_backward(
-            &host(&[0.5], &[1]),
+            &rand(&[rows, cols], 3, 1.0),
             &rand(&[cols], 1, 1.0),
             &rand(&[rows, cols], 2, 1.0),
         ),

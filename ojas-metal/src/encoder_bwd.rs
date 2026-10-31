@@ -286,7 +286,7 @@ mod tests {
         for items in [1u32, 2, 15, 16, 17, 1000, 5184, 82_944, 4_000_000] {
             for per in [16u32, 2048] {
                 let (splits, chunk) = split_plan(items, per, MAX_SPLITS);
-                assert!(splits >= 1 && splits <= MAX_SPLITS, "{items} {per}");
+                assert!((1..=MAX_SPLITS).contains(&splits), "{items} {per}");
                 assert!(u64::from(splits) * u64::from(chunk) >= u64::from(items));
                 assert!(u64::from(splits - 1) * u64::from(chunk) < u64::from(items));
             }

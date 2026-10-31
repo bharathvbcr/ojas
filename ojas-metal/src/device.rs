@@ -4964,6 +4964,8 @@ impl Worker {
     }
 }
 
+mod enc_bwd_dev;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5482,8 +5484,6 @@ mod tests {
         );
     }
 }
-
-mod enc_bwd_dev;
 
 #[cfg(test)]
 #[path = "adversarial_oom.rs"]
