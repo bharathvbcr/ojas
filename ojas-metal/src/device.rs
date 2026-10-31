@@ -4768,7 +4768,7 @@ impl Worker {
     /// `ojas_adamw_check` decides the whole step (inputs and every new p, m,
     /// v finite), then `ojas_adamw_apply`, in the same command buffer, writes
     /// in place only if this call's status words are clear. No wait, no copies.
-    fn adamw(&mut self, p: Arg, g: Arg, m: Arg, v: Arg, scalars: &[f32; 7]) -> Res<Reply> {
+    fn adamw(&mut self, p: Arg, g: Arg, m: Arg, v: Arg, scalars: &[f32; 8]) -> Res<Reply> {
         const OP: &str = "adamw_step";
         for written in [p, m, v] {
             self.writable(OP, written)?;

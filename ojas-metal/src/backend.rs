@@ -1393,6 +1393,7 @@ fn product(op: &'static str, dims: &[usize]) -> Res<usize> {
         .ok_or_else(|| overflow(op))
 }
 
+
 /// Row-major element strides of `shape`. The input has already passed
 /// [`MetalBackend::arg`], so the product fits u32 and cannot overflow.
 fn row_major_strides(shape: &[usize]) -> Vec<usize> {

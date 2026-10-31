@@ -2,8 +2,10 @@
 //!
 //! Tessl owns GEMM, RMSNorm, AdamW and residual add. This script builds the
 //! per-head gate, the tiny-step causal softmax backward, and the kernels in
-//! `ojas_backend.metal`. The Metal invocation matches tessl: `xcrun metal`
-//! with an explicit `-isysroot`, not `xcrun -sdk macosx metal`.
+//! `ojas_backend.metal`, which includes tessl's shared arithmetic headers
+//! (AdamW's element math) from `DEP_TESSL_KERNELS`. The Metal invocation
+//! matches tessl: `xcrun metal` with an explicit `-isysroot`, not
+//! `xcrun -sdk macosx metal`.
 
 use std::env;
 use std::path::PathBuf;
@@ -34,6 +36,17 @@ fn main() {
         }
     }
 
+    // tessl's canonical kernel sources: `tessl/build.rs` emits `cargo:kernels=`
+    // and `links = "tessl"` hands it to this script. `ojas_backend.metal`
+    // includes the shared arithmetic headers from there (`-I` below).
+    let tessl_kernels = env::var("DEP_TESSL_KERNELS").unwrap_or_else(|_| {
+        panic!("DEP_TESSL_KERNELS is not set: the `metal` feature needs the tessl dependency")
+    });
+    for header in SHARED_HEADERS {
+        println!("cargo:rerun-if-changed={tessl_kernels}/{header}");
+    }
+    println!("cargo:rerun-if-env-changed=DEP_TESSL_KERNELS");
+
     let sdk = xcrun(&["--sdk", "macosx", "--show-sdk-path"]);
     let metal = xcrun(&["-f", "metal"]);
     let metallib = xcrun(&["-f", "metallib"]);
@@ -51,6 +64,8 @@ fn main() {
                 "-O2",
                 "-ffp-contract=off",
                 "-fmetal-math-mode=safe",
+                "-I",
+                &tessl_kernels,
                 "-isysroot",
                 &sdk,
                 "-mmacosx-version-min=26.0",
@@ -76,6 +91,9 @@ fn main() {
     }
     println!("cargo:rustc-env=OJAS_GATE_METALLIB={}", lib.display());
 }
+
+/// Headers of tessl's kernel directory that `ojas_backend.metal` includes.
+const SHARED_HEADERS: [&str; 1] = ["qwen35_adamw_math.h"];
 
 fn xcrun(args: &[&str]) -> String {
     let out = Command::new("xcrun")
