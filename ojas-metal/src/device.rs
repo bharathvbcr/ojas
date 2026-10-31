@@ -512,42 +512,32 @@ fn bind_st(b: &mut Binder<'_>, st: &St, index: usize) {
     set_gpu_buf_offset(b, &st.buf, st.off, index);
 }
 
-/// How tessl reported a failed device allocation.
+/// How tessl reported a failed device allocation, with `Other` for an error
+/// that is not one.
 ///
-/// tessl's allocator returns its failures as `String`s, so this is the one
-/// place ojas reads them: no other code in this crate decides "out of
-/// memory" from a message. `contract_matches_tessls_source` pins the
-/// fragments below to tessl's own source, and the oversize tests run them
-/// against tessl's real refusals.
+/// tessl owns the reading of its allocator's failures
+/// (`tessl::is_allocation_failure`), built from the same constants its
+/// allocator builds them with; this crate decides nothing from a message
+/// fragment.
 #[derive(Debug, PartialEq, Eq)]
 enum AllocFailure {
-    /// The request is past what the device can ever hold (tessl's
-    /// "exceeds host/device allocation limit" and "rounded buffer size
-    /// exceeds device limit"). Permanent: a waited commit does not cure it.
+    /// The request is past what the device can ever hold. Permanent: a
+    /// waited commit does not cure it.
     Limit,
-    /// The device refused the buffer (tessl's `newBuffer({key}) failed`).
-    /// Buffers dropped since the last waited commit return to the pool only
-    /// at the next one, so a waited commit might cure it.
+    /// The device refused the buffer. Buffers dropped since the last waited
+    /// commit return to the pool only at the next one, so a waited commit
+    /// might cure it.
     Exhausted,
     /// Not an allocation failure.
     Other,
 }
 
 fn classify_alloc(e: &str) -> AllocFailure {
-    if e.contains("exceeds host/device allocation limit") || e.contains("exceeds device limit") {
-        AllocFailure::Limit
-    } else if is_new_buffer_failure(e) {
-        AllocFailure::Exhausted
-    } else {
-        AllocFailure::Other
+    match tessl::is_allocation_failure(e) {
+        Some(tessl::AllocFailure::Limit) => AllocFailure::Limit,
+        Some(tessl::AllocFailure::Exhausted) => AllocFailure::Exhausted,
+        None => AllocFailure::Other,
     }
-}
-
-/// tessl's `newBuffer({key}) failed`, with `key` the bucket size in decimal.
-fn is_new_buffer_failure(e: &str) -> bool {
-    e.strip_prefix("newBuffer(")
-        .and_then(|rest| rest.strip_suffix(") failed"))
-        .is_some_and(|key| !key.is_empty() && key.bytes().all(|b| b.is_ascii_digit()))
 }
 
 struct Worker {
@@ -5052,21 +5042,24 @@ mod tests {
         }
     }
 
-    /// Where tessl cannot be made to fail the transient way without
-    /// exhausting this machine, pin the exact text it builds: the source of
-    /// the sibling checkout must still contain each fragment
-    /// `classify_alloc` reads. A tessl change that moves one fails here
-    /// until tessl exposes a typed error and this function is deleted.
+    /// tessl's own permanent refusal, not a hand-written string, through
+    /// `retrying`: `CapacityExceeded` with the caller's size after one
+    /// attempt (a permanent refusal is neither retried nor waited on).
     #[test]
-    fn classify_alloc_matches_the_text_tessl_builds() {
-        let src = include_str!("../../../tessl/src/runtime.rs");
-        for fragment in [
-            r#"format!("newBuffer({key}) failed")"#,
-            r#""rounded buffer size exceeds device limit""#,
-            "exceeds host/device allocation limit",
-        ] {
-            assert!(src.contains(fragment), "tessl no longer builds {fragment}");
-        }
+    fn tessls_real_refusal_is_capacity_exceeded_without_a_retry() {
+        let (w, waits) = oversize_worker();
+        let before = waits.snapshot();
+        let mut calls = 0;
+        let r: Res<()> = w.retrying(usize::MAX, || {
+            calls += 1;
+            w.rt.alloc_buffer(usize::MAX).map(|_| ())
+        });
+        assert!(
+            matches!(&r, Err(OjasError::CapacityExceeded { requested, .. }) if *requested == usize::MAX as u64),
+            "{r:?}"
+        );
+        assert_eq!(calls, 1);
+        assert_eq!(waits.snapshot(), before);
     }
 
     /// A device refusal is retried behind a waited commit, then after the
