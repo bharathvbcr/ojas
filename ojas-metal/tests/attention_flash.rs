@@ -610,9 +610,10 @@ fn a_non_finite_operand_faults_under_the_name_that_was_called() {
 }
 
 /// A call the flash route does not cover stays on its kernel: a bias, key
-/// lengths and head dim 16 are split-K, causal and head dim 64 the scalar one,
-/// whatever its threadgroup count (the planner and the kernels encoded agree).
-/// The shapes are sized from the floor, so the covered call is at it.
+/// lengths and head dim 16 are split-K, causal and an unrouted head dim (such
+/// as 48) the scalar one, whatever its threadgroup count (the planner and the
+/// kernels encoded agree). The shapes are sized from the floor, so the covered
+/// call is at it.
 #[test]
 fn the_calls_the_route_does_not_cover_are_planned_and_run_elsewhere() {
     let m = metal();
@@ -676,11 +677,11 @@ fn the_calls_the_route_does_not_cover_are_planned_and_run_elsewhere() {
     };
     assert_eq!(kernel(&d16, opts()), "splitk");
     assert_eq!(observed(&d16, opts()), Ran::SPLITK, "head dim 16: observed");
-    let d64 = Operands {
-        q: up(&m, &rand(&[1, 8, rows, 64], 975, 1.0)),
-        k: up(&m, &rand(&[1, 8, 90, 64], 976, 1.0)),
-        v: up(&m, &rand(&[1, 8, 90, 64], 977, 1.0)),
+    let d48 = Operands {
+        q: up(&m, &rand(&[1, 8, rows, 48], 975, 1.0)),
+        k: up(&m, &rand(&[1, 8, 90, 48], 976, 1.0)),
+        v: up(&m, &rand(&[1, 8, 90, 48], 977, 1.0)),
     };
-    assert_eq!(kernel(&d64, opts()), "scalar");
-    assert_eq!(observed(&d64, opts()), Ran::SCALAR, "head dim 64: observed");
+    assert_eq!(kernel(&d48, opts()), "scalar");
+    assert_eq!(observed(&d48, opts()), Ran::SCALAR, "head dim 48: observed");
 }
