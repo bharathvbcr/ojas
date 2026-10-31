@@ -365,15 +365,13 @@
 </li>
 <li><strong>Device loss and command-buffer errors</strong> surface at the next waited commit (§4.3), not at the op that caused them. That is the same deferral as wgpu, which records a lost device apart from its error queue and reports it on every later check (<code>ojas-wgpu/src/context.rs:21-22, :853-863</code>) (V).
 </li>
-<li><strong>The typed error.</strong> Once tessl&#39;s runtime is poisoned (<code>GpuRuntime::is_poisoned</code>), every later call returns <code>OjasError::DeviceLost { backend: Metal, .. }</code>: commands, sync points, uploads and downloads. Two cases are mapped:
+<li><strong>The typed error.</strong> Once tessl&#39;s runtime is poisoned (<code>GpuRuntime::is_poisoned</code>), every later call returns <code>OjasError::DeviceLost { backend: Metal, .. }</code>: commands, sync points, uploads and downloads. One case is mapped (the tiny step&#39;s AdamW confirmation read in <code>gpu.rs</code> went with that file):
 <ul>
 <li>A command that fails on a poisoned runtime (<code>Worker::serve</code>, <code>lost_if_poisoned</code>).
 </li>
-<li>The AdamW confirmation read (<code>gpu.rs</code>).
-</li>
 </ul>
 </li>
-<li><strong>Pinned by tests.</strong> <code>a_poisoned_runtime_surfaces_as_the_typed_device_lost_error</code> (<code>backend.rs</code>) and the poisoned test in <code>gpu.rs</code> pin it (V).
+<li><strong>Pinned by tests.</strong> <code>a_poisoned_runtime_surfaces_as_the_typed_device_lost_error</code> (<code>backend.rs</code>) pins it (V).
 </li>
 <li><strong>ojas-capi.</strong> It maps the variant to its <code>DeviceLost</code> kind, with no detail-text matching.
 </li>
@@ -485,7 +483,6 @@
 <tr><td><code>tests/concurrency.rs</code></td><td>bits equal to a serial run, no faults</td><td>unchanged; extended in §7</td></tr>
 <tr><td><code>src/backend.rs:1428-1486</code> <code>a_device_thread_panic_mid_stream_fails_later_calls_cleanly</code></td><td>panic poisons; later calls <code>Poisoned</code>, no hang</td><td>unchanged; add a pending fault before the panic (§7)</td></tr>
 <tr><td><code>src/backend.rs:1575-1600</code> <code>qk_norm_fuses_only_when...</code>, <code>:1607-1625</code> <code>a_kv_write_past_capacity_is_refused_before_any_dispatch</code></td><td>host-side decisions</td><td>unchanged</td></tr>
-<tr><td><code>src/gpu.rs</code> NonFinite sites (<code>:295</code>, <code>:667</code>, ...)</td><td>the tiny tessl training step, not <code>MetalBackend</code></td><td>out of scope for this contract</td></tr>
 </tbody></table></div>
 <h2 id="7-test-plan-for-the-new-behaviour-phase-b-each-written-to-fail-first">7. Test plan for the new behaviour (phase B, each written to fail first) <a class="anchor" href="#7-test-plan-for-the-new-behaviour-phase-b-each-written-to-fail-first" aria-label="Link to this section">#</a></h2>
 <p>All of these fail today, because today the op itself returns <code>Err</code>.</p>

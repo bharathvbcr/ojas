@@ -217,11 +217,6 @@ impl Inherit {
     }
 }
 
-/// Runtimes this test holds, for the tests of who holds a lease.
-pub(crate) fn held_here() -> usize {
-    state().held(owner())
-}
-
 /// The device-wide figure, read under [`Measuring`].
 pub(crate) fn live_bytes(rt: &GpuRuntime, _measuring: &Measuring) -> u64 {
     rt.current_allocated_bytes()

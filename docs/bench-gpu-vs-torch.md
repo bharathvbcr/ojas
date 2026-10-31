@@ -393,7 +393,7 @@ the 12 heads one thread, which made 4096 dependent strided loads. Now each
 head's 32 lanes load a chunk of rows each (four chunks in flight), and the
 chunk is added lane by lane through `simd_shuffle`. The additions are the
 CPU reference's ascending-row order, so the result is bit-identical. Both
-dispatch sites (`device.rs` and the tiny step in `gpu.rs`) take the grid
+dispatch site (`device.rs`; the tiny step in `gpu.rs`, a second one then, is retired) takes the grid
 from `gate_dbias_threads`.
 
 **A/B**, old and new `metal_bench` binaries interleaved with alternating
@@ -410,7 +410,7 @@ runs started with the GPU reading 0% busy (old round 1: 58%), unlike the
 earlier rounds.
 
 **Tests:**
-- `gate_dbias_sums_rows_in_ascending_order_bit_for_bit` (`gpu.rs`) compares
+- `gate_dbias_sums_rows_in_ascending_order_bit_for_bit` (`gpu.rs`, retired with the tiny step; now `the_bias_gradient_sums_rows_in_ascending_order_bit_for_bit` in `tests/gate_dbias.rs`, through `MetalBackend`) compares
   the kernel bit for bit with a host loop in ascending row order. It uses
   rows 1 to 4097 around the 32-row chunks and 128-row load groups, heads 1,
   3 and 12, and values of ±3e7 among small ones, so any other order lands on
@@ -432,7 +432,7 @@ earlier rounds.
 `grad_output` and ST_OUT for a non-finite `pre` or `d_attn`.
 `ojas_per_head_gate_dbias` sets ST_OUT for a non-finite `d_bias`. Four
 standalone passes remain: `x` and `w` in, `gx` and `gw` out, which only
-tessl GEMMs touch. The forward is unchanged. The tiny step in `gpu.rs`,
+tessl GEMMs touch. The forward is unchanged. The tiny step in `gpu.rs` (since retired),
 which dispatches the same kernels, now binds a status buffer and refuses a
 non-finite `pre`, `d_attn`, `d_bias`, `d_input` or `d_weight`. Before, it
 returned them.
@@ -457,7 +457,7 @@ GPU 49% busy, the rest at 0%):
     downstream overflows.
   - a `d_bias` row sum overflowing is reported. Every gate is then 0.5 and
     `x` and `w` are zero, so it is the only non-finite value.
-- `gpu.rs`:
+- `gpu.rs` (retired with the tiny step; `tests/fused_checks.rs` holds the `MetalBackend` checks):
   - `gate_dbias_flags_a_sum_that_is_not_finite`;
   - `gate_backward_refuses_a_gradient_that_overflows`, for `d_bias` from the
     status word and `d_input` from the host check. Before this change the
@@ -993,7 +993,7 @@ the one-float kernel and dispatch; `bench/results/2026-10-02-kernels/ab-check/`)
   `bench/results/2026-10-02-kernels/*-step1.*.txt`.
 
 **Not folded: `gate`.**
-- Its kernels are shared with the tiny training step in `gpu.rs`, which has
+- Its kernels were shared with the tiny training step in `gpu.rs` (retired), which had
   no status slot.
 - `gate_bwd` is dominated by its two GEMMs. (Unmeasured when written, and
   wrong: the bias sum was half its GPU time. See "gate_bwd: where its time

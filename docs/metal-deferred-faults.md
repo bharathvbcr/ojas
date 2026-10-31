@@ -144,10 +144,9 @@ Today each op allocates a 32-byte status buffer and dispatches `ojas_status_init
 
 - **A device-thread panic** poisons the backend, as today (`device.rs`, `Worker::serve`). Every later call returns `Poisoned`, sync points included. A pending fault is dropped with the poisoned state, because the backend can no longer report anything else (I; phase B pins that nothing hangs, as `a_device_thread_panic_mid_stream_fails_later_calls_cleanly` does today).
 - **Device loss and command-buffer errors** surface at the next waited commit (§4.3), not at the op that caused them. That is the same deferral as wgpu, which records a lost device apart from its error queue and reports it on every later check (`ojas-wgpu/src/context.rs:21-22, :853-863`) (V).
-- **The typed error.** Once tessl's runtime is poisoned (`GpuRuntime::is_poisoned`), every later call returns `OjasError::DeviceLost { backend: Metal, .. }`: commands, sync points, uploads and downloads. Two cases are mapped:
+- **The typed error.** Once tessl's runtime is poisoned (`GpuRuntime::is_poisoned`), every later call returns `OjasError::DeviceLost { backend: Metal, .. }`: commands, sync points, uploads and downloads. One case is mapped (the tiny step's AdamW confirmation read in `gpu.rs` went with that file):
   - A command that fails on a poisoned runtime (`Worker::serve`, `lost_if_poisoned`).
-  - The AdamW confirmation read (`gpu.rs`).
-- **Pinned by tests.** `a_poisoned_runtime_surfaces_as_the_typed_device_lost_error` (`backend.rs`) and the poisoned test in `gpu.rs` pin it (V).
+- **Pinned by tests.** `a_poisoned_runtime_surfaces_as_the_typed_device_lost_error` (`backend.rs`) pins it (V).
 - **ojas-capi.** It maps the variant to its `DeviceLost` kind, with no detail-text matching.
 
 ### 4.5 Link and Cmd changes
@@ -222,7 +221,6 @@ Host-decided refusals stay as they are.
 | `tests/concurrency.rs` | bits equal to a serial run, no faults | unchanged; extended in §7 |
 | `src/backend.rs:1428-1486` `a_device_thread_panic_mid_stream_fails_later_calls_cleanly` | panic poisons; later calls `Poisoned`, no hang | unchanged; add a pending fault before the panic (§7) |
 | `src/backend.rs:1575-1600` `qk_norm_fuses_only_when...`, `:1607-1625` `a_kv_write_past_capacity_is_refused_before_any_dispatch` | host-side decisions | unchanged |
-| `src/gpu.rs` NonFinite sites (`:295`, `:667`, ...) | the tiny tessl training step, not `MetalBackend` | out of scope for this contract |
 
 ## 7. Test plan for the new behaviour (phase B, each written to fail first)
 

@@ -431,7 +431,7 @@
 <tr><td>whole backward, one command buffer</td><td style="text-align:right">1618–1636</td><td style="text-align:right"></td></tr>
 </tbody></table></div>
 <p>So the earlier note that <code>gate_bwd</code> &#34;is dominated by its two GEMMs&#34; was wrong (it was never measured); the GEMMs are ~330 µs of ~1620.</p>
-<p><strong>Fix: the bias sum runs one SIMD-group per head.</strong> The kernel gave each of the 12 heads one thread, which made 4096 dependent strided loads. Now each head&#39;s 32 lanes load a chunk of rows each (four chunks in flight), and the chunk is added lane by lane through <code>simd_shuffle</code>. The additions are the CPU reference&#39;s ascending-row order, so the result is bit-identical. Both dispatch sites (<code>device.rs</code> and the tiny step in <code>gpu.rs</code>) take the grid from <code>gate_dbias_threads</code>.</p>
+<p><strong>Fix: the bias sum runs one SIMD-group per head.</strong> The kernel gave each of the 12 heads one thread, which made 4096 dependent strided loads. Now each head&#39;s 32 lanes load a chunk of rows each (four chunks in flight), and the chunk is added lane by lane through <code>simd_shuffle</code>. The additions are the CPU reference&#39;s ascending-row order, so the result is bit-identical. Both dispatch site (<code>device.rs</code>; the tiny step in <code>gpu.rs</code>, a second one then, is retired) takes the grid from <code>gate_dbias_threads</code>.</p>
 <p><strong>A/B</strong>, old and new <code>metal_bench</code> binaries interleaved with alternating order, 4 rounds per side, min µs per round (<code>bench/results/2026-10-02-gate/ab-dbias/</code>):</p>
 <div class="table-wrap"><table>
 <thead><tr><th></th><th>Old</th><th>New</th><th style="text-align:right">Time ratio</th></tr></thead>
@@ -442,7 +442,7 @@
 <p>Every round of the new side beat every round of the old. Seven of the eight runs started with the GPU reading 0% busy (old round 1: 58%), unlike the earlier rounds.</p>
 <p><strong>Tests:</strong></p>
 <ul>
-<li><code>gate_dbias_sums_rows_in_ascending_order_bit_for_bit</code> (<code>gpu.rs</code>) compares the kernel bit for bit with a host loop in ascending row order. It uses rows 1 to 4097 around the 32-row chunks and 128-row load groups, heads 1, 3 and 12, and values of ±3e7 among small ones, so any other order lands on other bits.
+<li><code>gate_dbias_sums_rows_in_ascending_order_bit_for_bit</code> (<code>gpu.rs</code>, retired with the tiny step; now <code>the_bias_gradient_sums_rows_in_ascending_order_bit_for_bit</code> in <code>tests/gate_dbias.rs</code>, through <code>MetalBackend</code>) compares the kernel bit for bit with a host loop in ascending row order. It uses rows 1 to 4097 around the 32-row chunks and 128-row load groups, heads 1, 3 and 12, and values of ±3e7 among small ones, so any other order lands on other bits.
 </li>
 <li><code>gate_dbias_keeps_the_empty_and_short_length_edges</code> keeps the serial kernel&#39;s behaviour: no rows writes zeros, and a length too short for a head&#39;s last row leaves that head unwritten.
 </li>
@@ -451,7 +451,7 @@
 <li>ojas-metal suite: 162 passed. The one failure is <code>backend::tests::memory_probe_tracks_residency_and_plans_one_shared_budget</code>, another lane&#39;s new test (reported to that lane). clippy <code>--all-targets --features metal</code> is clean.
 </li>
 </ul>
-<p><strong>Fix: the gate backward kernels check their own operands.</strong> <code>ojas_per_head_gate_bwd</code> sets ST_IN for a non-finite <code>bias</code>, <code>attn</code> or <code>grad_output</code> and ST_OUT for a non-finite <code>pre</code> or <code>d_attn</code>. <code>ojas_per_head_gate_dbias</code> sets ST_OUT for a non-finite <code>d_bias</code>. Four standalone passes remain: <code>x</code> and <code>w</code> in, <code>gx</code> and <code>gw</code> out, which only tessl GEMMs touch. The forward is unchanged. The tiny step in <code>gpu.rs</code>, which dispatches the same kernels, now binds a status buffer and refuses a non-finite <code>pre</code>, <code>d_attn</code>, <code>d_bias</code>, <code>d_input</code> or <code>d_weight</code>. Before, it returned them.</p>
+<p><strong>Fix: the gate backward kernels check their own operands.</strong> <code>ojas_per_head_gate_bwd</code> sets ST_IN for a non-finite <code>bias</code>, <code>attn</code> or <code>grad_output</code> and ST_OUT for a non-finite <code>pre</code> or <code>d_attn</code>. <code>ojas_per_head_gate_dbias</code> sets ST_OUT for a non-finite <code>d_bias</code>. Four standalone passes remain: <code>x</code> and <code>w</code> in, <code>gx</code> and <code>gw</code> out, which only tessl GEMMs touch. The forward is unchanged. The tiny step in <code>gpu.rs</code> (since retired), which dispatches the same kernels, now binds a status buffer and refuses a non-finite <code>pre</code>, <code>d_attn</code>, <code>d_bias</code>, <code>d_input</code> or <code>d_weight</code>. Before, it returned them.</p>
 <p>A/B, the bias-sum binary against this one, interleaved with alternating order, 4 rounds per side, min µs per round (<code>bench/results/2026-10-02-gate/ab-fold/</code>; one old round started with the GPU 49% busy, the rest at 0%):</p>
 <div class="table-wrap"><table>
 <thead><tr><th></th><th>Old</th><th>New</th><th style="text-align:right">Time ratio</th></tr></thead>
@@ -472,7 +472,7 @@
 </li>
 </ul>
 </li>
-<li><code>gpu.rs</code>:
+<li><code>gpu.rs</code> (retired with the tiny step; <code>tests/fused_checks.rs</code> holds the <code>MetalBackend</code> checks):
 <ul>
 <li><code>gate_dbias_flags_a_sum_that_is_not_finite</code>;
 </li>
@@ -943,7 +943,7 @@
 </ul>
 <p><strong>Not folded: <code>gate</code>.</strong></p>
 <ul>
-<li>Its kernels are shared with the tiny training step in <code>gpu.rs</code>, which has no status slot.
+<li>Its kernels were shared with the tiny training step in <code>gpu.rs</code> (retired), which had no status slot.
 </li>
 <li><code>gate_bwd</code> is dominated by its two GEMMs. (Unmeasured when written, and wrong: the bias sum was half its GPU time. See &#34;gate_bwd: where its time went&#34; under Round 5.)
 </li>

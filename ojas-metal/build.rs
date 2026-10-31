@@ -1,19 +1,15 @@
 //! Compile the crate's Metal kernels into one overlay metallib.
 //!
 //! Tessl owns GEMM, RMSNorm, AdamW and residual add. This script builds the
-//! per-head gate, the tiny-step causal softmax backward, and the kernels in
-//! `ojas_backend.metal`. The Metal invocation matches tessl: `xcrun metal`
-//! with an explicit `-isysroot`, not `xcrun -sdk macosx metal`.
+//! per-head gate and the kernels in `ojas_backend.metal`. The Metal
+//! invocation matches tessl: `xcrun metal` with an explicit `-isysroot`, not
+//! `xcrun -sdk macosx metal`.
 
 use std::env;
 use std::path::PathBuf;
 use std::process::Command;
 
-const SOURCES: [&str; 3] = [
-    "per_head_gate.metal",
-    "causal_attn_bwd.metal",
-    "ojas_backend.metal",
-];
+const SOURCES: [&str; 2] = ["per_head_gate.metal", "ojas_backend.metal"];
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
