@@ -21,6 +21,10 @@ mod limits;
 mod rope;
 mod shapes;
 mod spatial;
+/// The step-provider contract a training loop drives (one definition, below every backend).
+/// A public module rather than root re-exports: its names (`AdamWHyper`, `ParamSpec`,
+/// `StepError`, ...) are generic enough to be read as `ojas_core::step::...`.
+pub mod step;
 mod tensor;
 
 pub use autocast::{
