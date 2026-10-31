@@ -23,15 +23,21 @@ pub struct NpyArray {
 
 impl NpyArray {
     pub fn f32_slice(&self) -> Result<&[f32], String> {
-        self.data_f32.as_deref().ok_or_else(|| "expected float32 npy".to_string())
+        self.data_f32
+            .as_deref()
+            .ok_or_else(|| "expected float32 npy".to_string())
     }
 
     pub fn f64_slice(&self) -> Result<&[f64], String> {
-        self.data_f64.as_deref().ok_or_else(|| "expected float64 npy".to_string())
+        self.data_f64
+            .as_deref()
+            .ok_or_else(|| "expected float64 npy".to_string())
     }
 
     pub fn i64_slice(&self) -> Result<&[i64], String> {
-        self.data_i64.as_deref().ok_or_else(|| "expected int64 npy".to_string())
+        self.data_i64
+            .as_deref()
+            .ok_or_else(|| "expected int64 npy".to_string())
     }
 
     pub fn scalar_f32(&self) -> Result<f32, String> {
@@ -54,7 +60,10 @@ pub fn read_npy_with_limit(path: &Path, limit: Option<u64>) -> Result<NpyArray, 
             if let Some(lim) = limit {
                 let nbytes = (v.len() * 4) as u64;
                 if nbytes > lim {
-                    return Err(format!("{}: payload {nbytes} > limit {lim}", path.display()));
+                    return Err(format!(
+                        "{}: payload {nbytes} > limit {lim}",
+                        path.display()
+                    ));
                 }
             }
             (Some(v), None, None)
@@ -63,7 +72,10 @@ pub fn read_npy_with_limit(path: &Path, limit: Option<u64>) -> Result<NpyArray, 
             if let Some(lim) = limit {
                 let nbytes = (v.len() * 8) as u64;
                 if nbytes > lim {
-                    return Err(format!("{}: payload {nbytes} > limit {lim}", path.display()));
+                    return Err(format!(
+                        "{}: payload {nbytes} > limit {lim}",
+                        path.display()
+                    ));
                 }
             }
             (None, Some(v), None)
@@ -72,7 +84,10 @@ pub fn read_npy_with_limit(path: &Path, limit: Option<u64>) -> Result<NpyArray, 
             if let Some(lim) = limit {
                 let nbytes = (v.len() * 8) as u64;
                 if nbytes > lim {
-                    return Err(format!("{}: payload {nbytes} > limit {lim}", path.display()));
+                    return Err(format!(
+                        "{}: payload {nbytes} > limit {lim}",
+                        path.display()
+                    ));
                 }
             }
             (None, None, Some(v))
@@ -139,7 +154,11 @@ pub fn write_npy_f32(path: &Path, shape: &[usize], data: &[f32]) -> Result<(), S
     } else {
         format!(
             "({})",
-            shape.iter().map(|d| d.to_string()).collect::<Vec<_>>().join(", ")
+            shape
+                .iter()
+                .map(|d| d.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
         )
     };
     let mut header = format!("{{'descr': '<f4', 'fortran_order': False, 'shape': {shape_str}, }}");
@@ -151,12 +170,15 @@ pub fn write_npy_f32(path: &Path, shape: &[usize], data: &[f32]) -> Result<(), S
     debug_assert_eq!(total % 64, 0);
 
     let mut f = File::create(path).map_err(|e| format!("create {}: {e}", path.display()))?;
-    f.write_all(b"\x93NUMPY").map_err(|e| format!("magic: {e}"))?;
+    f.write_all(b"\x93NUMPY")
+        .map_err(|e| format!("magic: {e}"))?;
     f.write_all(&[1u8, 0]).map_err(|e| format!("ver: {e}"))?;
-    let hlen =
-        u16::try_from(header.len()).map_err(|_| format!("write_npy: a {}-byte header needs npy v2", header.len()))?;
-    f.write_all(&hlen.to_le_bytes()).map_err(|e| format!("hlen: {e}"))?;
-    f.write_all(header.as_bytes()).map_err(|e| format!("header: {e}"))?;
+    let hlen = u16::try_from(header.len())
+        .map_err(|_| format!("write_npy: a {}-byte header needs npy v2", header.len()))?;
+    f.write_all(&hlen.to_le_bytes())
+        .map_err(|e| format!("hlen: {e}"))?;
+    f.write_all(header.as_bytes())
+        .map_err(|e| format!("header: {e}"))?;
     let mut buf = Vec::with_capacity(data.len().min(4096) * 4);
     for chunk in data.chunks(4096) {
         buf.clear();
@@ -170,7 +192,6 @@ pub fn write_npy_f32(path: &Path, shape: &[usize], data: &[f32]) -> Result<(), S
 
 #[allow(dead_code)]
 pub fn seek_noop() {}
-
 
 /// The payload, in the dtype the file declares. An `<f4` file is never widened
 /// here and an `<f8` file is never narrowed: callers choose explicitly.

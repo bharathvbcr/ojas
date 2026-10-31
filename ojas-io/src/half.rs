@@ -106,4 +106,3 @@ pub fn widen_in_place(bytes: &mut [u8], n: usize, widen: impl Fn(u16) -> f32) {
         bytes[4 * i..4 * i + 4].copy_from_slice(&widen(bits).to_ne_bytes());
     }
 }
-

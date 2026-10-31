@@ -33,4 +33,3 @@ impl From<IoError> for String {
         err.detail
     }
 }
-

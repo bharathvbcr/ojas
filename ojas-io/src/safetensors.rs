@@ -221,7 +221,6 @@ impl TensorInfo {
 /// The index a sharded Hugging Face checkpoint ships beside its shards.
 pub const INDEX_FILE_NAME: &str = "model.safetensors.index.json";
 
-
 /// One tensor to write. `data.len()` must equal the shape product times the
 /// dtype width. Products use checked arithmetic.
 pub struct TensorOut<'a> {
@@ -497,7 +496,12 @@ impl<'a> SafeTensors<'a> {
 
     /// Read floating-point tensor `name` widened to f32 (F32, BF16, or F16) into `dst`,
     /// after checking `shape`.
-    pub fn read_f32_into(&self, name: &str, shape: &[usize], dst: &mut [f32]) -> Result<(), IoError> {
+    pub fn read_f32_into(
+        &self,
+        name: &str,
+        shape: &[usize],
+        dst: &mut [f32],
+    ) -> Result<(), IoError> {
         let info = self.info(name)?;
         if info.shape.len() != shape.len()
             || !info.shape.iter().zip(shape).all(|(&a, &b)| a == b as u64)
@@ -557,12 +561,19 @@ impl<'a> SafeTensors<'a> {
                 }
                 Ok(())
             }
-            other => Err(IoError::new(format!("{name}: cannot read {other:?} as f32"))),
+            other => Err(IoError::new(format!(
+                "{name}: cannot read {other:?} as f32"
+            ))),
         }
     }
 
     /// Read raw BF16 bits of tensor `name` into `dst`, after checking `shape`.
-    pub fn read_bf16_bits_into(&self, name: &str, shape: &[usize], dst: &mut [u16]) -> Result<(), IoError> {
+    pub fn read_bf16_bits_into(
+        &self,
+        name: &str,
+        shape: &[usize],
+        dst: &mut [u16],
+    ) -> Result<(), IoError> {
         let info = self.info(name)?;
         if info.dtype != StDtype::BF16 {
             return Err(IoError::new(format!(
@@ -600,7 +611,12 @@ impl<'a> SafeTensors<'a> {
     }
 
     /// Read U32 tensor `name` into `dst`, after checking `shape`.
-    pub fn read_u32_into(&self, name: &str, shape: &[usize], dst: &mut [u32]) -> Result<(), IoError> {
+    pub fn read_u32_into(
+        &self,
+        name: &str,
+        shape: &[usize],
+        dst: &mut [u32],
+    ) -> Result<(), IoError> {
         let info = self.info(name)?;
         if info.dtype != StDtype::U32 {
             return Err(IoError::new(format!(
@@ -645,7 +661,12 @@ pub trait TensorSource {
     fn read_f32(&self, name: &str) -> Result<(Vec<usize>, Vec<f32>), IoError>;
     fn read_bf16_bits(&self, name: &str) -> Result<(Vec<usize>, Vec<u16>), IoError>;
     fn read_f32_into(&self, name: &str, shape: &[usize], dst: &mut [f32]) -> Result<(), IoError>;
-    fn read_bf16_bits_into(&self, name: &str, shape: &[usize], dst: &mut [u16]) -> Result<(), IoError>;
+    fn read_bf16_bits_into(
+        &self,
+        name: &str,
+        shape: &[usize],
+        dst: &mut [u16],
+    ) -> Result<(), IoError>;
     fn tensor_info(&self, name: &str) -> Result<TensorInfo, IoError>;
     fn read_u32_into(&self, name: &str, shape: &[usize], dst: &mut [u32]) -> Result<(), IoError>;
 }
@@ -656,18 +677,29 @@ impl<'a> TensorSource for SafeTensors<'a> {
     }
     fn read_f32(&self, name: &str) -> Result<(Vec<usize>, Vec<f32>), IoError> {
         let (shape, vals) = self.read_f32_widened(name)?;
-        let shape_us = shape.into_iter().map(|d| usize::try_from(d).unwrap_or(usize::MAX)).collect();
+        let shape_us = shape
+            .into_iter()
+            .map(|d| usize::try_from(d).unwrap_or(usize::MAX))
+            .collect();
         Ok((shape_us, vals))
     }
     fn read_bf16_bits(&self, name: &str) -> Result<(Vec<usize>, Vec<u16>), IoError> {
         let (shape, vals) = self.read_bf16_bits(name)?;
-        let shape_us = shape.into_iter().map(|d| usize::try_from(d).unwrap_or(usize::MAX)).collect();
+        let shape_us = shape
+            .into_iter()
+            .map(|d| usize::try_from(d).unwrap_or(usize::MAX))
+            .collect();
         Ok((shape_us, vals))
     }
     fn read_f32_into(&self, name: &str, shape: &[usize], dst: &mut [f32]) -> Result<(), IoError> {
         SafeTensors::read_f32_into(self, name, shape, dst)
     }
-    fn read_bf16_bits_into(&self, name: &str, shape: &[usize], dst: &mut [u16]) -> Result<(), IoError> {
+    fn read_bf16_bits_into(
+        &self,
+        name: &str,
+        shape: &[usize],
+        dst: &mut [u16],
+    ) -> Result<(), IoError> {
         SafeTensors::read_bf16_bits_into(self, name, shape, dst)
     }
     fn tensor_info(&self, name: &str) -> Result<TensorInfo, IoError> {
@@ -746,7 +778,11 @@ impl CheckpointView {
         let mut declared = 0u64;
         for (i, ((file, path), names)) in paths.iter().zip(by_file.values()).enumerate() {
             let st = SafeTensors::open(path)?;
-            let shard_data_len: u64 = st.tensors.values().map(|t| t.end.saturating_sub(t.begin)).sum();
+            let shard_data_len: u64 = st
+                .tensors
+                .values()
+                .map(|t| t.end.saturating_sub(t.begin))
+                .sum();
             declared = declared.saturating_add(shard_data_len);
             if let Some(lim) = limit {
                 if declared > lim {
@@ -774,7 +810,11 @@ impl CheckpointView {
             }
             shards.push(st);
         }
-        Ok(Self { what, shards, owner })
+        Ok(Self {
+            what,
+            shards,
+            owner,
+        })
     }
 
     pub fn tensor_info(&self, name: &str) -> Option<&TensorInfo> {
@@ -804,7 +844,12 @@ impl TensorSource for CheckpointView {
     fn read_f32_into(&self, name: &str, shape: &[usize], dst: &mut [f32]) -> Result<(), IoError> {
         self.shard(name)?.read_f32_into(name, shape, dst)
     }
-    fn read_bf16_bits_into(&self, name: &str, shape: &[usize], dst: &mut [u16]) -> Result<(), IoError> {
+    fn read_bf16_bits_into(
+        &self,
+        name: &str,
+        shape: &[usize],
+        dst: &mut [u16],
+    ) -> Result<(), IoError> {
         self.shard(name)?.read_bf16_bits_into(name, shape, dst)
     }
     fn tensor_info(&self, name: &str) -> Result<TensorInfo, IoError> {
@@ -837,7 +882,11 @@ fn parse_index(text: &str) -> Result<BTreeMap<String, Vec<String>>, IoError> {
     for (name, file_val) in entries {
         let file = match file_val {
             JsonValue::String(s) => s,
-            _ => return Err(IoError::new(format!("weight_map entry {name:?} is not a file name"))),
+            _ => {
+                return Err(IoError::new(format!(
+                    "weight_map entry {name:?} is not a file name"
+                )))
+            }
         };
         by_file.entry(file).or_default().push(name);
     }

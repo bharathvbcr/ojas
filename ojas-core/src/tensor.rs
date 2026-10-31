@@ -2936,7 +2936,11 @@ mod tests {
         fn current_value(&self) -> u64 {
             self.val.load(Ordering::Relaxed)
         }
-        fn wait_for(&self, _value: u64, _timeout: Option<std::time::Duration>) -> Result<(), AllocError> {
+        fn wait_for(
+            &self,
+            _value: u64,
+            _timeout: Option<std::time::Duration>,
+        ) -> Result<(), AllocError> {
             Ok(())
         }
     }
@@ -2973,7 +2977,8 @@ mod tests {
             &self.timeline
         }
         fn host_read(&self) -> Result<Box<dyn HostLease>, FenceError> {
-            let f32s: Vec<f32> = self.bytes
+            let f32s: Vec<f32> = self
+                .bytes
                 .as_chunks::<4>()
                 .0
                 .iter()
@@ -2994,7 +2999,9 @@ mod tests {
         let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_ne_bytes()).collect();
         let mapped = Arc::new(FakeMapped {
             bytes,
-            timeline: FakeTimeline { val: AtomicU64::new(1) },
+            timeline: FakeTimeline {
+                val: AtomicU64::new(1),
+            },
         });
 
         let t = Tensor::from_mapped(mapped.clone(), &[4], DType::F32, &budget).unwrap();
@@ -3005,16 +3012,25 @@ mod tests {
         // Fail-closed placement checks on CPU accessors
         assert!(matches!(
             t.f32_slice().unwrap_err(),
-            OjasError::Placement { found: Some(BackendId::Metal), .. }
+            OjasError::Placement {
+                found: Some(BackendId::Metal),
+                ..
+            }
         ));
         assert!(matches!(
             t.to_f32_vec().unwrap_err(),
-            OjasError::Placement { found: Some(BackendId::Metal), .. }
+            OjasError::Placement {
+                found: Some(BackendId::Metal),
+                ..
+            }
         ));
         let mut t_mut = t.clone();
         assert!(matches!(
             t_mut.write_f32(&values).unwrap_err(),
-            OjasError::Placement { found: Some(BackendId::Metal), .. }
+            OjasError::Placement {
+                found: Some(BackendId::Metal),
+                ..
+            }
         ));
 
         // host_view returns the lease

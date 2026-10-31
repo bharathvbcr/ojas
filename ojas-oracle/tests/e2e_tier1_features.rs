@@ -4,7 +4,12 @@
 //! in isolation against PyTorch reference oracles and mathematical ground truths under
 //! pre-registered tolerance bounds.
 
-#![allow(clippy::identity_op, clippy::useless_vec, clippy::needless_range_loop, clippy::excessive_precision)]
+#![allow(
+    clippy::identity_op,
+    clippy::useless_vec,
+    clippy::needless_range_loop,
+    clippy::excessive_precision
+)]
 
 use std::sync::Arc;
 
@@ -13,9 +18,7 @@ use ojas_core::{
     DType, Numerics, OjasError, Tensor,
 };
 use ojas_cpu::CpuBackend;
-use ojas_oracle::sam_fixtures::{
-    compare, Kind, ROPE_TOL,
-};
+use ojas_oracle::sam_fixtures::{compare, Kind, ROPE_TOL};
 
 /// 4 GiB budget for isolated op testing.
 fn cpu() -> CpuBackend {
@@ -23,7 +26,10 @@ fn cpu() -> CpuBackend {
 }
 
 fn host(be: &CpuBackend, t: &Tensor) -> Vec<f32> {
-    be.download(t).expect("download").to_f32_vec().expect("to_f32_vec")
+    be.download(t)
+        .expect("download")
+        .to_f32_vec()
+        .expect("to_f32_vec")
 }
 
 fn upload(be: &CpuBackend, data: &[f32], shape: &[usize]) -> Tensor {
@@ -38,7 +44,8 @@ fn upload(be: &CpuBackend, data: &[f32], shape: &[usize]) -> Tensor {
 #[test]
 fn tier1_feat1_01_rope_tables_local_window_24x24() {
     let be = cpu();
-    let (cos, sin) = axial_rope_2d_tables(64, 24, 24, 10_000.0, 1.0, be.budget()).expect("axial tables");
+    let (cos, sin) =
+        axial_rope_2d_tables(64, 24, 24, 10_000.0, 1.0, be.budget()).expect("axial tables");
     assert_eq!(cos.shape(), &[576, 32]);
     assert_eq!(sin.shape(), &[576, 32]);
     let cos_data = host(&be, &cos);
@@ -47,14 +54,18 @@ fn tier1_feat1_01_rope_tables_local_window_24x24() {
         let c = cos_data[i];
         let s = sin_data[i];
         let mag = (c * c + s * s).sqrt();
-        assert!((mag - 1.0).abs() < 1e-5, "cos^2 + sin^2 must be 1.0, got {mag}");
+        assert!(
+            (mag - 1.0).abs() < 1e-5,
+            "cos^2 + sin^2 must be 1.0, got {mag}"
+        );
     }
 }
 
 #[test]
 fn tier1_feat1_02_rope_tables_global_trunk_72x72() {
     let be = cpu();
-    let (cos, sin) = axial_rope_2d_tables(64, 72, 72, 10_000.0, 24.0 / 72.0, be.budget()).expect("axial tables");
+    let (cos, sin) =
+        axial_rope_2d_tables(64, 72, 72, 10_000.0, 24.0 / 72.0, be.budget()).expect("axial tables");
     assert_eq!(cos.shape(), &[5184, 32]);
     assert_eq!(sin.shape(), &[5184, 32]);
     assert!(host(&be, &cos).iter().all(|v| v.is_finite()));
@@ -64,10 +75,13 @@ fn tier1_feat1_02_rope_tables_global_trunk_72x72() {
 #[test]
 fn tier1_feat1_03_rope_interleaved_query_rotation() {
     let be = cpu();
-    let (cos, sin) = axial_rope_2d_tables(64, 24, 24, 10_000.0, 1.0, be.budget()).expect("axial tables");
+    let (cos, sin) =
+        axial_rope_2d_tables(64, 24, 24, 10_000.0, 1.0, be.budget()).expect("axial tables");
     let q_data = vec![1.0f32; 1 * 576 * 16 * 64];
     let q = upload(&be, &q_data, &[1, 576, 16, 64]);
-    let q_rot = be.rope_interleaved_forward(&q, &cos, &sin).expect("rope fwd");
+    let q_rot = be
+        .rope_interleaved_forward(&q, &cos, &sin)
+        .expect("rope fwd");
     assert_eq!(q_rot.shape(), &[1, 576, 16, 64]);
     let rot_data = host(&be, &q_rot);
     assert!(rot_data.iter().all(|v| v.is_finite()));
@@ -76,25 +90,39 @@ fn tier1_feat1_03_rope_interleaved_query_rotation() {
 #[test]
 fn tier1_feat1_04_rope_interleaved_key_rotation() {
     let be = cpu();
-    let (cos, sin) = axial_rope_2d_tables(64, 24, 24, 10_000.0, 1.0, be.budget()).expect("axial tables");
+    let (cos, sin) =
+        axial_rope_2d_tables(64, 24, 24, 10_000.0, 1.0, be.budget()).expect("axial tables");
     let k_data: Vec<f32> = (0..1 * 576 * 16 * 64).map(|i| (i as f32) * 0.001).collect();
     let k = upload(&be, &k_data, &[1, 576, 16, 64]);
-    let k_rot = be.rope_interleaved_forward(&k, &cos, &sin).expect("rope fwd");
+    let k_rot = be
+        .rope_interleaved_forward(&k, &cos, &sin)
+        .expect("rope fwd");
     assert_eq!(k_rot.shape(), &[1, 576, 16, 64]);
 }
 
 #[test]
 fn tier1_feat1_05_rope_interleaved_involution_property() {
     let be = cpu();
-    let (cos, sin) = axial_rope_2d_tables(64, 24, 24, 10_000.0, 1.0, be.budget()).expect("axial tables");
+    let (cos, sin) =
+        axial_rope_2d_tables(64, 24, 24, 10_000.0, 1.0, be.budget()).expect("axial tables");
     let x_data: Vec<f32> = (0..576 * 64).map(|i| ((i % 17) as f32) - 8.0).collect();
     let x = upload(&be, &x_data, &[1, 576, 1, 64]);
     let rot = be.rope_interleaved_forward(&x, &cos, &sin).expect("fwd");
     // Invert by passing negative sin
     let neg_sin_data: Vec<f32> = host(&be, &sin).into_iter().map(|s| -s).collect();
     let neg_sin = upload(&be, &neg_sin_data, sin.shape());
-    let inv = be.rope_interleaved_forward(&rot, &cos, &neg_sin).expect("inv");
-    let rep = compare("rope_involution", "rot then un-rot", Kind::Direct, &host(&be, &inv), &x_data, ROPE_TOL).expect("compare");
+    let inv = be
+        .rope_interleaved_forward(&rot, &cos, &neg_sin)
+        .expect("inv");
+    let rep = compare(
+        "rope_involution",
+        "rot then un-rot",
+        Kind::Direct,
+        &host(&be, &inv),
+        &x_data,
+        ROPE_TOL,
+    )
+    .expect("compare");
     assert!(rep.pass, "{rep}");
 }
 
@@ -109,12 +137,20 @@ fn tier1_feat2_01_local_window_attention_9_windows() {
     let q = upload(&be, &vec![0.1f32; 2 * 4 * 64 * 64], &[2, 4, 64, 64]);
     let k = upload(&be, &vec![0.1f32; 2 * 4 * 64 * 64], &[2, 4, 64, 64]);
     let v = upload(&be, &vec![0.5f32; 2 * 4 * 64 * 64], &[2, 4, 64, 64]);
-    let opts = AttentionOpts { causal: false, window: None, key_lens: None, bias: None };
+    let opts = AttentionOpts {
+        causal: false,
+        window: None,
+        key_lens: None,
+        bias: None,
+    };
     let out = be.attention_forward(&q, &k, &v, opts).expect("attn");
     assert_eq!(out.shape(), &[2, 4, 64, 64]);
     let data = host(&be, &out);
     for val in data {
-        assert!((val - 0.5).abs() < 1e-4, "uniform attention over constant V=0.5 must equal 0.5");
+        assert!(
+            (val - 0.5).abs() < 1e-4,
+            "uniform attention over constant V=0.5 must equal 0.5"
+        );
     }
 }
 
@@ -124,7 +160,12 @@ fn tier1_feat2_02_global_attention_tokens() {
     let q = upload(&be, &vec![0.05f32; 1 * 4 * 128 * 64], &[1, 4, 128, 64]);
     let k = upload(&be, &vec![0.05f32; 1 * 4 * 128 * 64], &[1, 4, 128, 64]);
     let v = upload(&be, &vec![1.2f32; 1 * 4 * 128 * 64], &[1, 4, 128, 64]);
-    let opts = AttentionOpts { causal: false, window: None, key_lens: None, bias: None };
+    let opts = AttentionOpts {
+        causal: false,
+        window: None,
+        key_lens: None,
+        bias: None,
+    };
     let out = be.attention_forward(&q, &k, &v, opts).expect("global attn");
     assert_eq!(out.shape(), &[1, 4, 128, 64]);
 }
@@ -136,7 +177,12 @@ fn tier1_feat2_03_attention_softmax_scale_invariance() {
     let q = upload(&be, &q_data, &[1, 1, 1, 64]);
     let k = upload(&be, &q_data, &[1, 1, 1, 64]);
     let v = upload(&be, &vec![2.5f32; 64], &[1, 1, 1, 64]);
-    let opts = AttentionOpts { causal: false, window: None, key_lens: None, bias: None };
+    let opts = AttentionOpts {
+        causal: false,
+        window: None,
+        key_lens: None,
+        bias: None,
+    };
     let out = be.attention_forward(&q, &k, &v, opts).expect("attn");
     let out_data = host(&be, &out);
     assert!((out_data[0] - 2.5).abs() < 1e-5);
@@ -151,7 +197,12 @@ fn tier1_feat2_04_attention_with_key_padding_mask() {
     let v = upload(&be, &v_data, &[1, 1, 2, 64]);
     // Mask out second token (valid len = 1)
     let lens_tensor = Tensor::from_u32(&[1], &[1], be.budget()).expect("lens");
-    let opts = AttentionOpts { causal: false, window: None, key_lens: Some(&lens_tensor), bias: None };
+    let opts = AttentionOpts {
+        causal: false,
+        window: None,
+        key_lens: Some(&lens_tensor),
+        bias: None,
+    };
     let out = be.attention_forward(&q, &k, &v, opts).expect("masked attn");
     let out_data = host(&be, &out);
     assert!((out_data[0] - 10.0).abs() < 1e-4);
@@ -163,8 +214,15 @@ fn tier1_feat2_05_attention_saving_lse() {
     let q = upload(&be, &vec![0.1f32; 64], &[1, 1, 1, 64]);
     let k = upload(&be, &vec![0.1f32; 64], &[1, 1, 1, 64]);
     let v = upload(&be, &vec![1.0f32; 64], &[1, 1, 1, 64]);
-    let opts = AttentionOpts { causal: false, window: None, key_lens: None, bias: None };
-    let (out, lse) = be.attention_forward_saving(&q, &k, &v, opts).expect("saving");
+    let opts = AttentionOpts {
+        causal: false,
+        window: None,
+        key_lens: None,
+        bias: None,
+    };
+    let (out, lse) = be
+        .attention_forward_saving(&q, &k, &v, opts)
+        .expect("saving");
     assert_eq!(out.shape(), &[1, 1, 1, 64]);
     assert_eq!(lse.shape(), &[1, 1, 1]);
     let lse_val = host(&be, &lse)[0];
@@ -197,7 +255,9 @@ fn tier1_feat3_02_channel_layernorm2d_fpn_neck() {
     let x = upload(&be, &x_data, &[1, 256, 24, 24]);
     let w = upload(&be, &vec![1.0f32; 256], &[256]);
     let b = upload(&be, &vec![0.0f32; 256], &[256]);
-    let out = be.channel_layer_norm_forward(&x, &w, &b, 1e-6).expect("channel ln");
+    let out = be
+        .channel_layer_norm_forward(&x, &w, &b, 1e-6)
+        .expect("channel ln");
     assert_eq!(out.shape(), &[1, 256, 24, 24]);
 }
 
@@ -222,7 +282,10 @@ fn tier1_feat3_04_layernorm_two_pass_variance_stability() {
     let b = upload(&be, &vec![0.0f32; 1024], &[1024]);
     let out = be.layer_norm_forward(&x, &w, &b, 1e-5).expect("ln");
     let data = host(&be, &out);
-    assert!(data.iter().all(|v| v.is_finite()), "two-pass must not suffer catastrophic cancellation");
+    assert!(
+        data.iter().all(|v| v.is_finite()),
+        "two-pass must not suffer catastrophic cancellation"
+    );
 }
 
 #[test]
@@ -247,7 +310,12 @@ fn tier1_feat4_01_conv2d_patch_embed_14x14() {
     let be = cpu();
     let x = upload(&be, &vec![1.0f32; 1 * 3 * 28 * 28], &[1, 3, 28, 28]);
     let w = upload(&be, &vec![0.01f32; 16 * 3 * 14 * 14], &[16, 3, 14, 14]);
-    let params = Conv2dParams { stride: [14, 14], padding: [0, 0], dilation: [1, 1], groups: 1 };
+    let params = Conv2dParams {
+        stride: [14, 14],
+        padding: [0, 0],
+        dilation: [1, 1],
+        groups: 1,
+    };
     let out = be.conv2d_forward(&x, &w, None, params).expect("conv2d");
     assert_eq!(out.shape(), &[1, 16, 2, 2]);
 }
@@ -258,7 +326,12 @@ fn tier1_feat4_02_conv2d_neck_3x3_with_bias() {
     let x = upload(&be, &vec![0.5f32; 1 * 4 * 8 * 8], &[1, 4, 8, 8]);
     let w = upload(&be, &vec![0.1f32; 4 * 4 * 3 * 3], &[4, 4, 3, 3]);
     let b = upload(&be, &vec![1.0f32; 4], &[4]);
-    let params = Conv2dParams { stride: [1, 1], padding: [1, 1], dilation: [1, 1], groups: 1 };
+    let params = Conv2dParams {
+        stride: [1, 1],
+        padding: [1, 1],
+        dilation: [1, 1],
+        groups: 1,
+    };
     let out = be.conv2d_forward(&x, &w, Some(&b), params).expect("conv2d");
     assert_eq!(out.shape(), &[1, 4, 8, 8]);
 }
@@ -268,8 +341,14 @@ fn tier1_feat4_03_conv_transpose2d_stride2_no_pad() {
     let be = cpu();
     let x = upload(&be, &vec![1.0f32; 1 * 2 * 4 * 4], &[1, 2, 4, 4]);
     let w = upload(&be, &vec![0.5f32; 2 * 2 * 2 * 2], &[2, 2, 2, 2]);
-    let params = ConvTranspose2dParams { stride: [2, 2], padding: [0, 0], output_padding: [0, 0] };
-    let out = be.conv_transpose2d_forward(&x, &w, None, params).expect("tconv");
+    let params = ConvTranspose2dParams {
+        stride: [2, 2],
+        padding: [0, 0],
+        output_padding: [0, 0],
+    };
+    let out = be
+        .conv_transpose2d_forward(&x, &w, None, params)
+        .expect("tconv");
     assert_eq!(out.shape(), &[1, 2, 8, 8]);
 }
 
@@ -278,8 +357,14 @@ fn tier1_feat4_04_conv_transpose2d_overlapping_3x3() {
     let be = cpu();
     let x = upload(&be, &vec![1.0f32; 1 * 2 * 4 * 4], &[1, 2, 4, 4]);
     let w = upload(&be, &vec![0.5f32; 2 * 2 * 3 * 3], &[2, 2, 3, 3]);
-    let params = ConvTranspose2dParams { stride: [2, 2], padding: [1, 1], output_padding: [0, 0] };
-    let out = be.conv_transpose2d_forward(&x, &w, None, params).expect("tconv overlapping");
+    let params = ConvTranspose2dParams {
+        stride: [2, 2],
+        padding: [1, 1],
+        output_padding: [0, 0],
+    };
+    let out = be
+        .conv_transpose2d_forward(&x, &w, None, params)
+        .expect("tconv overlapping");
     assert_eq!(out.shape(), &[1, 2, 7, 7]);
 }
 
@@ -288,8 +373,14 @@ fn tier1_feat4_05_conv_transpose2d_with_output_padding() {
     let be = cpu();
     let x = upload(&be, &vec![1.0f32; 1 * 2 * 4 * 4], &[1, 2, 4, 4]);
     let w = upload(&be, &vec![0.5f32; 2 * 2 * 2 * 2], &[2, 2, 2, 2]);
-    let params = ConvTranspose2dParams { stride: [2, 2], padding: [0, 0], output_padding: [1, 1] };
-    let out = be.conv_transpose2d_forward(&x, &w, None, params).expect("tconv out pad");
+    let params = ConvTranspose2dParams {
+        stride: [2, 2],
+        padding: [0, 0],
+        output_padding: [1, 1],
+    };
+    let out = be
+        .conv_transpose2d_forward(&x, &w, None, params)
+        .expect("tconv out pad");
     assert_eq!(out.shape(), &[1, 2, 9, 9]);
 }
 
@@ -300,7 +391,9 @@ fn tier1_feat4_05_conv_transpose2d_with_output_padding() {
 #[test]
 fn tier1_feat5_01_group_norm_32_groups_256_channels() {
     let be = cpu();
-    let x_data: Vec<f32> = (0..1 * 256 * 14 * 14).map(|i| ((i % 50) as f32) - 25.0).collect();
+    let x_data: Vec<f32> = (0..1 * 256 * 14 * 14)
+        .map(|i| ((i % 50) as f32) - 25.0)
+        .collect();
     let x = upload(&be, &x_data, &[1, 256, 14, 14]);
     let w = upload(&be, &vec![1.0f32; 256], &[256]);
     let b = upload(&be, &vec![0.0f32; 256], &[256]);
@@ -327,7 +420,9 @@ fn tier1_feat5_02_group_norm_affine_shift() {
 fn tier1_feat5_03_bilinear_interpolation_2x_upsample() {
     let be = cpu();
     let x = upload(&be, &vec![1.0f32, 2.0, 3.0, 4.0], &[1, 1, 2, 2]);
-    let out = be.interpolate_bilinear_forward(&x, [4, 4], false).expect("bilinear");
+    let out = be
+        .interpolate_bilinear_forward(&x, [4, 4], false)
+        .expect("bilinear");
     assert_eq!(out.shape(), &[1, 1, 4, 4]);
     let data = host(&be, &out);
     assert!(data.iter().all(|v| v.is_finite()));
@@ -337,18 +432,28 @@ fn tier1_feat5_03_bilinear_interpolation_2x_upsample() {
 fn tier1_feat5_04_bilinear_interpolation_align_corners() {
     let be = cpu();
     let x = upload(&be, &vec![10.0f32, 20.0, 30.0, 40.0], &[1, 1, 2, 2]);
-    let out = be.interpolate_bilinear_forward(&x, [4, 4], true).expect("bilinear align");
+    let out = be
+        .interpolate_bilinear_forward(&x, [4, 4], true)
+        .expect("bilinear align");
     assert_eq!(out.shape(), &[1, 1, 4, 4]);
     let data = host(&be, &out);
-    assert!((data[0] - 10.0).abs() < 1e-5, "corner (0,0) must equal 10.0");
-    assert!((data[15] - 40.0).abs() < 1e-5, "corner (3,3) must equal 40.0");
+    assert!(
+        (data[0] - 10.0).abs() < 1e-5,
+        "corner (0,0) must equal 10.0"
+    );
+    assert!(
+        (data[15] - 40.0).abs() < 1e-5,
+        "corner (3,3) must equal 40.0"
+    );
 }
 
 #[test]
 fn tier1_feat5_05_bilinear_downsampling() {
     let be = cpu();
     let x = upload(&be, &vec![1.0f32; 1 * 1 * 8 * 8], &[1, 1, 8, 8]);
-    let out = be.interpolate_bilinear_forward(&x, [4, 4], false).expect("downsample");
+    let out = be
+        .interpolate_bilinear_forward(&x, [4, 4], false)
+        .expect("downsample");
     assert_eq!(out.shape(), &[1, 1, 4, 4]);
     let data = host(&be, &out);
     for v in data {
@@ -363,12 +468,13 @@ fn tier1_feat5_05_bilinear_downsampling() {
 #[test]
 fn tier1_feat6_01_max_pool2d_standard_2x2_stride2() {
     let be = cpu();
-    let x = upload(&be, &vec![
-        1.0f32, 3.0,  2.0, 4.0,
-        5.0,    6.0,  8.0, 7.0,
-        9.0,    2.0,  1.0, 3.0,
-        4.0,    10.0, 5.0, 6.0,
-    ], &[1, 1, 4, 4]);
+    let x = upload(
+        &be,
+        &vec![
+            1.0f32, 3.0, 2.0, 4.0, 5.0, 6.0, 8.0, 7.0, 9.0, 2.0, 1.0, 3.0, 4.0, 10.0, 5.0, 6.0,
+        ],
+        &[1, 1, 4, 4],
+    );
     let out = be.max_pool2d_forward(&x, [2, 2], [2, 2]).expect("maxpool");
     assert_eq!(out.shape(), &[1, 1, 2, 2]);
     let data = host(&be, &out);
@@ -397,10 +503,7 @@ fn tier1_feat6_03_max_pool2d_tie_breaking_order() {
 #[test]
 fn tier1_feat6_04_max_pool2d_all_negative_values() {
     let be = cpu();
-    let x = upload(&be, &vec![
-        -10.0f32, -5.0,
-        -8.0,     -20.0,
-    ], &[1, 1, 2, 2]);
+    let x = upload(&be, &vec![-10.0f32, -5.0, -8.0, -20.0], &[1, 1, 2, 2]);
     let out = be.max_pool2d_forward(&x, [2, 2], [2, 2]).expect("maxpool");
     let data = host(&be, &out);
     assert_eq!(data[0], -5.0);
@@ -431,7 +534,10 @@ fn tier1_feat7_01_gelu_tanh_oracle_matches_pytorch() {
     for &x in &test_vals {
         let expected = torch_gelu_tanh(x);
         let actual = 0.5 * x * (1.0 + (0.79788456f32 * (x + 0.044715f32 * x * x * x)).tanh());
-        assert!((actual - expected).abs() < 1e-4, "at x={x}: actual={actual}, expected={expected}");
+        assert!(
+            (actual - expected).abs() < 1e-4,
+            "at x={x}: actual={actual}, expected={expected}"
+        );
     }
 }
 
@@ -524,8 +630,15 @@ fn tier1_feat8_05_bidirectional_non_causal_general_attention() {
     let q = upload(&be, &vec![0.1f32; 1 * 4 * 16 * 32], &[1, 4, 16, 32]);
     let k = upload(&be, &vec![0.1f32; 1 * 4 * 16 * 32], &[1, 4, 16, 32]);
     let v = upload(&be, &vec![1.0f32; 1 * 4 * 16 * 32], &[1, 4, 16, 32]);
-    let opts = AttentionOpts { causal: false, window: None, key_lens: None, bias: None };
-    let out = be.attention_forward(&q, &k, &v, opts).expect("non causal attn");
+    let opts = AttentionOpts {
+        causal: false,
+        window: None,
+        key_lens: None,
+        bias: None,
+    };
+    let out = be
+        .attention_forward(&q, &k, &v, opts)
+        .expect("non causal attn");
     assert_eq!(out.shape(), &[1, 4, 16, 32]);
 }
 
@@ -553,28 +666,17 @@ fn torch_segment_mean(input: &[f32], segments: &[[usize; 2]], d: usize) -> Vec<f
 fn tier1_feat9_01_uniform_sequence_mean_pooling() {
     let d = 4usize;
     let input = vec![
-        1.0f32, 2.0, 3.0, 4.0,
-        3.0,    4.0, 5.0, 6.0,
-        10.0,   20.0, 30.0, 40.0,
-        30.0,   40.0, 50.0, 60.0,
+        1.0f32, 2.0, 3.0, 4.0, 3.0, 4.0, 5.0, 6.0, 10.0, 20.0, 30.0, 40.0, 30.0, 40.0, 50.0, 60.0,
     ];
     let segments = vec![[0, 2], [2, 4]];
     let pooled = torch_segment_mean(&input, &segments, d);
-    assert_eq!(pooled, vec![
-        2.0, 3.0, 4.0, 5.0,
-        20.0, 30.0, 40.0, 50.0,
-    ]);
+    assert_eq!(pooled, vec![2.0, 3.0, 4.0, 5.0, 20.0, 30.0, 40.0, 50.0,]);
 }
 
 #[test]
 fn tier1_feat9_02_variable_length_sequence_mean_pooling() {
     let d = 2usize;
-    let input = vec![
-        1.0f32, 1.0,
-        2.0, 2.0,
-        3.0, 3.0,
-        10.0, 10.0,
-    ];
+    let input = vec![1.0f32, 1.0, 2.0, 2.0, 3.0, 3.0, 10.0, 10.0];
     let segments = vec![[0, 3], [3, 4]];
     let pooled = torch_segment_mean(&input, &segments, d);
     assert_eq!(pooled, vec![2.0, 2.0, 10.0, 10.0]);
@@ -681,7 +783,9 @@ fn tier1_feat11_01_rms_qk_norm_forward_runs_on_cpu() {
     let k = upload(&be, &vec![2.0f32; 1 * 4 * 8 * 16], &[1, 4, 8, 16]);
     let w_q = upload(&be, &vec![1.0f32; 16], &[16]);
     let w_k = upload(&be, &vec![1.0f32; 16], &[16]);
-    let (qn, kn) = be.rms_qk_norm_forward(&q, &k, &w_q, &w_k, 1e-6).expect("rms qk");
+    let (qn, kn) = be
+        .rms_qk_norm_forward(&q, &k, &w_q, &w_k, 1e-6)
+        .expect("rms qk");
     assert_eq!(qn.shape(), &[1, 4, 8, 16]);
     assert_eq!(kn.shape(), &[1, 4, 8, 16]);
     let q_data = host(&be, &qn);
@@ -823,7 +927,12 @@ fn tier1_feat13_02_backend_id_matches() {
 fn tier1_feat13_03_unsupported_op_refuses_cleanly() {
     let be = cpu();
     let t = upload(&be, &[1.0], &[1]);
-    let params = Conv2dParams { stride: [0, 0], padding: [0, 0], dilation: [1, 1], groups: 1 };
+    let params = Conv2dParams {
+        stride: [0, 0],
+        padding: [0, 0],
+        dilation: [1, 1],
+        groups: 1,
+    };
     let res = be.conv2d_forward(&t, &t, None, params);
     assert!(res.is_err());
 }

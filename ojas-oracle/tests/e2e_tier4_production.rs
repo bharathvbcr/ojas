@@ -9,8 +9,8 @@
 #![allow(clippy::identity_op, clippy::useless_vec, clippy::needless_range_loop)]
 
 use ojas_core::{
-    axial_rope_2d_tables, AttentionOpts, Backend, Budget, Conv2dParams,
-    ConvTranspose2dParams, Numerics, OjasError, Tensor,
+    axial_rope_2d_tables, AttentionOpts, Backend, Budget, Conv2dParams, ConvTranspose2dParams,
+    Numerics, OjasError, Tensor,
 };
 use ojas_cpu::CpuBackend;
 
@@ -19,7 +19,10 @@ fn cpu() -> CpuBackend {
 }
 
 fn host(be: &CpuBackend, t: &Tensor) -> Vec<f32> {
-    be.download(t).expect("download").to_f32_vec().expect("to_f32_vec")
+    be.download(t)
+        .expect("download")
+        .to_f32_vec()
+        .expect("to_f32_vec")
 }
 
 fn upload(be: &CpuBackend, data: &[f32], shape: &[usize]) -> Tensor {
@@ -65,16 +68,28 @@ fn tier4_scenario_a_sam31_video_tracker_multiplex_pipeline() {
         let frame_img = upload(&be, &img_data, &[1, 3, 28, 28]);
         let patch_w_data = varied_vector(64 * 3 * 14 * 14, 0.01);
         let patch_w = upload(&be, &patch_w_data, &[64, 3, 14, 14]);
-        let patch_params = Conv2dParams { stride: [14, 14], padding: [0, 0], dilation: [1, 1], groups: 1 };
-        let patches = be.conv2d_forward(&frame_img, &patch_w, None, patch_params).expect("patch embed");
+        let patch_params = Conv2dParams {
+            stride: [14, 14],
+            padding: [0, 0],
+            dilation: [1, 1],
+            groups: 1,
+        };
+        let patches = be
+            .conv2d_forward(&frame_img, &patch_w, None, patch_params)
+            .expect("patch embed");
         assert_eq!(patches.shape(), &[1, 64, 2, 2]);
 
         // Step 2: ViT Trunk
         // Reshape to tokens for RoPE: [1 batch, 4 tokens, 1 head, 64 head_dim]
         let tokens = patches.reshape(&[1, 4, 1, 64]).expect("reshape tokens");
-        let (cos, sin) = axial_rope_2d_tables(64, 2, 2, 10_000.0, 1.0, be.budget()).expect("rope tables");
-        let q_rot = be.rope_interleaved_forward(&tokens, &cos, &sin).expect("q rot");
-        let k_rot = be.rope_interleaved_forward(&tokens, &cos, &sin).expect("k rot");
+        let (cos, sin) =
+            axial_rope_2d_tables(64, 2, 2, 10_000.0, 1.0, be.budget()).expect("rope tables");
+        let q_rot = be
+            .rope_interleaved_forward(&tokens, &cos, &sin)
+            .expect("q rot");
+        let k_rot = be
+            .rope_interleaved_forward(&tokens, &cos, &sin)
+            .expect("k rot");
 
         // Reshape to [1 batch, 1 head, 4 tokens, 64 dim] for Attention
         let q_attn = q_rot.reshape(&[1, 1, 4, 64]).expect("q attn");
@@ -82,16 +97,27 @@ fn tier4_scenario_a_sam31_video_tracker_multiplex_pipeline() {
         let v_attn = tokens.reshape(&[1, 1, 4, 64]).expect("v attn");
 
         // Self-Attention
-        let attn_opts = AttentionOpts { causal: false, window: None, bias: None, key_lens: None };
-        let attn_out = be.attention_forward(&q_attn, &k_attn, &v_attn, attn_opts).expect("self attn");
+        let attn_opts = AttentionOpts {
+            causal: false,
+            window: None,
+            bias: None,
+            key_lens: None,
+        };
+        let attn_out = be
+            .attention_forward(&q_attn, &k_attn, &v_attn, attn_opts)
+            .expect("self attn");
         assert_eq!(attn_out.shape(), &[1, 1, 4, 64]);
         let attn_tokens = attn_out.reshape(&[1, 4, 1, 64]).expect("attn tokens");
 
         // Residual + LayerNorm
-        let res1 = be.residual_add_forward(&tokens, &attn_tokens).expect("res1");
+        let res1 = be
+            .residual_add_forward(&tokens, &attn_tokens)
+            .expect("res1");
         let ln_gamma = upload(&be, &vec![1.0f32; 64], &[64]);
         let ln_beta = upload(&be, &vec![0.0f32; 64], &[64]);
-        let ln1 = be.layer_norm_forward(&res1, &ln_gamma, &ln_beta, 1e-5).expect("ln1");
+        let ln1 = be
+            .layer_norm_forward(&res1, &ln_gamma, &ln_beta, 1e-5)
+            .expect("ln1");
 
         // MLP: Linear(64->128) -> GELU -> Linear(128->64)
         let ln1_flat = ln1.reshape(&[4, 64]).expect("flat tokens");
@@ -101,18 +127,28 @@ fn tier4_scenario_a_sam31_video_tracker_multiplex_pipeline() {
         let h_act = be.gelu_erf_forward(&h_up).expect("mlp gelu");
         let h_down = be.linear_forward(&h_act, &w_down).expect("mlp down");
         let h_down_shaped = h_down.reshape(&[1, 4, 1, 64]).expect("mlp shaped");
-        let trunk_out = be.residual_add_forward(&ln1, &h_down_shaped).expect("trunk res");
+        let trunk_out = be
+            .residual_add_forward(&ln1, &h_down_shaped)
+            .expect("trunk res");
 
         // Step 3: FPN Neck
         // Reshape to spatial [1, 64, 2, 2]
         let trunk_spatial = trunk_out.reshape(&[1, 64, 2, 2]).expect("trunk spatial");
         // Transposed Conv2d: 2x upsample to [1, 32, 4, 4]
         let w_tconv = upload(&be, &varied_vector(64 * 32 * 2 * 2, 0.05), &[64, 32, 2, 2]);
-        let tparams = ConvTranspose2dParams { stride: [2, 2], padding: [0, 0], output_padding: [0, 0] };
-        let fpn_up = be.conv_transpose2d_forward(&trunk_spatial, &w_tconv, None, tparams).expect("fpn up");
+        let tparams = ConvTranspose2dParams {
+            stride: [2, 2],
+            padding: [0, 0],
+            output_padding: [0, 0],
+        };
+        let fpn_up = be
+            .conv_transpose2d_forward(&trunk_spatial, &w_tconv, None, tparams)
+            .expect("fpn up");
         assert_eq!(fpn_up.shape(), &[1, 32, 4, 4]);
         // MaxPool2d downsampling to [1, 32, 2, 2]
-        let fpn_pool = be.max_pool2d_forward(&fpn_up, [2, 2], [2, 2]).expect("fpn maxpool");
+        let fpn_pool = be
+            .max_pool2d_forward(&fpn_up, [2, 2], [2, 2])
+            .expect("fpn maxpool");
         assert_eq!(fpn_pool.shape(), &[1, 32, 2, 2]);
 
         // Step 4: SAM Memory Cross-Attention
@@ -120,25 +156,43 @@ fn tier4_scenario_a_sam31_video_tracker_multiplex_pipeline() {
         let curr_q = fpn_pool.reshape(&[1, 1, 4, 32]).expect("curr q");
         let mem_k = upload(&be, &varied_vector(1 * 1 * 16 * 32, 0.05), &[1, 1, 16, 32]);
         let mem_v = upload(&be, &varied_vector(1 * 1 * 16 * 32, 0.05), &[1, 1, 16, 32]);
-        let mem_opts = AttentionOpts { causal: false, window: None, bias: None, key_lens: None };
-        let mem_out = be.attention_forward(&curr_q, &mem_k, &mem_v, mem_opts).expect("mem attn");
+        let mem_opts = AttentionOpts {
+            causal: false,
+            window: None,
+            bias: None,
+            key_lens: None,
+        };
+        let mem_out = be
+            .attention_forward(&curr_q, &mem_k, &mem_v, mem_opts)
+            .expect("mem attn");
         assert_eq!(mem_out.shape(), &[1, 1, 4, 32]);
 
         // Step 5: DETR Box & Mask Decoder
         // Additive boxRPB bias attention: bias is [1, 1, 4, 4]
         let rpb_bias = upload(&be, &varied_vector(1 * 1 * 4 * 4, 0.02), &[1, 1, 4, 4]);
-        let detr_opts = AttentionOpts { causal: false, window: None, bias: Some(&rpb_bias), key_lens: None };
-        let detr_out = be.attention_forward(&mem_out, &mem_out, &mem_out, detr_opts).expect("detr attn");
+        let detr_opts = AttentionOpts {
+            causal: false,
+            window: None,
+            bias: Some(&rpb_bias),
+            key_lens: None,
+        };
+        let detr_out = be
+            .attention_forward(&mem_out, &mem_out, &mem_out, detr_opts)
+            .expect("detr attn");
 
         // GroupNorm: [1, 32, 2, 2] with 4 groups
         let mask_feat = detr_out.reshape(&[1, 32, 2, 2]).expect("mask feat");
         let gn_w = upload(&be, &vec![1.0f32; 32], &[32]);
         let gn_b = upload(&be, &vec![0.0f32; 32], &[32]);
-        let norm_feat = be.group_norm_forward(&mask_feat, &gn_w, &gn_b, 4, 1e-5).expect("group norm");
+        let norm_feat = be
+            .group_norm_forward(&mask_feat, &gn_w, &gn_b, 4, 1e-5)
+            .expect("group norm");
         assert_eq!(norm_feat.shape(), &[1, 32, 2, 2]);
 
         // Bilinear upsampling: 2x2 -> 8x8 high-resolution mask logits
-        let mask_logits = be.interpolate_bilinear_forward(&norm_feat, [8, 8], false).expect("bilinear up");
+        let mask_logits = be
+            .interpolate_bilinear_forward(&norm_feat, [8, 8], false)
+            .expect("bilinear up");
         assert_eq!(mask_logits.shape(), &[1, 32, 8, 8]);
 
         let host_logits = host(&be, &mask_logits);
@@ -153,7 +207,10 @@ fn tier4_scenario_a_sam31_video_tracker_multiplex_pipeline() {
 
     // Verify bit-exact determinism on second frame
     let (logits_frame1, _) = run_frame_step();
-    assert_eq!(logits_frame0, logits_frame1, "Pipeline execution must be bit-deterministic under Numerics::Exact");
+    assert_eq!(
+        logits_frame0, logits_frame1,
+        "Pipeline execution must be bit-deterministic under Numerics::Exact"
+    );
 
     // Execute 10 consecutive frame multiplex steps to verify zero memory leaks
     for _ in 0..10 {
@@ -215,17 +272,28 @@ fn tier4_scenario_b_gemma_embedding_production_inference_pipeline() {
 
     // Per-head Query and Key RMSNorm
     let rms_scale = upload(&be, &vec![1.0f32; 16], &[16]);
-    let (q_norm, k_norm) = be.rms_qk_norm_forward(&q, &k, &rms_scale, &rms_scale, 1e-6).expect("qk norm");
+    let (q_norm, k_norm) = be
+        .rms_qk_norm_forward(&q, &k, &rms_scale, &rms_scale, 1e-6)
+        .expect("qk norm");
 
     // Local Sliding Window Attention (W=4, causal=true)
-    let attn_opts = AttentionOpts { causal: true, window: Some(4), bias: None, key_lens: None };
-    let attn_out = be.attention_forward(&q_norm, &k_norm, &v, attn_opts).expect("window attn");
+    let attn_opts = AttentionOpts {
+        causal: true,
+        window: Some(4),
+        bias: None,
+        key_lens: None,
+    };
+    let attn_out = be
+        .attention_forward(&q_norm, &k_norm, &v, attn_opts)
+        .expect("window attn");
     assert_eq!(attn_out.shape(), &[2, 4, 16, 16]);
 
     // Permute back to [Batch=2, Tokens=16, Heads=4, Dim=16] and flatten heads to [2, 16, 64]
     let attn_bthd = be.permute(&attn_out, &[0, 2, 1, 3]).expect("attn bthd");
     let attn_merged = attn_bthd.reshape(&[2, 16, 64]).expect("attn merged");
-    let res1 = be.residual_add_forward(&tokens, &attn_merged).expect("res1");
+    let res1 = be
+        .residual_add_forward(&tokens, &attn_merged)
+        .expect("res1");
 
     // GeGLU Feedforward: gate * gelu(up) -> linear down
     let res1_flat = res1.reshape(&[32, 64]).expect("flat res1");
@@ -244,7 +312,9 @@ fn tier4_scenario_b_gemma_embedding_production_inference_pipeline() {
     let encoder_out = be.residual_add_forward(&res1, &ffn_shaped).expect("res2");
     let ln_w = upload(&be, &vec![1.0f32; 64], &[64]);
     let ln_b = upload(&be, &vec![0.0f32; 64], &[64]);
-    let norm_out = be.layer_norm_forward(&encoder_out, &ln_w, &ln_b, 1e-6).expect("final ln");
+    let norm_out = be
+        .layer_norm_forward(&encoder_out, &ln_w, &ln_b, 1e-6)
+        .expect("final ln");
 
     // Step 4: Masked Sequence Mean Pooling
     // Sequence 0 has valid tokens [0..10], Sequence 1 has valid tokens [0..16]
@@ -274,15 +344,28 @@ fn tier4_scenario_b_gemma_embedding_production_inference_pipeline() {
             let truncated_slice = &full_emb[..d];
 
             // Compute L2 norm
-            let sum_sq: f64 = truncated_slice.iter().map(|&v| f64::from(v) * f64::from(v)).sum();
+            let sum_sq: f64 = truncated_slice
+                .iter()
+                .map(|&v| f64::from(v) * f64::from(v))
+                .sum();
             let norm = sum_sq.sqrt();
-            assert!(norm > 0.0, "Norm must be strictly positive for seq {seq_idx}");
+            assert!(
+                norm > 0.0,
+                "Norm must be strictly positive for seq {seq_idx}"
+            );
 
             // L2 normalize
-            let normalized: Vec<f32> = truncated_slice.iter().map(|&v| (f64::from(v) / norm) as f32).collect();
+            let normalized: Vec<f32> = truncated_slice
+                .iter()
+                .map(|&v| (f64::from(v) / norm) as f32)
+                .collect();
 
             // Verify Unit Sphere Norm condition: ||y||_2 = 1.0 ± 1e-6
-            let final_norm: f64 = normalized.iter().map(|&v| (v as f64) * (v as f64)).sum::<f64>().sqrt();
+            let final_norm: f64 = normalized
+                .iter()
+                .map(|&v| (v as f64) * (v as f64))
+                .sum::<f64>()
+                .sqrt();
             assert!(
                 (final_norm - 1.0).abs() < 1e-6,
                 "Unit sphere normalization failed for d={d}, seq={seq_idx}: got {final_norm}"
@@ -322,12 +405,18 @@ fn tier4_scenario_c_pipeline_budget_scoping_and_trim() {
 
     // Embedding pipeline budget should not be affected by tracker allocations
     let embed_live = be_embed.budget().live_bytes().expect("embed live");
-    assert_eq!(embed_live, 0, "Embedding pipeline budget must remain isolated");
+    assert_eq!(
+        embed_live, 0,
+        "Embedding pipeline budget must remain isolated"
+    );
 
     // Dropping tracker tensor frees tracker budget
     drop(t1);
     let tracker_after = be_tracker.budget().live_bytes().expect("tracker after");
-    assert_eq!(tracker_after, 0, "Dropping pipeline tensors must free memory");
+    assert_eq!(
+        tracker_after, 0,
+        "Dropping pipeline tensors must free memory"
+    );
 }
 
 /// Scenario D: Strict No Silent Fallback & Placement Integrity
@@ -342,11 +431,22 @@ fn tier4_scenario_d_no_silent_fallback_placement_invariance() {
     // Attempting an op with an unsupported shape or invalid dimension must fail closed
     let empty_shape: &[usize] = &[];
     let res = t.reshape(empty_shape);
-    assert!(res.is_err(), "Empty shape reshape must fail closed with OjasError");
+    assert!(
+        res.is_err(),
+        "Empty shape reshape must fail closed with OjasError"
+    );
 
     // Conv2d with invalid kernel layout must fail closed with OjasError::Shape
     let invalid_weight = upload(&be, &[1.0, 2.0], &[2]); // 1D instead of 4D
-    let params = Conv2dParams { stride: [1, 1], padding: [0, 0], dilation: [1, 1], groups: 1 };
+    let params = Conv2dParams {
+        stride: [1, 1],
+        padding: [0, 0],
+        dilation: [1, 1],
+        groups: 1,
+    };
     let conv_res = be.conv2d_forward(&t, &invalid_weight, None, params);
-    assert!(matches!(conv_res, Err(OjasError::Shape { .. })), "Invalid conv weight shape must return OjasError::Shape");
+    assert!(
+        matches!(conv_res, Err(OjasError::Shape { .. })),
+        "Invalid conv weight shape must return OjasError::Shape"
+    );
 }

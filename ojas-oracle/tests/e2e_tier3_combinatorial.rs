@@ -23,7 +23,10 @@ fn cpu() -> CpuBackend {
 }
 
 fn host(be: &CpuBackend, t: &Tensor) -> Vec<f32> {
-    be.download(t).expect("download").to_f32_vec().expect("to_f32_vec")
+    be.download(t)
+        .expect("download")
+        .to_f32_vec()
+        .expect("to_f32_vec")
 }
 
 fn upload(be: &CpuBackend, data: &[f32], shape: &[usize]) -> Tensor {
@@ -37,7 +40,9 @@ fn tier3_01_rope_with_window_partition_attention_and_merge() {
     // Grid 8x8, window size 4 (2x2 = 4 windows)
     let (h, w, window) = (8usize, 8usize, 4usize);
     let channels = 16usize; // 4 heads * 4 dim
-    let x_data: Vec<f32> = (0..1 * h * w * channels).map(|i| (i as f32) * 0.01).collect();
+    let x_data: Vec<f32> = (0..1 * h * w * channels)
+        .map(|i| (i as f32) * 0.01)
+        .collect();
     let x = upload(&be, &x_data, &[1, h, w, channels]);
 
     // 1. Partition into windows: [4 windows, 4, 4, 16]
@@ -48,12 +53,20 @@ fn tier3_01_rope_with_window_partition_attention_and_merge() {
     let tokens = parts.reshape(&[4, 16, 4, 4]).expect("tokens");
 
     // 2. Apply 2D RoPE per window
-    let (cos, sin) = axial_rope_2d_tables(4, window, window, 10_000.0, 1.0, be.budget()).expect("tables");
-    let rotated = be.rope_interleaved_forward(&tokens, &cos, &sin).expect("rope");
+    let (cos, sin) =
+        axial_rope_2d_tables(4, window, window, 10_000.0, 1.0, be.budget()).expect("tables");
+    let rotated = be
+        .rope_interleaved_forward(&tokens, &cos, &sin)
+        .expect("rope");
 
     // 3. Windowed Attention: transpose to [4, 4 heads, 16 tokens, 4 dim]
     let q = be.permute(&rotated, &[0, 2, 1, 3]).expect("permute");
-    let opts = AttentionOpts { causal: false, window: None, key_lens: None, bias: None };
+    let opts = AttentionOpts {
+        causal: false,
+        window: None,
+        key_lens: None,
+        bias: None,
+    };
     let attn_out = be.attention_forward(&q, &q, &q, opts).expect("attn");
     assert_eq!(attn_out.shape(), &[4, 4, 16, 4]);
 
@@ -73,14 +86,23 @@ fn tier3_02_conv2d_patch_embed_into_channel_layernorm2d() {
     let img = upload(&be, &vec![0.5f32; 1 * 3 * 28 * 28], &[1, 3, 28, 28]);
     // Patch embed: k=14, s=14, out_channels=16
     let weight = upload(&be, &vec![0.02f32; 16 * 3 * 14 * 14], &[16, 3, 14, 14]);
-    let params = Conv2dParams { stride: [14, 14], padding: [0, 0], dilation: [1, 1], groups: 1 };
-    let patches = be.conv2d_forward(&img, &weight, None, params).expect("conv");
+    let params = Conv2dParams {
+        stride: [14, 14],
+        padding: [0, 0],
+        dilation: [1, 1],
+        groups: 1,
+    };
+    let patches = be
+        .conv2d_forward(&img, &weight, None, params)
+        .expect("conv");
     assert_eq!(patches.shape(), &[1, 16, 2, 2]);
 
     // LayerNorm2D over channels
     let gamma = upload(&be, &vec![1.0f32; 16], &[16]);
     let beta = upload(&be, &vec![0.0f32; 16], &[16]);
-    let norm = be.channel_layer_norm_forward(&patches, &gamma, &beta, 1e-6).expect("ln2d");
+    let norm = be
+        .channel_layer_norm_forward(&patches, &gamma, &beta, 1e-6)
+        .expect("ln2d");
     assert_eq!(norm.shape(), &[1, 16, 2, 2]);
 
     let data = host(&be, &norm);
@@ -126,12 +148,20 @@ fn tier3_04_transposed_conv2d_into_maxpool2d() {
     let x = upload(&be, &vec![1.0f32; 1 * 2 * 4 * 4], &[1, 2, 4, 4]);
     // Transposed conv upsampling 2x: k=2, s=2 -> [1, 2, 8, 8]
     let w_tconv = upload(&be, &vec![0.5f32; 2 * 2 * 2 * 2], &[2, 2, 2, 2]);
-    let tparams = ConvTranspose2dParams { stride: [2, 2], padding: [0, 0], output_padding: [0, 0] };
-    let upsampled = be.conv_transpose2d_forward(&x, &w_tconv, None, tparams).expect("tconv");
+    let tparams = ConvTranspose2dParams {
+        stride: [2, 2],
+        padding: [0, 0],
+        output_padding: [0, 0],
+    };
+    let upsampled = be
+        .conv_transpose2d_forward(&x, &w_tconv, None, tparams)
+        .expect("tconv");
     assert_eq!(upsampled.shape(), &[1, 2, 8, 8]);
 
     // Max pooling 2x: k=2, s=2 -> [1, 2, 4, 4]
-    let pooled = be.max_pool2d_forward(&upsampled, [2, 2], [2, 2]).expect("maxpool");
+    let pooled = be
+        .max_pool2d_forward(&upsampled, [2, 2], [2, 2])
+        .expect("maxpool");
     assert_eq!(pooled.shape(), &[1, 2, 4, 4]);
     let data = host(&be, &pooled);
     for v in data {
@@ -145,13 +175,17 @@ fn tier3_05_bilinear_interpolation_into_group_norm() {
     // [1, 4 channels, 4, 4]
     let x = upload(&be, &vec![1.0f32; 1 * 4 * 4 * 4], &[1, 4, 4, 4]);
     // Bilinear 2x upsample -> [1, 4, 8, 8]
-    let upsampled = be.interpolate_bilinear_forward(&x, [8, 8], false).expect("bilinear");
+    let upsampled = be
+        .interpolate_bilinear_forward(&x, [8, 8], false)
+        .expect("bilinear");
     assert_eq!(upsampled.shape(), &[1, 4, 8, 8]);
 
     // GroupNorm with 2 groups (2 channels per group)
     let gamma = upload(&be, &vec![1.0f32; 4], &[4]);
     let beta = upload(&be, &vec![0.0f32; 4], &[4]);
-    let norm = be.group_norm_forward(&upsampled, &gamma, &beta, 2, 1e-5).expect("gn");
+    let norm = be
+        .group_norm_forward(&upsampled, &gamma, &beta, 2, 1e-5)
+        .expect("gn");
     assert_eq!(norm.shape(), &[1, 4, 8, 8]);
     let data = host(&be, &norm);
     assert!(data.iter().all(|v| v.is_finite()));
@@ -173,7 +207,9 @@ fn tier3_06_additive_bias_attention_with_window_masking() {
         key_lens: None,
         bias: Some(&bias),
     };
-    let out = be.attention_forward(&q, &k, &v, opts).expect("biased window attn");
+    let out = be
+        .attention_forward(&q, &k, &v, opts)
+        .expect("biased window attn");
     assert_eq!(out.shape(), &[1, 2, 8, 16]);
     let data = host(&be, &out);
     assert!(data.iter().all(|v| v.is_finite()));
@@ -199,9 +235,19 @@ fn tier3_07_multilayer_projection_into_matryoshka_l2_norm() {
         }
         let norm = sum_sq.sqrt();
         assert!(norm > 0.0);
-        let normalized: Vec<f32> = slice.iter().map(|&v| (f64::from(v) / norm) as f32).collect();
-        let final_norm = normalized.iter().map(|&v| (v as f64) * (v as f64)).sum::<f64>().sqrt();
-        assert!((final_norm - 1.0).abs() < 1e-5, "unit sphere norm must be 1.0, got {final_norm}");
+        let normalized: Vec<f32> = slice
+            .iter()
+            .map(|&v| (f64::from(v) / norm) as f32)
+            .collect();
+        let final_norm = normalized
+            .iter()
+            .map(|&v| (v as f64) * (v as f64))
+            .sum::<f64>()
+            .sqrt();
+        assert!(
+            (final_norm - 1.0).abs() < 1e-5,
+            "unit sphere norm must be 1.0, got {final_norm}"
+        );
     }
 }
 
@@ -227,8 +273,12 @@ fn tier3_08_fused_qkv_linear_into_rope_interleaved() {
 
     // Apply 2D RoPE
     let (cos, sin) = axial_rope_2d_tables(4, 4, 4, 10_000.0, 1.0, be.budget()).expect("tables");
-    let q_rot = be.rope_interleaved_forward(&q_heads, &cos, &sin).expect("q rot");
-    let k_rot = be.rope_interleaved_forward(&k_heads, &cos, &sin).expect("k rot");
+    let q_rot = be
+        .rope_interleaved_forward(&q_heads, &cos, &sin)
+        .expect("q rot");
+    let k_rot = be
+        .rope_interleaved_forward(&k_heads, &cos, &sin)
+        .expect("k rot");
     assert_eq!(q_rot.shape(), &[1, 16, 4, 4]);
     assert_eq!(k_rot.shape(), &[1, 16, 4, 4]);
 }

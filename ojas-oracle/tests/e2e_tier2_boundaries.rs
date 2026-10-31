@@ -16,7 +16,10 @@ fn cpu() -> CpuBackend {
 }
 
 fn host(be: &CpuBackend, t: &Tensor) -> Vec<f32> {
-    be.download(t).expect("download").to_f32_vec().expect("to_f32_vec")
+    be.download(t)
+        .expect("download")
+        .to_f32_vec()
+        .expect("to_f32_vec")
 }
 
 fn upload(be: &CpuBackend, data: &[f32], shape: &[usize]) -> Tensor {
@@ -81,11 +84,18 @@ fn tier2_feat1_05_rope_interleaved_nan_input_refused() {
 fn tier2_feat2_01_attention_zero_length_sequence_refused() {
     let be = cpu();
     let res = Tensor::from_f32(&[], &[1, 1, 0, 64], be.budget());
-    assert!(res.is_err() || {
-        let t = res.unwrap();
-        let opts = AttentionOpts { causal: false, window: None, key_lens: None, bias: None };
-        be.attention_forward(&t, &t, &t, opts).is_err()
-    });
+    assert!(
+        res.is_err() || {
+            let t = res.unwrap();
+            let opts = AttentionOpts {
+                causal: false,
+                window: None,
+                key_lens: None,
+                bias: None,
+            };
+            be.attention_forward(&t, &t, &t, opts).is_err()
+        }
+    );
 }
 
 #[test]
@@ -98,7 +108,12 @@ fn tier2_feat2_02_attention_nan_query_refused() {
         let up_res = be.upload(&q);
         if let Ok(uploaded_q) = up_res {
             let k = upload(&be, &vec![0.1f32; 64], &[1, 1, 1, 64]);
-            let opts = AttentionOpts { causal: false, window: None, key_lens: None, bias: None };
+            let opts = AttentionOpts {
+                causal: false,
+                window: None,
+                key_lens: None,
+                bias: None,
+            };
             let res = be.attention_forward(&uploaded_q, &k, &k, opts);
             assert!(matches!(res, Err(OjasError::NonFinite { .. })));
         }
@@ -113,7 +128,12 @@ fn tier2_feat2_03_attention_inf_key_refused() {
     k_data[5] = f32::INFINITY;
     if let Ok(k) = Tensor::from_f32(&k_data, &[1, 1, 1, 64], be.budget()) {
         if let Ok(uploaded_k) = be.upload(&k) {
-            let opts = AttentionOpts { causal: false, window: None, key_lens: None, bias: None };
+            let opts = AttentionOpts {
+                causal: false,
+                window: None,
+                key_lens: None,
+                bias: None,
+            };
             let res = be.attention_forward(&q, &uploaded_k, &q, opts);
             assert!(matches!(res, Err(OjasError::NonFinite { .. })));
         }
@@ -125,7 +145,12 @@ fn tier2_feat2_04_attention_dimension_mismatch() {
     let be = cpu();
     let q = upload(&be, &vec![0.1f32; 64], &[1, 1, 1, 64]);
     let k = upload(&be, &vec![0.1f32; 32], &[1, 1, 1, 32]); // Head dim mismatch
-    let opts = AttentionOpts { causal: false, window: None, key_lens: None, bias: None };
+    let opts = AttentionOpts {
+        causal: false,
+        window: None,
+        key_lens: None,
+        bias: None,
+    };
     let res = be.attention_forward(&q, &k, &k, opts);
     assert!(matches!(res, Err(OjasError::Shape { .. })));
 }
@@ -137,7 +162,12 @@ fn tier2_feat2_05_attention_prime_dimensions() {
     let q = upload(&be, &vec![0.01f32; 1 * 2 * 37 * 32], &[1, 2, 37, 32]);
     let k = upload(&be, &vec![0.01f32; 1 * 2 * 43 * 32], &[1, 2, 43, 32]);
     let v = upload(&be, &vec![0.01f32; 1 * 2 * 43 * 32], &[1, 2, 43, 32]);
-    let opts = AttentionOpts { causal: false, window: None, key_lens: None, bias: None };
+    let opts = AttentionOpts {
+        causal: false,
+        window: None,
+        key_lens: None,
+        bias: None,
+    };
     let out = be.attention_forward(&q, &k, &v, opts).expect("prime dims");
     assert_eq!(out.shape(), &[1, 2, 37, 32]);
 }
@@ -153,7 +183,10 @@ fn tier2_feat3_01_layernorm_nan_eps_refused() {
     let w = upload(&be, &[1.0, 1.0, 1.0], &[3]);
     let b = upload(&be, &[0.0, 0.0, 0.0], &[3]);
     let res = be.layer_norm_forward(&x, &w, &b, f32::NAN);
-    assert!(matches!(res, Err(OjasError::NonFinite { .. })), "NaN epsilon must be rejected");
+    assert!(
+        matches!(res, Err(OjasError::NonFinite { .. })),
+        "NaN epsilon must be rejected"
+    );
 }
 
 #[test]
@@ -163,7 +196,10 @@ fn tier2_feat3_02_layernorm_inf_eps_refused() {
     let w = upload(&be, &[1.0, 1.0, 1.0], &[3]);
     let b = upload(&be, &[0.0, 0.0, 0.0], &[3]);
     let res = be.layer_norm_forward(&x, &w, &b, f32::INFINITY);
-    assert!(matches!(res, Err(OjasError::NonFinite { .. })), "Inf epsilon must be rejected");
+    assert!(
+        matches!(res, Err(OjasError::NonFinite { .. })),
+        "Inf epsilon must be rejected"
+    );
 }
 
 #[test]
@@ -197,7 +233,9 @@ fn tier2_feat3_05_layernorm_extreme_scale_values() {
     let x = upload(&be, &[1e15f32, 2e15, 3e15, 4e15], &[1, 1, 4]);
     let w = upload(&be, &[1.0; 4], &[4]);
     let b = upload(&be, &[0.0; 4], &[4]);
-    let out = be.layer_norm_forward(&x, &w, &b, 1e-5).expect("large values");
+    let out = be
+        .layer_norm_forward(&x, &w, &b, 1e-5)
+        .expect("large values");
     let data = host(&be, &out);
     assert!(data.iter().all(|v| v.is_finite()));
 }
@@ -211,9 +249,17 @@ fn tier2_feat4_01_conv2d_kernel_larger_than_image() {
     let be = cpu();
     let x = upload(&be, &[1.0; 1 * 1 * 3 * 3], &[1, 1, 3, 3]);
     let w = upload(&be, &[1.0; 1 * 1 * 5 * 5], &[1, 1, 5, 5]); // k=5 > H=3
-    let params = Conv2dParams { stride: [1, 1], padding: [0, 0], dilation: [1, 1], groups: 1 };
+    let params = Conv2dParams {
+        stride: [1, 1],
+        padding: [0, 0],
+        dilation: [1, 1],
+        groups: 1,
+    };
     let res = be.conv2d_forward(&x, &w, None, params);
-    assert!(res.is_err(), "kernel larger than image without padding must fail");
+    assert!(
+        res.is_err(),
+        "kernel larger than image without padding must fail"
+    );
 }
 
 #[test]
@@ -221,7 +267,12 @@ fn tier2_feat4_02_conv2d_zero_stride_refused() {
     let be = cpu();
     let x = upload(&be, &[1.0; 1 * 1 * 4 * 4], &[1, 1, 4, 4]);
     let w = upload(&be, &[1.0; 1 * 1 * 2 * 2], &[1, 1, 2, 2]);
-    let params = Conv2dParams { stride: [0, 1], padding: [0, 0], dilation: [1, 1], groups: 1 };
+    let params = Conv2dParams {
+        stride: [0, 1],
+        padding: [0, 0],
+        dilation: [1, 1],
+        groups: 1,
+    };
     let res = be.conv2d_forward(&x, &w, None, params);
     assert!(res.is_err(), "stride 0 must fail");
 }
@@ -232,7 +283,11 @@ fn tier2_feat4_03_conv_transpose2d_output_padding_ge_stride_refused() {
     let x = upload(&be, &[1.0; 1 * 1 * 4 * 4], &[1, 1, 4, 4]);
     let w = upload(&be, &[1.0; 1 * 1 * 2 * 2], &[1, 1, 2, 2]);
     // output padding 2 >= stride 2 must be refused
-    let params = ConvTranspose2dParams { stride: [2, 2], padding: [0, 0], output_padding: [2, 0] };
+    let params = ConvTranspose2dParams {
+        stride: [2, 2],
+        padding: [0, 0],
+        output_padding: [2, 0],
+    };
     let res = be.conv_transpose2d_forward(&x, &w, None, params);
     assert!(res.is_err());
 }
@@ -243,7 +298,12 @@ fn tier2_feat4_04_conv2d_nan_weight_refused() {
     let x = upload(&be, &[1.0; 1 * 1 * 4 * 4], &[1, 1, 4, 4]);
     let mut w_data = vec![1.0f32; 4];
     w_data[2] = f32::NAN;
-    let params = Conv2dParams { stride: [1, 1], padding: [0, 0], dilation: [1, 1], groups: 1 };
+    let params = Conv2dParams {
+        stride: [1, 1],
+        padding: [0, 0],
+        dilation: [1, 1],
+        groups: 1,
+    };
     if let Ok(w) = Tensor::from_f32(&w_data, &[1, 1, 2, 2], be.budget()) {
         if let Ok(uploaded_w) = be.upload(&w) {
             let res = be.conv2d_forward(&x, &uploaded_w, None, params);
@@ -257,7 +317,12 @@ fn tier2_feat4_05_conv2d_channel_mismatch() {
     let be = cpu();
     let x = upload(&be, &[1.0; 1 * 3 * 4 * 4], &[1, 3, 4, 4]);
     let w = upload(&be, &[1.0; 1 * 4 * 2 * 2], &[1, 4, 2, 2]); // in_channels 4 != 3
-    let params = Conv2dParams { stride: [1, 1], padding: [0, 0], dilation: [1, 1], groups: 1 };
+    let params = Conv2dParams {
+        stride: [1, 1],
+        padding: [0, 0],
+        dilation: [1, 1],
+        groups: 1,
+    };
     let res = be.conv2d_forward(&x, &w, None, params);
     assert!(matches!(res, Err(OjasError::Shape { .. })));
 }
@@ -313,7 +378,9 @@ fn tier2_feat5_05_group_norm_single_channel_single_group() {
     let x = upload(&be, &[1.0, 2.0, 3.0, 4.0], &[1, 1, 2, 2]);
     let w = upload(&be, &[1.0], &[1]);
     let b = upload(&be, &[0.0], &[1]);
-    let out = be.group_norm_forward(&x, &w, &b, 1, 1e-5).expect("gn instance");
+    let out = be
+        .group_norm_forward(&x, &w, &b, 1, 1e-5)
+        .expect("gn instance");
     assert_eq!(out.shape(), &[1, 1, 2, 2]);
 }
 
@@ -362,7 +429,9 @@ fn tier2_feat6_04_max_pool2d_nan_input_refused() {
 fn tier2_feat6_05_max_pool2d_unit_dimension() {
     let be = cpu();
     let x = upload(&be, &[42.0], &[1, 1, 1, 1]);
-    let out = be.max_pool2d_forward(&x, [1, 1], [1, 1]).expect("unit pool");
+    let out = be
+        .max_pool2d_forward(&x, [1, 1], [1, 1])
+        .expect("unit pool");
     assert_eq!(out.shape(), &[1, 1, 1, 1]);
 }
 

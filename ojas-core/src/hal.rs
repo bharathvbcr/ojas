@@ -309,7 +309,11 @@ pub trait Timeline: Send + Sync {
     }
 
     /// Block until `value` is reached or timeout expires.
-    fn wait_for(&self, value: u64, _timeout: Option<std::time::Duration>) -> Result<(), AllocError> {
+    fn wait_for(
+        &self,
+        value: u64,
+        _timeout: Option<std::time::Duration>,
+    ) -> Result<(), AllocError> {
         match self.wait(value) {
             Ok(()) => Ok(()),
             Err(FenceError::TimedOut { value, completed }) => Err(AllocError::DeviceLost {
@@ -557,15 +561,14 @@ mod tests {
                 "completed",
                 refused_op(timeline.completed().unwrap_err()) == Some("Timeline::completed"),
             ),
-            (
-                "Timeline",
-                "current_value",
-                timeline.current_value() == 0,
-            ),
+            ("Timeline", "current_value", timeline.current_value() == 0),
             (
                 "Timeline",
                 "wait_for",
-                matches!(timeline.wait_for(1, None), Err(AllocError::DeviceLost { .. })),
+                matches!(
+                    timeline.wait_for(1, None),
+                    Err(AllocError::DeviceLost { .. })
+                ),
             ),
             (
                 "Timeline",
@@ -598,16 +601,8 @@ mod tests {
                 "as_u32_mut",
                 is_unsupported(&lease.as_u32_mut().unwrap_err(), "HostLeaseMut::as_u32_mut"),
             ),
-            (
-                "MappedBuffer",
-                "host_ptr",
-                plain.host_ptr().is_null(),
-            ),
-            (
-                "MappedBuffer",
-                "gpu_address",
-                plain.gpu_address() == 0,
-            ),
+            ("MappedBuffer", "host_ptr", plain.host_ptr().is_null()),
+            ("MappedBuffer", "gpu_address", plain.gpu_address() == 0),
             (
                 "MappedBuffer",
                 "timeline",

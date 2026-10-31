@@ -68,7 +68,7 @@ var docCategory = map[string]string{
 }
 
 // docSkip lists docs that describe the site itself and are not part of the library.
-var docSkip = map[string]bool{"web-and-domain": true}
+var docSkip = map[string]bool{"web-and-domain": true, "WORKFLOWS": true}
 
 type doc struct {
 	Slug, Src, Cat, Title, Desc string
