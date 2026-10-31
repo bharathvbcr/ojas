@@ -214,6 +214,8 @@
 <ul>
 <li>Plain unmasked attention at D=32 and D=64 routes to <code>tessl encoder_attn</code> between permutes (e.g. 22.8 vs 606 ms at <code>[1, 16, 5184, 64]</code>).
 </li>
+<li>Head dim 32 cross-attention with no bias or key lengths and at least <code>flash_min_groups()</code> threadgroups runs the TensorOps flash kernel <code>ojas_attn_fwd_d32</code> in one dispatch, 28.7× to 40.5× faster than the forced scalar kernel (<code>bench/results/2026-10-27-attention-mpp</code>).
+</li>
 <li>For $T_q &lt; T_k$, the pad-q route zero-pads $Q$ to $T_k$ rows when $T_k \le 2.25 T_q$ at D=32/64 and slices the output.
 </li>
 <li>Head dims 16 and 32 with bias run split-K tiled kernels (<code>ojas_xattn_part_dD</code>, <code>ojas_xattn_combine_dD</code>), splitting key ranges across threadgroups to saturate the GPU for short queries.
@@ -225,6 +227,10 @@
 <li><strong>Spatial operators</strong>:
 <ul>
 <li><code>conv2d_forward</code>: arbitrary stride and padding using <code>ojas_im2col</code> scratch followed by tessl NT GEMM and <code>ojas_conv_nchw</code>; depthwise convolution (<code>groups == in == out</code>) runs the direct single-pass kernel <code>ojas_dwconv</code>.
+</li>
+<li><strong>1x1 Stride-1 Unpadded Route:</strong> When <code>kernel == 1</code>, <code>stride == 1</code>, <code>padding == 0</code>, <code>dilation == 1</code>, and <code>groups == 1</code>, <code>conv2d_forward</code> skips <code>im2col</code> scratch generation entirely and routes directly to tessl NN GEMM per image with no intermediate layout pass ($2.03\times$ speedup on f32, $2.1\times$ on bf16-exact at $[1, 256, 288, 288]$).
+</li>
+<li><strong>BF16 GEMM Lane Selection:</strong> <code>conv2d_forward</code> selects the bf16 GEMM lane (<code>Link::lane</code>) when operands are bf16-exact.
 </li>
 <li><code>conv_transpose2d_forward</code>: (kernel == stride) executed via <code>ojas_permute</code> to NHWC, tessl NN GEMM, and <code>ojas_convt_nchw</code>.
 </li>
@@ -270,6 +276,8 @@
 <ul>
 <li>The input and output finiteness checks are folded into those passes. Every element is still checked, including rows whose target is ignored.
 </li>
+<li>Collapsed rows where $p_t - 1$ rounds to 0 take the target-excluded cross-entropy form; standard rows pay zero extra passes via a uniform branch.
+</li>
 </ul>
 </li>
 <li><strong>Gradient accumulation</strong> (<code>ojas_acc_check</code>, <code>ojas_acc_apply</code>): <code>accumulate_grad</code> adds in place, with no new memory, when <code>acc</code> solely owns its buffer, and is checked as AdamW is.
@@ -283,6 +291,8 @@
 <li><strong>Linear cross-entropy</strong> (<code>ojas_lce_stats</code>, <code>ojas_lce_loss</code>, <code>ojas_lce_grad</code>, <code>ojas_add_into</code>): <code>linear_cross_entropy_mean</code> never holds more than one <code>[rows, cols]</code> logits tile.
 <ul>
 <li>tessl GEMMs make each tile, and a running (max, sum of exp) per row is merged across vocabulary tiles.
+</li>
+<li>Carries the target-excluded sum and takes its form on collapsed rows, avoiding precision collapse on highly confident logits.
 </li>
 <li>With gradients, a second pass remakes each tile (or, when one vocabulary tile covers V, reuses the tile the first pass left), turns it into the gradient of the logits, and adds both gradient GEMMs into the outputs.
 </li>
@@ -363,6 +373,8 @@
 <li><strong>Device Residency Invariant:</strong> No intermediate activations or gradients are downloaded to the host during <code>Step</code>. Only the 4-byte scalar loss is read back.
 </li>
 <li><strong>Deferred Faults</strong> (<code>docs/metal-deferred-faults.md</code>): an op whose kernels find a NaN or infinity returns <code>Ok</code>; the next <code>sync</code>, <code>download</code> or <code>clip_grad_norm</code> on the backend returns <code>OjasError::NonFinite</code> naming the first such op in recording order, once. Shape, dtype, placement, capacity, head-dim, range and token-id refusals stay immediate. Ops are recorded into one command buffer and wait only at those sync points, at reads and uploads made while work is recorded, and at memory and status-slab caps.
+</li>
+<li><strong>Memory Cap (<code>set_mem_cap</code>/<code>mem_cap</code>):</strong> the cap is the bytes allocated since the last waited commit at which the backend commits and waits. A lower cap trades resident memory for more waited commits; lowering it below the bytes already allocated, with work recorded, waits for one commit. A zero or over-budget cap is refused and leaves the cap unchanged, and the resource plan sets aside the uncharged <code>mem_cap</code> bytes (<code>tests/mem_cap_setter.rs</code>).
 </li>
 </ol>
 </aside>

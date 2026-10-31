@@ -251,6 +251,16 @@
 </li>
 </ul>
 </li>
+<li><strong>Encoder &amp; Vision Backward Passes, Fast Fused CE Exponentials &amp; Window Padding (since 2026-10-30):</strong>
+<ul>
+<li><strong>Encoder &amp; vision backward passes (<code>src/encoder_ops.rs</code>):</strong> Exact CPU backward passes for 7 core operations: <code>layer_norm_backward</code>, <code>channel_layer_norm_backward</code> (LayerNorm over channel dimension $[B, C, H, W]$), <code>gelu_erf_backward</code> (via <code>gelu_erf_backward_exact</code> computing the analytic Gaussian derivative and erf series), <code>linear_bias_backward</code> (evaluating $dX, dW, db$ simultaneously, with frozen weight $dW$ GEMM bypass), <code>broadcast_add_backward</code>, <code>broadcast_mul_backward</code>, and <code>softmax_backward</code>. Checked within tolerance against 31 PyTorch 2.15 golden cases (<code>ojas-oracle/fixtures/encoder_bwd/golden.txt</code>) and f64 finite differences in <code>tests/encoder_backward.rs</code>.
+</li>
+<li><strong>Fast fused cross-entropy exponentials (<code>src/fused_ce.rs</code>):</strong> Under <code>Numerics::Fast</code>, the fused cross-entropy takes the unfused Fast path&#39;s exponentials (<code>exp</code>, and the tile&#39;s <code>exp_sub_sum</code>), so it matches the composed Fast path on the same operands. A row whose standard target gradient $p_t - 1$ rounds to 0 takes the target-excluded form, with the loss through <code>log1p_exact</code>.
+</li>
+<li><strong>Window partition padding &amp; cropping (<code>ojas_core::spatial</code>):</strong> <code>window_partition</code> zero-pads the bottom and right edges when the window does not divide the image, and <code>window_merge</code> crops the padding back off; the padded path is built from <code>fill</code>, <code>concat</code> and <code>slice</code> (<code>tests/window_padding.rs</code>).
+</li>
+</ul>
+</li>
 </ol>
 </aside>
       </article>

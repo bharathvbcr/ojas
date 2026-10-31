@@ -306,6 +306,22 @@
 </li>
 <li><code>softmax_forward_dims</code>: validates last-axis row reductions (<code>RmsDims</code>).
 </li>
+<li>Backward validators (wave 8, 2026-10-30):
+<ul>
+<li><code>layer_norm_backward_dims</code> &amp; <code>channel_layer_norm_backward_dims</code>: validate <code>grad_output</code>, <code>input</code>, <code>weight</code>, and <code>bias</code> shapes, returning <code>RmsDims</code> or <code>ChannelLayerNormDims</code>.
+</li>
+<li><code>gelu_erf_backward_dims</code>: validates matching shapes for <code>input</code> and <code>grad_output</code>.
+</li>
+<li><code>linear_bias_backward_dims</code>: validates <code>input</code> (rank $\ge 2$), <code>weight</code> (rank 2), <code>bias</code> (rank 1 $[out]$), and <code>grad_output</code>, returning <code>LinearDims</code>.
+</li>
+<li><code>broadcast_add_backward_dims</code> &amp; <code>broadcast_mul_backward_dims</code>: validate broadcast compatibility of operands <code>a</code>, <code>b</code>, and <code>grad_output</code>, returning <code>BroadcastDims</code>.
+</li>
+<li><code>softmax_backward_dims</code>: validates matching shapes for <code>output</code> and <code>grad_output</code>, returning <code>RmsDims</code>.
+</li>
+<li><code>conv2d_backward_dims</code>, <code>conv_transpose2d_backward_dims</code>, and <code>max_pool2d_backward_dims</code> (in <code>ojas_core::spatial</code>): validate spatial operands, geometries, and gradient shapes prior to dispatch.
+</li>
+</ul>
+</li>
 </ul>
       </article>
       <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/shape-contract.md" rel="noopener"><code>docs/shape-contract.md</code></a>. If this page and the repository disagree, the repository wins.</p>

@@ -266,11 +266,13 @@
 </li>
 <li><strong>General attention:</strong> <code>attention_forward</code>, <code>attention_forward_saving</code>, and <code>attention_backward</code> with <code>AttentionOpts { causal, window, bias, key_lens }</code> for bidirectional attention, cross-attention ($T_q \ne T_k$), broadcastable additive score bias $[B, H, T_q, T_k]$, and key-length masks.
 </li>
-<li><strong>Spatial operations (<code>ojas_core::spatial</code>):</strong> <code>conv2d_forward</code>, <code>conv_transpose2d_forward</code>, <code>max_pool2d_forward</code>, <code>interpolate_bilinear_forward</code>, <code>rope_interleaved_forward</code>/<code>_backward</code>, and window partition/merge and pixel shuffle/unshuffle helpers.
+<li><strong>Spatial operations (<code>ojas_core::spatial</code>):</strong> forward and backward for <code>conv2d</code> and <code>conv_transpose2d</code>, <code>max_pool2d_forward</code>/<code>_backward</code>, <code>interpolate_bilinear_forward</code>, <code>rope_interleaved_forward</code>/<code>_backward</code>, and window partition/merge (supporting zero-padding for non-divisible dimensions) and pixel shuffle/unshuffle helpers.
 </li>
-<li><strong>Vision and encoder operations:</strong> <code>layer_norm_forward</code>, <code>channel_layer_norm_forward</code>, <code>group_norm_forward</code>, <code>gelu_erf_forward</code>, <code>relu_forward</code>, <code>linear_bias_forward</code>, <code>broadcast_add_forward</code>, <code>broadcast_mul_forward</code>, <code>scale_forward</code>, <code>softmax_forward</code>, <code>concat</code>, <code>slice</code>, and <code>fill</code>.
+<li><strong>Vision and encoder operations:</strong> forward and backward <code>layer_norm_forward</code>/<code>_backward</code>, <code>channel_layer_norm_forward</code>/<code>_backward</code>, <code>group_norm_forward</code>, <code>gelu_erf_forward</code>/<code>_backward</code>, <code>relu_forward</code>, <code>linear_bias_forward</code>/<code>_backward</code>, <code>broadcast_add_forward</code>/<code>_backward</code>, <code>broadcast_mul_forward</code>/<code>_backward</code>, <code>scale_forward</code>, <code>softmax_forward</code>/<code>_backward</code>, <code>concat</code>, <code>slice</code>, and <code>fill</code>.
 </li>
-<li><strong>Pure shape contract (<code>ojas_core::shapes</code>):</strong> Pure <code>*_dims</code> validators for every backend operation, evaluated before budget allocation or kernel dispatch to guarantee uniform error classification across backends.
+<li><strong>Numerics &amp; Exponentials (<code>ojas_core::exp_exact</code>):</strong> Bit-exact ascending exponential reductions, <code>ln_wide</code>, and <code>log1p_exact</code> providing stable loss evaluation for softmax collapse / target-excluded cross-entropy forms.
+</li>
+<li><strong>Pure shape contract (<code>ojas_core::shapes</code>):</strong> Pure <code>*_dims</code> validators for every backend operation (forward and backward), evaluated before budget allocation or kernel dispatch to guarantee uniform error classification across backends.
 </li>
 <li>Fused head cross-entropy computation (<code>linear_cross_entropy_mean</code>) and key-value cache operations.
 </li>

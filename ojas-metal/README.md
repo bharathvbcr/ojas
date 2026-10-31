@@ -66,11 +66,14 @@ Implements elementwise operations, vector arithmetic, and reduction passes requi
   * `ojas_permute` serves as the general fallback.
 * **General attention** (`attention_forward`, `attention_forward_saving`):
   * Plain unmasked attention at D=32 and D=64 routes to `tessl encoder_attn` between permutes (e.g. 22.8 vs 606 ms at `[1, 16, 5184, 64]`).
+  * Head dim 32 cross-attention with no bias or key lengths and at least `flash_min_groups()` threadgroups runs the TensorOps flash kernel `ojas_attn_fwd_d32` in one dispatch, 28.7× to 40.5× faster than the forced scalar kernel (`bench/results/2026-10-27-attention-mpp`).
   * For $T_q < T_k$, the pad-q route zero-pads $Q$ to $T_k$ rows when $T_k \le 2.25 T_q$ at D=32/64 and slices the output.
   * Head dims 16 and 32 with bias run split-K tiled kernels (`ojas_xattn_part_dD`, `ojas_xattn_combine_dD`), splitting key ranges across threadgroups to saturate the GPU for short queries.
   * General shapes, windowing, and causal cross-attention fall back to scalar `ojas_attn_gen_fwd` (one simdgroup per row, D ≤ 256).
 * **Spatial operators**:
   * `conv2d_forward`: arbitrary stride and padding using `ojas_im2col` scratch followed by tessl NT GEMM and `ojas_conv_nchw`; depthwise convolution (`groups == in == out`) runs the direct single-pass kernel `ojas_dwconv`.
+  * **1x1 Stride-1 Unpadded Route:** When `kernel == 1`, `stride == 1`, `padding == 0`, `dilation == 1`, and `groups == 1`, `conv2d_forward` skips `im2col` scratch generation entirely and routes directly to tessl NN GEMM per image with no intermediate layout pass ($2.03\times$ speedup on f32, $2.1\times$ on bf16-exact at $[1, 256, 288, 288]$).
+  * **BF16 GEMM Lane Selection:** `conv2d_forward` selects the bf16 GEMM lane (`Link::lane`) when operands are bf16-exact.
   * `conv_transpose2d_forward`: (kernel == stride) executed via `ojas_permute` to NHWC, tessl NN GEMM, and `ojas_convt_nchw`.
   * `interpolate_bilinear_forward`: `ojas_bilinear` computes taps directly in the shader for both `align_corners` modes with zero axis-table allocations.
   * `rope_interleaved_forward` / `_backward`: adjacent-pair rotation on `ojas_rope` mode 2, matching CPU axial 2D tables.
@@ -89,11 +92,13 @@ Implements elementwise operations, vector arithmetic, and reduction passes requi
   * The weight gradient is a two-stage, fixed-order reduction (64-row partials, then a sum per column), so it is deterministic.
 * **Cross-entropy** (`ojas_ce_fused`): two passes per row (an online max/sum, then the gradient) instead of five.
   * The input and output finiteness checks are folded into those passes. Every element is still checked, including rows whose target is ignored.
+  * Collapsed rows where $p_t - 1$ rounds to 0 take the target-excluded cross-entropy form; standard rows pay zero extra passes via a uniform branch.
 * **Gradient accumulation** (`ojas_acc_check`, `ojas_acc_apply`): `accumulate_grad` adds in place, with no new memory, when `acc` solely owns its buffer, and is checked as AdamW is.
   * A non-finite input or sum is refused at the next sync point and leaves `acc`'s values bit-identical.
   * A shared `acc` gets a new buffer (holding the old values if the sum was refused); the other handles keep the old values.
 * **Linear cross-entropy** (`ojas_lce_stats`, `ojas_lce_loss`, `ojas_lce_grad`, `ojas_add_into`): `linear_cross_entropy_mean` never holds more than one `[rows, cols]` logits tile.
   * tessl GEMMs make each tile, and a running (max, sum of exp) per row is merged across vocabulary tiles.
+  * Carries the target-excluded sum and takes its form on collapsed rows, avoiding precision collapse on highly confident logits.
   * With gradients, a second pass remakes each tile (or, when one vocabulary tile covers V, reuses the tile the first pass left), turns it into the gradient of the logits, and adds both gradient GEMMs into the outputs.
   * The loss equals the unfused composition's. Gradients that the chunk does not split are bit-equal; split ones differ in summation order only.
 * **KV cache** (`ojas_kv_write`, `ojas_cached_attn`):
@@ -147,3 +152,4 @@ flowchart LR
 > 2. **AdamW Step Counter Safety:** Step increments use checked integer math. When `step` reaches `u64::MAX`, the kernel halts with an error instead of wrapping to zero.
 > 3. **Device Residency Invariant:** No intermediate activations or gradients are downloaded to the host during `Step`. Only the 4-byte scalar loss is read back.
 > 4. **Deferred Faults** (`docs/metal-deferred-faults.md`): an op whose kernels find a NaN or infinity returns `Ok`; the next `sync`, `download` or `clip_grad_norm` on the backend returns `OjasError::NonFinite` naming the first such op in recording order, once. Shape, dtype, placement, capacity, head-dim, range and token-id refusals stay immediate. Ops are recorded into one command buffer and wait only at those sync points, at reads and uploads made while work is recorded, and at memory and status-slab caps.
+> 5. **Memory Cap (`set_mem_cap`/`mem_cap`):** the cap is the bytes allocated since the last waited commit at which the backend commits and waits. A lower cap trades resident memory for more waited commits; lowering it below the bytes already allocated, with work recorded, waits for one commit. A zero or over-budget cap is refused and leaves the cap unchanged, and the resource plan sets aside the uncharged `mem_cap` bytes (`tests/mem_cap_setter.rs`).

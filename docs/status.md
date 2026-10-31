@@ -48,6 +48,24 @@ Source: 120 commits from `83d7a29` to `6abdb31` on `main`, merging PR #1 (`dc212
 
 ---
 
+## Changes 2026-10-28 to 2026-10-30: Waves 6–8, Softmax Collapse, Encoder Backwards & Pointwise Conv (commits `6abdb31` to `571dc7d`)
+
+Source: 152 commits from `6abdb31` to `571dc7d` on `main`, covering waves 6 through 8 of session `ojas-78`.
+
+| Area | Commits | What changed |
+| :--- | :--- | :--- |
+| **Encoder & vision backwards** | `8ad430d`, `667c89b`, `cded7b8`, `0631e56` | Added seven `Backend` methods with default `Unsupported`: `layer_norm_backward`, `channel_layer_norm_backward`, `gelu_erf_backward`, `linear_bias_backward`, `broadcast_add_backward`, `broadcast_mul_backward`, `softmax_backward`, plus `AffineGrad` and `gelu_erf_backward_exact`. CPU implementations use ascending f64 sums rounded once. `Tape` ops wired: `Tape::layer_norm`, `channel_layer_norm`, `gelu_erf`, `linear_bias` (skips $dW$ when weight is frozen), `broadcast_add`, `broadcast_mul`, `scale`, `softmax`. Tested against 31 PyTorch 2.15 goldens (`ojas-oracle/fixtures/encoder_bwd/`). C-API gate pinned to 90 ops, 86 refused after cancel. `SAM_AUTOCAST_POLICY` expanded to 32 ops. |
+| **Pointwise Conv2d & bf16 lane** | `9ffe251`, `86efb70`, `571dc7d` | Metal `conv2d_forward` on 1x1 stride 1 pad 0 convs with one group executes directly as an NN GEMM per image without `ojas_im2col` or layout passes, saving memory and runtime (3.739 ms vs 7.592 ms in f32, 2.912 ms vs 6.136 ms in bf16-exact, over 2x speedup at `[1, 256, 288, 288]` 256 to 256 with bias). Conv2d selects the bf16 lane on bf16-exact operands via `Link::lane`. |
+| **Softmax collapse defense** | `f8ef7fd`, `1af6904`, `53aae0a`, `2526b03`, `ce5f9f9`, `94ff21f`, `e93fc5c` | Softmax collapse (narrow rule, ft-f40eeed8): when target logit is the maximum and standard $p_t - 1$ rounds to 0, all backends (CPU, Metal `ojas_ce_fused`/`ojas_lce_*`, wgpu `ce_*`/`lce_*`, and CUDA K10) take the target-excluded form using $S = \sum_{j \ne t} \exp(z_j - z_t)$, with loss $\ln(1+S)$ via `log1p_exact` in `ojas-core`. Standard rows pay no second reduction tree. |
+| **Budget-scoped readback counting** | `b9f6440`, `0b0df79`, `acadba8`, `6999e94` | The global process-wide `device_readbacks()` counter was removed in favor of `Budget::device_readbacks()`, eliminating test race conditions across threads and scoping audit counters to session budget trees. C-API tracks readbacks on session budget. |
+| **Fast fused CE exponentials** | `2e15abe`, `dade47a` | Under `Numerics::Fast`, CPU fused CE switches to Fast SIMD exponentials. Fast GEMM chain pinned per target. |
+| **TensorOps flash cross-attention** | `8b88328`, `821c874`, `2b14dca`, `ac5ec37` | Plain D=32 cross-attention (no bias/lens) on TensorOps hardware runs the flash kernel `ojas_attn_fwd_d32` in one dispatch once it launches at least `flash_min_groups()` threadgroups; fewer stay on split-K. 28.7× to 40.5× faster than the forced scalar kernel (`bench/results/2026-10-27-attention-mpp`). |
+| **Window partition padding** | `f8549e7`, `9e469b3` | `window_partition` pads bottom/right with zeros when image dimensions are not divisible by window size; `window_merge` crops back. Supported on CPU and Metal via `fill`, `concat`, and `slice`. |
+| **Metal memory cap API** | `7b6152b`, `fa1b328` | `MetalBackend::set_mem_cap(bytes)` and `mem_cap()` promoted to public documented API. `ResourcePlan` sets aside uncharged `mem_cap` bytes. |
+| **Autograd Metal G6 test** | `453fc9d`, `1607235`, `0b0df79` | `ojas-autograd` added macOS-only `ojas-metal` dev-dependency and runs the G6 seeded-backward test on a real Metal GPU. Helpers unified in `tests/common/mod.rs`. |
+
+---
+
 ## Current test counts
 
 The latest full workspace run: <!--count:ws.summary-->1825 passed, 0 failed, 41 ignored, 211 suites (`cargo test --workspace --release -- --test-threads=2` at `d431949`, 2026-10-09, macOS, Metal and wgpu on the real GPU, no SKIP lines)<!--/count-->.

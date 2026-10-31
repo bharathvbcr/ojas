@@ -95,3 +95,10 @@ Both must return the validator's variant. The sweep must fail before adoption wh
 - `broadcast_add_forward_dims` & `broadcast_mul_forward_dims`: enforce NumPy-style broadcast alignment up to rank 8, refusing incompatible shapes before memory is reserved or dispatches occur.
 - `scale_forward_dims`: validates finite float multiplier $s$ and operand shapes.
 - `softmax_forward_dims`: validates last-axis row reductions (`RmsDims`).
+- Backward validators (wave 8, 2026-10-30):
+  - `layer_norm_backward_dims` & `channel_layer_norm_backward_dims`: validate `grad_output`, `input`, `weight`, and `bias` shapes, returning `RmsDims` or `ChannelLayerNormDims`.
+  - `gelu_erf_backward_dims`: validates matching shapes for `input` and `grad_output`.
+  - `linear_bias_backward_dims`: validates `input` (rank $\ge 2$), `weight` (rank 2), `bias` (rank 1 $[out]$), and `grad_output`, returning `LinearDims`.
+  - `broadcast_add_backward_dims` & `broadcast_mul_backward_dims`: validate broadcast compatibility of operands `a`, `b`, and `grad_output`, returning `BroadcastDims`.
+  - `softmax_backward_dims`: validates matching shapes for `output` and `grad_output`, returning `RmsDims`.
+  - `conv2d_backward_dims`, `conv_transpose2d_backward_dims`, and `max_pool2d_backward_dims` (in `ojas_core::spatial`): validate spatial operands, geometries, and gradient shapes prior to dispatch.

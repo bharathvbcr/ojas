@@ -175,8 +175,27 @@
 
     BackendCheck --&gt;|CpuBackend| CPUFlow[&#34;Host Execution\n- Tensors remain in host memory\n- Cross-entropy seed scaled on host&#34;]
     BackendCheck --&gt;|MetalBackend / WgpuBackend| GPUFlow[&#34;Device-Resident Execution\n- Leaf inputs uploaded once\n- Reshape is a zero-copy Tensor::view\n- Backward seed uploaded\n- Non-root CE scaled on device via rank-1 linears\n- Zero intermediate readbacks (Loss download is only transfer)&#34;]</pre></figure>
-<aside class="alert alert-note"><p class="alert-title">Note</p><p>In <code>wgpu_tape</code> and <code>device_tape</code> test suites, intermediate backward activations stay entirely in GPU memory. The loss download is the single audited readback from the device.</p>
+<aside class="alert alert-note"><p class="alert-title">Note</p><p>In <code>wgpu_tape</code>, <code>device_tape</code>, and <code>metal_tape</code> test suites, intermediate backward activations stay entirely in GPU memory. The loss download is the single audited readback from the device. On macOS, <code>metal_tape.rs</code> executes the seeded-backward G6 test suite on real Apple Silicon hardware.</p>
 </aside>
+<hr>
+<h2 id="supported-tape-operations">Supported Tape Operations <a class="anchor" href="#supported-tape-operations" aria-label="Link to this section">#</a></h2>
+<p>The dynamic reverse-mode tape records forward operations and evaluates analytical backward adjoints across backends:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Operation</th><th>Tape Method</th><th>Adjoint Description</th></tr></thead>
+<tbody>
+<tr><td><strong>Linear</strong></td><td><code>Tape::linear</code></td><td>$dX = dY \cdot W^T$, $dW = X^T \cdot dY$</td></tr>
+<tr><td><strong>Linear + Bias</strong></td><td><code>Tape::linear_bias</code></td><td>Simultaneous $dX, dW, db$. Bypasses $dW$ calculation when <code>weight</code> is frozen (<code>!needs_grad</code>).</td></tr>
+<tr><td><strong>RMSNorm</strong></td><td><code>Tape::rms_norm</code></td><td>Normalized activations and weight scaling adjoints.</td></tr>
+<tr><td><strong>LayerNorm</strong></td><td><code>Tape::layer_norm</code></td><td>Exact two-pass LayerNorm backward for activations, gamma, and beta.</td></tr>
+<tr><td><strong>Channel LayerNorm</strong></td><td><code>Tape::channel_layer_norm</code></td><td>2D LayerNorm backward over channel dimension $[B, C, H, W]$.</td></tr>
+<tr><td><strong>GELU (erf)</strong></td><td><code>Tape::gelu_erf</code></td><td>Exact Gaussian error function and derivative backward (<code>gelu_erf_backward_exact</code>).</td></tr>
+<tr><td><strong>Softmax</strong></td><td><code>Tape::softmax</code></td><td>Softmax adjoint $dX = S \odot (dY - \sum (dY \odot S))$ along dimension.</td></tr>
+<tr><td><strong>Broadcast Add</strong></td><td><code>Tape::broadcast_add</code></td><td>Gradient passed to operands, reducing across broadcast dimensions.</td></tr>
+<tr><td><strong>Broadcast Mul</strong></td><td><code>Tape::broadcast_mul</code></td><td>Scaled gradient passed to operands with reduction across broadcast dimensions.</td></tr>
+<tr><td><strong>Scale</strong></td><td><code>Tape::scale</code></td><td>Scalar multiplication adjoint $dX = dY \cdot \alpha$.</td></tr>
+<tr><td><strong>Attention</strong></td><td><code>Tape::attention</code></td><td>Causal and general attention adjoints (dQ, dK, dV, and optional score bias).</td></tr>
+<tr><td><strong>Cross-Entropy</strong></td><td><code>Tape::cross_entropy</code></td><td>Target-excluded or fused chunked softmax cross-entropy adjoint.</td></tr>
+</tbody></table></div>
 <hr>
 <h2 id="numerical-gradcheck-oracle-central-diff">Numerical Gradcheck Oracle (<code>central_diff</code>) <a class="anchor" href="#numerical-gradcheck-oracle-central-diff" aria-label="Link to this section">#</a></h2>
 <p>Every analytical gradient kernel is mathematically validated against an offline double-precision (<code>f64</code>) numerical oracle using central finite differences:</p>
@@ -213,6 +232,10 @@
 </li>
 <li><strong>Coordinate-Wise NaN Detection:</strong> Parity checks compare absolute and relative error across every single tensor element. Any coordinate producing <code>NaN</code> or non-finite differences fails immediately—<strong>preventing false-positive passes from NaN fold operations</strong>.
 </li>
+<li><strong>Frozen Weight Bypass:</strong> When parameters have <code>needs_grad = false</code> (e.g. frozen backbone weights), <code>Tape::linear_bias</code> bypasses allocating and computing the weight gradient adjoint $dW$, saving device memory and compute cycles.
+</li>
+<li><strong>Shape Check on Accumulation:</strong> <code>Tape::acc</code> returns an error when an accumulated gradient&#39;s shape differs from the forward value&#39;s, before anything is added.
+</li>
 </ol>
 </aside>
       </article>
@@ -225,6 +248,7 @@
     <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
 <li><a href="#tape-graph--reverse-mode-adjoint-execution">Tape Graph &amp; Reverse-Mode Adjoint Execution</a></li>
 <li><a href="#multi-backend-tape-execution--device-residency">Multi-Backend Tape Execution &amp; Device Residency</a></li>
+<li><a href="#supported-tape-operations">Supported Tape Operations</a></li>
 <li><a href="#numerical-gradcheck-oracle-central-diff">Numerical Gradcheck Oracle (central_diff)</a></li>
 <li><a href="#safety-invariants--defect-defenses">Safety Invariants &amp; Defect Defenses</a></li>
 </ol></nav>
