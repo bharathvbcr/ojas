@@ -87,8 +87,8 @@ use ojas_core::{
     attention_forward_saving_dims, broadcast_add_forward_dims, broadcast_mul_forward_dims,
     cached_attention_dims, causal_conv1d_silu_backward_dims, causal_conv1d_silu_forward_dims,
     causal_sdpa_backward_dims, causal_sdpa_forward_dims, channel_layer_norm_forward_dims,
-    check_adamw, chunked_gdn_backward_dims, chunked_gdn_forward_dims, clip_grad_norm_dims,
-    clip_scale, concat_dims, conv2d_forward_dims, conv_transpose2d_forward_dims,
+    chunked_gdn_backward_dims, chunked_gdn_forward_dims, clip_grad_norm_dims, clip_scale,
+    concat_dims, conv2d_forward_dims, conv_transpose2d_forward_dims,
     cross_entropy_mean_backward_dims, cross_entropy_mean_forward_dims, embedding_backward_dims,
     embedding_forward_dims, fill_dims, gated_rms_norm_backward_dims, gated_rms_norm_forward_dims,
     gdn_log_decay_backward_dims, gdn_log_decay_forward_dims, gelu_erf_forward_dims,
@@ -104,12 +104,12 @@ use ojas_core::{
     scale_forward_dims, sigmoid_backward_dims, sigmoid_forward_dims, silu_backward_dims,
     silu_forward_dims, slice_dims, softmax_forward_dims, topk_rows_dims,
     value_residual_blend_backward_dims, value_residual_blend_forward_dims, AdamWConfig,
-    AttentionDims, AttentionOpts, Backend, BackendId, BroadcastDims, Budget, CeChunk, CeGrads,
-    Conv1dDims, Conv2dDims, Conv2dParams, ConvTranspose2dDims, ConvTranspose2dParams, DType,
-    DeviceBuffer, GateDims, GatedRmsGrad, GdnDecayGrad, GdnDims, GdnForward, GdnGrad, GdnInputs,
-    InterleavedRopeDims, LinearCe, MuonNs5Config, Ns5Precision, Numerics, OjasError, OptimizerKind,
-    PartialRopeDims, PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
-    ValueResidualGrad, MAX_PERMUTE_RANK,
+    AdamWScalars, AttentionDims, AttentionOpts, Backend, BackendId, BroadcastDims, Budget, CeChunk,
+    CeGrads, Conv1dDims, Conv2dDims, Conv2dParams, ConvTranspose2dDims, ConvTranspose2dParams,
+    DType, DeviceBuffer, GateDims, GatedRmsGrad, GdnDecayGrad, GdnDims, GdnForward, GdnGrad,
+    GdnInputs, InterleavedRopeDims, LinearCe, MuonNs5Config, Ns5Precision, Numerics, OjasError,
+    OptimizerKind, PartialRopeDims, PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout,
+    SdpaDims, Tensor, ValueResidualGrad, MAX_PERMUTE_RANK,
 };
 
 use crate::link::{
@@ -1393,27 +1393,6 @@ fn product(op: &'static str, dims: &[usize]) -> Res<usize> {
     dims.iter()
         .try_fold(1usize, |acc, &d| acc.checked_mul(d))
         .ok_or_else(|| overflow(op))
-}
-
-/// The per-step f32 scalars of `ojas_adamw_*`, formed in f64 from the bias
-/// corrections [`check_adamw`] returns (so `1 - beta^step` has the CPU
-/// reference's bits), in `OjasAdamW` field order. A scalar that does not
-/// survive the f32 rounding is [`OjasError::NonFinite`] before the device
-/// sees it.
-fn adamw_scalars(config: AdamWConfig, bc1: f64, bc2: f64) -> Res<[f32; 7]> {
-    let s = [
-        (1.0 - config.lr * config.weight_decay) as f32,
-        (1.0 - config.beta1) as f32,
-        config.beta2 as f32,
-        (1.0 - config.beta2) as f32,
-        (config.lr / bc1) as f32,
-        bc2.sqrt() as f32,
-        config.eps as f32,
-    ];
-    if s.iter().any(|v| !v.is_finite()) {
-        return Err(OjasError::NonFinite { op: "adamw_step" });
-    }
-    Ok(s)
 }
 
 /// Row-major element strides of `shape`. The input has already passed
@@ -3718,8 +3697,8 @@ impl Backend for MetalBackend {
             self.f32(OP, moment1)?,
             self.f32(OP, moment2)?,
         );
-        let (_, bc1, bc2) = check_adamw(config, step)?;
-        let scalars = adamw_scalars(config, bc1, bc2)?;
+        // `ojas_adamw_*` reads the seven f32 words in `OjasAdamW` field order.
+        let scalars = AdamWScalars::new(config, step)?.f32_words(OP)?;
         self.unique(OP, param)?;
         self.unique(OP, moment1)?;
         self.unique(OP, moment2)?;

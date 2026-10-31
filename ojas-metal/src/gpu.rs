@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use ojas_core::{
-    check_adamw, next_step, refuse_unsupported_metal_head_dim, sdpa_scale, AdamWConfig, BackendId,
-    OjasError, RMS_NORM_EPS,
+    check_adamw, next_step, refuse_unsupported_metal_head_dim, sdpa_scale, AdamWConfig,
+    AdamWScalars, BackendId, OjasError, RMS_NORM_EPS,
 };
 use tessl::cross_entropy::{self, CeGrads, CeHidden, CeWorkspace, Reduction};
 use tessl::dispatch::{self, set_gpu_buf, set_gpu_buf_offset, set_u32};
@@ -1199,21 +1199,10 @@ fn adamw_apply(
             detail: "step 0 is refused".into(),
         });
     }
-    // The shared range checks and bias correction every backend forms.
-    let (_, bc1, bc2) = check_adamw(*cfg, step_after - 1)?;
-    let scalars = [
-        (1.0 - cfg.lr * cfg.weight_decay) as f32,
-        (1.0 - cfg.beta1) as f32,
-        cfg.beta2 as f32,
-        (1.0 - cfg.beta2) as f32,
-        (cfg.lr / bc1) as f32,
-        bc2.powf(0.5) as f32,
-        cfg.eps as f32,
-        1.0f32,
-    ];
-    if scalars.iter().any(|s| !s.is_finite()) {
-        return Err(OjasError::NonFinite { op: "adamw" });
-    }
+    // The shared range checks, bias correction and f32 words every backend
+    // forms. tessl's `adamw_step` forms its own scalars from `hyper`; this
+    // refuses a step whose words would not survive the f32 rounding.
+    AdamWScalars::new(*cfg, step_after - 1)?.f32_words("adamw")?;
     if param.shape().len() != 2 {
         return Err(OjasError::Shape {
             op: "adamw",

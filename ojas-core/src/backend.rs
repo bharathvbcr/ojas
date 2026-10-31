@@ -244,6 +244,98 @@ pub fn check_adamw(config: AdamWConfig, step: u64) -> Result<(u64, f64, f64), Oj
     Ok((next, bc1, bc2))
 }
 
+/// The host-side scalars of one AdamW step, formed once in f64 from a
+/// config and the bias corrections. This is the one owner of the formulas
+/// every backend and the host trainer used to spell out: the decoupled-decay
+/// factor `1 - lr * weight_decay`, `1 - beta1`, `1 - beta2`,
+/// `step_size = lr / bc1` and `sqrt(bc2)`. A backend rounds the fields it
+/// needs to f32 (one cast each, never an f32 recomputation), so the f32
+/// bits agree on every backend that starts from the same bias corrections.
+///
+/// [`AdamWScalars::new`] is the checked path: it calls [`check_adamw`], so
+/// the config is refused before anything is formed and the bias corrections
+/// are [`pow_u64`]'s. [`AdamWScalars::from_bias_corrections`] forms the same
+/// scalars from bias corrections the caller computed (torch's libm `pow`,
+/// for the host AdamW that reproduces torch bit for bit) and validates
+/// nothing: the caller's own checks must already have run.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AdamWScalars {
+    /// The post-increment step the bias corrections were formed for.
+    pub step: u64,
+    /// `1 - beta1^step`.
+    pub bc1: f64,
+    /// `1 - beta2^step`.
+    pub bc2: f64,
+    pub beta1: f64,
+    pub beta2: f64,
+    pub eps: f64,
+    /// `1 - lr * weight_decay`.
+    pub decay: f64,
+    /// `1 - beta1`, torch's `lerp` weight.
+    pub one_minus_b1: f64,
+    /// `1 - beta2`.
+    pub one_minus_b2: f64,
+    /// `lr / bc1`.
+    pub step_size: f64,
+    /// `sqrt(bc2)`.
+    pub bc2_sqrt: f64,
+    /// `weight_decay != 0`: the decay multiply runs at all.
+    pub decays: bool,
+    /// `1 - beta1 < 0.5`: torch's `lerp` uses `m + w * (g - m)` rather than
+    /// `g - (g - m) * (1 - w)`.
+    pub lerp_low: bool,
+}
+
+impl AdamWScalars {
+    /// Validate `config` for the step after `step_before` ([`check_adamw`])
+    /// and form its scalars.
+    pub fn new(config: AdamWConfig, step_before: u64) -> Result<Self, OjasError> {
+        let (step, bc1, bc2) = check_adamw(config, step_before)?;
+        Ok(Self::from_bias_corrections(config, step, bc1, bc2))
+    }
+
+    /// The scalars of `config` for post-increment `step` and the given bias
+    /// corrections. Nothing is validated.
+    pub fn from_bias_corrections(config: AdamWConfig, step: u64, bc1: f64, bc2: f64) -> Self {
+        let one_minus_b1 = 1.0 - config.beta1;
+        Self {
+            step,
+            bc1,
+            bc2,
+            beta1: config.beta1,
+            beta2: config.beta2,
+            eps: config.eps,
+            decay: 1.0 - config.lr * config.weight_decay,
+            one_minus_b1,
+            one_minus_b2: 1.0 - config.beta2,
+            step_size: config.lr / bc1,
+            bc2_sqrt: bc2.sqrt(),
+            decays: config.weight_decay != 0.0,
+            lerp_low: one_minus_b1 < 0.5,
+        }
+    }
+
+    /// The seven f32 scalars a device kernel reads, each rounded once from
+    /// its f64 field: `[decay, 1 - beta1, beta2, 1 - beta2, step_size,
+    /// sqrt(bc2), eps]`. One that does not survive the rounding is
+    /// [`OjasError::NonFinite`] for `op`, before a device sees it.
+    pub fn f32_words(&self, op: &'static str) -> Result<[f32; 7], OjasError> {
+        let words = [
+            self.decay as f32,
+            self.one_minus_b1 as f32,
+            self.beta2 as f32,
+            self.one_minus_b2 as f32,
+            self.step_size as f32,
+            self.bc2_sqrt as f32,
+            self.eps as f32,
+        ];
+        if words.iter().any(|word| !word.is_finite()) {
+            return Err(OjasError::NonFinite { op });
+        }
+        Ok(words)
+    }
+}
+
 /// Torch single-tensor AdamW scalars. The host forms them in f64.
 ///
 /// Order, matching tessl `qwen35_adamw_f32`:

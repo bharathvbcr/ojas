@@ -70,19 +70,20 @@ use std::sync::Arc;
 
 use ojas_core::{
     accumulate_grad_dims, adamw_step_dims, argmax_rows_dims, cached_attention_dims,
-    causal_sdpa_backward_dims, causal_sdpa_forward_dims, check_adamw, clip_grad_norm_dims,
-    clip_scale, cross_entropy_mean_backward_dims, cross_entropy_mean_forward_dims,
-    embedding_backward_dims, embedding_forward_dims, kv_cache_write_dims, linear_backward_dims,
-    linear_ce_dims, linear_forward_dims, mul_backward_dims, mul_forward_dims, muon_ns5_step_dims,
+    causal_sdpa_backward_dims, causal_sdpa_forward_dims, clip_grad_norm_dims, clip_scale,
+    cross_entropy_mean_backward_dims, cross_entropy_mean_forward_dims, embedding_backward_dims,
+    embedding_forward_dims, kv_cache_write_dims, linear_backward_dims, linear_ce_dims,
+    linear_forward_dims, mul_backward_dims, mul_forward_dims, muon_ns5_step_dims,
     per_head_sigmoid_gate_backward_dims, per_head_sigmoid_gate_forward_dims, permute_dims,
     refuse_bf16_table, require_ns5, residual_add_backward_dims, residual_add_forward_dims,
     rms_norm_backward_dims, rms_norm_forward_dims, rms_qk_norm_backward_dims,
     rms_qk_norm_forward_dims, rope_half_split_backward_dims, rope_half_split_forward_dims,
     scale_grad_dims, sdpa_scale, silu_backward_dims, silu_forward_dims, topk_rows_dims,
-    value_residual_blend_backward_dims, value_residual_blend_forward_dims, AdamWConfig, Backend,
-    BackendId, Budget, CeChunk, CeGrads, DType, LinearCe, MuonNs5Config, Ns5Precision, Numerics,
-    OjasError, OptimizerKind, PerHeadGateGrad, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
-    ValueResidualGrad, MUON_NS5_A, MUON_NS5_B, MUON_NS5_C, MUON_NS_EPS,
+    value_residual_blend_backward_dims, value_residual_blend_forward_dims, AdamWConfig,
+    AdamWScalars, Backend, BackendId, Budget, CeChunk, CeGrads, DType, LinearCe, MuonNs5Config,
+    Ns5Precision, Numerics, OjasError, OptimizerKind, PerHeadGateGrad, RmsDims, RopeDims,
+    RopeLayout, SdpaDims, Tensor, ValueResidualGrad, MUON_NS5_A, MUON_NS5_B, MUON_NS5_C,
+    MUON_NS_EPS,
 };
 use ojas_device::DeviceError;
 use ojas_kernels::{
@@ -2668,26 +2669,20 @@ impl Backend for WgpuBackend {
         let gv = self.placed(op, grad)?;
         self.placed(op, moment1)?;
         self.placed(op, moment2)?;
-        let (_, bc1, bc2) = check_adamw(config, step)?;
+        let s = AdamWScalars::new(config, step)?;
         let grid = self.lanes(n)?;
-        let one_minus_b1 = 1.0 - config.beta1;
-        let mut flags = 0u32;
-        if config.weight_decay != 0.0 {
-            flags |= 1;
-        }
-        if one_minus_b1 < 0.5 {
-            flags |= 2;
-        }
+        // Bit 0: the decay multiply runs. Bit 1: torch's low-weight `lerp`.
+        let flags = u32::from(s.decays) | (u32::from(s.lerp_low) << 1);
         let words = [
             u(op, n)?,
-            ((config.lr / bc1) as f32).to_bits(),
-            (bc2.sqrt() as f32).to_bits(),
-            (config.eps as f32).to_bits(),
-            (config.beta1 as f32).to_bits(),
-            (one_minus_b1 as f32).to_bits(),
-            (config.beta2 as f32).to_bits(),
-            ((1.0 - config.beta2) as f32).to_bits(),
-            ((1.0 - config.lr * config.weight_decay) as f32).to_bits(),
+            (s.step_size as f32).to_bits(),
+            (s.bc2_sqrt as f32).to_bits(),
+            (s.eps as f32).to_bits(),
+            (s.beta1 as f32).to_bits(),
+            (s.one_minus_b1 as f32).to_bits(),
+            (s.beta2 as f32).to_bits(),
+            (s.one_minus_b2 as f32).to_bits(),
+            (s.decay as f32).to_bits(),
             flags,
         ];
         let pb = exclusive(op, param)?;

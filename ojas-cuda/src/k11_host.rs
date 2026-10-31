@@ -55,6 +55,8 @@
 //! after chunk, and summed in f64 in that order. The grid is a function of
 //! the window lengths only, never of the SM count.
 
+use ojas_core::{AdamWConfig, AdamWScalars};
+
 use crate::error::CudaError;
 use crate::small_common::{block_sum, thread_partials};
 
@@ -165,14 +167,23 @@ pub fn entry_scalars(
             format!("step count {t} exceeds 2^53"),
         ));
     }
+    // torch's bias corrections are libm `pow`, not `pow_u64`'s products, so
+    // they are formed here; ojas-core forms the scalars from them.
     let tf = t as f64;
-    let lr = h.lr * lr_scale;
     let bc1 = 1.0 - h.beta1.powf(tf);
     let bc2 = 1.0 - h.beta2.powf(tf);
+    let config = AdamWConfig {
+        lr: h.lr * lr_scale,
+        beta1: h.beta1,
+        beta2: h.beta2,
+        eps: h.eps,
+        weight_decay,
+    };
+    let s = AdamWScalars::from_bias_corrections(config, t, bc1, bc2);
     Ok(EntryScalars {
-        decay_mul: (1.0 - lr * weight_decay) as f32,
-        step_size: (lr / bc1) as f32,
-        bc2_sqrt: bc2.powf(0.5) as f32,
+        decay_mul: s.decay as f32,
+        step_size: s.step_size as f32,
+        bc2_sqrt: s.bc2_sqrt as f32,
     })
 }
 
