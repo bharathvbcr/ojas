@@ -49,7 +49,7 @@ pub fn case_checks(rt: &CudaRuntime, c: &K8Case) -> Vec<Check> {
         },
     ));
 
-    let sentinel16 = crate::bf16::f32_to_bf16_bits(SENTINEL);
+    let sentinel16 = ojas_core::f32_to_bf16(SENTINEL);
     let mut want16 = vec![sentinel16; dense];
     if let Err(e) = plan.host_bf16(&c.fused, &c.fused, &mut want16) {
         return vec![Check::from_error(&name, &e)];

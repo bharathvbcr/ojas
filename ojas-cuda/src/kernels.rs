@@ -27,7 +27,8 @@
 //! The kernels are named after their tessl seams (`tessl/kernels/utils.metal`,
 //! `qwen35_bwd.metal`, `cross_entropy.metal`) with a `qd_` prefix. No
 //! `#include`: NVRTC has no default include path, and the bf16 conversion is
-//! the integer form of [`crate::bf16`], so `cuda_bf16.h` is not needed.
+//! the integer form of [`ojas_core::f32_to_bf16`], so `cuda_bf16.h` is not
+//! needed.
 
 /// The compute capability every kernel here is written for and the only one
 /// [`crate::runtime::CudaRuntime::open`] accepts (GH200: sm_90). The NVRTC
@@ -620,7 +621,7 @@ pub const AFTER: KernelModule = KernelModule {\n\
     #[cfg(feature = "harness")]
     #[test]
     fn the_device_rounding_is_the_host_rounding() {
-        // The integer sequence in both device modules is crate::bf16's, once each.
+        // The integer sequence in both device modules is ojas_core::f32_to_bf16's, once each.
         let round = "(bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16";
         let nan = "((bits >> 16) | 0x0040u)";
         for module in ALL_MODULES {

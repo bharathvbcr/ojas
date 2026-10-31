@@ -1,6 +1,5 @@
-//! The `.npy` reader moved to the library, `ojas_cuda::npy` (L-cuda-M1,
-//! lead's ruling 2026-10-01): `runga` and the tiny-fixture loader read `.npy`
-//! outside the test harness. Re-exported here so every `reference::npy` user
-//! is unchanged.
+//! The `.npy` reader is the workspace's, `ojas_io::npy` (it was ojas-cuda's
+//! own until it moved to ojas-io unchanged). Re-exported here so every
+//! `reference::npy` user is unchanged.
 
-pub use ojas_cuda::npy::*;
+pub use ojas_io::npy::*;

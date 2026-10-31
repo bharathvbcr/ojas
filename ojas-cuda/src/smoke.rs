@@ -23,7 +23,6 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Mutex;
 use std::time::Instant;
 
-use crate::bf16::f32_slice_to_bf16;
 use crate::buffer::Element;
 use crate::check::{
     bitwise_check, diff_bits_bf16, diff_bits_f32, panic_text, tolerance_check, tolerance_vs_f64,
@@ -36,7 +35,6 @@ use crate::host_ref;
 use crate::inputs::{
     bf16_cast_edge_cases, splitmix_bits, splitmix_f32, tessl_ragged_a, tessl_ragged_b,
 };
-use crate::json::{Json, JsonObj};
 use crate::k0::{self, GatherSource};
 use crate::k0_plan::{
     CopyColsPlan, DeliverMode, DeliverPlan, GatherRowsPlan, ScatterAddRowsPlan, ZeroPlan,
@@ -46,6 +44,7 @@ use crate::libprobe;
 use crate::report_cli::{lock, Report};
 use crate::rung0_cli::{EXIT_FAIL, EXIT_REFUSED};
 use crate::runtime::{CudaRuntime, RuntimeConfig};
+use ojas_io::{JsonObj, JsonValue as Json};
 
 /// tessl's ragged GEMM shapes `(m, n, k)` (`tessl/src/gemm.rs:2342-2348`).
 pub const TESSL_RAGGED_SHAPES: [(usize, usize, usize); 5] = [
@@ -266,7 +265,7 @@ pub fn k0_checks(rt: &CudaRuntime) -> Vec<Check> {
             let (ld, off, hidden) = (37u64, 4u64, 30u64);
             let rows = [3u32, 39, 3, 0, 17];
             let h = splitmix_f32(0x9a7, 40 * 37, 4.0);
-            let h16 = f32_slice_to_bf16(&h);
+            let h16 = host_ref::cast_f32_to_bf16(&h);
             let mut want = vec![0.0f32; rows.len() * 30];
             let plan = match GatherRowsPlan::new(&rows, hidden, (ld, off, h.len()), want.len()) {
                 Ok(p) => p,
@@ -322,8 +321,8 @@ pub fn cublas_probe(rt: &CudaRuntime) -> Vec<Check> {
         let b = splitmix_f32(0xb2, shape.b_len(), 1.0);
         let want = host_ref::gemm_f64(GemmLayout::Nn, shape, Operands::Bf16, &a, &b, None);
         let run = || -> Result<Vec<f32>, CudaError> {
-            let a16 = rt.upload(&f32_slice_to_bf16(&a), "probe A")?;
-            let b16 = rt.upload(&f32_slice_to_bf16(&b), "probe B")?;
+            let a16 = rt.upload(&host_ref::cast_f32_to_bf16(&a), "probe A")?;
+            let b16 = rt.upload(&host_ref::cast_f32_to_bf16(&b), "probe B")?;
             let mut c = rt.alloc_zeros::<f32>(shape.c_len(), "probe C")?;
             gemm_bf16_cublas(
                 rt,
@@ -688,7 +687,7 @@ pub fn alloc_budget(rt: &CudaRuntime) -> JsonObj {
 /// and the runtime's NVRTC cache counts: the rung reports' `extra` sections.
 pub fn loaded_libraries(rt: &CudaRuntime) -> (Json, JsonObj) {
     let loaded = match std::fs::read_to_string("/proc/self/maps") {
-        Ok(maps) => Json::Arr(
+        Ok(maps) => Json::Array(
             libprobe::REQUIRED
                 .iter()
                 .flat_map(|spec| libprobe::mapped_paths(&maps, spec.mapped_prefixes))

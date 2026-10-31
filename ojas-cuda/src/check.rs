@@ -6,7 +6,7 @@
 //! `Pass` only when every check ran and passed.
 
 use crate::error::CudaError;
-use crate::json::{Json, JsonObj};
+use ojas_io::{JsonObj, JsonValue as Json};
 
 /// How one check ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -16,9 +16,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ojas_cuda::check::Check;
-use ojas_cuda::json::JsonObj;
 use ojas_cuda::report_cli::{finish, prepare_report, record, set_phase, spawn_watchdog, Report};
 use ojas_cuda::rung0_cli::{EXIT_PASS, EXIT_TIMEOUT};
+use ojas_io::JsonObj;
 
 /// Set in the child: the directory its report goes to.
 const CHILD_ENV: &str = "OJAS_CUDA_WATCHDOG_CHILD_DIR";

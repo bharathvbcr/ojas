@@ -38,12 +38,12 @@ use ojas_core::{Backend, CheckpointV1, DType, OjasError, OptimizerCheckpoint, Te
 use ojas_cpu::OptimGroup;
 use ojas_data::{SamplerRngState, TokenBin};
 use ojas_io::{
-    checkpoint_file_len, read_checkpoint_from, recover_replaced_dir, replace_dir_with_if,
+    checkpoint_file_len, quote, read_checkpoint_from, recover_replaced_dir, replace_dir_with_if,
     safetensors_file_len, write_checkpoint, IoError, SafeTensors, SafeTensorsWriter, StDtype,
     TensorSpec,
 };
 
-use crate::json::{flat_object, quote};
+use crate::json::flat_object;
 use crate::names::{param_table, ParamInfo};
 use crate::spec::{ModelSpec, SPEC_METADATA_KEY};
 use crate::trainer::{Moments, Slot, TrainConfig, Trainer};
