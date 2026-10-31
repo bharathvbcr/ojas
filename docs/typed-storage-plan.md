@@ -1,11 +1,12 @@
 # Typed Host Storage: Plan
 
-Status (2026-10-01):
-- **Step 1 has landed and is verified.** It was approved by the user and gated in a staging copy before being copied into the live tree.
-- **Integration run 4:** Rust 1071 passed and 0 failed (`--no-fail-fast`), Go 38/38, and clippy `-D warnings` is clean ([`status.md`](status.md)).
-- **Steps 2–4 are not started.**
+Status (2026-10-31; steps 1–3 as recorded under "Migration order" below, step 4 checked against the tree):
+- **Step 1 landed on 2026-10-01 and was verified.** It was approved by the user and gated in a staging copy before being copied into the live tree.
+- **Integration run 4 (2026-10-01, step 1):** Rust 1071 passed and 0 failed (`--no-fail-fast`), Go 38/38, and clippy `-D warnings` is clean. This is the step-1 record; current counts are in [`status.md`](status.md).
+- **Steps 2 and 3 landed on 2026-10-02** (owned copies removed from `ojas-cpu`; every output is a `Scratch` filled in place). **Step 4 is done as far as the tree shows:** `rg -uu` finds no definition of `decode_f32`, `decode_u32`, `write_ne_f32`, `contiguous_bytes`, `from_le_fill`, `alloc_out` or `F32Out`.
 - **Rollback point:** the snapshot `wip/framework-layer-2026-10-01` (c686bb0), taken before step 1.
-- **Not yet run for step 1:** `parity.sh` (a gitignored lane file, not kept) and the `block_ab.sh` / `sample` profile that the success criterion below calls for.
+- **Not yet run:** `parity.sh` and the `block_ab.sh` / `sample` profile that the success criterion below calls for (gitignored lane files, not kept), so the plan is not yet counted successful.
+- **Device readback** (`Tensor::to_host`, `Tensor::from_le_reader`) reserves the typed result and appends the decoded pieces to it without zero-filling it first, so each result byte is written once. The bytes are unchanged; `readback_and_le_load_are_bit_exact_for_every_dtype_across_pieces` pins them, and `ojas-metal/examples/readback_bench.rs` measures the copy against the host floor.
 
 ## Why
 
