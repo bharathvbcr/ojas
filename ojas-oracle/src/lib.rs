@@ -110,14 +110,10 @@ pub fn parse_rms_norm(text: &str) -> Result<RmsNormFixture, OjasError> {
     Ok(fixture)
 }
 
+/// The fixture reader's checked shape product: `ojas-core`'s, under this
+/// crate's op name.
 pub(crate) fn product(shape: &[usize]) -> Result<usize, OjasError> {
-    let mut n = 1usize;
-    for &dim in shape {
-        n = n
-            .checked_mul(dim)
-            .ok_or_else(|| bad("shape product overflows"))?;
-    }
-    Ok(n)
+    ojas_core::checked_product("oracle_fixture", shape)
 }
 
 pub(crate) fn bad(detail: &str) -> OjasError {
