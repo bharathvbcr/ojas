@@ -6,6 +6,11 @@
 //! and U16 are read and written; BF16 and F16 decode to f32 exactly and
 //! encode with round-to-nearest-even ([`f32_to_bf16`], [`f32_to_f16`]).
 //!
+//! [`SafeTensors::read_into_slab`] and [`SafeTensors::read_into_sink`] read a
+//! list of tensors straight into caller storage at a named alignment (an
+//! unaligned caller slice is fine); [`OwnedSlab`] is such storage charged to a
+//! `Budget`. [`SafeTensors::read_tensor_into`] reads one tensor by name.
+//!
 //! [`SafeTensorsWriter`] streams a file one tensor at a time after writing
 //! the header up front; [`encode_safetensors`] and [`write_safetensors`] are
 //! built on it. [`SafeTensors::from_file`] reads a file the caller opened.
@@ -26,6 +31,7 @@ mod posread;
 mod replace;
 mod safetensors;
 pub mod sha256;
+mod slab;
 #[cfg(test)]
 mod test_util;
 
@@ -42,6 +48,8 @@ pub use safetensors::{
     encode_f32_as, encode_safetensors, safetensors_file_len, write_safetensors, SafeTensors,
     SafeTensorsWriter, StDtype, TensorInfo, TensorOut, TensorSpec, MAX_HEADER_BYTES,
 };
+
+pub use slab::{OwnedSlab, SlabEntry, SlabSink, TensorSink, MAX_SLAB_ALIGN};
 
 #[doc(hidden)]
 pub use ojas_core::CheckpointV1;
