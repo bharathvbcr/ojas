@@ -104,11 +104,17 @@ impl Operands {
         }
     }
     fn opts<'a>(&'a self, c: &Case) -> AttentionOpts<'a> {
+        // Two struct updates, so the literals list only some of the fields
+        // and survive new `AttentionOpts` fields without a needless update.
+        let operands = AttentionOpts {
+            bias: self.bias.as_ref(),
+            key_lens: self.lens.as_ref(),
+            ..Default::default()
+        };
         AttentionOpts {
             causal: c.causal,
             window: c.window,
-            bias: self.bias.as_ref(),
-            key_lens: self.lens.as_ref(),
+            ..operands
         }
     }
 }
@@ -170,7 +176,7 @@ fn check(m: &MetalBackend, c: &Case, seed: u64) {
     let dev = host.up(m);
     let (dy, dlse) = (up(m, &y), up(m, &lse));
     let names = ["dq", "dkv", "dbias"].map(|n| format!("ojas_attn_gen_bwd_{n}_d{}", width(c.d)));
-    let before = names.clone().map(|n| m.kernel_dispatches(&n));
+    let before = names.each_ref().map(|n| m.kernel_dispatches(n));
     let got = m.attention_backward(
         &dev.q,
         &dev.k,
@@ -197,7 +203,7 @@ fn check(m: &MetalBackend, c: &Case, seed: u64) {
     }
     let got = ok(&tag, got);
     ok("sync", m.sync());
-    let ran = names.map(|n| m.kernel_dispatches(&n));
+    let ran = names.each_ref().map(|n| m.kernel_dispatches(n));
     assert_eq!(
         ran[0] - before[0],
         1,

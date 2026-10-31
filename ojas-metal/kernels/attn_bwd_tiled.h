@@ -92,8 +92,10 @@ inline uint agb_len(AgbMask m, device const uint *lens, uint b)
     return ((m.flags & AGB_LENS) != 0u) ? min(lens[b], m.Tk) : m.Tk;
 }
 
-/// The keys query row `i` sees, `[lo, hi)`; `lo == hi == 0` when none.
-inline void agb_range(AgbMask m, uint len, uint i, thread uint &lo, thread uint &hi)
+/// The keys query row `i` sees, `[lo, hi)`, before an empty range is
+/// normalized: `lo` and `hi` do not decrease with `i`, and `lo >= hi` means
+/// the row sees none.
+inline void agb_range_raw(AgbMask m, uint len, uint i, thread uint &lo, thread uint &hi)
 {
     lo = 0u;
     hi = len;
@@ -111,12 +113,21 @@ inline void agb_range(AgbMask m, uint len, uint i, thread uint &lo, thread uint 
         lo = (i > m.R) ? i - m.R : 0u;
         hi = min(hi, i + m.R + 1u);
     }
+}
+
+/// The keys query row `i` sees, `[lo, hi)`; `lo == hi == 0` when none.
+inline void agb_range(AgbMask m, uint len, uint i, thread uint &lo, thread uint &hi)
+{
+    agb_range_raw(m, len, i, lo, hi);
     if (lo >= hi) { lo = 0u; hi = 0u; }
 }
 
 /// The keys any of query rows `[q0, q0 + nq)` sees, `[lo, hi)`: a superset
-/// that is tight for every mask above (the range's ends do not decrease with
-/// the row). Rows past `len` are dead, so the last live one bounds `hi`.
+/// that is tight for every mask above. The ends of a row's range do not
+/// decrease with the row, so the first row bounds `lo` and the last bounds
+/// `hi`, both taken before an empty range is normalized (a late row with an
+/// empty range must not hide the keys of the earlier rows). Rows past `len`
+/// are dead, so the last live one bounds `hi`.
 inline void agb_block_keys(
     AgbMask m, uint len, uint q0, uint nq, thread uint &lo, thread uint &hi)
 {
@@ -126,8 +137,8 @@ inline void agb_block_keys(
         last = min(last, len - 1u);
     }
     uint l0, h0, l1, h1;
-    agb_range(m, len, q0, l0, h0);
-    agb_range(m, len, last, l1, h1);
+    agb_range_raw(m, len, q0, l0, h0);
+    agb_range_raw(m, len, last, l1, h1);
     lo = l0;
     hi = h1;
     if (lo >= hi) { lo = 0u; hi = 0u; }
@@ -146,9 +157,11 @@ inline void agb_block_queries(
         const long off = (long)m.Tk - (long)m.Tq;
         // The first query whose position reaches k0, and (with a window) the
         // end of those whose window still holds a key of the block.
-        lo = (uint)max(0L, min((long)k0 - off, (long)m.Tq));
+        const long none = 0;
+        const long one = 1;
+        lo = (uint)max(none, min((long)k0 - off, (long)m.Tq));
         if (m.W != 0u) {
-            hi = (uint)max(0L, min((long)k0 + (long)nk + (long)m.W - 1L - off, (long)m.Tq));
+            hi = (uint)max(none, min((long)k0 + (long)nk + (long)m.W - one - off, (long)m.Tq));
         }
     } else if (m.R != 0u) {
         lo = (k0 > m.R) ? k0 - m.R : 0u;

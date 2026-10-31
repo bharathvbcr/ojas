@@ -37,6 +37,9 @@ impl MetalBackend {
     ) -> Res<AttentionGrad> {
         const OP: &str = "attention_backward";
         let dims = attention_backward_dims(q, k, v, output, lse, grad_output, &opts, bias_grad)?;
+        // The head-dim cap is the same on every device, so it is checked
+        // before the device-dependent TensorOps refusal.
+        let geom = attn_launch(OP, &dims)?;
         if !self.link.has_tensorops() {
             return Err(OjasError::Unsupported {
                 op: OP,
@@ -50,7 +53,6 @@ impl MetalBackend {
             [q, k, v, output, grad_output].map(|t| self.widened(t));
         let (q, k, v, output, grad_output) = (q?, k?, v?, output?, grad_output?);
         let bias = opts.bias.map(|b| self.widened(b)).transpose()?;
-        let geom = attn_launch(OP, &dims)?;
         let args = [
             self.f32(OP, &q)?,
             self.f32(OP, &k)?,
