@@ -2638,13 +2638,13 @@ impl Worker {
             if tiled
                 || g.causal
                 || g.window != 0
-                || g.d != 32
+                || !matches!(g.d, 32 | 64 | 128 | 256)
                 || g.bias.is_some()
                 || g.has_lens
                 || g.kv_len == 0
             {
                 return Err(metal_err(format!(
-                    "{op}: the flash kernel runs non-causal head dim 32 with no window, bias or key lengths, not causal {} window {} d {} bias {} lens {} splits {}",
+                    "{op}: the flash kernel runs non-causal head dims 32, 64, 128, 256 with no window, bias or key lengths, not causal {} window {} d {} bias {} lens {} splits {}",
                     g.causal,
                     g.window,
                     g.d,

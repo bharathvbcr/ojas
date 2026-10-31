@@ -567,9 +567,10 @@ fn causal_attention_backward_equals_causal_sdpa_backward() {
             m.attention_backward(&q, &k, &v, &y, &lse, &gy, opts, false),
         );
         let tag = format!("t{t} d{d} {window:?}");
-        same_bits(&format!("{tag} dq"), &got.q, &wq);
-        same_bits(&format!("{tag} dk"), &got.k, &wk);
-        same_bits(&format!("{tag} dv"), &got.v, &wv);
+        let down_host = |t: &Tensor| host(&down(t), t.shape());
+        same_bits(&format!("{tag} dq"), &got.q, &down_host(&wq));
+        same_bits(&format!("{tag} dk"), &got.k, &down_host(&wk));
+        same_bits(&format!("{tag} dv"), &got.v, &down_host(&wv));
     }
 }
 
