@@ -71,6 +71,11 @@ mod device {
 }
 
 #[cfg(all(target_os = "macos", feature = "metal"))]
+mod pool_ledger;
+#[cfg(all(target_os = "macos", feature = "metal"))]
+pub use pool_ledger::BudgetLedger;
+
+#[cfg(all(target_os = "macos", feature = "metal"))]
 pub mod gpu;
 
 #[cfg(not(all(target_os = "macos", feature = "metal")))]
