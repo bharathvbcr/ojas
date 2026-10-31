@@ -36,7 +36,6 @@ use tessl::sq_norm::{decode_sq_norm, SqNormPlan, SqWindow};
 use tessl::tensor::{gpu_copy, GpuBuffer, Tensor as TT};
 use tessl::DType;
 
-use crate::gpu::gate_dbias_threads;
 use crate::link::{
     cached_attn_origin, cached_attn_part, cached_attn_splits, copied_at, device_lost, metal_err,
     norm_chunks, reduce_groups, rms_w_chunks, Arg, AttnGeom, BilinearGeom, Cmd, Conv1dGeom,
@@ -105,6 +104,21 @@ const POOL_CACHE_CEILING: u64 = 1 << 30;
 pub(crate) fn pool_cache_cap(budget_cap: u64) -> u64 {
     POOL_CACHE_CEILING.min(budget_cap / 4)
 }
+
+/// Threads per head of `ojas_per_head_gate_dbias`: one SIMD-group, the
+/// width `dispatch_1d` gives each threadgroup on Apple GPUs.
+const GATE_DBIAS_LANES: usize = 32;
+
+/// The `ojas_per_head_gate_dbias` grid for `n_head` heads.
+fn gate_dbias_threads(n_head: usize) -> Res<usize> {
+    n_head
+        .checked_mul(GATE_DBIAS_LANES)
+        .ok_or_else(|| OjasError::OutOfRange {
+            op: "gate_dbias_threads",
+            detail: "thread count overflows usize".into(),
+        })
+}
+
 /// Device memory above this share of the recommended working set forces a
 /// waited commit once this backend has allocated more than [`WS_GROWTH`]
 /// since its last one. The device figure is every allocation on the device,
@@ -4933,6 +4947,25 @@ mod tests {
     use super::*;
 
     use ojas_core::{Backend, Budget, Tensor};
+
+    /// The bias-gradient grid is one SIMD-group per head, and a head count
+    /// whose grid does not fit `usize` is refused, not wrapped.
+    #[test]
+    fn the_gate_dbias_grid_is_one_simd_group_per_head_and_refuses_overflow() {
+        assert_eq!(gate_dbias_threads(0).expect("no heads"), 0);
+        assert_eq!(gate_dbias_threads(12).expect("12 heads"), 12 * 32);
+        let r = gate_dbias_threads(usize::MAX / GATE_DBIAS_LANES + 1);
+        assert!(
+            matches!(
+                &r,
+                Err(OjasError::OutOfRange {
+                    op: "gate_dbias_threads",
+                    ..
+                })
+            ),
+            "{r:?}"
+        );
+    }
 
     /// Every public op indexes elements with 32 bits, so no op on the
     /// backend can ask for more than the device's buffer limit (about

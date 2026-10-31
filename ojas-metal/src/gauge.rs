@@ -7,10 +7,10 @@
 //!
 //! Two guards, one lock:
 //!
-//! - [`Lease`]: held by every runtime a test opens, from `Worker::open` and
-//!   `Session::open` until the runtime (and anything that shares it) drops,
-//!   so every test that can allocate on the device holds one without writing
-//!   it out. Leases share.
+//! - [`Lease`]: held by every runtime a test opens, from `Worker::open`,
+//!   until the runtime (and anything that shares it) drops, so every test
+//!   that can allocate on the device holds one without writing it out.
+//!   Leases share.
 //! - [`Measuring`]: held by every test that reads the figure. It waits for
 //!   every lease to drop and admits no new one while it is held, and
 //!   [`live_bytes`] takes it by reference, so a figure read cannot compile
@@ -215,11 +215,6 @@ impl Inherit {
     pub(crate) fn enter(self) {
         ACTING_FOR.with(|a| a.set(Some(self.0)));
     }
-}
-
-/// Runtimes this test holds, for the tests of who holds a lease.
-pub(crate) fn held_here() -> usize {
-    state().held(owner())
 }
 
 /// The device-wide figure, read under [`Measuring`].

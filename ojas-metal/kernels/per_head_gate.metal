@@ -182,7 +182,7 @@ kernel void ojas_per_head_gate_bwd_saved(
 constexpr constant uint DBIAS_STAGE = 2048u;
 
 /// d_bias[h] = sum over rows of d_pre[r, h], rows in ascending order from 0.
-/// Grid: one SIMD-group per head (`gate_dbias_threads` in `gpu.rs`).
+/// Grid: one SIMD-group per head (`gate_dbias_threads` in `device.rs`).
 ///
 /// The SIMD-group's lanes load a block of rows into threadgroup memory
 /// together, so the whole block's loads are in flight at once. Lane 0 then

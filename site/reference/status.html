@@ -285,17 +285,14 @@
 <h2 id="defect-countermeasures--hardening-invariants">Defect Countermeasures &amp; Hardening Invariants <a class="anchor" href="#defect-countermeasures--hardening-invariants" aria-label="Link to this section">#</a></h2>
 <figure class="diagram"><pre class="mermaid">flowchart TD
     subgraph InvariantChecks[&#34;Defensive Hardening Guarantees&#34;]
-        C1[&#34;CE dh offset preservation: 16 canary padding elements (DH_PAD)&#34;]
         C2[&#34;AdamW step counter overflow: next_step checked_add refuses u64::MAX&#34;]
         C3[&#34;All-ignored cross-entropy: Zero valid targets returns Err(NonFinite)&#34;]
         C4[&#34;AdamW non-finite store: Aborts before touching moment buffers&#34;]
-        C5[&#34;Metal head dim limit: Dimensions &gt; 256 produce UnsupportedHeadDim (the tiny training step in gpu.rs keeps 64)&#34;]
+        C5[&#34;Metal head dim limit: Dimensions &gt; 256 produce UnsupportedHeadDim&#34;]
         C6[&#34;Safetensors parser: Capped 100MB header, max depth 64, no overlaps&#34;]
     end</pre></figure>
 <ul>
-<li><strong>CE <code>dh</code> offset preservation (verified):</strong> <code>ojas-metal</code> reserves 16 canary padding elements (<code>DH_PAD</code>) before the <code>dh</code> slice; verified by <code>ce_nonzero_dh_offset_keeps_prefix</code> (<code>ojas-metal/src/gpu.rs</code>).
-</li>
-<li><strong>AdamW step counter overflow (verified):</strong> <code>next_step</code> uses <code>checked_add</code> and refuses <code>u64::MAX</code>; verified by <code>step_count_at_u64_max_is_refused</code> (<code>ojas-metal/src/gpu.rs</code>).
+<li><strong>AdamW step counter overflow (verified):</strong> <code>next_step</code> uses <code>checked_add</code> and refuses <code>u64::MAX</code>; verified by <code>step_counter_refuses_wrap</code> (<code>ojas-core/src/backend.rs</code>).
 </li>
 <li><strong>All-ignored cross entropy (verified):</strong> Mean loss over zero valid targets returns <code>OjasError::NonFinite</code>; verified by <code>all_ignored_cross_entropy_is_nonfinite_not_a_zero_loss</code> (<code>ojas-cpu/tests/redteam.rs</code>).
 </li>
