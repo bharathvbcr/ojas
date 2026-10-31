@@ -1029,10 +1029,10 @@ impl Tensor {
     /// The window is read with [`DeviceBuffer::read_bytes`] in pieces of at
     /// most [`READBACK_CHUNK_BYTES`], each decoded straight into the typed
     /// result, which is reserved up front and never zero-filled, so each
-    /// result byte is written once. `budget` is charged for the result and for one piece; the
-    /// piece's charge is released before this returns, so the peak is the
-    /// window plus one piece, not twice the window. A short read is
-    /// [`OjasError::Backend`] and nothing is kept.
+    /// result byte is written once. `budget` is charged for the result and
+    /// for one piece; the piece's charge is released before this returns, so
+    /// the peak is the window plus one piece, not twice the window. A short
+    /// read is [`OjasError::Backend`] and nothing is kept.
     pub fn to_host(&self, budget: &Budget) -> Result<Self, OjasError> {
         const OP: &str = "Tensor::to_host";
         let buf = match &self.storage.payload {
