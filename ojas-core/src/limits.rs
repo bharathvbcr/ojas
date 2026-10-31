@@ -1,8 +1,10 @@
-//! Named sizes and the one shape-product implementation.
+//! Named sizes and the shape-product implementations.
 //!
 //! Other crates still spell some of these numbers locally. This module is
-//! the owner inside `ojas-core`. Call sites outside this crate are left
-//! alone while those crates are being edited elsewhere.
+//! the owner inside `ojas-core`. [`checked_product`] is also the one op-named
+//! product the CPU, wgpu and Metal backends call; the zero-refusing
+//! variants in `ojas-cpu/src/train.rs` and `ojas-autograd/src/tape.rs` keep
+//! their own error contracts and are not folded here.
 
 use crate::OjasError;
 
