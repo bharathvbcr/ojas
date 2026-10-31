@@ -251,14 +251,16 @@ impl Reference {
             .expect("allocate a buffer");
         {
             let mut map = buf.try_contents_f32().expect("map a buffer");
-            map.copy_from_slice(data);
+            // The mapping may be longer than `data` (a pooled allocation).
+            map[..data.len()].copy_from_slice(data);
         }
         buf
     }
 
-    fn read_bits(buf: &tessl::tensor::GpuBuffer) -> Vec<u32> {
+    /// The first `n` elements of `buf`, as bits.
+    fn read_bits(buf: &tessl::tensor::GpuBuffer, n: usize) -> Vec<u32> {
         let map = buf.try_contents_f32().expect("map a buffer");
-        map.iter().map(|x| x.to_bits()).collect()
+        map[..n].iter().map(|x| x.to_bits()).collect()
     }
 
     fn scalar_bytes(s: &[f32; 7]) -> Vec<u8> {
@@ -290,7 +292,7 @@ impl Reference {
         .expect("dispatch the classifier");
         self.rt.synchronize().expect("synchronize");
         let map = flags.try_contents_u32().expect("map the flags");
-        map.to_vec()
+        map[..n].to_vec()
     }
 
     /// The old `check` then `apply` pair.
@@ -325,9 +327,9 @@ impl Reference {
             words[0] != 0 || words[1] != 0
         };
         RefOut {
-            p: Self::read_bits(&pb),
-            m: Self::read_bits(&mb),
-            v: Self::read_bits(&vb),
+            p: Self::read_bits(&pb, n),
+            m: Self::read_bits(&mb, n),
+            v: Self::read_bits(&vb, n),
             refused,
         }
     }
