@@ -224,7 +224,7 @@ fn main() -> Result<(), String> {
         rt.set_pool_cache_cap_bytes(mb.saturating_mul(1024 * 1024));
     }
     if let Some(f) = wired_fraction {
-        rt.set_wired_fraction(f);
+        rt.set_wired_fraction(f)?;
     }
     rt.set_precision(if use_f32 {
         PrecisionMode::F32
