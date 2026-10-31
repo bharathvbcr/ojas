@@ -536,7 +536,7 @@
 <ul>
 <li><strong>The provider.</strong> A <code>Qwen35Cuda</code> model, the CUDA twin of the Metal <code>ojas-qwen35</code> provider, which holds a tessl <code>Qwen35Model</code>. It loads the 2B safetensors to f32 device masters and exposes the <strong>same step-provider trait</strong> as the Metal arm.
 </li>
-<li><p><strong>The trait.</strong> Proposed shape, mirroring tessl&#39;s verified API (§1.7). The trait&#39;s owner is L-ojas-qwen35 and the coordinator, not this lane:</p>
+<li><p><strong>The trait.</strong> Superseded: <code>ojas-cuda</code> no longer carries this proposal as a trait. <code>Qwen35Step</code> keeps <code>train_forward</code>, <code>hidden</code> and <code>train_backward_into</code> as inherent methods beside its existing <code>grad_sq_norm</code> and <code>adamw_step</code> (the tessl-shaped engine seam; the bank-taking trait forms of those two are gone), and the loop-facing contract is the one <code>ojas_core::step::StepProvider</code> that <code>ojas-train</code>, the Tape provider and Lappi&#39;s <code>qd-train-metal</code> share. A CUDA provider will implement that trait as an adapter over the engine. The proposed shape, mirroring tessl&#39;s verified API (§1.7), was (the trait&#39;s owner is L-ojas-qwen35 and the coordinator, not this lane):</p>
 <div class="code"><span class="code-lang">rust</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>trait StepProvider {
     type Pending; type Bank;
     fn train_forward(&amp;self, ids: &amp;[u32], ops: GemmOperands, sup: Supervise&lt;&#39;_&gt;) -&gt; Result&lt;Self::Pending, Error&gt;;

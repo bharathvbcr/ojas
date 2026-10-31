@@ -292,7 +292,7 @@ first Qwen op runs** [I].
 #### 2.B.1 What it is
 
 - **The provider.** A `Qwen35Cuda` model, the CUDA twin of the Metal `ojas-qwen35` provider, which holds a tessl `Qwen35Model`. It loads the 2B safetensors to f32 device masters and exposes the **same step-provider trait** as the Metal arm.
-- **The trait.** Proposed shape, mirroring tessl's verified API (§1.7). The trait's owner is L-ojas-qwen35 and the coordinator, not this lane:
+- **The trait.** Superseded: `ojas-cuda` no longer carries this proposal as a trait. `Qwen35Step` keeps `train_forward`, `hidden` and `train_backward_into` as inherent methods beside its existing `grad_sq_norm` and `adamw_step` (the tessl-shaped engine seam; the bank-taking trait forms of those two are gone), and the loop-facing contract is the one `ojas_core::step::StepProvider` that `ojas-train`, the Tape provider and Lappi's `qd-train-metal` share. A CUDA provider will implement that trait as an adapter over the engine. The proposed shape, mirroring tessl's verified API (§1.7), was (the trait's owner is L-ojas-qwen35 and the coordinator, not this lane):
 
   ```rust
   trait StepProvider {
