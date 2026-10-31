@@ -45,6 +45,8 @@ use crate::link::{
 };
 use crate::permute::{self, Plan};
 
+mod pool;
+
 /// Threads of an `ojas_permute_tile` threadgroup (`PERMUTE_TILE_THREADS`).
 const PERMUTE_TILE_THREADS: usize = 256;
 /// The status word that tells `ojas_permute_runs` and `ojas_permute_tile` not
@@ -217,6 +219,8 @@ const KERNELS: &[&str] = &[
     "ojas_xattn_combine_d32",
     "ojas_conv_nchw",
     "ojas_bilinear",
+    "ojas_max_pool2d_fwd",
+    "ojas_max_pool2d_bwd",
     "ojas_concat_part",
     "ojas_slice",
     "ojas_fill_words",
@@ -1584,6 +1588,8 @@ impl Worker {
                 geom,
             } => self.depthwise_conv2d(op, [x, w], bias, geom),
             Cmd::Bilinear { x, geom } => self.bilinear(x, geom),
+            Cmd::MaxPool2d { x, geom } => self.max_pool2d(x, geom),
+            Cmd::MaxPool2dBwd { x, dy, geom } => self.max_pool2d_bwd(x, dy, geom),
             Cmd::Concat {
                 xs,
                 outer,

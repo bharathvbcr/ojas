@@ -120,6 +120,8 @@ use crate::link::{
 };
 use crate::permute;
 
+mod pool;
+
 /// A Metal allocation owned by the device thread, named by id.
 pub struct MetalBuffer {
     id: u64,
@@ -3808,6 +3810,31 @@ impl Backend for MetalBackend {
             Reply::Done => Ok(()),
             other => Err(metal_err(format!("{OP}: device returned {other:?}"))),
         }
+    }
+
+    /// Max pooling on `ojas_max_pool2d_fwd` (`backend/pool.rs`): values
+    /// only, the first maximum of a window wins a tie, bit-identical to the
+    /// CPU.
+    fn max_pool2d_forward(
+        &self,
+        input: &Tensor,
+        kernel: [usize; 2],
+        stride: [usize; 2],
+    ) -> Result<Tensor, OjasError> {
+        self.pool_forward(input, kernel, stride)
+    }
+
+    /// The gather form of the max-pool gradient on `ojas_max_pool2d_bwd`:
+    /// each input sums, in ascending window order, the `grad_output` of the
+    /// windows it wins. No atomics; bit-identical to the CPU.
+    fn max_pool2d_backward(
+        &self,
+        input: &Tensor,
+        grad_output: &Tensor,
+        kernel: [usize; 2],
+        stride: [usize; 2],
+    ) -> Result<Tensor, OjasError> {
+        self.pool_backward(input, grad_output, kernel, stride)
     }
 }
 

@@ -435,6 +435,21 @@ pub(crate) struct BilinearGeom {
     pub align_corners: bool,
 }
 
+/// Max pooling of `planes` `[h, w]` images to `[oh, ow]` with windows of
+/// `kernel = [kh, kw]` at `stride = [sh, sw]` and no padding: window
+/// `(oy, ox)` covers rows `oy * sh .. oy * sh + kh` and columns
+/// `ox * sw .. ox * sw + kw`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PoolGeom {
+    pub planes: u32,
+    pub h: u32,
+    pub w: u32,
+    pub oh: u32,
+    pub ow: u32,
+    pub kernel: [u32; 2],
+    pub stride: [u32; 2],
+}
+
 /// A convolution as GEMM, validated and within the kernels' limits:
 /// `[batch, c, h, w]` input, `[o, c, kh, kw]` weight, `[batch, o, oh, ow]`
 /// output, dilation 1, one group.
@@ -775,6 +790,18 @@ pub(crate) enum Cmd {
     Bilinear {
         x: Arg,
         geom: BilinearGeom,
+    },
+    /// `max_pool2d_forward` on `ojas_max_pool2d_fwd`.
+    MaxPool2d {
+        x: Arg,
+        geom: PoolGeom,
+    },
+    /// `max_pool2d_backward` on `ojas_max_pool2d_bwd`: the forward's input
+    /// `x` and the output gradient `dy`.
+    MaxPool2dBwd {
+        x: Arg,
+        dy: Arg,
+        geom: PoolGeom,
     },
     /// `[q, k, v, output, lse, grad_output]`; replies with dQ, dK, dV.
     SdpaBwd {
