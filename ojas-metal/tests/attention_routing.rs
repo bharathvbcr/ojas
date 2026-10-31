@@ -322,6 +322,7 @@ fn the_calls_that_stay_on_the_general_kernel_still_match_cpu() {
             window: opts.window,
             bias: dev_bias.as_ref(),
             key_lens: dev_lens.as_ref(),
+            ..Default::default()
         };
         let got = ok(
             "metal",
@@ -572,6 +573,7 @@ fn opts<'a>(causal: bool, bias: Option<&'a Tensor>, lens: Option<&'a Tensor>) ->
         window: None,
         bias,
         key_lens: lens,
+        ..Default::default()
     }
 }
 

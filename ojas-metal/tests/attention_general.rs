@@ -97,6 +97,7 @@ impl Operands {
             window: c.window,
             bias: self.bias.as_ref(),
             key_lens: self.lens.as_ref(),
+            ..Default::default()
         }
     }
 }
@@ -287,6 +288,7 @@ fn offset_views_are_read_in_place() {
         window: None,
         bias: Some(&bias),
         key_lens: Some(&lens),
+        ..Default::default()
     };
     let got = ok("metal", m.attention_forward(&q, &k, &v, opts));
     same_tensor("offset views", &got, &want, tol(9), 1e-4);

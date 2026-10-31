@@ -84,6 +84,7 @@ fn a_bf16_region_rounds_operands_and_output_and_keeps_lse_f32() {
         window: None,
         bias: Some(&rb),
         key_lens: Some(&f.lens),
+        ..Default::default()
     };
     let (mid, want_lse) = exact
         .attention_forward_saving(&rq, &rk, &rv, want_opts)
@@ -96,6 +97,7 @@ fn a_bf16_region_rounds_operands_and_output_and_keeps_lse_f32() {
         window: None,
         bias: Some(&f.bias),
         key_lens: Some(&f.lens),
+        ..Default::default()
     };
     let y = ac.attention_forward(&f.q, &f.k, &f.v, got_opts).unwrap();
     let (y2, lse) = ac
@@ -135,6 +137,7 @@ fn outside_a_region_the_wrapper_is_the_inner_backend() {
         window: None,
         bias: Some(&f.bias),
         key_lens: Some(&f.lens),
+        ..Default::default()
     };
     let got = ac.attention_forward(&f.q, &f.k, &f.v, opts).unwrap();
     let want = exact.attention_forward(&f.q, &f.k, &f.v, opts).unwrap();

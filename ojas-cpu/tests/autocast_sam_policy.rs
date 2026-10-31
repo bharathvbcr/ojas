@@ -14,11 +14,25 @@
 //! without the table following.
 
 use ojas_core::{
-    round_f32_to_bf16, AttentionOpts, Autocast, AutocastClass, AutocastMode, Backend, Budget,
-    Conv2dParams, ConvTranspose2dParams, DType, Numerics, Tensor, BACKEND_METHODS,
-    SAM_AUTOCAST_POLICY,
+    round_f32_to_bf16, AffineGrad, AttentionOpts, Autocast, AutocastClass, AutocastMode, Backend,
+    Budget, Conv2dParams, ConvTranspose2dParams, DType, Numerics, OjasError, Tensor,
+    BACKEND_METHODS, SAM_AUTOCAST_POLICY,
 };
 use ojas_cpu::CpuBackend;
+
+/// Policy entries whose `CpuBackend` implementation has not landed: the
+/// trait default refuses them (and `Autocast<CpuBackend>` passes the refusal
+/// through), so the class cannot be observed yet. The ops stay in the policy
+/// and have `arguments`/`try_call` arms, so the lane that implements one
+/// deletes its name here and the class check below then runs it. Both halves
+/// are enforced: a name listed here must still refuse, so the list cannot
+/// outlive an implementation, and a name not listed must run.
+const REFUSED_ON_CPU_UNTIL_IMPLEMENTED: &[&str] = &[
+    "gelu_tanh_forward",
+    "gelu_tanh_backward",
+    "seq_mean_forward",
+    "l2_normalize_forward",
+];
 
 /// Every other `Backend` method. Their policy predates the SAM ops and is
 /// not classified here.
@@ -170,9 +184,25 @@ fn arguments(op: &str) -> Vec<Tensor> {
             positive(&[4], 14),
             tensor(&[4], 15, 0.5),
         ],
-        "gelu_erf_forward" | "relu_forward" | "softmax_forward" | "scale_forward" => {
-            vec![tensor(&[3, 8], 16, 2.0)]
-        }
+        "gelu_erf_forward"
+        | "gelu_tanh_forward"
+        | "relu_forward"
+        | "softmax_forward"
+        | "scale_forward"
+        | "l2_normalize_forward" => vec![tensor(&[3, 8], 16, 2.0)],
+        // `try_call` supplies the lengths `[5, 3]`: `U32` cannot be rounded.
+        "seq_mean_forward" => vec![tensor(&[2, 5, 8], 46, 2.0)],
+        "group_norm_backward" => vec![
+            tensor(&[2, 4, 3, 3], 13, 2.0),
+            positive(&[4], 14),
+            tensor(&[4], 15, 0.5),
+            tensor(&[2, 4, 3, 3], 47, 1.0),
+        ],
+        "gelu_tanh_backward" => vec![tensor(&[3, 8], 16, 2.0), tensor(&[3, 8], 41, 1.0)],
+        "interpolate_bilinear_backward" => vec![
+            tensor(&[1, 2, 4, 4], 29, 2.0),
+            tensor(&[1, 2, 6, 6], 48, 2.0),
+        ],
         "broadcast_add_forward" | "broadcast_mul_forward" => {
             vec![tensor(&[3, 8], 17, 2.0), tensor(&[8], 18, 2.0)]
         }
@@ -264,13 +294,21 @@ fn arguments(op: &str) -> Vec<Tensor> {
 
 /// One call of `op` on `backend`; every tensor it returns, in order.
 fn call<B: Backend>(op: &str, backend: &B, a: &[Tensor]) -> Vec<Tensor> {
+    try_call(op, backend, a).unwrap_or_else(|e| panic!("{op}: {e}"))
+}
+
+/// [`call`], handing the backend's refusal back.
+fn try_call<B: Backend>(op: &str, backend: &B, a: &[Tensor]) -> Result<Vec<Tensor>, OjasError> {
     let lens = Tensor::from_u32(&[4], &[1], &budget()).unwrap();
+    // `seq_mean_forward`'s lengths: one per sequence of its `[2, 5, 8]` input.
+    let seq_lens = Tensor::from_u32(&[5, 3], &[2], &budget()).unwrap();
     let opts = |bias| AttentionOpts {
         bias,
         key_lens: Some(&lens),
         ..AttentionOpts::default()
     };
-    let one = |r: Result<Tensor, ojas_core::OjasError>| vec![r.unwrap()];
+    let one = |r: Result<Tensor, OjasError>| r.map(|t| vec![t]);
+    let affine = |r: Result<AffineGrad, OjasError>| r.map(|g| vec![g.input, g.weight, g.bias]);
     match op {
         "layer_norm_forward" => one(backend.layer_norm_forward(&a[0], &a[1], &a[2], 1e-5)),
         "channel_layer_norm_forward" => {
@@ -298,59 +336,52 @@ fn call<B: Backend>(op: &str, backend: &B, a: &[Tensor]) -> Vec<Tensor> {
             ConvTranspose2dParams::new(),
         )),
         "max_pool2d_forward" => one(backend.max_pool2d_forward(&a[0], [2, 2], [2, 2])),
+        "group_norm_backward" => {
+            affine(backend.group_norm_backward(&a[0], &a[1], &a[2], &a[3], 2, 1e-5))
+        }
         "layer_norm_backward" => {
-            let g = backend
-                .layer_norm_backward(&a[0], &a[1], &a[2], &a[3], 1e-5)
-                .unwrap();
-            vec![g.input, g.weight, g.bias]
+            affine(backend.layer_norm_backward(&a[0], &a[1], &a[2], &a[3], 1e-5))
         }
         "channel_layer_norm_backward" => {
-            let g = backend
-                .channel_layer_norm_backward(&a[0], &a[1], &a[2], &a[3], 1e-5)
-                .unwrap();
-            vec![g.input, g.weight, g.bias]
+            affine(backend.channel_layer_norm_backward(&a[0], &a[1], &a[2], &a[3], 1e-5))
         }
         "gelu_erf_backward" => one(backend.gelu_erf_backward(&a[0], &a[1])),
+        "gelu_tanh_forward" => one(backend.gelu_tanh_forward(&a[0])),
+        "gelu_tanh_backward" => one(backend.gelu_tanh_backward(&a[0], &a[1])),
+        "seq_mean_forward" => one(backend.seq_mean_forward(&a[0], &seq_lens)),
+        "l2_normalize_forward" => one(backend.l2_normalize_forward(&a[0], 1e-12)),
         "softmax_backward" => one(backend.softmax_backward(&a[0], &a[1])),
-        "broadcast_add_backward" => {
-            let (ga, gb) = backend.broadcast_add_backward(&a[0], &a[1], &a[2]).unwrap();
-            vec![ga, gb]
-        }
-        "broadcast_mul_backward" => {
-            let (ga, gb) = backend.broadcast_mul_backward(&a[0], &a[1], &a[2]).unwrap();
-            vec![ga, gb]
-        }
-        "linear_bias_backward" => {
-            let g = backend
-                .linear_bias_backward(&a[0], &a[1], &a[2], &a[3])
-                .unwrap();
-            vec![g.input, g.weight, g.bias]
-        }
+        "broadcast_add_backward" => backend
+            .broadcast_add_backward(&a[0], &a[1], &a[2])
+            .map(|(ga, gb)| vec![ga, gb]),
+        "broadcast_mul_backward" => backend
+            .broadcast_mul_backward(&a[0], &a[1], &a[2])
+            .map(|(ga, gb)| vec![ga, gb]),
+        "linear_bias_backward" => affine(backend.linear_bias_backward(&a[0], &a[1], &a[2], &a[3])),
         "conv2d_backward" => {
             let params = Conv2dParams {
                 groups: 2,
                 ..Conv2dParams::new()
             };
-            let g = backend
+            backend
                 .conv2d_backward(&a[0], &a[1], Some(&a[2]), &a[3], params)
-                .unwrap();
-            vec![g.input, g.weight, g.bias.unwrap()]
+                .map(|g| vec![g.input, g.weight, g.bias.unwrap()])
         }
-        "conv_transpose2d_backward" => {
-            let g = backend
-                .conv_transpose2d_backward(
-                    &a[0],
-                    &a[1],
-                    Some(&a[2]),
-                    &a[3],
-                    ConvTranspose2dParams::new(),
-                )
-                .unwrap();
-            vec![g.input, g.weight, g.bias.unwrap()]
-        }
+        "conv_transpose2d_backward" => backend
+            .conv_transpose2d_backward(
+                &a[0],
+                &a[1],
+                Some(&a[2]),
+                &a[3],
+                ConvTranspose2dParams::new(),
+            )
+            .map(|g| vec![g.input, g.weight, g.bias.unwrap()]),
         "max_pool2d_backward" => one(backend.max_pool2d_backward(&a[0], &a[1], [2, 2], [2, 2])),
         "interpolate_bilinear_forward" => {
             one(backend.interpolate_bilinear_forward(&a[0], [6, 6], false))
+        }
+        "interpolate_bilinear_backward" => {
+            one(backend.interpolate_bilinear_backward(&a[0], &a[1], false))
         }
         "rope_interleaved_forward" => one(backend.rope_interleaved_forward(&a[0], &a[1], &a[2])),
         "rope_interleaved_backward" => one(backend.rope_interleaved_backward(&a[0], &a[1], &a[2])),
@@ -360,27 +391,21 @@ fn call<B: Backend>(op: &str, backend: &B, a: &[Tensor]) -> Vec<Tensor> {
         "attention_forward" => {
             one(backend.attention_forward(&a[0], &a[1], &a[2], opts(Some(&a[3]))))
         }
-        "attention_forward_saving" => {
-            let (out, lse) = backend
-                .attention_forward_saving(&a[0], &a[1], &a[2], opts(Some(&a[3])))
-                .unwrap();
-            vec![out, lse]
-        }
-        "attention_backward" => {
-            let g = backend
-                .attention_backward(
-                    &a[0],
-                    &a[1],
-                    &a[2],
-                    &a[3],
-                    &a[4],
-                    &a[5],
-                    opts(Some(&a[6])),
-                    true,
-                )
-                .unwrap();
-            vec![g.q, g.k, g.v, g.bias.unwrap()]
-        }
+        "attention_forward_saving" => backend
+            .attention_forward_saving(&a[0], &a[1], &a[2], opts(Some(&a[3])))
+            .map(|(out, lse)| vec![out, lse]),
+        "attention_backward" => backend
+            .attention_backward(
+                &a[0],
+                &a[1],
+                &a[2],
+                &a[3],
+                &a[4],
+                &a[5],
+                opts(Some(&a[6])),
+                true,
+            )
+            .map(|g| vec![g.q, g.k, g.v, g.bias.unwrap()]),
         other => panic!("{other} is in SAM_AUTOCAST_POLICY but this test has no call for it"),
     }
 }
@@ -589,6 +614,41 @@ fn every_backend_method_has_one_autocast_policy_and_every_sam_op_follows_it() {
     }
     // Behaviour: every op follows its class.
     for &(op, class) in SAM_AUTOCAST_POLICY {
+        if REFUSED_ON_CPU_UNTIL_IMPLEMENTED.contains(&op) {
+            continue;
+        }
         check(op, class);
+    }
+}
+
+/// The ops [`REFUSED_ON_CPU_UNTIL_IMPLEMENTED`] names are in the policy, and
+/// each is still the trait default's refusal, directly and through
+/// `Autocast` in a bf16 region, under its own name. Their class check is the
+/// loop above; this keeps a skipped check from also hiding an implementation
+/// that landed without removing the name.
+#[test]
+fn ops_without_a_cpu_implementation_refuse_and_have_a_policy_entry() {
+    for &op in REFUSED_ON_CPU_UNTIL_IMPLEMENTED {
+        assert!(
+            SAM_AUTOCAST_POLICY.iter().any(|(name, _)| *name == op),
+            "{op} is listed as not yet on the CPU but has no policy entry"
+        );
+        let plain = raw();
+        let auto = Autocast::new(&plain);
+        let args = arguments(op);
+        let refused = |got: Result<Vec<Tensor>, OjasError>, how: &str| match got {
+            Err(OjasError::Unsupported { op: name, .. }) => {
+                assert_eq!(name, op, "{how}: refused under another op's name");
+            }
+            Ok(_) => panic!(
+                "{op}: CpuBackend implements it ({how}): remove the name from \
+                 REFUSED_ON_CPU_UNTIL_IMPLEMENTED so its class is checked"
+            ),
+            Err(other) => panic!("{op}: {how}: expected Unsupported, got {other:?}"),
+        };
+        refused(try_call(op, &plain, &args), "direct");
+        refused(try_call(op, &auto, &args), "Autocast, region off");
+        let _region = auto.autocast_region(AutocastMode::Bf16).unwrap();
+        refused(try_call(op, &auto, &args), "Autocast, bf16 region");
     }
 }

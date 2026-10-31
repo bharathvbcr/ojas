@@ -129,6 +129,7 @@ impl Operands {
             window: None,
             bias: self.bias.as_ref(),
             key_lens: self.lens.as_ref(),
+            ..Default::default()
         }
     }
 }

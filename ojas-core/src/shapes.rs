@@ -72,8 +72,13 @@ const LAYER_NORM_BACKWARD: &str = "layer_norm_backward";
 const CHANNEL_LAYER_NORM_FORWARD: &str = "channel_layer_norm_forward";
 const CHANNEL_LAYER_NORM_BACKWARD: &str = "channel_layer_norm_backward";
 const GROUP_NORM_FORWARD: &str = "group_norm_forward";
+const GROUP_NORM_BACKWARD: &str = "group_norm_backward";
 const GELU_ERF_FORWARD: &str = "gelu_erf_forward";
 const GELU_ERF_BACKWARD: &str = "gelu_erf_backward";
+const GELU_TANH_FORWARD: &str = "gelu_tanh_forward";
+const GELU_TANH_BACKWARD: &str = "gelu_tanh_backward";
+const SEQ_MEAN_FORWARD: &str = "seq_mean_forward";
+const L2_NORMALIZE_FORWARD: &str = "l2_normalize_forward";
 const RELU_FORWARD: &str = "relu_forward";
 const CONCAT: &str = "concat";
 const SLICE: &str = "slice";
@@ -253,6 +258,12 @@ pub struct AttentionDims {
     pub causal: bool,
     /// Always `None` without `causal`, and for a window of at least `Tk`.
     pub window: Option<usize>,
+    /// The symmetric band of [`AttentionOpts::radius`]: key `j` is visible
+    /// to query `i` when `|i - j| <= radius`. At least 1; always `None` with
+    /// `causal` or a `window`, when `Tq != Tk`, and for a radius of at least
+    /// `Tk - 1`. The `f32` score scale is not here (this type is `Eq`):
+    /// backends read it with [`crate::attention_scale`].
+    pub radius: Option<usize>,
     pub bias: Option<AttentionBias>,
     /// A `key_lens` tensor `[B]` was given.
     pub key_lens: bool,
@@ -1538,37 +1549,67 @@ pub fn group_norm_forward_dims(
 ) -> Result<GroupNormDims, OjasError> {
     const OP: &str = GROUP_NORM_FORWARD;
     f32_operands(OP, &[input, weight, bias])?;
+    group_norm_layout(OP, input, weight, bias, groups, eps)
+}
+
+/// [`crate::Backend::group_norm_backward`]: `grad_output` shaped like
+/// `input` (checked after the operands' own rules and before the rest, as
+/// [`layer_norm_backward_dims`] does), then as the forward.
+pub fn group_norm_backward_dims(
+    input: &Tensor,
+    weight: &Tensor,
+    bias: &Tensor,
+    grad_output: &Tensor,
+    groups: usize,
+    eps: f32,
+) -> Result<GroupNormDims, OjasError> {
+    const OP: &str = GROUP_NORM_BACKWARD;
+    f32_operands(OP, &[input, weight, bias, grad_output])?;
+    same(OP, input.shape(), grad_output.shape())?;
+    group_norm_layout(OP, input, weight, bias, groups, eps)
+}
+
+/// The rules the GroupNorm forward and backward share, after the
+/// per-operand dtype checks.
+fn group_norm_layout(
+    op: &'static str,
+    input: &Tensor,
+    weight: &Tensor,
+    bias: &Tensor,
+    groups: usize,
+    eps: f32,
+) -> Result<GroupNormDims, OjasError> {
     let shape = input.shape();
     let &[batch, channels, height, width] = shape else {
         return Err(refuse(
-            OP,
+            op,
             format!("input rank {} is not 4 ([N, C, H, W])", shape.len()),
         ));
     };
     if groups == 0 {
-        return Err(too_large(OP, "groups 0 is not in 1..=channels"));
+        return Err(too_large(op, "groups 0 is not in 1..=channels"));
     }
     if !channels.is_multiple_of(groups) {
         return Err(refuse(
-            OP,
+            op,
             format!("{channels} channels are not divisible into {groups} groups"),
         ));
     }
     for (name, t) in [("weight", weight), ("bias", bias)] {
         if t.shape() != [channels] {
             return Err(refuse(
-                OP,
+                op,
                 format!("{name} shape {:?} is not [{channels}]", t.shape()),
             ));
         }
     }
     if !eps.is_finite() {
-        return Err(OjasError::NonFinite { op: OP });
+        return Err(OjasError::NonFinite { op });
     }
     if eps <= 0.0 {
-        return Err(too_large(OP, format!("eps {eps} is not above 0")));
+        return Err(too_large(op, format!("eps {eps} is not above 0")));
     }
-    f32_product(OP, shape)?;
+    f32_product(op, shape)?;
     Ok(GroupNormDims {
         batch,
         channels,
@@ -1587,6 +1628,73 @@ pub fn gelu_erf_forward_dims(input: &Tensor) -> Result<usize, OjasError> {
 /// both `F32`. Returns the element count.
 pub fn gelu_erf_backward_dims(input: &Tensor, grad_output: &Tensor) -> Result<usize, OjasError> {
     same_shape(GELU_ERF_BACKWARD, &[input, grad_output])
+}
+
+/// [`crate::Backend::gelu_tanh_forward`]: the contract of
+/// [`gelu_erf_forward_dims`] under this op's name.
+pub fn gelu_tanh_forward_dims(input: &Tensor) -> Result<usize, OjasError> {
+    same_shape(GELU_TANH_FORWARD, &[input])
+}
+
+/// [`crate::Backend::gelu_tanh_backward`]: the contract of
+/// [`gelu_erf_backward_dims`] under this op's name.
+pub fn gelu_tanh_backward_dims(input: &Tensor, grad_output: &Tensor) -> Result<usize, OjasError> {
+    same_shape(GELU_TANH_BACKWARD, &[input, grad_output])
+}
+
+/// Dimensions of [`crate::Backend::seq_mean_forward`]: `x` is `[batch, seq,
+/// dim]` and the output `[batch, dim]`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SeqMeanDims {
+    pub batch: usize,
+    pub seq: usize,
+    pub dim: usize,
+}
+
+/// [`crate::Backend::seq_mean_forward`]: `x` `[B, T, D]` `F32` and
+/// `key_lens` `U32` `[B]`, checked in that order (dtype, then no zero
+/// extent, then size) and then the rank of `x` and the shape of `key_lens`.
+/// A length above `T` is `T`, so no length is out of range.
+pub fn seq_mean_forward_dims(x: &Tensor, key_lens: &Tensor) -> Result<SeqMeanDims, OjasError> {
+    const OP: &str = SEQ_MEAN_FORWARD;
+    f32_operand(OP, x)?;
+    operand(OP, key_lens, DType::U32)?;
+    let &[batch, seq, dim] = x.shape() else {
+        return Err(refuse(
+            OP,
+            format!("seq_mean x rank {} != 3 [B, T, D]", x.shape().len()),
+        ));
+    };
+    if key_lens.shape() != [batch] {
+        return Err(refuse(
+            OP,
+            format!("seq_mean key_lens {:?} != [{batch}]", key_lens.shape()),
+        ));
+    }
+    f32_product(OP, &[batch, dim])?;
+    Ok(SeqMeanDims { batch, seq, dim })
+}
+
+/// [`crate::Backend::l2_normalize_forward`]: `x` `[rows, dim]` `F32`, then
+/// `eps`: non-finite is [`OjasError::NonFinite`] and one that is not above 0
+/// is [`OjasError::OutOfRange`] (a zero row's divisor is `eps`, so `eps` is
+/// what keeps it finite).
+pub fn l2_normalize_forward_dims(x: &Tensor, eps: f32) -> Result<RmsDims, OjasError> {
+    const OP: &str = L2_NORMALIZE_FORWARD;
+    f32_operand(OP, x)?;
+    let &[rows, dim] = x.shape() else {
+        return Err(refuse(
+            OP,
+            format!("l2_normalize x rank {} != 2 [rows, dim]", x.shape().len()),
+        ));
+    };
+    if !eps.is_finite() {
+        return Err(OjasError::NonFinite { op: OP });
+    }
+    if eps <= 0.0 {
+        return Err(too_large(OP, format!("eps {eps} is not above 0")));
+    }
+    Ok(RmsDims { rows, dim })
 }
 
 /// [`crate::Backend::relu_forward`]: one `F32` tensor of any rank. Returns
@@ -2254,6 +2362,23 @@ fn attention_layout(
     if opts.window.is_some() && !opts.causal {
         return Err(refuse(op, "attention window needs causal"));
     }
+    if opts.radius == Some(0) {
+        return Err(refuse(op, "attention radius must be at least 1"));
+    }
+    if opts.radius.is_some() {
+        if opts.causal {
+            return Err(refuse(op, "attention radius is not causal"));
+        }
+        if q_len != kv_len {
+            return Err(refuse(
+                op,
+                format!("attention radius needs Tq == Tk, got Tq {q_len} and Tk {kv_len}"),
+            ));
+        }
+    }
+    if opts.scale.is_some_and(|s| !s.is_finite()) {
+        return Err(OjasError::NonFinite { op });
+    }
     let bias = match opts.bias {
         None => None,
         Some(bias) => {
@@ -2300,6 +2425,7 @@ fn attention_layout(
         head_dim,
         causal: opts.causal,
         window: opts.window.filter(|&w| w < kv_len),
+        radius: opts.radius.filter(|&r| r < kv_len.saturating_sub(1)),
         bias,
         key_lens: opts.key_lens.is_some(),
     })
@@ -4617,6 +4743,333 @@ mod tests {
             op,
             "query heads",
         );
+    }
+
+    #[test]
+    fn attention_radius_rules() {
+        let op = "attention_forward";
+        let q = f(&[2, 4, 7, 8]);
+        let k = f(&[2, 2, 7, 8]);
+        let radius = |r: usize| AttentionOpts {
+            radius: Some(r),
+            ..AttentionOpts::default()
+        };
+        let dims = |opts: &AttentionOpts<'_>| attention_forward_dims(&q, &k, &k, opts);
+
+        // The band is kept when it hides something: Tk 7, radius 1..=5.
+        assert_eq!(dims(&AttentionOpts::default()).unwrap().radius, None);
+        for r in 1..=5 {
+            let d = dims(&radius(r)).unwrap();
+            assert_eq!(
+                (d.radius, d.causal, d.window),
+                (Some(r), false, None),
+                "{r}"
+            );
+        }
+        // A radius of Tk - 1 or more hides nothing: it normalizes to no
+        // radius, as a window of at least Tk does.
+        for r in [6, 7, 1000, usize::MAX] {
+            assert_eq!(dims(&radius(r)).unwrap().radius, None, "{r}");
+        }
+        shape_err(dims(&radius(0)), op, "radius must be at least 1");
+        // Zero is refused before the other radius rules.
+        shape_err(
+            dims(&AttentionOpts {
+                causal: true,
+                ..radius(0)
+            }),
+            op,
+            "radius must be at least 1",
+        );
+        // Causal, windowed (a window needs causal, so that is the refusal),
+        // and cross-attention (Tq != Tk) are refused.
+        shape_err(
+            dims(&AttentionOpts {
+                causal: true,
+                ..radius(2)
+            }),
+            op,
+            "radius is not causal",
+        );
+        shape_err(
+            dims(&AttentionOpts {
+                causal: true,
+                window: Some(3),
+                ..radius(2)
+            }),
+            op,
+            "radius is not causal",
+        );
+        shape_err(
+            dims(&AttentionOpts {
+                window: Some(3),
+                ..radius(2)
+            }),
+            op,
+            "window needs causal",
+        );
+        shape_err(
+            attention_forward_dims(&f(&[2, 4, 5, 8]), &k, &k, &radius(2)),
+            op,
+            "radius needs Tq == Tk",
+        );
+        // The saving form and the backward say the same under their names.
+        shape_err(
+            attention_forward_saving_dims(&q, &k, &k, &radius(0)),
+            "attention_forward_saving",
+            "radius must be at least 1",
+        );
+        let (o, lse) = (f(&[2, 4, 7, 8]), f(&[2, 4, 7]));
+        shape_err(
+            attention_backward_dims(&q, &k, &k, &o, &lse, &o, &radius(0), false),
+            "attention_backward",
+            "radius must be at least 1",
+        );
+        assert_eq!(
+            attention_backward_dims(&q, &k, &k, &o, &lse, &o, &radius(3), false)
+                .unwrap()
+                .radius,
+            Some(3)
+        );
+        // A radius composes with key_lens and a bias.
+        let lens = Tensor::zeros(&[2], DType::U32, &budget()).unwrap();
+        let bias = f(&[1, 1, 7, 7]);
+        let d = dims(&AttentionOpts {
+            key_lens: Some(&lens),
+            bias: Some(&bias),
+            ..radius(2)
+        })
+        .unwrap();
+        assert_eq!(
+            (d.radius, d.key_lens, d.bias.is_some()),
+            (Some(2), true, true)
+        );
+        // A single position has no band to cut.
+        let one = f(&[1, 1, 1, 8]);
+        assert_eq!(
+            attention_forward_dims(&one, &one, &one, &radius(1))
+                .unwrap()
+                .radius,
+            None
+        );
+    }
+
+    #[test]
+    fn attention_scale_must_be_finite_and_leaves_the_dims_alone() {
+        let op = "attention_forward";
+        let q = f(&[1, 2, 3, 8]);
+        let with = |scale: Option<f32>| AttentionOpts {
+            scale,
+            ..AttentionOpts::default()
+        };
+        let base = attention_forward_dims(&q, &q, &q, &AttentionOpts::default()).unwrap();
+        for s in [1.0f32, 0.0, -2.5, f32::MAX] {
+            // The scale is not part of the dims: every other field is as
+            // without it.
+            assert_eq!(
+                attention_forward_dims(&q, &q, &q, &with(Some(s))).unwrap(),
+                base,
+                "{s}"
+            );
+        }
+        for s in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            for got in [
+                attention_forward_dims(&q, &q, &q, &with(Some(s))),
+                attention_forward_saving_dims(&q, &q, &q, &with(Some(s))),
+            ] {
+                assert!(
+                    matches!(&got, Err(OjasError::NonFinite { op: o }) if o.starts_with(op)),
+                    "{s}: {got:?}"
+                );
+            }
+        }
+        let (o, lse) = (f(&[1, 2, 3, 8]), f(&[1, 2, 3]));
+        assert!(matches!(
+            attention_backward_dims(&q, &q, &q, &o, &lse, &o, &with(Some(f32::NAN)), false),
+            Err(OjasError::NonFinite {
+                op: "attention_backward"
+            })
+        ));
+    }
+
+    #[test]
+    fn gelu_tanh_dims_are_the_erf_contract_under_their_own_names() {
+        let x = f(&[3, 4]);
+        assert_eq!(gelu_tanh_forward_dims(&x).unwrap(), 12);
+        assert_eq!(gelu_tanh_backward_dims(&x, &x).unwrap(), 12);
+        shape_err(
+            gelu_tanh_backward_dims(&x, &f(&[4, 3])),
+            "gelu_tanh_backward",
+            "does not match",
+        );
+        shape_err(
+            gelu_tanh_forward_dims(&f(&[3, 0])),
+            "gelu_tanh_forward",
+            "empty tensor",
+        );
+        dtype_err(
+            gelu_tanh_forward_dims(&u(&[3])),
+            "gelu_tanh_forward",
+            DType::F32,
+            DType::U32,
+        );
+        dtype_err(
+            gelu_tanh_backward_dims(&x, &u(&[3, 4])),
+            "gelu_tanh_backward",
+            DType::F32,
+            DType::U32,
+        );
+        // The erf pair still answers to its own names.
+        shape_err(
+            gelu_erf_backward_dims(&x, &f(&[4, 3])),
+            "gelu_erf_backward",
+            "does not match",
+        );
+    }
+
+    #[test]
+    fn group_norm_backward_dims_are_the_forwards_under_their_own_name() {
+        let op = "group_norm_backward";
+        let (x, w, b) = (f(&[2, 6, 4, 5]), f(&[6]), f(&[6]));
+        let d = group_norm_backward_dims(&x, &w, &b, &x, 3, 1e-5).unwrap();
+        assert_eq!(
+            d,
+            group_norm_forward_dims(&x, &w, &b, 3, 1e-5).unwrap(),
+            "the same dims as the forward"
+        );
+        assert_eq!((d.batch, d.channels, d.groups, d.spatial), (2, 6, 3, 20));
+        // grad_output is checked against the input before the layout.
+        shape_err(
+            group_norm_backward_dims(&x, &w, &b, &f(&[2, 6, 5, 4]), 3, 1e-5),
+            op,
+            "does not match",
+        );
+        shape_err(
+            group_norm_backward_dims(&x, &w, &b, &f(&[2, 6, 4, 5]), 4, 1e-5),
+            op,
+            "not divisible",
+        );
+        shape_err(
+            group_norm_backward_dims(&f(&[6, 4, 5]), &w, &b, &f(&[6, 4, 5]), 3, 1e-5),
+            op,
+            "rank 3 is not 4",
+        );
+        range_err(
+            group_norm_backward_dims(&x, &w, &b, &x, 0, 1e-5),
+            op,
+            "groups 0",
+        );
+        shape_err(
+            group_norm_backward_dims(&x, &f(&[5]), &b, &x, 3, 1e-5),
+            op,
+            "weight shape",
+        );
+        shape_err(
+            group_norm_backward_dims(&x, &w, &f(&[6, 1]), &x, 3, 1e-5),
+            op,
+            "bias shape",
+        );
+        for eps in [f32::NAN, f32::INFINITY] {
+            assert!(matches!(
+                group_norm_backward_dims(&x, &w, &b, &x, 3, eps),
+                Err(OjasError::NonFinite {
+                    op: "group_norm_backward"
+                })
+            ));
+        }
+        for eps in [0.0, -1e-5] {
+            range_err(group_norm_backward_dims(&x, &w, &b, &x, 3, eps), op, "eps");
+        }
+        // Each operand in turn: a wrong dtype names the backward.
+        dtype_err(
+            group_norm_backward_dims(&x, &w, &b, &u(&[2, 6, 4, 5]), 3, 1e-5),
+            op,
+            DType::F32,
+            DType::U32,
+        );
+        shape_err(
+            group_norm_backward_dims(&x, &w, &b, &f(&[2, 0, 4, 5]), 3, 1e-5),
+            op,
+            "empty tensor",
+        );
+        // The forward keeps its own name.
+        shape_err(
+            group_norm_forward_dims(&x, &w, &b, 4, 1e-5),
+            "group_norm_forward",
+            "not divisible",
+        );
+    }
+
+    #[test]
+    fn seq_mean_dims_rules() {
+        let op = "seq_mean_forward";
+        let (x, lens) = (f(&[3, 5, 8]), u(&[3]));
+        let d = seq_mean_forward_dims(&x, &lens).unwrap();
+        assert_eq!((d.batch, d.seq, d.dim), (3, 5, 8));
+        dtype_err(
+            seq_mean_forward_dims(&u(&[3, 5, 8]), &lens),
+            op,
+            DType::F32,
+            DType::U32,
+        );
+        dtype_err(
+            seq_mean_forward_dims(&x, &f(&[3])),
+            op,
+            DType::U32,
+            DType::F32,
+        );
+        shape_err(
+            seq_mean_forward_dims(&f(&[3, 0, 8]), &lens),
+            op,
+            "empty tensor",
+        );
+        shape_err(seq_mean_forward_dims(&x, &u(&[0])), op, "empty tensor");
+        for shape in [&[5, 8][..], &[2, 3, 5, 8]] {
+            shape_err(seq_mean_forward_dims(&f(shape), &lens), op, "rank");
+        }
+        shape_err(seq_mean_forward_dims(&x, &u(&[2])), op, "key_lens");
+        shape_err(seq_mean_forward_dims(&x, &u(&[3, 1])), op, "key_lens");
+        // The dtype of x is checked before that of key_lens.
+        dtype_err(
+            seq_mean_forward_dims(&u(&[3, 5, 8]), &f(&[3])),
+            op,
+            DType::F32,
+            DType::U32,
+        );
+    }
+
+    #[test]
+    fn l2_normalize_dims_rules() {
+        let op = "l2_normalize_forward";
+        let d = l2_normalize_forward_dims(&f(&[4, 9]), 1e-12).unwrap();
+        assert_eq!((d.rows, d.dim), (4, 9));
+        dtype_err(
+            l2_normalize_forward_dims(&u(&[4, 9]), 1e-12),
+            op,
+            DType::F32,
+            DType::U32,
+        );
+        shape_err(
+            l2_normalize_forward_dims(&f(&[4, 0]), 1e-12),
+            op,
+            "empty tensor",
+        );
+        for shape in [&[9][..], &[2, 4, 9]] {
+            shape_err(l2_normalize_forward_dims(&f(shape), 1e-12), op, "rank");
+        }
+        for eps in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert!(matches!(
+                l2_normalize_forward_dims(&f(&[4, 9]), eps),
+                Err(OjasError::NonFinite {
+                    op: "l2_normalize_forward"
+                })
+            ));
+        }
+        for eps in [0.0, -1e-12] {
+            range_err(l2_normalize_forward_dims(&f(&[4, 9]), eps), op, "eps");
+        }
+        // The smallest positive eps is legal.
+        assert!(l2_normalize_forward_dims(&f(&[1, 1]), f32::MIN_POSITIVE).is_ok());
     }
 
     #[test]

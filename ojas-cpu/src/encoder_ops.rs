@@ -1,7 +1,7 @@
 //! Forward ops of a transformer encoder that is not nanolab's GPT: LayerNorm
 //! with a bias (plain, across the channel axis of an image, and per channel
 //! group), the exact GELU, a linear layer's bias, broadcast add and multiply, a scalar scale,
-//! and a standalone softmax; and the backward of all of them but GroupNorm.
+//! and a standalone softmax; and the backward of all of them.
 //!
 //! Every row, channel and softmax reduction ascends from index 0 without
 //! `mul_add` (LayerNorm's in `f64`, the softmax sum in `f32`), and no output
@@ -657,6 +657,135 @@ pub(crate) fn channel_layer_norm_backward(
                     for ((&v, &g), &(m, r)) in src.iter().zip(gy).zip(stat) {
                         let g = f64::from(g);
                         sum_gx += g * ((f64::from(v) - m) * r);
+                        sum_g += g;
+                    }
+                }
+                grad_w[local] = sum_gx as f32;
+                grad_b[local] = sum_g as f32;
+            }
+            Ok(())
+        },
+    )?;
+    Ok(())
+}
+
+/// [`layer_norm_backward`] over the `(batch, group)` rows of GroupNorm
+/// ([`group_norm_forward`]): a row is the `channels / groups` contiguous
+/// channels of a group and every position, its statistics are the forward's
+/// own [`row_stats`], and its two sums (`sum dxhat`, `sum dxhat * xhat`, with
+/// `dxhat = g * weight[c]`) ascend over the row. Row chunks write `grad_x`
+/// and keep each row's `(mean, rstd)`. `grad_w[c]` (`sum g * xhat`) and
+/// `grad_b[c]` (`sum g`) then gather channel `c`'s values over the batch
+/// and, within an image, the positions, both ascending, as one `f64` sum
+/// rounded once. No sum is split across threads and nothing is scattered.
+/// `dims` comes from [`ojas_core::group_norm_backward_dims`].
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn group_norm_backward(
+    op: &'static str,
+    budget: &Budget,
+    exec: Exec<'_>,
+    [x, weight, grad_y]: [&[f32]; 3],
+    dims: GroupNormDims,
+    eps: f32,
+    [grad_x, grad_w, grad_b]: [&mut [f32]; 3],
+) -> Result<(), OjasError> {
+    let GroupNormDims {
+        batch,
+        channels,
+        groups,
+        spatial,
+    } = dims;
+    if groups == 0 || !channels.is_multiple_of(groups) {
+        return Err(shape(op, "group_norm groups do not divide the channels"));
+    }
+    let per_group = channels / groups;
+    if batch == 0 || per_group == 0 || spatial == 0 {
+        return Err(shape(op, "group_norm backward has an empty extent"));
+    }
+    let width = product(op, &[per_group, spatial])?;
+    let rows = product(op, &[batch, groups])?;
+    let n = product(op, &[rows, width])?;
+    if x.len() != n
+        || grad_y.len() != n
+        || weight.len() != channels
+        || grad_x.len() != n
+        || grad_w.len() != channels
+        || grad_b.len() != channels
+    {
+        return Err(shape(
+            op,
+            "group_norm backward data length does not match shape",
+        ));
+    }
+    // A `(mean, rstd)` pair of `f64` per row, held in the tasks' parts and
+    // again joined for the column pass (four `f32` elements each time).
+    let _hold = room_for(op, budget, product(op, &[rows, 8])?)?;
+    let parts = scoped::chunks_into(
+        exec,
+        grad_x,
+        rows,
+        width,
+        scoped::min_rows(width),
+        |range, grad_x| {
+            let src = &x[range.start * width..range.end * width];
+            let gy = &grad_y[range.start * width..range.end * width];
+            let mut stats = Vec::with_capacity(range.len());
+            let groups_in = grad_x
+                .chunks_exact_mut(width)
+                .zip(src.chunks_exact(width))
+                .zip(gy.chunks_exact(width));
+            for (row, ((dst, grp), g_grp)) in range.zip(groups_in) {
+                let (mean, rstd) = row_stats(op, grp, eps)?;
+                let first = (row % groups) * per_group;
+                let w = &weight[first..first + per_group];
+                let (mut sum_g, mut sum_gx) = (0.0f64, 0.0f64);
+                let planes = grp.chunks_exact(spatial).zip(g_grp.chunks_exact(spatial));
+                for ((plane, g_plane), &wc) in planes.zip(w) {
+                    let wc = f64::from(wc);
+                    for (&v, &g) in plane.iter().zip(g_plane) {
+                        let dxhat = f64::from(g) * wc;
+                        sum_g += dxhat;
+                        sum_gx += dxhat * ((f64::from(v) - mean) * rstd);
+                    }
+                }
+                let (mean_g, mean_gx) = (sum_g / width as f64, sum_gx / width as f64);
+                let planes = dst
+                    .chunks_exact_mut(spatial)
+                    .zip(grp.chunks_exact(spatial))
+                    .zip(g_grp.chunks_exact(spatial));
+                for (((out_plane, plane), g_plane), &wc) in planes.zip(w) {
+                    let wc = f64::from(wc);
+                    for ((out, &v), &g) in out_plane.iter_mut().zip(plane).zip(g_plane) {
+                        let xhat = (f64::from(v) - mean) * rstd;
+                        let dxhat = f64::from(g) * wc;
+                        *out = (rstd * (dxhat - mean_g - xhat * mean_gx)) as f32;
+                    }
+                }
+                stats.push((mean, rstd));
+            }
+            Ok::<_, OjasError>(stats)
+        },
+    )?;
+    let stats = parts.concat();
+    let min_cols = (ROW_MIN_ELEMS / product(op, &[batch, spatial])?).max(1);
+    scoped::chunks_into_n(
+        exec,
+        [grad_w, grad_b],
+        channels,
+        [1, 1],
+        min_cols,
+        |cols, [grad_w, grad_b]| {
+            for (local, c) in cols.enumerate() {
+                let group = c / per_group;
+                let (mut sum_gx, mut sum_g) = (0.0f64, 0.0f64);
+                for b in 0..batch {
+                    let (mean, rstd) = stats[b * groups + group];
+                    let at = (b * channels + c) * spatial;
+                    let src = &x[at..at + spatial];
+                    let gy = &grad_y[at..at + spatial];
+                    for (&v, &g) in src.iter().zip(gy) {
+                        let g = f64::from(g);
+                        sum_gx += g * ((f64::from(v) - mean) * rstd);
                         sum_g += g;
                     }
                 }

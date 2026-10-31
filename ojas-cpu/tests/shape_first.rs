@@ -73,6 +73,7 @@ fn attention_opts(o: &[Tensor], causal: bool, window: Option<usize>) -> Attentio
         window,
         bias: extra.filter(|t| t.dtype() == DType::F32),
         key_lens: extra.filter(|t| t.dtype() == DType::U32),
+        ..Default::default()
     }
 }
 

@@ -247,6 +247,21 @@ enum Rec {
         seg: usize,
         part: usize,
     },
+    /// GroupNorm of `x` `[N, C, H, W]` into `groups` channel groups, with
+    /// weight `w` and bias `b` `[C]`.
+    GroupNorm {
+        x: usize,
+        w: usize,
+        b: usize,
+        groups: usize,
+        eps: f32,
+    },
+    /// Bilinear resampling of `x` `[N, C, H, W]` to `out_size`.
+    Bilinear {
+        x: usize,
+        out_size: [usize; 2],
+        align_corners: bool,
+    },
 }
 
 impl Rec {
@@ -434,6 +449,28 @@ impl Rec {
                 inverse,
             },
             Rec::Checkpoint { seg, part } => Rec::Checkpoint { seg, part },
+            Rec::GroupNorm {
+                x,
+                w,
+                b,
+                groups,
+                eps,
+            } => Rec::GroupNorm {
+                x: m(x),
+                w: m(w),
+                b: m(b),
+                groups,
+                eps,
+            },
+            Rec::Bilinear {
+                x,
+                out_size,
+                align_corners,
+            } => Rec::Bilinear {
+                x: m(x),
+                out_size,
+                align_corners,
+            },
         }
     }
 
@@ -864,6 +901,43 @@ impl<B: Backend> Tape<B> {
         self.record(Rec::ChannelLayerNorm { x, w, b, eps })
     }
 
+    /// GroupNorm ([`Backend::group_norm_forward`]) of `x` `[N, C, H, W]`
+    /// into `groups` channel groups, with `w` and `b` `[C]`.
+    pub fn group_norm(
+        &mut self,
+        x: Var,
+        w: Var,
+        b: Var,
+        groups: usize,
+        eps: f32,
+    ) -> Result<Var, OjasError> {
+        const OP: &str = "Tape::group_norm";
+        let (x, w, b) = (self.index(x, OP)?, self.index(w, OP)?, self.index(b, OP)?);
+        self.record(Rec::GroupNorm {
+            x,
+            w,
+            b,
+            groups,
+            eps,
+        })
+    }
+
+    /// Bilinear resampling ([`Backend::interpolate_bilinear_forward`]) of
+    /// `x` `[N, C, H, W]` to `out_size`.
+    pub fn interpolate_bilinear(
+        &mut self,
+        x: Var,
+        out_size: [usize; 2],
+        align_corners: bool,
+    ) -> Result<Var, OjasError> {
+        let x = self.index(x, "Tape::interpolate_bilinear")?;
+        self.record(Rec::Bilinear {
+            x,
+            out_size,
+            align_corners,
+        })
+    }
+
     /// The exact GELU ([`Backend::gelu_erf_forward`]).
     pub fn gelu_erf(&mut self, x: Var) -> Result<Var, OjasError> {
         let x = self.index(x, "Tape::gelu_erf")?;
@@ -1186,6 +1260,7 @@ impl<B: Backend> Tape<B> {
                     window,
                     bias: bias.map(|b| &v[b]),
                     key_lens: key_lens.as_ref(),
+                    ..Default::default()
                 };
                 let (y, lse) = be.attention_forward_saving(&v[q], &v[k], &v[vi], opts)?;
                 let rec = Rec::Attn {
@@ -1274,6 +1349,24 @@ impl<B: Backend> Tape<B> {
             }
             Rec::ChannelLayerNorm { x, w, b, eps } => (
                 be.channel_layer_norm_forward(&v[x], &v[w], &v[b], eps)?,
+                rec,
+            ),
+            Rec::GroupNorm {
+                x,
+                w,
+                b,
+                groups,
+                eps,
+            } => (
+                be.group_norm_forward(&v[x], &v[w], &v[b], groups, eps)?,
+                rec,
+            ),
+            Rec::Bilinear {
+                x,
+                out_size,
+                align_corners,
+            } => (
+                be.interpolate_bilinear_forward(&v[x], out_size, align_corners)?,
                 rec,
             ),
             Rec::Gelu { x } => (be.gelu_erf_forward(&v[x])?, rec),
@@ -1645,6 +1738,7 @@ impl<B: Backend> Tape<B> {
                     window,
                     bias: bias.map(|b| &self.values[b]),
                     key_lens: key_lens.as_ref(),
+                    ..Default::default()
                 };
                 let bias_grad = bias.is_some_and(|b| !self.is_frozen(b));
                 let g = self.backend.attention_backward(
@@ -1819,6 +1913,30 @@ impl<B: Backend> Tape<B> {
                     .backend
                     .channel_layer_norm_backward(&xv, &wv, &bv, grad, eps)?;
                 self.affine_grads(x, w, b, g)
+            }
+            Rec::GroupNorm {
+                x,
+                w,
+                b,
+                groups,
+                eps,
+            } => {
+                let (xv, wv) = (self.values[x].clone(), self.values[w].clone());
+                let bv = self.values[b].clone();
+                let g = self
+                    .backend
+                    .group_norm_backward(&xv, &wv, &bv, grad, groups, eps)?;
+                self.affine_grads(x, w, b, g)
+            }
+            Rec::Bilinear {
+                x, align_corners, ..
+            } => {
+                // `x` is read for its shape: the output size is `grad`'s.
+                let xv = self.values[x].clone();
+                let gx = self
+                    .backend
+                    .interpolate_bilinear_backward(&xv, grad, align_corners)?;
+                self.acc(x, gx)
             }
             Rec::Gelu { x } => {
                 let xv = self.values[x].clone();
