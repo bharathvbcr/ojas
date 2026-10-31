@@ -369,7 +369,19 @@
 <li><code>gp/ug-metal-attn-bwd</code>, <code>-encoder-bwd</code>, <code>-maxpool</code> and <code>-spatial-bwd</code>: each edits <code>ojas-metal/{build.rs, src/backend.rs, src/device.rs, src/link.rs}</code> and adds new <code>.metal</code> files (<code>attn_gen_bwd.metal</code> with <code>attn_bwd_tiled.h</code>, <code>encoder_bwd.metal</code>, <code>max_pool.metal</code>, <code>spatial_bwd.metal</code>), new <code>src/backend/</code> and <code>src/device/</code> submodules, oracle fixtures and tests.
 </li>
 </ul>
-<p>Other sprint lanes (<code>gp/ug-docs-ojas</code>, <code>-bucket-dedup</code>, <code>-alloc-error</code>, <code>-const-dedup</code>, <code>-adamw-scalars</code>, <code>-geometry-dedup</code>, <code>-tiny-step</code>, <code>-one-runtime</code>, and <code>ug/docs</code> in tessl) were opened after the plan&#39;s snapshot, so the plan does not classify them; they are shown in this repository&#39;s worktree list and are I with respect to which phase each one starts.</p>
+<p>Other sprint lanes (<code>gp/ug-docs-ojas</code>, <code>-bucket-dedup</code>, <code>-alloc-error</code>, <code>-const-dedup</code>, <code>-adamw-scalars</code>, <code>-geometry-dedup</code>, <code>-tiny-step</code>, <code>-one-runtime</code>, and <code>ug/docs</code> in tessl) were opened after the plan&#39;s snapshot, so the plan does not classify them; they are shown in this repository&#39;s worktree list. The mapping below is inferred from the lane names alone (their diffs were not read for this document), so treat each row as I:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Lane (by name)</th><th>Nearest plan item</th><th>Basis</th></tr></thead>
+<tbody>
+<tr><td><code>gp/ug-alloc-error</code></td><td>P1 and P3a: typed <code>AllocError</code>, retiring the <code>classify_alloc</code> string match</td><td>name</td></tr>
+<tr><td><code>gp/ug-bucket-dedup</code></td><td>Ledger row &#34;ojas-metal accounting layer&#34;: one bucket formula (<code>gpu.rs:214</code> copy)</td><td>name</td></tr>
+<tr><td><code>gp/ug-adamw-scalars</code></td><td>Ledger row &#34;AdamW scalar formation&#34;: three copies to one</td><td>name</td></tr>
+<tr><td><code>gp/ug-const-dedup</code>, <code>gp/ug-geometry-dedup</code></td><td>Dedup of shared constants and launch geometry; no row in the ledger above, so the match is loose</td><td>name</td></tr>
+<tr><td><code>gp/ug-tiny-step</code></td><td>The legacy tiny Metal step (<code>gpu.rs</code>) and D11</td><td>name</td></tr>
+<tr><td><code>gp/ug-one-runtime</code></td><td>P4 one pool: fewer <code>GpuRuntime::new</code> sites</td><td>name</td></tr>
+<tr><td><code>gp/ug-docs-ojas</code>, <code>ug/docs</code> (tessl)</td><td>Documentation of the same direction; this page is a sibling of that work</td><td>name</td></tr>
+</tbody></table></div>
+<p>Any of these that deletes code the owner has not yet approved (for example <code>gpu.rs</code>, D11) must stop short of the deletion; section 9 lists what stays.</p>
 <p>How the kernel lanes fit: they are ojas-contract training kernels (safe math, status words, &#34;tessl has no kernel for the rest&#34;, <code>attn_bwd_tiled.h:1-10</code>) for EmbeddingGemma 2 and SAM backwards. They belong in ojas-metal&#39;s overlay under the ownership rule (tessl owns arithmetic both sides need; ojas owns its training contract), and they need no tessl change. Three consequences:</p>
 <ol>
 <li>P1 to P6 avoid <code>link.rs</code>, <code>backend.rs</code> and <code>device.rs</code> except for the small accounting regions (<code>device.rs:449-551, 761-822, 934-994, 1787-1855</code>). P3a and P3b land after the Metal lanes or rebase onto them. Any structural reshaping of <code>Cmd</code> (proposal A&#39;s closure owner) or relocation of ojas-metal (proposal C&#39;s Phase 6) is off the table until the lanes land, and is the owner&#39;s decision afterwards (D1).

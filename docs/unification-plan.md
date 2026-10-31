@@ -214,7 +214,19 @@ The plan's snapshot: five worktrees sat at `c389342` (the main commit) with unco
 - `gp/ug-core`: six new `Backend` methods (`interpolate_bilinear_backward`, `group_norm_backward`, `gelu_tanh_forward` and `_backward`, `seq_mean_forward`, `l2_normalize_forward`) in `ojas-core/src/backend.rs`, plus autocast, shapes, spatial, CPU general attention and tests; 26 files, +1,460 and -118.
 - `gp/ug-metal-attn-bwd`, `-encoder-bwd`, `-maxpool` and `-spatial-bwd`: each edits `ojas-metal/{build.rs, src/backend.rs, src/device.rs, src/link.rs}` and adds new `.metal` files (`attn_gen_bwd.metal` with `attn_bwd_tiled.h`, `encoder_bwd.metal`, `max_pool.metal`, `spatial_bwd.metal`), new `src/backend/` and `src/device/` submodules, oracle fixtures and tests.
 
-Other sprint lanes (`gp/ug-docs-ojas`, `-bucket-dedup`, `-alloc-error`, `-const-dedup`, `-adamw-scalars`, `-geometry-dedup`, `-tiny-step`, `-one-runtime`, and `ug/docs` in tessl) were opened after the plan's snapshot, so the plan does not classify them; they are shown in this repository's worktree list and are I with respect to which phase each one starts.
+Other sprint lanes (`gp/ug-docs-ojas`, `-bucket-dedup`, `-alloc-error`, `-const-dedup`, `-adamw-scalars`, `-geometry-dedup`, `-tiny-step`, `-one-runtime`, and `ug/docs` in tessl) were opened after the plan's snapshot, so the plan does not classify them; they are shown in this repository's worktree list. The mapping below is inferred from the lane names alone (their diffs were not read for this document), so treat each row as I:
+
+| Lane (by name) | Nearest plan item | Basis |
+| :--- | :--- | :--- |
+| `gp/ug-alloc-error` | P1 and P3a: typed `AllocError`, retiring the `classify_alloc` string match | name |
+| `gp/ug-bucket-dedup` | Ledger row "ojas-metal accounting layer": one bucket formula (`gpu.rs:214` copy) | name |
+| `gp/ug-adamw-scalars` | Ledger row "AdamW scalar formation": three copies to one | name |
+| `gp/ug-const-dedup`, `gp/ug-geometry-dedup` | Dedup of shared constants and launch geometry; no row in the ledger above, so the match is loose | name |
+| `gp/ug-tiny-step` | The legacy tiny Metal step (`gpu.rs`) and D11 | name |
+| `gp/ug-one-runtime` | P4 one pool: fewer `GpuRuntime::new` sites | name |
+| `gp/ug-docs-ojas`, `ug/docs` (tessl) | Documentation of the same direction; this page is a sibling of that work | name |
+
+Any of these that deletes code the owner has not yet approved (for example `gpu.rs`, D11) must stop short of the deletion; section 9 lists what stays.
 
 How the kernel lanes fit: they are ojas-contract training kernels (safe math, status words, "tessl has no kernel for the rest", `attn_bwd_tiled.h:1-10`) for EmbeddingGemma 2 and SAM backwards. They belong in ojas-metal's overlay under the ownership rule (tessl owns arithmetic both sides need; ojas owns its training contract), and they need no tessl change. Three consequences:
 
