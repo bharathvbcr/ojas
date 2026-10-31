@@ -195,7 +195,13 @@ fn scale_and_radius_are_refused_not_ignored() {
         m.attention_forward(&dq, &dk, &dv, AttentionOpts::default()),
     );
     let down_host = |t: &Tensor| host(&down(t), t.shape());
-    same_tensor("a radius that hides nothing", &got, &down_host(&want), 0.0, 0.0);
+    same_tensor(
+        "a radius that hides nothing",
+        &got,
+        &down_host(&want),
+        0.0,
+        0.0,
+    );
 }
 
 /// The sync after a faulting `attention_forward` names `attention_forward`.
