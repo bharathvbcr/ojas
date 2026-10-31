@@ -4,7 +4,7 @@
 //! checkpointed segment replays it bit for bit.
 
 use ojas_autograd::{central_diff, gradients_match, Tape, Var};
-use ojas_core::{Budget, Numerics, OjasError, Tensor};
+use ojas_core::{Backend, Budget, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 
 const H: f64 = 1e-3;
@@ -175,8 +175,8 @@ fn parts(s: &Shape, seed: u64) -> Parts {
 }
 
 /// Tape variables of a case, in order `q, k, v, bias, w`.
-fn record(
-    t: &mut Tape,
+fn record<B: Backend>(
+    t: &mut Tape<B>,
     s: &Shape,
     p: &Parts,
     frozen_bias: bool,
@@ -293,5 +293,116 @@ fn a_checkpointed_segment_replays_attention_bit_for_bit() {
             [q, k, v, bias].map(|x| t.grad(x).unwrap().to_f32_vec().unwrap())
         };
         assert_eq!(run(true), run(false), "{numerics:?}");
+    }
+}
+
+/// The same tape on a real Metal device: `Tape::attention` records the
+/// general forward and replays `attention_backward` on the tiled kernels.
+#[cfg(target_os = "macos")]
+mod metal {
+    use super::*;
+    use ojas_metal::MetalBackend;
+
+    const ALLOW_NO_GPU: &str = "OJAS_ALLOW_NO_GPU";
+
+    /// The Metal backend, or `None` when `OJAS_ALLOW_NO_GPU=1` says to skip
+    /// a machine with no device or no TensorOps (the backward is
+    /// matrix-unit code only and refuses there). Without that variable a
+    /// missing device fails.
+    fn open() -> Option<MetalBackend> {
+        match MetalBackend::new(Budget::new(1 << 28)) {
+            Ok(gpu) if gpu.has_tensorops() => Some(gpu),
+            Ok(_) if std::env::var(ALLOW_NO_GPU).as_deref() == Ok("1") => {
+                eprintln!("SKIP ({ALLOW_NO_GPU}=1): this device has no TensorOps");
+                None
+            }
+            Ok(_) => panic!(
+                "this device has no TensorOps, which Metal's attention backward needs; set \
+                 {ALLOW_NO_GPU}=1 to skip it explicitly"
+            ),
+            Err(err) if std::env::var(ALLOW_NO_GPU).as_deref() == Ok("1") => {
+                eprintln!("SKIP ({ALLOW_NO_GPU}=1): MetalBackend::new: {err}");
+                None
+            }
+            Err(err) => panic!(
+                "MetalBackend::new failed: {err}. This test needs a Metal 4 device; set \
+                 {ALLOW_NO_GPU}=1 to skip it explicitly on a machine without one"
+            ),
+        }
+    }
+
+    fn host_vals(t: &Tape<MetalBackend>, v: Var) -> Vec<f32> {
+        t.grad(v)
+            .unwrap()
+            .to_host(&Budget::new(1 << 24))
+            .unwrap()
+            .to_f32_vec()
+            .unwrap()
+    }
+
+    /// Gradients of q, k, v and the bias on Metal against f64 central
+    /// differences, at the tolerance the CPU tape is held to.
+    #[test]
+    fn gradcheck_attention_q_k_v_and_bias_on_metal() {
+        for (n, s) in CASES.iter().enumerate() {
+            let Some(gpu) = open() else {
+                return;
+            };
+            let p = parts(s, 10 + n as u64);
+            let lens = lens_for(s);
+            let mut tape = Tape::new(gpu);
+            let ([q, k, v, bias, _], z) = record(&mut tape, s, &p, false).unwrap();
+            tape.backward(z).unwrap();
+            let l = |q: &[f64], k: &[f64], v: &[f64], b: &[f64]| loss(s, &lens, q, k, v, b, &p.w);
+            check(
+                &host_vals(&tape, q),
+                &central_diff(&p.q, H, |x| Ok(l(x, &p.k, &p.v, &p.bias))).unwrap(),
+                &format!("metal case {n} q"),
+            );
+            check(
+                &host_vals(&tape, k),
+                &central_diff(&p.k, H, |x| Ok(l(&p.q, x, &p.v, &p.bias))).unwrap(),
+                &format!("metal case {n} k"),
+            );
+            check(
+                &host_vals(&tape, v),
+                &central_diff(&p.v, H, |x| Ok(l(&p.q, &p.k, x, &p.bias))).unwrap(),
+                &format!("metal case {n} v"),
+            );
+            check(
+                &host_vals(&tape, bias),
+                &central_diff(&p.bias, H, |x| Ok(l(&p.q, &p.k, &p.v, x))).unwrap(),
+                &format!("metal case {n} bias"),
+            );
+        }
+    }
+
+    /// A frozen bias asks the backward for no bias gradient, and q, k and v
+    /// get the same bits either way.
+    #[test]
+    fn a_frozen_bias_takes_no_gradient_on_metal() {
+        for (n, s) in CASES.iter().enumerate() {
+            let (Some(live_gpu), Some(frozen_gpu)) = (open(), open()) else {
+                return;
+            };
+            let p = parts(s, 20 + n as u64);
+            let mut live = Tape::new(live_gpu);
+            let (vars, z) = record(&mut live, s, &p, false).unwrap();
+            live.backward(z).unwrap();
+            let mut frozen = Tape::new(frozen_gpu);
+            let (fvars, fz) = record(&mut frozen, s, &p, true).unwrap();
+            frozen.backward(fz).unwrap();
+            assert!(
+                frozen.grad(fvars[3]).is_none(),
+                "case {n}: frozen bias grad"
+            );
+            for (i, name) in ["q", "k", "v"].iter().enumerate() {
+                assert_eq!(
+                    host_vals(&live, vars[i]),
+                    host_vals(&frozen, fvars[i]),
+                    "case {n}: {name}"
+                );
+            }
+        }
     }
 }

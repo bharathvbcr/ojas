@@ -2577,16 +2577,14 @@ kernel void ojas_softmax_rows(
 // compiled reduction width; D <= DM is the real head dimension. One (b, h)
 // plane must fit i32 extents; the host checks.
 
-using namespace mpp::tensor_ops;
+// ATT_BQ, ATT_BK, ATT_NSG, ATT_THREADS, and the backward bodies, which the
+// causal entry points below and `attn_gen_bwd.metal` share.
+#include "attn_bwd_tiled.h"
 
-#define ATT_BQ 32
-#define ATT_BK 32
 // Forward only. A 64-wide key tile halves how often the softmax and the
 // output rescale run. The backward stays at 32: the wider tile was slower
 // there on the bench shape.
 #define ATT_FWD_BK 64
-#define ATT_NSG 4
-#define ATT_THREADS (ATT_NSG * 32)
 // Four consecutive threads share a query row and own ATT_FWD_CPR scores
 // each in the forward.
 #define ATT_TPR 4
@@ -2621,170 +2619,6 @@ kernel void ojas_attn_bwd_dr(
     for (uint i = lane; i < D; i += 32u) { acc += dout[at + i] * o[at + i]; }
     acc = simd_sum(acc);
     if (lane == 0u) { dvec[row] = acc; }
-}
-
-/// dQ for query rows [q0, q0 + BQ) of query plane `bh`: walk the key blocks
-/// of its window, rebuild dS per block in threadgroup memory, accumulate
-/// dS K.
-template <int DM>
-inline void attn_bwd_dq_body(
-    device float *Q, device float *K, device float *V, device float *dO,
-    device const float *lse, device const float *dvec, device float *dQ,
-    uint T, uint D, uint rep, uint W, float scale, uint2 tgpig, uint tid,
-    threadgroup float *S, threadgroup float *dP, threadgroup float *lse_row,
-    threadgroup float *d_row)
-{
-    const uint q0 = tgpig.x * (uint)ATT_BQ;
-    if (q0 >= T) { return; }
-    const uint nq = min((uint)ATT_BQ, T - q0);
-    const uint bh = tgpig.y;
-    const ulong base = (ulong)bh * T * D;
-    const ulong kv_base = (ulong)(bh / rep) * T * D;
-    const uint t_end = q0 + nq;
-
-    constexpr auto s_desc = matmul2d_descriptor(
-        ATT_BQ, ATT_BK, DM, false, true, false, matmul2d_descriptor::mode::multiply);
-    constexpr auto acc_desc = matmul2d_descriptor(
-        ATT_BQ, DM, ATT_BK, false, false, false, matmul2d_descriptor::mode::multiply_accumulate);
-    matmul2d<s_desc, execution_simdgroups<ATT_NSG>> s_op;
-    matmul2d<acc_desc, execution_simdgroups<ATT_NSG>> acc_op;
-
-    auto mQ = tensor(Q + base, dextents<int, 2>{(int)D, (int)T}, array<int, 2>{1, (int)D});
-    auto mK = tensor(K + kv_base, dextents<int, 2>{(int)D, (int)T}, array<int, 2>{1, (int)D});
-    auto mV = tensor(V + kv_base, dextents<int, 2>{(int)D, (int)T}, array<int, 2>{1, (int)D});
-    auto mdO = tensor(dO + base, dextents<int, 2>{(int)D, (int)T}, array<int, 2>{1, (int)D});
-    auto tQ = mQ.slice(0, (int)q0);
-    auto tdO = mdO.slice(0, (int)q0);
-    auto tS = tensor(S, dextents<int, 2>{ATT_BK, ATT_BQ}, array<int, 2>{1, ATT_BK});
-    auto tdP = tensor(dP, dextents<int, 2>{ATT_BK, ATT_BQ}, array<int, 2>{1, ATT_BK});
-
-    auto dq = acc_op.template get_destination_cooperative_tensor<
-        decltype(tS), decltype(mK.slice(0, 0)), float>();
-#pragma clang loop unroll(full)
-    for (uint16_t i = 0; i < dq.get_capacity(); ++i) { dq[i] = 0.0f; }
-
-    if (tid < (uint)ATT_BQ) {
-        const bool live = tid < nq;
-        lse_row[tid] = live ? lse[(ulong)bh * T + q0 + tid] : 0.0f;
-        d_row[tid] = live ? dvec[(ulong)bh * T + q0 + tid] : 0.0f;
-    }
-
-    for (uint kb = attn_first_key(q0, W, ATT_BK); kb < t_end; kb += (uint)ATT_BK) {
-        auto tK = mK.slice(0, (int)kb);
-        auto tV = mV.slice(0, (int)kb);
-        auto sT = s_op.template get_destination_cooperative_tensor<
-            decltype(tQ), decltype(tK), float>();
-        s_op.run(tQ, tK, sT);
-        sT.store(tS);
-        auto pT = s_op.template get_destination_cooperative_tensor<
-            decltype(tdO), decltype(tV), float>();
-        s_op.run(tdO, tV, pT);
-        pT.store(tdP);
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-        for (uint i = tid; i < (uint)(ATT_BQ * ATT_BK); i += ATT_THREADS) {
-            const uint rr = i / (uint)ATT_BK, c = i % (uint)ATT_BK;
-            const bool live = rr < nq && attn_live(q0 + rr, kb + c, W);
-            float ds = 0.0f;
-            if (live) {
-                const float p = precise::exp(S[i] * scale - lse_row[rr]);
-                ds = scale * (p * (dP[i] - d_row[rr]));
-            }
-            S[i] = ds;
-        }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-        acc_op.run(tS, tK, dq);
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-    }
-    auto mdQ = tensor(dQ + base, dextents<int, 2>{(int)D, (int)T}, array<int, 2>{1, (int)D});
-    dq.store(mdQ.slice(0, (int)q0));
-}
-
-/// dK and dV for key rows [k0, k0 + BK) of KV plane `g`: for each of its
-/// `rep` query planes in increasing order, walk the query blocks from the
-/// one holding k0 through the last query whose window holds a key of the
-/// block, rebuild Pᵀ and dSᵀ per block in threadgroup memory, accumulate
-/// Pᵀ dO and dSᵀ Q.
-template <int DM>
-inline void attn_bwd_dkv_body(
-    device float *Q, device float *K, device float *V, device float *dO,
-    device const float *lse, device const float *dvec, device float *dK, device float *dV,
-    uint T, uint D, uint rep, uint W, float scale, uint2 tgpig, uint tid,
-    threadgroup float *Pt, threadgroup float *dSt, threadgroup float *lse_col,
-    threadgroup float *d_col)
-{
-    const uint k0 = tgpig.x * (uint)ATT_BK;
-    if (k0 >= T) { return; }
-    const uint nk = min((uint)ATT_BK, T - k0);
-    const uint g = tgpig.y;
-    const ulong kv_base = (ulong)g * T * D;
-    const uint q_end = (W == 0u) ? T : min(T, k0 + nk - 1u + W);
-
-    constexpr auto s_desc = matmul2d_descriptor(
-        ATT_BK, ATT_BQ, DM, false, true, false, matmul2d_descriptor::mode::multiply);
-    constexpr auto acc_desc = matmul2d_descriptor(
-        ATT_BK, DM, ATT_BQ, false, false, false, matmul2d_descriptor::mode::multiply_accumulate);
-    matmul2d<s_desc, execution_simdgroups<ATT_NSG>> s_op;
-    matmul2d<acc_desc, execution_simdgroups<ATT_NSG>> acc_op;
-
-    auto mK = tensor(K + kv_base, dextents<int, 2>{(int)D, (int)T}, array<int, 2>{1, (int)D});
-    auto mV = tensor(V + kv_base, dextents<int, 2>{(int)D, (int)T}, array<int, 2>{1, (int)D});
-    auto tK = mK.slice(0, (int)k0);
-    auto tV = mV.slice(0, (int)k0);
-    auto tPt = tensor(Pt, dextents<int, 2>{ATT_BQ, ATT_BK}, array<int, 2>{1, ATT_BQ});
-    auto tdSt = tensor(dSt, dextents<int, 2>{ATT_BQ, ATT_BK}, array<int, 2>{1, ATT_BQ});
-
-    auto dk = acc_op.template get_destination_cooperative_tensor<
-        decltype(tPt), decltype(mK.slice(0, 0)), float>();
-    auto dv = acc_op.template get_destination_cooperative_tensor<
-        decltype(tPt), decltype(mK.slice(0, 0)), float>();
-#pragma clang loop unroll(full)
-    for (uint16_t i = 0; i < dk.get_capacity(); ++i) { dk[i] = 0.0f; dv[i] = 0.0f; }
-
-    for (uint r = 0u; r < rep; ++r) {
-        const uint bh = g * rep + r;
-        const ulong base = (ulong)bh * T * D;
-        auto mQ = tensor(Q + base, dextents<int, 2>{(int)D, (int)T}, array<int, 2>{1, (int)D});
-        auto mdO = tensor(dO + base, dextents<int, 2>{(int)D, (int)T}, array<int, 2>{1, (int)D});
-        for (uint qb = (k0 / (uint)ATT_BQ) * (uint)ATT_BQ; qb < q_end; qb += (uint)ATT_BQ) {
-            const uint nq = min((uint)ATT_BQ, T - qb);
-            if (tid < (uint)ATT_BQ) {
-                const bool live = tid < nq;
-                lse_col[tid] = live ? lse[(ulong)bh * T + qb + tid] : 0.0f;
-                d_col[tid] = live ? dvec[(ulong)bh * T + qb + tid] : 0.0f;
-            }
-            auto tQ = mQ.slice(0, (int)qb);
-            auto tdO = mdO.slice(0, (int)qb);
-            auto sT = s_op.template get_destination_cooperative_tensor<
-                decltype(tK), decltype(tQ), float>();
-            s_op.run(tK, tQ, sT);
-            sT.store(tPt);
-            auto pT = s_op.template get_destination_cooperative_tensor<
-                decltype(tV), decltype(tdO), float>();
-            s_op.run(tV, tdO, pT);
-            pT.store(tdSt);
-            threadgroup_barrier(mem_flags::mem_threadgroup);
-            for (uint i = tid; i < (uint)(ATT_BK * ATT_BQ); i += ATT_THREADS) {
-                const uint c = i / (uint)ATT_BQ, rr = i % (uint)ATT_BQ;
-                const bool live = c < nk && rr < nq && attn_live(qb + rr, k0 + c, W);
-                float p = 0.0f;
-                float ds = 0.0f;
-                if (live) {
-                    p = precise::exp(Pt[i] * scale - lse_col[rr]);
-                    ds = scale * (p * (dSt[i] - d_col[rr]));
-                }
-                Pt[i] = p;
-                dSt[i] = ds;
-            }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
-            acc_op.run(tPt, tdO, dv);
-            acc_op.run(tdSt, tQ, dk);
-            threadgroup_barrier(mem_flags::mem_threadgroup);
-        }
-    }
-    auto mdK = tensor(dK + kv_base, dextents<int, 2>{(int)D, (int)T}, array<int, 2>{1, (int)D});
-    auto mdV = tensor(dV + kv_base, dextents<int, 2>{(int)D, (int)T}, array<int, 2>{1, (int)D});
-    dk.store(mdK.slice(0, (int)k0));
-    dv.store(mdV.slice(0, (int)k0));
 }
 
 /// Forward for query rows [q0, q0 + BQ) of query plane `bh`, after tessl's
@@ -2920,6 +2754,10 @@ inline void attn_fwd_tiled_body(
 #define ATT_INPUTS                                                            \
     const_cast<device float *>(q), const_cast<device float *>(k),             \
     const_cast<device float *>(v), const_cast<device float *>(dout)
+/* The causal entry points bind no bias and no key lengths: flags without
+   AGB_BIAS and AGB_LENS never read these two, so any buffer stands in. */
+#define ATT_UNREAD_F q
+#define ATT_UNREAD_U ((device const uint *)q)
 
 #define OJAS_ATTN_TILED(DM)                                                   \
 kernel void ojas_attn_fwd_d##DM(                                              \
@@ -2957,8 +2795,9 @@ kernel void ojas_attn_bwd_dq_d##DM(                                           \
     threadgroup float dP[ATT_BQ * ATT_BK];                                    \
     threadgroup float r0[ATT_BQ];                                             \
     threadgroup float r1[ATT_BQ];                                             \
-    attn_bwd_dq_body<DM>(ATT_INPUTS, lse, dvec, dq, T, D, rep, W, scale,      \
-                         tgpig, tid, S, dP, r0, r1);                          \
+    agb_dq_body<DM>(ATT_INPUTS, lse, dvec, ATT_UNREAD_F, ATT_UNREAD_U, dq,    \
+                    AgbMask{T, T, W, 0u, AGB_CAUSAL}, D, 1u, rep,             \
+                    AgbBias{1u, 1u, 1u}, scale, tgpig, tid, S, dP, r0, r1);   \
 }                                                                             \
 kernel void ojas_attn_bwd_dkv_d##DM(                                          \
     device const float *q [[buffer(0)]], device const float *k [[buffer(1)]], \
@@ -2975,8 +2814,9 @@ kernel void ojas_attn_bwd_dkv_d##DM(                                          \
     threadgroup float dSt[ATT_BQ * ATT_BK];                                   \
     threadgroup float c0[ATT_BQ];                                             \
     threadgroup float c1[ATT_BQ];                                             \
-    attn_bwd_dkv_body<DM>(ATT_INPUTS, lse, dvec, dk, dv, T, D, rep, W, scale, \
-                          tgpig, tid, Pt, dSt, c0, c1);                       \
+    agb_dkv_body<DM>(ATT_INPUTS, lse, dvec, ATT_UNREAD_F, ATT_UNREAD_U, dk, dv, \
+                     AgbMask{T, T, W, 0u, AGB_CAUSAL}, D, 1u, rep,            \
+                     AgbBias{1u, 1u, 1u}, scale, tgpig, tid, Pt, dSt, c0, c1); \
 }
 
 OJAS_ATTN_TILED(16)

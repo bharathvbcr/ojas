@@ -122,6 +122,7 @@ use crate::link::{
 };
 use crate::permute;
 
+mod attn_bwd;
 mod enc_bwd_host;
 mod pool;
 mod spatial_bwd;
@@ -1580,7 +1581,7 @@ fn conv_geom(op: &'static str, d: &Conv2dDims) -> Res<ConvGeom> {
 /// family (`ENCODER_TILED_KERNEL`, one simdgroup and 16 queries a group) with
 /// the same i32-plane and length semantics. The head dims tessl compiles
 /// beyond these (256, 512) have no measurement here.
-const ENCODER_ATTN_HEAD_DIMS: [usize; 2] = [32, 64];
+const ENCODER_ATTN_HEAD_DIMS: [usize; 3] = [32, 64, 256];
 
 /// The longest `Tk / Tq` a cross-attention is routed to `encoder_attn` at;
 /// beyond it the split-K tiled kernel (`ojas_xattn_part_dD`) runs it.
@@ -1777,7 +1778,7 @@ enum AttnKernel {
 /// split-K: it covers a non-causal call with no window, bias or key lengths
 /// at these head dims, and split-K keeps everything else it ran (a bias, key
 /// lengths, head dim 16).
-const FLASH_CROSS_HEAD_DIMS: [u32; 1] = [32];
+const FLASH_CROSS_HEAD_DIMS: [u32; 4] = [32, 64, 128, 256];
 
 /// Query rows of one flash threadgroup (`ATT_BQ` in the Metal source).
 const FLASH_ROWS_PER_GROUP: u32 = 32;
@@ -2566,8 +2567,8 @@ impl Backend for MetalBackend {
     /// (`ojas_xattn_part_dD`); the scalar `ojas_attn_gen_fwd` runs causal,
     /// windowed and other head dims, and a split-K call when the budget
     /// cannot hold the tiled partials (so the bits of such a call can depend
-    /// on the budget; the values agree to rounding). There is no backward on
-    /// Metal yet: `attention_backward` is `Unsupported`, as the default says.
+    /// on the budget; the values agree to rounding). Its gradients are
+    /// [`Self::attention_backward`]'s.
     fn attention_forward_saving(
         &self,
         q: &Tensor,
@@ -2581,6 +2582,29 @@ impl Backend for MetalBackend {
         let (q, k, v) = (self.widened(q)?, self.widened(k)?, self.widened(v)?);
         let bias = opts.bias.map(|b| self.widened(b)).transpose()?;
         self.attn_forward(OP, &dims, [&q, &k, &v], bias.as_ref(), opts.key_lens)
+    }
+
+    /// The gradients of [`Self::attention_forward_saving`] from its output
+    /// and log-sum-exp, on the general tiled backward (`attn_gen_bwd.metal`):
+    /// bidirectional or causal with a window, `Tq != Tk`, a bias in every
+    /// broadcast layout with its gradient, key lengths, grouped-query heads,
+    /// head dims through 256. No atomics: every gradient element is written
+    /// by one threadgroup in a fixed order, and a bias gradient summed over
+    /// the batch or heads is summed in the CPU reference's order, so a result
+    /// repeats bit for bit. Scratch is `B * H * Tq` values.
+    #[allow(clippy::too_many_arguments)]
+    fn attention_backward(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        output: &Tensor,
+        lse: &Tensor,
+        grad_output: &Tensor,
+        opts: AttentionOpts<'_>,
+        bias_grad: bool,
+    ) -> Result<ojas_core::AttentionGrad, OjasError> {
+        self.attn_backward(q, k, v, output, lse, grad_output, opts, bias_grad)
     }
 
     fn per_head_sigmoid_gate_forward(
@@ -3455,15 +3479,46 @@ impl Backend for MetalBackend {
         self.enc_gelu_erf_backward(input, grad_output)
     }
 
-    /// [`Self::linear_forward`] and then [`Self::broadcast_add_forward`] of
-    /// the bias: the CPU's definition, with the product held beside the sum.
+    /// Fused `x @ W^T + bias` on `matmul2d_tensorops_nt_bf16_f32_bias` when
+    /// running on TensorOps under Bf16 lane, else sequential linear_forward and broadcast_add_forward.
     fn linear_bias_forward(
         &self,
         input: &Tensor,
         weight: &Tensor,
         bias: &Tensor,
     ) -> Result<Tensor, OjasError> {
-        linear_bias_forward_dims(input, weight, bias)?;
+        const OP: &str = "linear_bias_forward";
+        let dims = linear_bias_forward_dims(input, weight, bias)?;
+        let lane = self.link.lane(input.bf16_exact(), weight.bf16_exact());
+        if self.link.has_tensorops()
+            && lane == Lane::Bf16
+            && bias.shape() == [dims.out_features]
+        {
+            let (input, weight) = (self.widened(input)?, self.widened(weight)?);
+            let x = self.f32(OP, &input)?;
+            let w = self.f32(OP, &weight)?;
+            let b = self.f32(OP, bias)?;
+            u32_dim(OP, product(OP, &dims.out_shape)?)?;
+            let scratch = plus(
+                OP,
+                copied_elems(OP, ReadAs::Matrix, &[x, w, b])?,
+                lane_copies(OP, lane, x.n, w.n)?,
+            )?;
+            return self.one(
+                OP,
+                &dims.out_shape,
+                scratch,
+                Cmd::LinearBias {
+                    x,
+                    w,
+                    bias: b,
+                    rows: dims.rows,
+                    kin: dims.in_features,
+                    nout: dims.out_features,
+                    lane,
+                },
+            );
+        }
         let product = self.linear_forward(input, weight)?;
         self.broadcast_add_forward(&product, bias)
     }

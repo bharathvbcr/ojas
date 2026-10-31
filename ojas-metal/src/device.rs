@@ -44,6 +44,7 @@ use crate::link::{
 };
 use crate::permute::{self, Plan};
 
+mod attn_bwd;
 mod pool;
 mod spatial_bwd;
 
@@ -251,6 +252,21 @@ const KERNELS: &[&str] = &[
     "ojas_per_head_gate_scale",
     "ojas_per_head_gate_bwd_saved",
     "ojas_per_head_gate_dbias",
+    "ojas_attn_gen_bwd_dq_d16",
+    "ojas_attn_gen_bwd_dq_d32",
+    "ojas_attn_gen_bwd_dq_d64",
+    "ojas_attn_gen_bwd_dq_d128",
+    "ojas_attn_gen_bwd_dq_d256",
+    "ojas_attn_gen_bwd_dkv_d16",
+    "ojas_attn_gen_bwd_dkv_d32",
+    "ojas_attn_gen_bwd_dkv_d64",
+    "ojas_attn_gen_bwd_dkv_d128",
+    "ojas_attn_gen_bwd_dkv_d256",
+    "ojas_attn_gen_bwd_dbias_d16",
+    "ojas_attn_gen_bwd_dbias_d32",
+    "ojas_attn_gen_bwd_dbias_d64",
+    "ojas_attn_gen_bwd_dbias_d128",
+    "ojas_attn_gen_bwd_dbias_d256",
 ];
 
 /// tessl's dims for a dense GDN call (one key head per value head).
@@ -1527,6 +1543,15 @@ impl Worker {
                 nout,
                 lane,
             } => self.linear(x, w, rows, kin, nout, lane),
+            Cmd::LinearBias {
+                x,
+                w,
+                bias,
+                rows,
+                kin,
+                nout,
+                lane,
+            } => self.linear_bias(x, w, bias, rows, kin, nout, lane),
             Cmd::LinearBwd {
                 x,
                 w,
@@ -1618,6 +1643,13 @@ impl Worker {
             Cmd::Fill { bytes, word } => self.fill(bytes, word),
             Cmd::GroupNorm { x, w, b, geom, eps } => self.group_norm([x, w, b], geom, eps),
             Cmd::SdpaBwd { args, geom } => self.sdpa_bwd(args, geom),
+            Cmd::AttnBwd {
+                op,
+                args,
+                bias,
+                lens,
+                geom,
+            } => self.attn_gen_bwd(op, args, bias, lens, geom),
             Cmd::Gate {
                 x,
                 w,
@@ -2216,6 +2248,38 @@ impl Worker {
         Ok(self.keep(vec![y]))
     }
 
+    fn linear_bias(
+        &mut self,
+        x: Arg,
+        w: Arg,
+        bias: Arg,
+        rows: usize,
+        kin: usize,
+        nout: usize,
+        lane: Lane,
+    ) -> Res<Reply> {
+        const OP: &str = "linear_bias_forward";
+        let xv = self.view(x)?;
+        let wv = self.view(w)?;
+        let bv = self.view(bias)?;
+        let y = self.fresh(rows * nout)?;
+        let st = self.status(OP)?;
+        self.check(&st, &xv, ST_IN)?;
+        self.check_operand(&st, w, &wv, ST_IN)?;
+        self.check_operand(&st, bias, &bv, ST_IN)?;
+        if lane == Lane::Bf16 && self.rt.has_tensorops() {
+            let a = self.mat(&xv, rows, kin)?;
+            let b = self.mat(&wv, nout, kin)?;
+            let c = self.tt(&y, &[rows, nout])?;
+            let bias_t = self.tt(&bv, &[nout])?;
+            tessl::gemm::gemm_nt_bf16_bias(&a, &b, &c, &bias_t, false).map_err(metal_err)?;
+        } else {
+            return Err(metal_err("linear_bias requires Lane::Bf16 and TensorOps"));
+        }
+        self.check(&st, &y, ST_OUT)?;
+        Ok(self.keep(vec![y]))
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn linear_bwd(
         &mut self,
@@ -2615,10 +2679,12 @@ impl Worker {
         if g.flash {
             if qv.n > 0 {
                 // One threadgroup per 32 query rows of a plane, four
-                // simdgroups, no partials: `ojas_attn_fwd_d32` with `cross`.
+                // simdgroups, no partials: `ojas_attn_fwd_d{width}` with `cross`.
                 let scale = sdpa_scale(g.d)?;
+                let width = Self::attn_width(g.d)?;
+                let name = format!("ojas_attn_fwd_d{width}");
                 self.ktg(
-                    "ojas_attn_fwd_d32",
+                    &name,
                     q_len.div_ceil(ATTN_ROWS),
                     planes,
                     ATTN_THREADS,
