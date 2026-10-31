@@ -1528,7 +1528,7 @@ fn refuse_unsupported_conv_transpose2d(op: &'static str, d: &ConvTranspose2dDims
 const GROUP_NORM_TARGET_GROUPS: usize = 512;
 const GROUP_NORM_MIN_CHUNK: usize = 1024;
 /// Threads of a GroupNorm threadgroup (`GN_THREADS`).
-const GROUP_NORM_THREADS: usize = 256;
+pub(crate) const GROUP_NORM_THREADS: usize = 256;
 
 /// `(chunks, chunk_len)` of a GroupNorm row of `width` values among `rows`
 /// rows: enough chunks to reach the target, but no more than one per

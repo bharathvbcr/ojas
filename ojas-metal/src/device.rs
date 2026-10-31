@@ -41,7 +41,7 @@ use crate::link::{
     cached_attn_origin, cached_attn_part, cached_attn_splits, copied_at, device_lost, metal_err,
     norm_chunks, reduce_groups, rms_w_chunks, Arg, AttnGeom, BilinearGeom, Cmd, Conv1dGeom,
     ConvGeom, DeviceInfo, EmbedRows, EncAttnGeom, GdnArgs, GroupNormGeom, Lane, LceGeom, Msg,
-    NewBuf, ReadAs, Reply, Res, RmsSide, RopeMode, SdpaGeom, Wait, Waits, SQ_OUT_WORDS, SQ_PIECE,
+    NewBuf, ReadAs, Reply, Res, RmsSide, RopeMode, SdpaGeom, Wait, Waits, SQ_OUT_WORDS,
 };
 use crate::permute::{self, Plan};
 
