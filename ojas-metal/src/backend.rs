@@ -104,12 +104,12 @@ use ojas_core::{
     scale_forward_dims, sigmoid_backward_dims, sigmoid_forward_dims, silu_backward_dims,
     silu_forward_dims, slice_dims, softmax_forward_dims, topk_rows_dims,
     value_residual_blend_backward_dims, value_residual_blend_forward_dims, AdamWConfig,
-    AttentionDims, AttentionGrad, AttentionOpts, Backend, BackendId, BroadcastDims, Budget,
-    CeChunk, CeGrads, Conv1dDims, Conv2dDims, Conv2dParams, ConvTranspose2dDims,
-    ConvTranspose2dParams, DType, DeviceBuffer, GateDims, GatedRmsGrad, GdnDecayGrad, GdnDims,
-    GdnForward, GdnGrad, GdnInputs, InterleavedRopeDims, LinearCe, MuonNs5Config, Ns5Precision,
-    Numerics, OjasError, OptimizerKind, PartialRopeDims, PerHeadGateGrad, Reservation, RmsDims,
-    RopeDims, RopeLayout, SdpaDims, Tensor, ValueResidualGrad, MAX_PERMUTE_RANK,
+    AttentionDims, AttentionOpts, Backend, BackendId, BroadcastDims, Budget, CeChunk, CeGrads,
+    Conv1dDims, Conv2dDims, Conv2dParams, ConvTranspose2dDims, ConvTranspose2dParams, DType,
+    DeviceBuffer, GateDims, GatedRmsGrad, GdnDecayGrad, GdnDims, GdnForward, GdnGrad, GdnInputs,
+    InterleavedRopeDims, LinearCe, MuonNs5Config, Ns5Precision, Numerics, OjasError, OptimizerKind,
+    PartialRopeDims, PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
+    ValueResidualGrad, MAX_PERMUTE_RANK,
 };
 
 use crate::link::{
@@ -2561,7 +2561,7 @@ impl Backend for MetalBackend {
         grad_output: &Tensor,
         opts: AttentionOpts<'_>,
         bias_grad: bool,
-    ) -> Result<AttentionGrad, OjasError> {
+    ) -> Result<ojas_core::AttentionGrad, OjasError> {
         self.attn_backward(q, k, v, output, lse, grad_output, opts, bias_grad)
     }
 

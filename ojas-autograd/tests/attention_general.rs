@@ -303,10 +303,32 @@ mod metal {
     use super::*;
     use ojas_metal::MetalBackend;
 
-    fn gpu() -> MetalBackend {
-        MetalBackend::new(Budget::new(1 << 28)).unwrap_or_else(|e| {
-            panic!("MetalBackend::new failed: {e}. This test needs a Metal 4 device")
-        })
+    const ALLOW_NO_GPU: &str = "OJAS_ALLOW_NO_GPU";
+
+    /// The Metal backend, or `None` when `OJAS_ALLOW_NO_GPU=1` says to skip
+    /// a machine with no device or no TensorOps (the backward is
+    /// matrix-unit code only and refuses there). Without that variable a
+    /// missing device fails.
+    fn open() -> Option<MetalBackend> {
+        match MetalBackend::new(Budget::new(1 << 28)) {
+            Ok(gpu) if gpu.has_tensorops() => Some(gpu),
+            Ok(_) if std::env::var(ALLOW_NO_GPU).as_deref() == Ok("1") => {
+                eprintln!("SKIP ({ALLOW_NO_GPU}=1): this device has no TensorOps");
+                None
+            }
+            Ok(_) => panic!(
+                "this device has no TensorOps, which Metal's attention backward needs; set \
+                 {ALLOW_NO_GPU}=1 to skip it explicitly"
+            ),
+            Err(err) if std::env::var(ALLOW_NO_GPU).as_deref() == Ok("1") => {
+                eprintln!("SKIP ({ALLOW_NO_GPU}=1): MetalBackend::new: {err}");
+                None
+            }
+            Err(err) => panic!(
+                "MetalBackend::new failed: {err}. This test needs a Metal 4 device; set \
+                 {ALLOW_NO_GPU}=1 to skip it explicitly on a machine without one"
+            ),
+        }
     }
 
     fn host_vals(t: &Tape<MetalBackend>, v: Var) -> Vec<f32> {
@@ -323,9 +345,12 @@ mod metal {
     #[test]
     fn gradcheck_attention_q_k_v_and_bias_on_metal() {
         for (n, s) in CASES.iter().enumerate() {
+            let Some(gpu) = open() else {
+                return;
+            };
             let p = parts(s, 10 + n as u64);
             let lens = lens_for(s);
-            let mut tape = Tape::new(gpu());
+            let mut tape = Tape::new(gpu);
             let ([q, k, v, bias, _], z) = record(&mut tape, s, &p, false).unwrap();
             tape.backward(z).unwrap();
             let l = |q: &[f64], k: &[f64], v: &[f64], b: &[f64]| loss(s, &lens, q, k, v, b, &p.w);
@@ -357,11 +382,14 @@ mod metal {
     #[test]
     fn a_frozen_bias_takes_no_gradient_on_metal() {
         for (n, s) in CASES.iter().enumerate() {
+            let (Some(live_gpu), Some(frozen_gpu)) = (open(), open()) else {
+                return;
+            };
             let p = parts(s, 20 + n as u64);
-            let mut live = Tape::new(gpu());
+            let mut live = Tape::new(live_gpu);
             let (vars, z) = record(&mut live, s, &p, false).unwrap();
             live.backward(z).unwrap();
-            let mut frozen = Tape::new(gpu());
+            let mut frozen = Tape::new(frozen_gpu);
             let (fvars, fz) = record(&mut frozen, s, &p, true).unwrap();
             frozen.backward(fz).unwrap();
             assert!(
