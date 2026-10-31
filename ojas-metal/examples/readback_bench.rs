@@ -226,7 +226,10 @@ mod bench {
             "# warmups {warmups} runs {runs} (decimal MB, f32, one pass = the tensor's bytes)"
         );
         for mb in SIZES_MB {
-            if only.as_deref().is_some_and(|o| o != mb.to_string()) {
+            if only
+                .as_deref()
+                .is_some_and(|o| o.parse::<usize>().ok() != Some(mb))
+            {
                 continue;
             }
             run_size(&be, mb, warmups, runs);
