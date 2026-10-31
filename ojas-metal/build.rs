@@ -11,9 +11,6 @@ use std::env;
 use std::path::PathBuf;
 use std::process::Command;
 
-/// Headers of tessl's kernel directory that `ojas_backend.metal` includes.
-const SHARED_HEADERS: [&str; 1] = ["qwen35_adamw_math.h"];
-
 const SOURCES: [&str; 3] = [
     "per_head_gate.metal",
     "causal_attn_bwd.metal",
@@ -94,6 +91,9 @@ fn main() {
     }
     println!("cargo:rustc-env=OJAS_GATE_METALLIB={}", lib.display());
 }
+
+/// Headers of tessl's kernel directory that `ojas_backend.metal` includes.
+const SHARED_HEADERS: [&str; 1] = ["qwen35_adamw_math.h"];
 
 fn xcrun(args: &[&str]) -> String {
     let out = Command::new("xcrun")
