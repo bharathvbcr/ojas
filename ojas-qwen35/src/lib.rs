@@ -25,7 +25,8 @@
 //! - [`state`]: masters and AdamW moments on disk through ojas-io.
 //!
 //! Nothing here opens a GPU runtime except [`step::Qwen35Step::open`] and the
-//! methods of an open provider.
+//! methods of an open provider. [`step::Qwen35Step::open_on`] opens none: it
+//! runs on the runtime of an `ojas_metal::MetalBackend`'s device thread.
 //!
 //! Off macOS the crate is empty: tessl builds only there.
 

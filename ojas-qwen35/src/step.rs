@@ -22,7 +22,7 @@
 use std::sync::Arc;
 
 use ojas_core::{
-    check_adamw, clip_scale, next_step, AdamWConfig, Budget, DType, OjasError, Tensor,
+    check_adamw, clip_scale, next_step, AdamWConfig, Budget, DType, OjasError, Reservation, Tensor,
 };
 use tessl::gemm::GemmOperands;
 use tessl::qwen35_adamw::{
@@ -367,6 +367,43 @@ pub struct Qwen35Step {
     pub(crate) weights_version: u64,
     pub(crate) budget: Budget,
     pub(crate) poisoned: Option<String>,
+    /// What [`Qwen35Step::open_on`] reserved for the device state; last, so
+    /// it releases after the buffers it paid for are gone.
+    _device_reservation: Option<Reservation>,
+}
+
+/// Bytes of device state for the tower the config names: 16 per parameter
+/// at either [`Precision`] (weights, gradient bank, AdamW state). The count
+/// is `tower_tensors`, which `open` checks against tessl's live table, so
+/// it is the parameter count the step allocates. A lower bound: tessl's pool
+/// rounds buffers up, and an f32 model also keeps a packed head copy.
+fn device_footprint(cfg: &Qwen35TextConfig) -> Result<u64> {
+    const OP: &str = "Qwen35Step::open_on";
+    let mut params = 0u64;
+    for spec in tower_tensors(cfg) {
+        let n = spec
+            .shape
+            .iter()
+            .try_fold(1u64, |acc, &d| acc.checked_mul(d as u64))
+            .ok_or_else(|| invalid(OP, format!("{} has too many elements", spec.name)))?;
+        params = params
+            .checked_add(n)
+            .ok_or_else(|| invalid(OP, "the tower has too many parameters"))?;
+    }
+    params
+        .checked_mul(16)
+        .ok_or_else(|| invalid(OP, "the tower's device bytes overflow u64"))
+}
+
+fn refuse_bf16_exact(numerics: Numerics, precision: Precision) -> Result<()> {
+    if precision == Precision::Bf16 && numerics == Numerics::ExactF32 {
+        return Err(invalid(
+            "Qwen35Step::open",
+            "Precision::Bf16 trains on Numerics::Bf16Operands: a bf16 model's weights are \
+             bf16 GEMM operands, so Numerics::ExactF32 cannot apply",
+        ));
+    }
+    Ok(())
 }
 
 impl Qwen35Step {
@@ -388,15 +425,54 @@ impl Qwen35Step {
         precision: Precision,
         host_budget: Budget,
     ) -> Result<Self> {
-        if precision == Precision::Bf16 && numerics == Numerics::ExactF32 {
-            return Err(invalid(
-                "Qwen35Step::open",
-                "Precision::Bf16 trains on Numerics::Bf16Operands: a bf16 model's weights are \
-                 bf16 GEMM operands, so Numerics::ExactF32 cannot apply",
-            ));
-        }
-        let cfg = snapshot.config.clone();
+        refuse_bf16_exact(numerics, precision)?;
         let rt = GpuRuntime::new().map_err(tessl("GpuRuntime::new"))?;
+        Self::open_with(rt, snapshot, numerics, precision, host_budget, None)
+    }
+
+    /// [`Self::open`] on a runtime the caller already has, not a new
+    /// `GpuRuntime`: the way to run the step on the pool, queue and pipeline
+    /// cache of an ojas `MetalBackend`. The runtime is not `Send`, so the
+    /// caller is on the thread that owns it: inside
+    /// `ojas_metal::MetalBackend::with_runtime`, whose closure receives the
+    /// device thread's runtime and must build, use and drop the provider
+    /// there.
+    ///
+    /// One `budget` is charged for everything this provider holds: the
+    /// weights, gradient bank and AdamW state (16 bytes per parameter,
+    /// [`Precision`]) are reserved up front, before the first device byte,
+    /// and refused with `OjasError::CapacityExceeded` when they do not
+    /// fit; the host tensors it hands out (hidden rows) are charged to it
+    /// as in [`Self::open`]. The reservation releases when the provider
+    /// drops. `open` charges only the host tensors, so a caller that
+    /// sized its budget for hidden rows alone is unaffected.
+    pub fn open_on(
+        rt: Arc<GpuRuntime>,
+        snapshot: &Snapshot,
+        numerics: Numerics,
+        precision: Precision,
+        budget: Budget,
+    ) -> Result<Self> {
+        refuse_bf16_exact(numerics, precision)?;
+        let charge = budget.clone();
+        Self::open_with(rt, snapshot, numerics, precision, budget, Some(&charge))
+    }
+
+    /// The tessl runtime this provider runs on; `Arc::ptr_eq` against
+    /// another handle's runtime tells whether the two share one pool.
+    pub fn runtime(&self) -> &Arc<GpuRuntime> {
+        &self.rt
+    }
+
+    fn open_with(
+        rt: Arc<GpuRuntime>,
+        snapshot: &Snapshot,
+        numerics: Numerics,
+        precision: Precision,
+        host_budget: Budget,
+        device_budget: Option<&Budget>,
+    ) -> Result<Self> {
+        let cfg = snapshot.config.clone();
         if rt.relaxed_precision() {
             return Err(invalid(
                 "Qwen35Step::open",
@@ -409,6 +485,11 @@ impl Qwen35Step {
                 needs: "a GPU with TensorOps (tessl's bf16 GEMM lane)".into(),
             });
         }
+        // Before the first device byte, so a shortfall is a refusal here.
+        let device_reservation = match device_budget {
+            Some(b) => Some(b.try_reserve(device_footprint(&cfg)?)?),
+            None => None,
+        };
         let st = tessl::safetensors::CheckpointView::open(&snapshot.weights_path)
             .map_err(tessl("CheckpointView::open"))?;
         let (prefix, tcfg, p) = (&cfg.tower_prefix, cfg.tessl.clone(), precision.tessl());
@@ -471,6 +552,7 @@ impl Qwen35Step {
             weights_version: 0,
             budget: host_budget,
             poisoned: None,
+            _device_reservation: device_reservation,
         })
     }
 

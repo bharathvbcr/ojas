@@ -242,6 +242,43 @@ impl MetalBackend {
         }
     }
 
+    /// Run `f` on this backend's device thread with the thread's own tessl
+    /// runtime: the one queue, buffer pool, pipeline cache and residency set
+    /// every op of this backend (and its clones) already uses. A provider
+    /// that builds its tessl objects from `rt` here (ojas-qwen35's
+    /// `Qwen35Step::open_on`) shares that pool instead of opening a second
+    /// `GpuRuntime`.
+    ///
+    /// `GpuRuntime` is `!Send`, so everything `f` builds from it must be
+    /// built and dropped inside `f`; only `f` itself crosses threads. A
+    /// provider that wants a handle across calls needs the device-thread
+    /// registry sketched in `DESIGN-one-runtime.md`. Results leave through a
+    /// channel the closure owns.
+    ///
+    /// The device is settled before `f` runs (a pending fault is returned
+    /// instead of running it), runs `f` with `async_encode` off, and is
+    /// waited idle after; see `Worker::run_provider`. A panic in `f`
+    /// poisons this backend like any device-thread panic. Other ops queue
+    /// behind `f` for as long as it runs.
+    #[cfg(all(target_os = "macos", feature = "metal"))]
+    pub fn with_runtime<F>(&self, f: F) -> Result<(), OjasError>
+    where
+        F: FnOnce(&Arc<tessl::GpuRuntime>) -> Result<(), OjasError> + Send + 'static,
+    {
+        let job = crate::link::RunBox(Box::new(move |rt: &dyn Any| {
+            let rt = rt
+                .downcast_ref::<Arc<tessl::GpuRuntime>>()
+                .ok_or_else(|| metal_err("with_runtime: the device thread passed no runtime"))?;
+            f(rt)
+        }));
+        match self.link.call(Cmd::Run(job))? {
+            Reply::Done => Ok(()),
+            other => Err(metal_err(format!(
+                "with_runtime: device returned {other:?}"
+            ))),
+        }
+    }
+
     /// Release every freed buffer the device keeps cached for reuse, after
     /// a waited commit returns the ones freed since the last. Live tensors
     /// are untouched, and later frees cache as before. The cache is not
