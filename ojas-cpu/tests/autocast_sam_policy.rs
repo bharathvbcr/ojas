@@ -271,6 +271,8 @@ fn arguments(op: &str) -> Vec<Tensor> {
         ],
         "concat" => vec![tensor(&[2, 3], 33, 2.0), tensor(&[2, 3], 34, 2.0)],
         "slice" => vec![tensor(&[2, 6], 35, 2.0)],
+        "slice_backward" => vec![tensor(&[2, 2], 35, 2.0)],
+        "relu_backward" => vec![tensor(&[3, 8], 16, 2.0), tensor(&[3, 8], 41, 1.0)],
         "fill" => vec![],
         "attention_forward" | "attention_forward_saving" => {
             let [q, k, v] = attn();
@@ -387,6 +389,8 @@ fn try_call<B: Backend>(op: &str, backend: &B, a: &[Tensor]) -> Result<Vec<Tenso
         "rope_interleaved_backward" => one(backend.rope_interleaved_backward(&a[0], &a[1], &a[2])),
         "concat" => one(backend.concat(&[&a[0], &a[1]], 1)),
         "slice" => one(backend.slice(&a[0], 1, 1, 3)),
+        "slice_backward" => one(backend.slice_backward(&a[0], &[2, 6], 1, 1)),
+        "relu_backward" => one(backend.relu_backward(&a[0], &a[1])),
         "fill" => one(backend.fill(&[2, 3], DType::F32, f32::from_bits(0x3f80_0001))),
         "attention_forward" => {
             one(backend.attention_forward(&a[0], &a[1], &a[2], opts(Some(&a[3]))))
