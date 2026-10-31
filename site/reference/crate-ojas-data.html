@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ojas-data · ojas reference</title>
-  <meta name="description" content="ojas-data provides token streaming from pre-tokenized binary datasets, counter-based deterministic pseudo-random number generators, and GPT-2 byte-pair encoding (BPE) tokenization routines.">
+  <meta name="description" content="ojas-data provides token streaming from pre-tokenized binary datasets, image dataset ingestion (MNIST, CIFAR-10), counter-based deterministic pseudo-random number generators, and GPT-2 byte-pair enco…">
   <meta name="keywords" content="ojas, ojas-data, rust deep learning, machine learning, pytorch alternative, neural network, autograd, tensors, metal, wgpu">
   <meta name="author" content="Bharath Chandra Vaddaram">
   <meta name="robots" content="index, follow">
@@ -14,7 +14,7 @@
   <meta property="og:site_name" content="ojas">
   <meta property="og:url" content="https://ojas.vbcr.dev/reference/crate-ojas-data.html">
   <meta property="og:title" content="ojas-data · ojas reference">
-  <meta property="og:description" content="ojas-data provides token streaming from pre-tokenized binary datasets, counter-based deterministic pseudo-random number generators, and GPT-2 byte-pair encoding (BPE) tokenization routines.">
+  <meta property="og:description" content="ojas-data provides token streaming from pre-tokenized binary datasets, image dataset ingestion (MNIST, CIFAR-10), counter-based deterministic pseudo-random number generators, and GPT-2 byte-pair enco…">
   <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
@@ -22,7 +22,7 @@
   <meta property="og:locale" content="en_US">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="ojas-data · ojas reference">
-  <meta name="twitter:description" content="ojas-data provides token streaming from pre-tokenized binary datasets, counter-based deterministic pseudo-random number generators, and GPT-2 byte-pair encoding (BPE) tokenization routines.">
+  <meta name="twitter:description" content="ojas-data provides token streaming from pre-tokenized binary datasets, image dataset ingestion (MNIST, CIFAR-10), counter-based deterministic pseudo-random number generators, and GPT-2 byte-pair enco…">
   <meta name="twitter:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
   <meta name="twitter:image:alt" content="ojas-data · ojas reference">
   <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
@@ -40,7 +40,7 @@
     "@context": "https://schema.org",
     "@type": "TechArticle",
     "headline": "ojas-data · ojas reference",
-    "description": "ojas-data provides token streaming from pre-tokenized binary datasets, counter-based deterministic pseudo-random number generators, and GPT-2 byte-pair encoding (BPE) tokenization routines.",
+    "description": "ojas-data provides token streaming from pre-tokenized binary datasets, image dataset ingestion (MNIST, CIFAR-10), counter-based deterministic pseudo-random number generators, and GPT-2 byte-pair enco…",
     "url": "https://ojas.vbcr.dev/reference/crate-ojas-data.html",
     "image": "https://ojas.vbcr.dev/assets/ojas-og.png",
     "author": {
@@ -146,33 +146,40 @@
       <p class="ref-crumb"><a href="./">Reference</a> / Crates</p>
       <article class="prose-ojas">
 <h1 id="ojas-data">ojas-data <a class="anchor" href="#ojas-data" aria-label="Link to this section">#</a></h1>
-<p><code>ojas-data</code> provides token streaming from pre-tokenized binary datasets, counter-based deterministic pseudo-random number generators, and GPT-2 byte-pair encoding (BPE) tokenization routines.</p>
+<p><code>ojas-data</code> provides token streaming from pre-tokenized binary datasets, image dataset ingestion (MNIST, CIFAR-10), counter-based deterministic pseudo-random number generators, and GPT-2 byte-pair encoding (BPE) tokenization routines.</p>
 <hr>
 <h2 id="data-pipeline-architecture">Data Pipeline Architecture <a class="anchor" href="#data-pipeline-architecture" aria-label="Link to this section">#</a></h2>
 <figure class="diagram"><pre class="mermaid">flowchart TD
     subgraph Storage[&#34;On-Disk Dataset Sources&#34;]
         FineWeb[&#34;FineWeb Binary Files (.bin)\n- 256-byte header with magic\n- Stream of u16 or u32 token IDs&#34;]
         RawWindows[&#34;Headerless Token Windows (u16 or u32)&#34;]
+        Images[&#34;Image Datasets\n- MNIST IDX (u8 pixel matrices)\n- CIFAR-10 Binary (3x32x32 CHW u8)&#34;]
     end
 
     subgraph DataEngine[&#34;ojas-data Ingestion Engine&#34;]
         Tokens[&#34;tokens.rs\n- Validates header magic and offsets\n- Rejects misaligned byte buffers (u16 / u32)\n- Positioned window reads&#34;]
         Sampler[&#34;sampler.rs (BatchSampler)\n- Non-overlapping T+1 windows\n- Each window once per epoch, seeded order\n- (x, y) batches [B, T] u32\n- Resume from DataCursor (epoch, window)&#34;]
+        ImageEngine[&#34;image.rs (ImageSet, ImageBatchSampler)\n- MNIST / CIFAR-10 decoding\n- Normalization tables\n- Batched NCHW f32 output&#34;]
         RNG[&#34;rng.rs\n- Counter-based deterministic RNG\n- Zero global state\n- Bit-identical across thread configurations&#34;]
         BPE[&#34;bpe.rs\n- Bijective GPT-2 byte-to-unicode mapping\n- Verified against tiktoken 0.12.0&#34;]
     end
 
     subgraph Batches[&#34;Training Batch Output&#34;]
-        Out[&#34;Batch Tensors: [Batch Size, Seq Len] u32&#34;]
+        OutTokens[&#34;Token Tensors: [Batch Size, Seq Len] u32&#34;]
+        OutImages[&#34;Image Tensors: [Batch Size, C, H, W] f32&#34;]
     end
 
     FineWeb --&gt; Tokens
     RawWindows --&gt; Tokens
+    Images --&gt; ImageEngine
     RNG --&gt; Sampler
+    RNG --&gt; ImageEngine
     BPE -.-&gt; Tokens
     Tokens --&gt; Sampler
-    Sampler --&gt; Out</pre></figure>
+    Sampler --&gt; OutTokens
+    ImageEngine --&gt; OutImages</pre></figure>
 <p><code>BatchSampler</code> covers <code>W = (len - 1) / T</code> windows; window <code>k</code> is tokens <code>[kT, kT + T]</code>, <code>x</code> its first <code>T</code> and <code>y</code> its last <code>T</code>. Each epoch visits every window once in an order keyed by <code>(seed, epoch)</code> (a Feistel permutation over <code>CounterRng</code>, so no per-epoch table). A batch that runs past the end of an epoch continues into the next one. The checkpoint&#39;s <code>DataCursor</code> stores the epoch in <code>shard</code> and the next window&#39;s ordinal in <code>token_index</code>. nanolab&#39;s batcher instead draws starts uniformly with replacement; this sampler does not reproduce that stream.</p>
+<p>Image datasets (<code>ImageSet::from_mnist</code>, <code>ImageSet::from_cifar10</code>) decode streamed binary pixel arrays directly under <code>Budget</code> limits, widening <code>u8</code> pixels to <code>f32</code> during <code>ImageBatchSampler::next_batch</code> in NCHW order with labels as <code>u32</code>. Pre-computed 256-entry <code>Normalization</code> tables apply channel-wise <code>(p / 255 - mean) / std</code> with zero runtime transcendental operations.</p>
 <hr>
 <h2 id="deterministic-counter-based-rng">Deterministic Counter-Based RNG <a class="anchor" href="#deterministic-counter-based-rng" aria-label="Link to this section">#</a></h2>
 <figure class="diagram"><pre class="mermaid">flowchart LR

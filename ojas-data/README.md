@@ -1,6 +1,6 @@
 # ojas-data
 
-`ojas-data` provides token streaming from pre-tokenized binary datasets, counter-based deterministic pseudo-random number generators, and GPT-2 byte-pair encoding (BPE) tokenization routines.
+`ojas-data` provides token streaming from pre-tokenized binary datasets, image dataset ingestion (MNIST, CIFAR-10), counter-based deterministic pseudo-random number generators, and GPT-2 byte-pair encoding (BPE) tokenization routines.
 
 ---
 
@@ -11,25 +11,31 @@ flowchart TD
     subgraph Storage["On-Disk Dataset Sources"]
         FineWeb["FineWeb Binary Files (.bin)\n- 256-byte header with magic\n- Stream of u16 or u32 token IDs"]
         RawWindows["Headerless Token Windows (u16 or u32)"]
+        Images["Image Datasets\n- MNIST IDX (u8 pixel matrices)\n- CIFAR-10 Binary (3x32x32 CHW u8)"]
     end
 
     subgraph DataEngine["ojas-data Ingestion Engine"]
         Tokens["tokens.rs\n- Validates header magic and offsets\n- Rejects misaligned byte buffers (u16 / u32)\n- Positioned window reads"]
         Sampler["sampler.rs (BatchSampler)\n- Non-overlapping T+1 windows\n- Each window once per epoch, seeded order\n- (x, y) batches [B, T] u32\n- Resume from DataCursor (epoch, window)"]
+        ImageEngine["image.rs (ImageSet, ImageBatchSampler)\n- MNIST / CIFAR-10 decoding\n- Normalization tables\n- Batched NCHW f32 output"]
         RNG["rng.rs\n- Counter-based deterministic RNG\n- Zero global state\n- Bit-identical across thread configurations"]
         BPE["bpe.rs\n- Bijective GPT-2 byte-to-unicode mapping\n- Verified against tiktoken 0.12.0"]
     end
 
     subgraph Batches["Training Batch Output"]
-        Out["Batch Tensors: [Batch Size, Seq Len] u32"]
+        OutTokens["Token Tensors: [Batch Size, Seq Len] u32"]
+        OutImages["Image Tensors: [Batch Size, C, H, W] f32"]
     end
 
     FineWeb --> Tokens
     RawWindows --> Tokens
+    Images --> ImageEngine
     RNG --> Sampler
+    RNG --> ImageEngine
     BPE -.-> Tokens
     Tokens --> Sampler
-    Sampler --> Out
+    Sampler --> OutTokens
+    ImageEngine --> OutImages
 ```
 
 `BatchSampler` covers `W = (len - 1) / T` windows; window `k` is tokens
@@ -40,6 +46,12 @@ past the end of an epoch continues into the next one. The checkpoint's
 `DataCursor` stores the epoch in `shard` and the next window's ordinal in
 `token_index`. nanolab's batcher instead draws starts uniformly with
 replacement; this sampler does not reproduce that stream.
+
+Image datasets (`ImageSet::from_mnist`, `ImageSet::from_cifar10`) decode
+streamed binary pixel arrays directly under `Budget` limits, widening `u8`
+pixels to `f32` during `ImageBatchSampler::next_batch` in NCHW order with labels
+as `u32`. Pre-computed 256-entry `Normalization` tables apply channel-wise
+`(p / 255 - mean) / std` with zero runtime transcendental operations.
 
 ---
 

@@ -131,13 +131,19 @@ stateDiagram-v2
 ```
 
 > [!IMPORTANT]
-> If an allocation exceeds remaining budget limits, `try_reserve()` returns `Err(OjasError::CapacityExceeded)` immediately. The engine **refuses to silently swap to disk or resize limits**. `check_room(bytes)` allows checking capacity ahead of multi-step execution without reserving, and `peak_bytes()` / `reset_peak()` enable exact phase-by-phase peak memory measurement. Infallible system allocators (`vec!`, `format!`, `thread::spawn`) operate outside this software budget and can still abort if physical host memory is exhausted.
+> If an allocation exceeds remaining budget limits, `try_reserve()` returns `Err(OjasError::CapacityExceeded)` immediately. The engine **refuses to silently swap to disk or resize limits**. `check_room(bytes)` allows checking capacity ahead of multi-step execution without reserving, and `peak_bytes()` / `reset_peak()` enable exact phase-by-phase peak memory measurement. Device readbacks are strictly scoped and audited per budget tree via `Budget::device_readbacks()`. On Apple Silicon Metal, `MetalBackend::set_mem_cap` and `mem_cap` allow enforcing hard device memory ceilings. Infallible system allocators (`vec!`, `format!`, `thread::spawn`) operate outside this software budget and can still abort if physical host memory is exhausted.
 
 ---
 
 ## 4. Dynamic Reverse-Mode Autograd Tape
 
 `ojas-autograd` implements a dynamic tape-based automatic differentiation engine. On a CPU backend the tensors stay as given and the cross-entropy seed is scaled on the host. On any other backend, `leaf` and the saved inputs are uploaded, reshape is a zero-copy `Tensor::view`, and the backward seed is uploaded. A non-root cross-entropy gradient is scaled with two rank-1 linears and a multiply, all on that backend.
+
+The tape records both transformer and vision/encoder operational adjoints:
+- **Core Ops:** `Tape::linear`, `Tape::rms_norm`, `Tape::silu`, `Tape::attention`, `Tape::cross_entropy`.
+- **Vision & Encoder Backwards:** `Tape::layer_norm`, `Tape::channel_layer_norm` (2D LayerNorm over channels), `Tape::gelu_erf` (`gelu_erf_backward_exact`), `Tape::linear_bias` (simultaneous $dX, dW, db$; frozen weights with `!needs_grad` bypass $dW$ GEMM computation entirely), `Tape::broadcast_add`, `Tape::broadcast_mul`, `Tape::scale`, `Tape::softmax`.
+- **Spatial Backwards:** `Tape::conv2d`, `Tape::conv_transpose2d`, `Tape::max_pool2d`.
+- **Hardware Device Testing:** On macOS Metal, `tests/metal_tape.rs` runs real GPU device-resident seeded backward adjoint sweeps with zero unbudgeted readbacks.
 
 ```mermaid
 flowchart TD

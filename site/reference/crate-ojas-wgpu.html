@@ -223,6 +223,10 @@
 </li>
 <li><strong>Training and decode ops (T2-T5):</strong> <code>accumulate_grad</code> adds in the accumulator&#39;s own buffer when it is the sole owner (a shared one gets a new buffer); <code>linear_cross_entropy_mean</code> keeps at most <code>chunk.rows x chunk.cols</code> logits alive, folds vocabulary tiles into an online softmax, and accumulates both gradients through the GEMM (<code>tests/linear_ce.rs</code>); <code>cached_attention_forward</code> splits the keys of a time-major cache so one decode query still fills the GPU, with grouped-query heads and rows that never read past their own position; <code>kv_cache_write</code> refuses before recording anything and copies only if the source is finite, so the cache is unchanged on every error (<code>tests/kv_cache.rs</code>). Non-finite values in these ops are reported at the next sync point, as for every op.
 </li>
+<li><strong>Softmax collapse defense:</strong> On rows where the target gradient $p_t - 1$ rounds to 0, <code>ce_fwd</code>, <code>ce_bwd</code>, and <code>lce_*</code> take the target-excluded cross-entropy form with $\ln(1+S)$ (<code>log1p_exact</code>). Standard rows pay only a single uniform branch load rather than a second reduction tree.
+</li>
+<li><strong>SAM and encoder ops refusal:</strong> All 32 ops of <code>ojas_core::SAM_AUTOCAST_POLICY</code> (spatial ops, LayerNorm, erf GELU, linear bias, broadcast add/mul, softmax backwards, etc.) return <code>OjasError::Unsupported</code> under their exact op names as trait defaults (<code>tests/sam_ops_refused.rs</code>).
+</li>
 <li><strong>CPU adapters</strong> (lavapipe, SwiftShader, WARP) are refused unless <code>OJAS_WGPU_ALLOW_CPU_ADAPTER=1</code>; Linux CI sets it to run the tests on lavapipe.
 </li>
 </ul>

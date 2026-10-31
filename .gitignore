@@ -161,13 +161,21 @@ backups/
 .devmap/
 /.devmap/
 
-# Agent session reports belong in docs/reports/ (committed deliberately), never at the root
+# Agent session, build and wave reports
+BUILD_REPORT*
 /BUILD_REPORT*
+docs/reports/BUILD_REPORT*
+WAVE_REPORT*
 /WAVE_REPORT*
+*wave*report*
 /*wave*report*
+*WAVE_REPORT*
 /*WAVE_REPORT*
+BRANCH_REPORT*
 /BRANCH_REPORT*
+AUDIT_REPORT*
 /AUDIT_REPORT*
+HANDOFF*
 /HANDOFF*
 
 # Documentation scratch & guides

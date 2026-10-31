@@ -247,11 +247,22 @@
     Active --&gt; Rejected: try_reserve(req) [req &gt; remaining]
     
     Rejected --&gt; [*]: Returns Err(OjasError#58;#58;CapacityExceeded)</pre></figure>
-<aside class="alert alert-important"><p class="alert-title">Important</p><p>If an allocation exceeds remaining budget limits, <code>try_reserve()</code> returns <code>Err(OjasError::CapacityExceeded)</code> immediately. The engine <strong>refuses to silently swap to disk or resize limits</strong>. <code>check_room(bytes)</code> allows checking capacity ahead of multi-step execution without reserving, and <code>peak_bytes()</code> / <code>reset_peak()</code> enable exact phase-by-phase peak memory measurement. Infallible system allocators (<code>vec!</code>, <code>format!</code>, <code>thread::spawn</code>) operate outside this software budget and can still abort if physical host memory is exhausted.</p>
+<aside class="alert alert-important"><p class="alert-title">Important</p><p>If an allocation exceeds remaining budget limits, <code>try_reserve()</code> returns <code>Err(OjasError::CapacityExceeded)</code> immediately. The engine <strong>refuses to silently swap to disk or resize limits</strong>. <code>check_room(bytes)</code> allows checking capacity ahead of multi-step execution without reserving, and <code>peak_bytes()</code> / <code>reset_peak()</code> enable exact phase-by-phase peak memory measurement. Device readbacks are strictly scoped and audited per budget tree via <code>Budget::device_readbacks()</code>. On Apple Silicon Metal, <code>MetalBackend::set_mem_cap</code> and <code>mem_cap</code> allow enforcing hard device memory ceilings. Infallible system allocators (<code>vec!</code>, <code>format!</code>, <code>thread::spawn</code>) operate outside this software budget and can still abort if physical host memory is exhausted.</p>
 </aside>
 <hr>
 <h2 id="4-dynamic-reverse-mode-autograd-tape">4. Dynamic Reverse-Mode Autograd Tape <a class="anchor" href="#4-dynamic-reverse-mode-autograd-tape" aria-label="Link to this section">#</a></h2>
 <p><code>ojas-autograd</code> implements a dynamic tape-based automatic differentiation engine. On a CPU backend the tensors stay as given and the cross-entropy seed is scaled on the host. On any other backend, <code>leaf</code> and the saved inputs are uploaded, reshape is a zero-copy <code>Tensor::view</code>, and the backward seed is uploaded. A non-root cross-entropy gradient is scaled with two rank-1 linears and a multiply, all on that backend.</p>
+<p>The tape records both transformer and vision/encoder operational adjoints:</p>
+<ul>
+<li><strong>Core Ops:</strong> <code>Tape::linear</code>, <code>Tape::rms_norm</code>, <code>Tape::silu</code>, <code>Tape::attention</code>, <code>Tape::cross_entropy</code>.
+</li>
+<li><strong>Vision &amp; Encoder Backwards:</strong> <code>Tape::layer_norm</code>, <code>Tape::channel_layer_norm</code> (2D LayerNorm over channels), <code>Tape::gelu_erf</code> (<code>gelu_erf_backward_exact</code>), <code>Tape::linear_bias</code> (simultaneous $dX, dW, db$; frozen weights with <code>!needs_grad</code> bypass $dW$ GEMM computation entirely), <code>Tape::broadcast_add</code>, <code>Tape::broadcast_mul</code>, <code>Tape::scale</code>, <code>Tape::softmax</code>.
+</li>
+<li><strong>Spatial Backwards:</strong> <code>Tape::conv2d</code>, <code>Tape::conv_transpose2d</code>, <code>Tape::max_pool2d</code>.
+</li>
+<li><strong>Hardware Device Testing:</strong> On macOS Metal, <code>tests/metal_tape.rs</code> runs real GPU device-resident seeded backward adjoint sweeps with zero unbudgeted readbacks.
+</li>
+</ul>
 <figure class="diagram"><pre class="mermaid">flowchart TD
     subgraph GraphBuilding[&#34;Dynamic Graph Construction (Forward Pass)&#34;]
         X[&#34;Input Var x&#34;] --&gt; L1[&#34;Linear Node&#34;]
