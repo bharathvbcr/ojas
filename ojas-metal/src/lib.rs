@@ -21,6 +21,7 @@
 pub use ojas_core::BackendId;
 
 mod backend;
+mod encoder_bwd;
 #[cfg(all(test, target_os = "macos", feature = "metal"))]
 mod gauge;
 mod link;

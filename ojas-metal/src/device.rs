@@ -583,7 +583,7 @@ impl Worker {
             return Err(metal_err("embedded ojas-metal metallib is empty"));
         }
         rt.add_metallib_bytes(lib).map_err(metal_err)?;
-        for name in KERNELS {
+        for name in KERNELS.iter().chain(crate::encoder_bwd::KERNELS) {
             rt.pipeline(name).map_err(metal_err)?;
         }
         let slab = rt.alloc_buffer(SLAB_SLOTS * ST_BYTES).map_err(metal_err)?;
@@ -1764,6 +1764,31 @@ impl Worker {
                 alpha,
                 bf16,
             } => self.muon(p, g, m, rows, cols, momentum, nesterov, decay, alpha, bf16),
+            Cmd::LnBwd {
+                x,
+                w,
+                b,
+                gy,
+                geom,
+                eps,
+            } => self.ln_bwd([x, w, b, gy], geom, eps),
+            Cmd::ClnBwd {
+                x,
+                w,
+                b,
+                gy,
+                geom,
+                eps,
+            } => self.cln_bwd([x, w, b, gy], geom, eps),
+            Cmd::GeluErfBwd { x, gy } => self.gelu_erf_bwd(x, gy),
+            Cmd::SoftmaxBwd { y, gy, rows, dim } => self.softmax_bwd(y, gy, rows, dim),
+            Cmd::BcastGrad {
+                op,
+                g,
+                other,
+                scan,
+                geom,
+            } => self.bcast_grad(op, g, other, &scan, &geom),
         }
     }
 
@@ -5457,6 +5482,8 @@ mod tests {
         );
     }
 }
+
+mod enc_bwd_dev;
 
 #[cfg(test)]
 #[path = "adversarial_oom.rs"]

@@ -9,10 +9,11 @@ use std::env;
 use std::path::PathBuf;
 use std::process::Command;
 
-const SOURCES: [&str; 3] = [
+const SOURCES: [&str; 4] = [
     "per_head_gate.metal",
     "causal_attn_bwd.metal",
     "ojas_backend.metal",
+    "encoder_bwd.metal",
 ];
 
 fn main() {

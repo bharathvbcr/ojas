@@ -120,6 +120,8 @@ use crate::link::{
 };
 use crate::permute;
 
+mod enc_bwd_host;
+
 /// A Metal allocation owned by the device thread, named by id.
 pub struct MetalBuffer {
     id: u64,
@@ -3374,6 +3376,32 @@ impl Backend for MetalBackend {
         self.permute(&normed, &back)
     }
 
+    /// Double-single sums in a fixed order (`kernels/encoder_bwd.metal`,
+    /// `backend/enc_bwd_host.rs` for the bound against the CPU's `f64` ones).
+    fn layer_norm_backward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        grad_output: &Tensor,
+        eps: f32,
+    ) -> Result<ojas_core::AffineGrad, OjasError> {
+        self.enc_layer_norm_backward(input, weight, bias, grad_output, eps)
+    }
+
+    /// One thread per position over its strided channels, or the row path
+    /// for a `[N, C]` input.
+    fn channel_layer_norm_backward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        grad_output: &Tensor,
+        eps: f32,
+    ) -> Result<ojas_core::AffineGrad, OjasError> {
+        self.enc_channel_layer_norm_backward(input, weight, bias, grad_output, eps)
+    }
+
     /// tessl's `bert::bias_gelu_erf` with a zero bias.
     fn gelu_erf_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
         const OP: &str = "gelu_erf_forward";
@@ -3382,6 +3410,11 @@ impl Backend for MetalBackend {
         u32_dim(OP, x.n)?;
         // The one-element zero bias.
         self.one(OP, input.shape(), 1, Cmd::GeluErf { x })
+    }
+
+    /// The derivative of the forward's own erfc fit, one element per thread.
+    fn gelu_erf_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        self.enc_gelu_erf_backward(input, grad_output)
     }
 
     /// [`Self::linear_forward`] and then [`Self::broadcast_add_forward`] of
@@ -3397,16 +3430,46 @@ impl Backend for MetalBackend {
         self.broadcast_add_forward(&product, bias)
     }
 
+    /// [`Self::linear_backward`]'s two gradients and the output gradient's
+    /// column sums for the bias.
+    fn linear_bias_backward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<ojas_core::AffineGrad, OjasError> {
+        self.enc_linear_bias_backward(input, weight, bias, grad_output)
+    }
+
     fn broadcast_add_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
         const OP: &str = "broadcast_add_forward";
         let dims = broadcast_add_forward_dims(a, b)?;
         self.broadcast(OP, false, a, b, &dims)
     }
 
+    fn broadcast_add_backward(
+        &self,
+        a: &Tensor,
+        b: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        self.enc_broadcast_add_backward(a, b, grad_output)
+    }
+
     fn broadcast_mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
         const OP: &str = "broadcast_mul_forward";
         let dims = broadcast_mul_forward_dims(a, b)?;
         self.broadcast(OP, true, a, b, &dims)
+    }
+
+    fn broadcast_mul_backward(
+        &self,
+        a: &Tensor,
+        b: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        self.enc_broadcast_mul_backward(a, b, grad_output)
     }
 
     fn scale_forward(&self, input: &Tensor, scale: f32) -> Result<Tensor, OjasError> {
@@ -3423,6 +3486,11 @@ impl Backend for MetalBackend {
         let x = self.f32(OP, input)?;
         let (rows, dim) = gated_rms_geom(OP, &dims)?;
         self.one(OP, input.shape(), 0, Cmd::Softmax { x, rows, dim })
+    }
+
+    /// From the forward's output `y`, a double-single dot per row.
+    fn softmax_backward(&self, output: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        self.enc_softmax_backward(output, grad_output)
     }
 
     fn cross_entropy_mean_forward(
