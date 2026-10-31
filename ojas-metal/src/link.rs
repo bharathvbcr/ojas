@@ -1014,8 +1014,8 @@ pub(crate) enum Cmd {
         g: Arg,
         m: Arg,
         v: Arg,
-        /// `ojas_adamw_*`'s `OjasAdamW`, in field order.
-        scalars: [f32; 7],
+        /// tessl's `Qwen35AdamW` (`qwen35_adamw_math.h`), in field order.
+        scalars: [f32; 8],
     },
     /// Writes `p` and `m` only if the whole step is finite.
     Muon {

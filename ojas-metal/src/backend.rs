@@ -1397,10 +1397,11 @@ fn product(op: &'static str, dims: &[usize]) -> Res<usize> {
 
 /// The per-step f32 scalars of `ojas_adamw_*`, formed in f64 from the bias
 /// corrections [`check_adamw`] returns (so `1 - beta^step` has the CPU
-/// reference's bits), in `OjasAdamW` field order. A scalar that does not
-/// survive the f32 rounding is [`OjasError::NonFinite`] before the device
-/// sees it.
-fn adamw_scalars(config: AdamWConfig, bc1: f64, bc2: f64) -> Res<[f32; 7]> {
+/// reference's bits), in tessl's `Qwen35AdamW` field order. Its last field,
+/// `grad_scale`, is 1: `clip_grad_norm` scales the gradient before the step.
+/// A scalar that does not survive the f32 rounding is
+/// [`OjasError::NonFinite`] before the device sees it.
+fn adamw_scalars(config: AdamWConfig, bc1: f64, bc2: f64) -> Res<[f32; 8]> {
     let s = [
         (1.0 - config.lr * config.weight_decay) as f32,
         (1.0 - config.beta1) as f32,
@@ -1409,6 +1410,7 @@ fn adamw_scalars(config: AdamWConfig, bc1: f64, bc2: f64) -> Res<[f32; 7]> {
         (config.lr / bc1) as f32,
         bc2.sqrt() as f32,
         config.eps as f32,
+        1.0,
     ];
     if s.iter().any(|v| !v.is_finite()) {
         return Err(OjasError::NonFinite { op: "adamw_step" });

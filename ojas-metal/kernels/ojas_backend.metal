@@ -27,6 +27,8 @@
 // calls are `precise::`.
 #include <metal_stdlib>
 #include <MetalPerformancePrimitives/MetalPerformancePrimitives.h>
+// tessl's kernel directory (`DEP_TESSL_KERNELS`, passed as -I by build.rs).
+#include "qwen35_adamw_math.h"
 using namespace metal;
 
 #define ST_IN 0u
@@ -1503,42 +1505,20 @@ kernel void ojas_ce_mean(
 
 // --------------------------------------------------------------- AdamW ---
 //
-// torch.optim.AdamW's single-tensor step, in tessl `qwen35_adamw_f32`'s f32
-// arithmetic and order (decoupled decay, torch's lerp for the first moment,
-// `sqrt(v) / sqrt(bc2) + eps`, then `p += -step_size * m / denom`). The host
-// forms the scalars in f64 from `ojas_core::check_adamw`.
+// The element arithmetic is tessl's `qwen35_adamw_update` from
+// `qwen35_adamw_math.h` (torch.optim.AdamW's single-tensor step: decoupled
+// decay, torch's lerp for the first moment, `sqrt(v) / sqrt(bc2) + eps`, then
+// `p += -step_size * m / denom`), so the f32 update has one owner. The host
+// forms the scalars in f64 from `ojas_core::check_adamw` and binds tessl's
+// `Qwen35AdamW` with `grad_scale` 1: the gradient is not rescaled here
+// (`clip_grad_norm` scales it before the step).
 //
 // Transactional without copies: `ojas_adamw_check` computes every element
 // and only flags status (ST_IN for a non-finite input, ST_OUT for a
 // non-finite p, m or v); `ojas_adamw_apply`, dispatched after it in the same
 // command buffer, recomputes and writes in place only if no status word is
-// set. The two kernels run the same inline arithmetic on the same inputs,
+// set. The two kernels run the same header function on the same inputs,
 // so what is written is what was checked.
-
-struct OjasAdamW {
-    float decay_mul;       // 1 - lr * weight_decay
-    float lerp_w;          // 1 - beta1
-    float beta2;
-    float one_minus_beta2;
-    float step_size;       // lr / (1 - beta1^step)
-    float bc2_sqrt;        // sqrt(1 - beta2^step)
-    float eps;
-};
-
-inline void ojas_adamw_elem(
-    float p, float g, float m, float v, constant OjasAdamW &a,
-    thread float &p_out, thread float &m_out, thread float &v_out)
-{
-    float w = p * a.decay_mul;
-    const float diff = g - m;
-    const float mi = a.lerp_w < 0.5f ? m + a.lerp_w * diff : g - diff * (1.0f - a.lerp_w);
-    const float vi = v * a.beta2 + (a.one_minus_beta2 * g) * g;
-    const float denom = precise::divide(precise::sqrt(vi), a.bc2_sqrt) + a.eps;
-    w = w + (-a.step_size) * precise::divide(mi, denom);
-    p_out = w;
-    m_out = mi;
-    v_out = vi;
-}
 
 kernel void ojas_adamw_check(
     device const float *p [[buffer(0)]],
@@ -1547,17 +1527,17 @@ kernel void ojas_adamw_check(
     device const float *v [[buffer(3)]],
     device atomic_uint *st [[buffer(4)]],
     constant uint &n [[buffer(5)]],
-    constant OjasAdamW &a [[buffer(6)]],
+    constant Qwen35AdamW &a [[buffer(6)]],
     uint i [[thread_position_in_grid]])
 {
     if (i >= n) return;
-    const float pi = p[i], gi = g[i], mi = m[i], vi = v[i];
-    if (!(isfinite(pi) && isfinite(gi) && isfinite(mi) && isfinite(vi))) {
+    const float pi = p[i], gi = g[i];
+    float mo = m[i], vo = v[i];
+    if (!(isfinite(pi) && isfinite(gi) && isfinite(mo) && isfinite(vo))) {
         atomic_store_explicit(&st[ST_IN], 1u, memory_order_relaxed);
         return;
     }
-    float po, mo, vo;
-    ojas_adamw_elem(pi, gi, mi, vi, a, po, mo, vo);
+    const float po = qwen35_adamw_update(a, pi, gi, mo, vo);
     if (!(isfinite(po) && isfinite(mo) && isfinite(vo))) {
         atomic_store_explicit(&st[ST_OUT], 1u, memory_order_relaxed);
     }
@@ -1570,16 +1550,15 @@ kernel void ojas_adamw_apply(
     device float *v [[buffer(3)]],
     device const uint *st [[buffer(4)]],
     constant uint &n [[buffer(5)]],
-    constant OjasAdamW &a [[buffer(6)]],
+    constant Qwen35AdamW &a [[buffer(6)]],
     uint i [[thread_position_in_grid]])
 {
     if (i >= n) return;
     if (st[ST_IN] != 0u || st[ST_OUT] != 0u) {
         return;
     }
-    float po, mo, vo;
-    ojas_adamw_elem(p[i], g[i], m[i], v[i], a, po, mo, vo);
-    p[i] = po;
+    float mo = m[i], vo = v[i];
+    p[i] = qwen35_adamw_update(a, p[i], g[i], mo, vo);
     m[i] = mo;
     v[i] = vo;
 }
