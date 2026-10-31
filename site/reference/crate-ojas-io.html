@@ -172,6 +172,18 @@
     CKPT --&gt; CKPTValidator
     CKPTValidator --&gt; Checkpoint</pre></figure>
 <hr>
+<h2 id="reading-tensors-into-caller-storage">Reading tensors into caller storage <a class="anchor" href="#reading-tensors-into-caller-storage" aria-label="Link to this section">#</a></h2>
+<p><code>SafeTensors::open</code> reads the header only; <code>info</code>, <code>read_into</code> and <code>read_bytes</code> already look one tensor up by name. Three additions let a loader land the bytes where it wants them, with no decode and no intermediate buffer:</p>
+<ul>
+<li><code>read_tensor_into(name, dst)</code> fills a <code>&amp;mut [u8]</code> of exactly the tensor&#39;s length with one positioned read. A short or long destination is refused before a byte is written.
+</li>
+<li><code>read_into_slab(names, align, slab)</code> reads a list of tensors into one caller-held slice, each at an <code>align</code>-aligned address (<code>align</code> is a power of two up to <code>MAX_SLAB_ALIGN</code>). The slice may have any alignment: each slot is rounded up from its real address, so an unaligned slab costs up to <code>align - 1</code> bytes at the front. <code>slab_len(names, align)</code> is the size from an aligned start. The whole plan (names, repeats, alignment, total size) is checked before the first read, so a slab that is too small is refused untouched.
+</li>
+<li><code>read_into_sink</code> takes any <code>TensorSink</code> (for example a page-aligned pool slab) and re-checks every slot&#39;s length and alignment before reading into it. <code>OwnedSlab</code> is an aligned slab charged to a <code>Budget</code> before it is allocated and released on drop.
+</li>
+</ul>
+<p>The bytes land as stored, little-endian, and are bit-equal to <code>read_bytes</code> of the same tensor. None of this uses <code>unsafe</code>.</p>
+<hr>
 <h2 id="binary-checkpoint-v1-record-structure">Binary Checkpoint v1 Record Structure <a class="anchor" href="#binary-checkpoint-v1-record-structure" aria-label="Link to this section">#</a></h2>
 <figure class="diagram"><pre class="mermaid">flowchart LR
     subgraph Frame[&#34;Checkpoint v1 Binary Envelope&#34;]
@@ -209,6 +221,7 @@
     </main>
     <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
 <li><a href="#formats--parsing-engine">Formats &amp; Parsing Engine</a></li>
+<li><a href="#reading-tensors-into-caller-storage">Reading tensors into caller storage</a></li>
 <li><a href="#binary-checkpoint-v1-record-structure">Binary Checkpoint v1 Record Structure</a></li>
 <li><a href="#safety-invariants--hardening-guarantees">Safety Invariants &amp; Hardening Guarantees</a></li>
 </ol></nav>

@@ -21,9 +21,9 @@
 //! read through a slab is bit-equal to [`SafeTensors::read_bytes`] of the
 //! same tensor. Padding between tensors is left as the caller had it.
 //!
-//! Nothing here uses `unsafe`: alignment is found with
-//! [`pointer::align_offset`] on the slab's own address, and a destination a
-//! sink returns is re-checked for length and alignment before it is read into.
+//! Nothing here uses `unsafe`: alignment is found with `align_offset` on the
+//! slab's own address, and a destination a sink returns is re-checked for
+//! length and alignment before it is read into.
 
 use crate::error::IoError;
 use crate::safetensors::SafeTensors;

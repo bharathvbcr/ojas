@@ -354,12 +354,15 @@ fn offsets_past_eof_overlap_and_a_truncated_file_are_refused_before_any_slab_rea
     let past = patch_header(&valid, "[0,4]", "[0,16]");
     // shape and offsets agree on 16 bytes; the file holds 4.
     let past = patch_header(&past, "\"shape\":[1]", "\"shape\":[4]");
-    assert!(SafeTensors::parse(&past).is_err());
+    let err = SafeTensors::parse(&past).unwrap_err();
+    assert!(err.detail().contains("outside the 4-byte data"), "{err}");
     let f = tmp("past");
     std::fs::write(&f.0, &past).unwrap();
-    assert!(SafeTensors::open(&f.0).is_err());
+    let err = SafeTensors::open(&f.0).unwrap_err();
+    assert!(err.detail().contains("outside the 4-byte data"), "{err}");
 
-    // Truncated after a valid open of the original.
+    // A file cut short before it is opened: the header promises more data
+    // than the file holds, so it is refused at open, not at the first read.
     let fx = fixtures();
     let bytes = encode(&fx);
     std::fs::write(&f.0, &bytes[..bytes.len() - 10]).unwrap();
@@ -381,9 +384,41 @@ fn offsets_past_eof_overlap_and_a_truncated_file_are_refused_before_any_slab_rea
         },
     ]);
     let overlap = patch_header(&two, "[8,12]", "[4,8]");
-    assert!(SafeTensors::parse(&overlap).is_err());
+    let err = SafeTensors::parse(&overlap).unwrap_err();
+    assert!(err.detail().contains("gap or overlap"), "{err}");
     std::fs::write(&f.0, &overlap).unwrap();
-    assert!(SafeTensors::open(&f.0).is_err());
+    let err = SafeTensors::open(&f.0).unwrap_err();
+    assert!(err.detail().contains("gap or overlap"), "{err}");
+}
+
+/// The header is checked against the file's length when it is opened, but the
+/// file can shrink afterwards. A read of the missing bytes is an error naming
+/// the tensor, never a short or zero-filled success; a tensor before the cut
+/// still reads exactly.
+#[test]
+fn a_file_cut_short_after_open_is_an_error_on_the_missing_tensor_only() {
+    let fx = fixtures();
+    let bytes = encode(&fx);
+    let f = tmp("cut");
+    std::fs::write(&f.0, &bytes).unwrap();
+    let st = SafeTensors::open(&f.0).unwrap();
+    // Fixture order is the file order, so "h" (66 bytes) is last.
+    let h_len = fx.last().unwrap().data.len();
+    let cut = std::fs::OpenOptions::new().write(true).open(&f.0).unwrap();
+    cut.set_len((bytes.len() - 1) as u64).unwrap();
+    drop(cut);
+
+    let mut h = vec![SENT; h_len];
+    let err = st.read_tensor_into("h", &mut h).unwrap_err();
+    assert!(err.detail().starts_with("h: data:"), "{err}");
+
+    let mut ids = vec![SENT; 24];
+    st.read_tensor_into("ids", &mut ids).unwrap();
+    assert_eq!(ids, fx.iter().find(|f| f.name == "ids").unwrap().data);
+
+    let mut slab = vec![SENT; 1 << 13];
+    let err = st.read_into_slab(&["ids", "h"], 8, &mut slab).unwrap_err();
+    assert!(err.detail().starts_with("h: data:"), "{err}");
 }
 
 #[test]

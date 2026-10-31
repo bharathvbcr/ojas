@@ -33,6 +33,18 @@ flowchart TD
 
 ---
 
+## Reading tensors into caller storage
+
+`SafeTensors::open` reads the header only; `info`, `read_into` and `read_bytes` already look one tensor up by name. Three additions let a loader land the bytes where it wants them, with no decode and no intermediate buffer:
+
+- `read_tensor_into(name, dst)` fills a `&mut [u8]` of exactly the tensor's length with one positioned read. A short or long destination is refused before a byte is written.
+- `read_into_slab(names, align, slab)` reads a list of tensors into one caller-held slice, each at an `align`-aligned address (`align` is a power of two up to `MAX_SLAB_ALIGN`). The slice may have any alignment: each slot is rounded up from its real address, so an unaligned slab costs up to `align - 1` bytes at the front. `slab_len(names, align)` is the size from an aligned start. The whole plan (names, repeats, alignment, total size) is checked before the first read, so a slab that is too small is refused untouched.
+- `read_into_sink` takes any `TensorSink` (for example a page-aligned pool slab) and re-checks every slot's length and alignment before reading into it. `OwnedSlab` is an aligned slab charged to a `Budget` before it is allocated and released on drop.
+
+The bytes land as stored, little-endian, and are bit-equal to `read_bytes` of the same tensor. None of this uses `unsafe`.
+
+---
+
 ## Binary Checkpoint v1 Record Structure
 
 ```mermaid
