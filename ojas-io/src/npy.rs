@@ -9,7 +9,168 @@
 //! library by L-cuda-M1) and moved here unchanged, errors included, so
 //! every crate reading goldens shares it; ojas-cuda's tests re-export it.
 
+use std::fs::File;
+use std::io::Write;
 use std::path::Path;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NpyArray {
+    pub shape: Vec<usize>,
+    pub data_f32: Option<Vec<f32>>,
+    pub data_i64: Option<Vec<i64>>,
+    pub data_f64: Option<Vec<f64>>,
+}
+
+impl NpyArray {
+    pub fn f32_slice(&self) -> Result<&[f32], String> {
+        self.data_f32.as_deref().ok_or_else(|| "expected float32 npy".to_string())
+    }
+
+    pub fn f64_slice(&self) -> Result<&[f64], String> {
+        self.data_f64.as_deref().ok_or_else(|| "expected float64 npy".to_string())
+    }
+
+    pub fn i64_slice(&self) -> Result<&[i64], String> {
+        self.data_i64.as_deref().ok_or_else(|| "expected int64 npy".to_string())
+    }
+
+    pub fn scalar_f32(&self) -> Result<f32, String> {
+        let s = self.f32_slice()?;
+        if s.len() != 1 {
+            return Err(format!("expected scalar, got {} elems", s.len()));
+        }
+        Ok(s[0])
+    }
+}
+
+pub fn read_npy(path: &Path) -> Result<NpyArray, String> {
+    read_npy_with_limit(path, None)
+}
+
+pub fn read_npy_with_limit(path: &Path, limit: Option<u64>) -> Result<NpyArray, String> {
+    let npy = read(path)?;
+    let (data_f32, data_f64, data_i64) = match npy.data {
+        Data::F32(v) => {
+            if let Some(lim) = limit {
+                let nbytes = (v.len() * 4) as u64;
+                if nbytes > lim {
+                    return Err(format!("{}: payload {nbytes} > limit {lim}", path.display()));
+                }
+            }
+            (Some(v), None, None)
+        }
+        Data::F64(v) => {
+            if let Some(lim) = limit {
+                let nbytes = (v.len() * 8) as u64;
+                if nbytes > lim {
+                    return Err(format!("{}: payload {nbytes} > limit {lim}", path.display()));
+                }
+            }
+            (None, Some(v), None)
+        }
+        Data::I64(v) => {
+            if let Some(lim) = limit {
+                let nbytes = (v.len() * 8) as u64;
+                if nbytes > lim {
+                    return Err(format!("{}: payload {nbytes} > limit {lim}", path.display()));
+                }
+            }
+            (None, None, Some(v))
+        }
+    };
+    Ok(NpyArray {
+        shape: npy.shape,
+        data_f32,
+        data_i64,
+        data_f64,
+    })
+}
+
+/// Transpose last two dims of a row-major array. `shape` is updated in place.
+pub fn transpose_last2(data: &mut [f32], shape: &mut [usize]) -> Result<(), String> {
+    if shape.len() < 2 {
+        return Err("transpose_last2 needs rank >= 2".into());
+    }
+    let r = shape.len();
+    let rows = shape[r - 2];
+    let cols = shape[r - 1];
+    let numel: usize = shape.iter().product();
+    if numel != data.len() {
+        return Err(format!(
+            "transpose_last2: shape {shape:?} holds {numel} elements, data has {}",
+            data.len()
+        ));
+    }
+    let batch: usize = shape[..r - 2].iter().product();
+    let mut tmp = vec![0.0f32; data.len()];
+    for b in 0..batch {
+        let src = &data[b * rows * cols..(b + 1) * rows * cols];
+        let dst = &mut tmp[b * rows * cols..(b + 1) * rows * cols];
+        for i in 0..rows {
+            for j in 0..cols {
+                dst[j * rows + i] = src[i * cols + j];
+            }
+        }
+    }
+    data.copy_from_slice(&tmp);
+    shape[r - 2] = cols;
+    shape[r - 1] = rows;
+    Ok(())
+}
+
+/// Write a C-order float32 `.npy` (v1.0).
+pub fn write_npy_f32(path: &Path, shape: &[usize], data: &[f32]) -> Result<(), String> {
+    let numel: usize = shape.iter().product();
+    if data.len() != numel {
+        return Err(format!(
+            "write_npy shape {:?} expects {} elems, got {}",
+            shape,
+            numel,
+            data.len()
+        ));
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+    }
+    let shape_str = if shape.is_empty() {
+        "()".to_string()
+    } else if shape.len() == 1 {
+        format!("({},)", shape[0])
+    } else {
+        format!(
+            "({})",
+            shape.iter().map(|d| d.to_string()).collect::<Vec<_>>().join(", ")
+        )
+    };
+    let mut header = format!("{{'descr': '<f4', 'fortran_order': False, 'shape': {shape_str}, }}");
+    let mut total = 10 + header.len() + 1;
+    let pad = (64 - (total % 64)) % 64;
+    header.push_str(&" ".repeat(pad));
+    header.push('\n');
+    total = 10 + header.len();
+    debug_assert_eq!(total % 64, 0);
+
+    let mut f = File::create(path).map_err(|e| format!("create {}: {e}", path.display()))?;
+    f.write_all(b"\x93NUMPY").map_err(|e| format!("magic: {e}"))?;
+    f.write_all(&[1u8, 0]).map_err(|e| format!("ver: {e}"))?;
+    let hlen =
+        u16::try_from(header.len()).map_err(|_| format!("write_npy: a {}-byte header needs npy v2", header.len()))?;
+    f.write_all(&hlen.to_le_bytes()).map_err(|e| format!("hlen: {e}"))?;
+    f.write_all(header.as_bytes()).map_err(|e| format!("header: {e}"))?;
+    let mut buf = Vec::with_capacity(data.len().min(4096) * 4);
+    for chunk in data.chunks(4096) {
+        buf.clear();
+        for &x in chunk {
+            buf.extend_from_slice(&x.to_le_bytes());
+        }
+        f.write_all(&buf).map_err(|e| format!("payload: {e}"))?;
+    }
+    Ok(())
+}
+
+#[allow(dead_code)]
+pub fn seek_noop() {}
+
 
 /// The payload, in the dtype the file declares. An `<f4` file is never widened
 /// here and an `<f8` file is never narrowed: callers choose explicitly.

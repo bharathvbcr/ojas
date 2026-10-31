@@ -27,3 +27,10 @@ impl fmt::Display for IoError {
 }
 
 impl std::error::Error for IoError {}
+
+impl From<IoError> for String {
+    fn from(err: IoError) -> Self {
+        err.detail
+    }
+}
+

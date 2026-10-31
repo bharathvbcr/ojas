@@ -20,6 +20,14 @@ pub struct Budget {
     inner: Arc<Inner>,
 }
 
+/// A callback invoked by [`Budget`] when an allocation request cannot be satisfied.
+///
+/// Implementations free at least `needed_bytes` of idle/reclaimable memory
+/// (e.g., from an internal freelist buffer cache). Returns the number of bytes actually freed.
+pub trait BudgetTrimHandler: Send + Sync + std::fmt::Debug {
+    fn trim_memory(&self, needed_bytes: u64) -> u64;
+}
+
 #[derive(Debug)]
 struct Inner {
     cap_bytes: u64,
@@ -31,6 +39,7 @@ struct Inner {
     /// Device-to-host copies charged to this budget or a descendant.
     readbacks: AtomicU64,
     readback_bytes: AtomicU64,
+    trim_handler: std::sync::RwLock<Option<Arc<dyn BudgetTrimHandler>>>,
 }
 
 /// Charges `bytes` against a [`Budget`] until dropped.
@@ -63,6 +72,7 @@ impl Budget {
                 parent: None,
                 readbacks: AtomicU64::new(0),
                 readback_bytes: AtomicU64::new(0),
+                trim_handler: std::sync::RwLock::new(None),
             }),
         }
     }
@@ -81,8 +91,26 @@ impl Budget {
                 parent: Some(self.clone()),
                 readbacks: AtomicU64::new(0),
                 readback_bytes: AtomicU64::new(0),
+                trim_handler: std::sync::RwLock::new(None),
             }),
         }
+    }
+
+    /// Set an eviction callback invoked when an allocation would exceed capacity.
+    pub fn set_trim_handler(&self, handler: Arc<dyn BudgetTrimHandler>) {
+        if let Ok(mut lock) = self.inner.trim_handler.write() {
+            *lock = Some(handler);
+        }
+    }
+
+    /// Retrieve the trim handler on this budget or the nearest ancestor.
+    pub fn trim_handler(&self) -> Option<Arc<dyn BudgetTrimHandler>> {
+        if let Ok(lock) = self.inner.trim_handler.read() {
+            if let Some(h) = lock.as_ref() {
+                return Some(Arc::clone(h));
+            }
+        }
+        self.inner.parent.as_ref().and_then(|p| p.trim_handler())
     }
 
     /// `(calls, bytes)` of device-to-host copies [`crate::Tensor::to_host`]
@@ -174,7 +202,20 @@ impl Budget {
                 budget: self.clone(),
             });
         }
-        self.charge(bytes)?;
+        if let Err(err) = self.charge(bytes) {
+            if let OjasError::CapacityExceeded { .. } = &err {
+                if let Some(handler) = self.trim_handler() {
+                    let freed = handler.trim_memory(bytes);
+                    if freed > 0 && self.charge(bytes).is_ok() {
+                        return Ok(Reservation {
+                            bytes,
+                            budget: self.clone(),
+                        });
+                    }
+                }
+            }
+            return Err(err);
+        }
         Ok(Reservation {
             bytes,
             budget: self.clone(),
@@ -1153,5 +1194,36 @@ mod tests {
         for n in &nodes {
             assert_eq!(n.live_bytes().unwrap(), 0);
         }
+    }
+
+    #[test]
+    fn trim_handler_recovers_headroom_on_capacity_exceeded() {
+        use std::sync::atomic::AtomicU64;
+
+        #[derive(Debug)]
+        struct TestTrim(Arc<AtomicU64>, Budget);
+
+        impl BudgetTrimHandler for TestTrim {
+            fn trim_memory(&self, needed_bytes: u64) -> u64 {
+                let current = self.0.load(Ordering::SeqCst);
+                let freed = needed_bytes.min(current);
+                self.0.fetch_sub(freed, Ordering::SeqCst);
+                self.1.release(freed);
+                freed
+            }
+        }
+
+        let b = Budget::new(100);
+        let live = Arc::new(AtomicU64::new(80));
+        let res = b.try_reserve(80).unwrap();
+        let handler = Arc::new(TestTrim(Arc::clone(&live), b.clone()));
+        b.set_trim_handler(handler);
+        // Forget res so b doesn't double-release upon drop
+        std::mem::forget(res);
+
+        // Next reservation of 40 would exceed 100 (80 + 40 > 100), but trim frees 40, so it succeeds.
+        let res2 = b.try_reserve(40).expect("trim freed memory");
+        assert_eq!(res2.bytes(), 40);
+        assert_eq!(b.live_bytes().unwrap(), 80); // (80 - 40) + 40 = 80
     }
 }

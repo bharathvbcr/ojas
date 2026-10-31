@@ -71,6 +71,8 @@ pub enum AllocError {
     /// The request is past what the device can ever hold. `cap` is that
     /// limit. Permanent: no wait or trim cures it.
     TooLarge { requested: u64, cap: u64, live: u64 },
+    /// Requested byte size or address violates hardware alignment constraints.
+    InvalidAlignment { requested: usize, alignment: usize },
     /// The device can no longer allocate or run work.
     DeviceLost { backend: BackendId, detail: String },
 }
@@ -82,6 +84,7 @@ impl AllocError {
             AllocError::OverBudget { requested, .. }
             | AllocError::Exhausted { requested, .. }
             | AllocError::TooLarge { requested, .. } => Some(*requested),
+            AllocError::InvalidAlignment { requested, .. } => Some(*requested as u64),
             AllocError::DeviceLost { .. } => None,
         }
     }
@@ -127,6 +130,13 @@ impl fmt::Display for AllocError {
                 "allocation past the device limit: requested {requested} bytes, \
                  limit {cap}, live {live}"
             ),
+            AllocError::InvalidAlignment {
+                requested,
+                alignment,
+            } => write!(
+                f,
+                "invalid buffer alignment: {requested} bytes not aligned to {alignment}"
+            ),
             AllocError::DeviceLost { backend, detail } => {
                 write!(f, "backend {backend:?}: device lost: {detail}")
             }
@@ -157,6 +167,15 @@ impl From<AllocError> for OjasError {
                 requested,
                 cap,
                 live,
+            },
+            AllocError::InvalidAlignment {
+                requested,
+                alignment,
+            } => OjasError::Shape {
+                op: "alloc",
+                detail: format!(
+                    "alignment violation: requested {requested} with alignment {alignment}"
+                ),
             },
             AllocError::DeviceLost { backend, detail } => OjasError::DeviceLost { backend, detail },
         }
@@ -284,6 +303,30 @@ pub trait Timeline: Send + Sync {
         ))
     }
 
+    /// Current completed timeline value (convenience accessor).
+    fn current_value(&self) -> u64 {
+        self.completed().unwrap_or(0)
+    }
+
+    /// Block until `value` is reached or timeout expires.
+    fn wait_for(&self, value: u64, _timeout: Option<std::time::Duration>) -> Result<(), AllocError> {
+        match self.wait(value) {
+            Ok(()) => Ok(()),
+            Err(FenceError::TimedOut { value, completed }) => Err(AllocError::DeviceLost {
+                backend: BackendId::Metal,
+                detail: format!("timeline wait timed out at {completed} waiting for {value}"),
+            }),
+            Err(FenceError::Poisoned) => Err(AllocError::DeviceLost {
+                backend: BackendId::Metal,
+                detail: "timeline poisoned".to_string(),
+            }),
+            Err(e) => Err(AllocError::DeviceLost {
+                backend: BackendId::Metal,
+                detail: e.to_string(),
+            }),
+        }
+    }
+
     /// Block until [`Timeline::completed`] reaches `value`. A `value` above
     /// [`Timeline::submitted`] answers [`FenceError::NotSubmitted`] at once
     /// instead of waiting: nothing waits on an uncommitted value. A `value`
@@ -366,6 +409,24 @@ pub trait HostLeaseMut: HostLease {
 /// use and is exclusive, and a stamp the device has not committed answers
 /// [`FenceError::NotSubmitted`] instead of waiting.
 pub trait MappedBuffer: DeviceBuffer {
+    /// Host virtual address of the shared mapping.
+    fn host_ptr(&self) -> *mut u8 {
+        std::ptr::null_mut()
+    }
+
+    /// GPU virtual address of the buffer.
+    fn gpu_address(&self) -> u64 {
+        0
+    }
+
+    /// Associated timeline synchronization fence.
+    fn timeline(&self) -> &dyn Timeline {
+        struct NoTimeline;
+        impl Timeline for NoTimeline {}
+        static NO_TIMELINE: NoTimeline = NoTimeline;
+        &NO_TIMELINE
+    }
+
     /// Borrow the whole buffer for reading, after the device finished its
     /// last write.
     fn host_read(&self) -> Result<Box<dyn HostLease>, FenceError> {
@@ -498,6 +559,16 @@ mod tests {
             ),
             (
                 "Timeline",
+                "current_value",
+                timeline.current_value() == 0,
+            ),
+            (
+                "Timeline",
+                "wait_for",
+                matches!(timeline.wait_for(1, None), Err(AllocError::DeviceLost { .. })),
+            ),
+            (
+                "Timeline",
                 "wait",
                 refused_op(timeline.wait(1).unwrap_err()) == Some("Timeline::wait"),
             ),
@@ -526,6 +597,21 @@ mod tests {
                 "HostLeaseMut",
                 "as_u32_mut",
                 is_unsupported(&lease.as_u32_mut().unwrap_err(), "HostLeaseMut::as_u32_mut"),
+            ),
+            (
+                "MappedBuffer",
+                "host_ptr",
+                plain.host_ptr().is_null(),
+            ),
+            (
+                "MappedBuffer",
+                "gpu_address",
+                plain.gpu_address() == 0,
+            ),
+            (
+                "MappedBuffer",
+                "timeline",
+                plain.timeline().current_value() == 0,
             ),
             (
                 "MappedBuffer",
@@ -657,6 +743,27 @@ mod tests {
                 } => assert_eq!((requested, cap, live), (64, 100, 90), "{e}"),
                 other => panic!("{e} became {other}"),
             }
+        }
+    }
+
+    #[test]
+    fn invalid_alignment_maps_to_shape_error() {
+        let e = AllocError::InvalidAlignment {
+            requested: 100,
+            alignment: 64,
+        };
+        assert_eq!(e.requested(), Some(100));
+        assert!(!e.is_retryable());
+        assert_eq!(
+            e.to_string(),
+            "invalid buffer alignment: 100 bytes not aligned to 64"
+        );
+        match OjasError::from(e) {
+            OjasError::Shape { op, detail } => {
+                assert_eq!(op, "alloc");
+                assert!(detail.contains("alignment violation"));
+            }
+            other => panic!("became {other}"),
         }
     }
 

@@ -83,3 +83,27 @@ fn round_shift(m: u32, shift: u32) -> u32 {
         r
     }
 }
+
+/// Whole blocks of `B` elements go first, over slices the borrow checker can
+/// see are disjoint, which lets the loop run without per-element bounds
+/// checks: block `i..i + B` writes `[4i, 4i + 4B)` and reads from `2n + 2i`
+/// on, and `4i + 4B <= 2n + 2i` exactly when `i + 2B <= n`. The remaining
+/// fewer than `2B` elements take the element-at-a-time loop.
+pub fn widen_in_place(bytes: &mut [u8], n: usize, widen: impl Fn(u16) -> f32) {
+    const B: usize = 1024;
+    let mut i = 0;
+    while i + 2 * B <= n {
+        let (lo, hi) = bytes.split_at_mut(2 * n + 2 * i);
+        let dst = &mut lo[4 * i..4 * (i + B)];
+        let src = &hi[..2 * B];
+        for (d, s) in dst.chunks_exact_mut(4).zip(src.chunks_exact(2)) {
+            d.copy_from_slice(&widen(u16::from_le_bytes([s[0], s[1]])).to_ne_bytes());
+        }
+        i += B;
+    }
+    for i in i..n {
+        let bits = u16::from_le_bytes([bytes[2 * n + 2 * i], bytes[2 * n + 2 * i + 1]]);
+        bytes[4 * i..4 * i + 4].copy_from_slice(&widen(bits).to_ne_bytes());
+    }
+}
+

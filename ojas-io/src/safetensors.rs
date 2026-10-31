@@ -197,6 +197,31 @@ pub struct TensorInfo {
     pub end: u64,
 }
 
+impl TensorInfo {
+    /// Product of `shape` (1 for a scalar).
+    pub fn numel(&self) -> usize {
+        let mut p = 1usize;
+        for &d in &self.shape {
+            p = p
+                .checked_mul(usize::try_from(d).unwrap_or(usize::MAX))
+                .unwrap_or(usize::MAX);
+        }
+        p
+    }
+
+    /// Shape converted to `usize` for host index calculations.
+    pub fn shape_usize(&self) -> Vec<usize> {
+        self.shape
+            .iter()
+            .map(|&d| usize::try_from(d).unwrap_or(usize::MAX))
+            .collect()
+    }
+}
+
+/// The index a sharded Hugging Face checkpoint ships beside its shards.
+pub const INDEX_FILE_NAME: &str = "model.safetensors.index.json";
+
+
 /// One tensor to write. `data.len()` must equal the shape product times the
 /// dtype width. Products use checked arithmetic.
 pub struct TensorOut<'a> {
@@ -469,6 +494,367 @@ impl<'a> SafeTensors<'a> {
         }
         Ok((info.shape.clone(), values))
     }
+
+    /// Read floating-point tensor `name` widened to f32 (F32, BF16, or F16) into `dst`,
+    /// after checking `shape`.
+    pub fn read_f32_into(&self, name: &str, shape: &[usize], dst: &mut [f32]) -> Result<(), IoError> {
+        let info = self.info(name)?;
+        if info.shape.len() != shape.len()
+            || !info.shape.iter().zip(shape).all(|(&a, &b)| a == b as u64)
+        {
+            return Err(IoError::new(format!(
+                "{name}: shape {:?}, expected {shape:?}",
+                info.shape
+            )));
+        }
+        if dst.len() != info.numel() {
+            return Err(IoError::new(format!(
+                "{name}: dst len {} != tensor numel {}",
+                dst.len(),
+                info.numel()
+            )));
+        }
+        match info.dtype {
+            StDtype::F32 => {
+                let mut offset = 0usize;
+                let mut chunk = vec![0u8; (dst.len() * 4).min(READ_CHUNK_BYTES)];
+                while offset < dst.len() {
+                    let take = (dst.len() - offset).min(chunk.len() / 4);
+                    let bytes = &mut chunk[..take * 4];
+                    self.read_into(name, (offset * 4) as u64, bytes)?;
+                    for (i, c) in bytes.chunks_exact(4).enumerate() {
+                        dst[offset + i] = f32::from_le_bytes([c[0], c[1], c[2], c[3]]);
+                    }
+                    offset += take;
+                }
+                Ok(())
+            }
+            StDtype::BF16 => {
+                let mut offset = 0usize;
+                let mut chunk = vec![0u8; (dst.len() * 2).min(READ_CHUNK_BYTES)];
+                while offset < dst.len() {
+                    let take = (dst.len() - offset).min(chunk.len() / 2);
+                    let bytes = &mut chunk[..take * 2];
+                    self.read_into(name, (offset * 2) as u64, bytes)?;
+                    for (i, c) in bytes.chunks_exact(2).enumerate() {
+                        dst[offset + i] = bf16_to_f32(u16::from_le_bytes([c[0], c[1]]));
+                    }
+                    offset += take;
+                }
+                Ok(())
+            }
+            StDtype::F16 => {
+                let mut offset = 0usize;
+                let mut chunk = vec![0u8; (dst.len() * 2).min(READ_CHUNK_BYTES)];
+                while offset < dst.len() {
+                    let take = (dst.len() - offset).min(chunk.len() / 2);
+                    let bytes = &mut chunk[..take * 2];
+                    self.read_into(name, (offset * 2) as u64, bytes)?;
+                    for (i, c) in bytes.chunks_exact(2).enumerate() {
+                        dst[offset + i] = f16_to_f32(u16::from_le_bytes([c[0], c[1]]));
+                    }
+                    offset += take;
+                }
+                Ok(())
+            }
+            other => Err(IoError::new(format!("{name}: cannot read {other:?} as f32"))),
+        }
+    }
+
+    /// Read raw BF16 bits of tensor `name` into `dst`, after checking `shape`.
+    pub fn read_bf16_bits_into(&self, name: &str, shape: &[usize], dst: &mut [u16]) -> Result<(), IoError> {
+        let info = self.info(name)?;
+        if info.dtype != StDtype::BF16 {
+            return Err(IoError::new(format!(
+                "{name}: expected BF16, found {:?}",
+                info.dtype
+            )));
+        }
+        if info.shape.len() != shape.len()
+            || !info.shape.iter().zip(shape).all(|(&a, &b)| a == b as u64)
+        {
+            return Err(IoError::new(format!(
+                "{name}: shape {:?}, expected {shape:?}",
+                info.shape
+            )));
+        }
+        if dst.len() != info.numel() {
+            return Err(IoError::new(format!(
+                "{name}: dst len {} != tensor numel {}",
+                dst.len(),
+                info.numel()
+            )));
+        }
+        let mut offset = 0usize;
+        let mut chunk = vec![0u8; (dst.len() * 2).min(READ_CHUNK_BYTES)];
+        while offset < dst.len() {
+            let take = (dst.len() - offset).min(chunk.len() / 2);
+            let bytes = &mut chunk[..take * 2];
+            self.read_into(name, (offset * 2) as u64, bytes)?;
+            for (i, c) in bytes.chunks_exact(2).enumerate() {
+                dst[offset + i] = u16::from_le_bytes([c[0], c[1]]);
+            }
+            offset += take;
+        }
+        Ok(())
+    }
+
+    /// Read U32 tensor `name` into `dst`, after checking `shape`.
+    pub fn read_u32_into(&self, name: &str, shape: &[usize], dst: &mut [u32]) -> Result<(), IoError> {
+        let info = self.info(name)?;
+        if info.dtype != StDtype::U32 {
+            return Err(IoError::new(format!(
+                "{name}: expected U32, found {:?}",
+                info.dtype
+            )));
+        }
+        if info.shape.len() != shape.len()
+            || !info.shape.iter().zip(shape).all(|(&a, &b)| a == b as u64)
+        {
+            return Err(IoError::new(format!(
+                "{name}: shape {:?}, expected {shape:?}",
+                info.shape
+            )));
+        }
+        if dst.len() != info.numel() {
+            return Err(IoError::new(format!(
+                "{name}: dst len {} != tensor numel {}",
+                dst.len(),
+                info.numel()
+            )));
+        }
+        let mut offset = 0usize;
+        let mut chunk = vec![0u8; (dst.len() * 4).min(READ_CHUNK_BYTES)];
+        while offset < dst.len() {
+            let take = (dst.len() - offset).min(chunk.len() / 4);
+            let bytes = &mut chunk[..take * 4];
+            self.read_into(name, (offset * 4) as u64, bytes)?;
+            for (i, c) in bytes.chunks_exact(4).enumerate() {
+                dst[offset + i] = u32::from_le_bytes([c[0], c[1], c[2], c[3]]);
+            }
+            offset += take;
+        }
+        Ok(())
+    }
+}
+
+/// What a model loader reads tensors through: one `.safetensors` file
+/// ([`SafeTensors`]) or a sharded checkpoint ([`CheckpointView`]).
+pub trait TensorSource {
+    fn names(&self) -> Box<dyn Iterator<Item = &str> + '_>;
+    fn read_f32(&self, name: &str) -> Result<(Vec<usize>, Vec<f32>), IoError>;
+    fn read_bf16_bits(&self, name: &str) -> Result<(Vec<usize>, Vec<u16>), IoError>;
+    fn read_f32_into(&self, name: &str, shape: &[usize], dst: &mut [f32]) -> Result<(), IoError>;
+    fn read_bf16_bits_into(&self, name: &str, shape: &[usize], dst: &mut [u16]) -> Result<(), IoError>;
+    fn tensor_info(&self, name: &str) -> Result<TensorInfo, IoError>;
+    fn read_u32_into(&self, name: &str, shape: &[usize], dst: &mut [u32]) -> Result<(), IoError>;
+}
+
+impl<'a> TensorSource for SafeTensors<'a> {
+    fn names(&self) -> Box<dyn Iterator<Item = &str> + '_> {
+        Box::new(SafeTensors::names(self))
+    }
+    fn read_f32(&self, name: &str) -> Result<(Vec<usize>, Vec<f32>), IoError> {
+        let (shape, vals) = self.read_f32_widened(name)?;
+        let shape_us = shape.into_iter().map(|d| usize::try_from(d).unwrap_or(usize::MAX)).collect();
+        Ok((shape_us, vals))
+    }
+    fn read_bf16_bits(&self, name: &str) -> Result<(Vec<usize>, Vec<u16>), IoError> {
+        let (shape, vals) = self.read_bf16_bits(name)?;
+        let shape_us = shape.into_iter().map(|d| usize::try_from(d).unwrap_or(usize::MAX)).collect();
+        Ok((shape_us, vals))
+    }
+    fn read_f32_into(&self, name: &str, shape: &[usize], dst: &mut [f32]) -> Result<(), IoError> {
+        SafeTensors::read_f32_into(self, name, shape, dst)
+    }
+    fn read_bf16_bits_into(&self, name: &str, shape: &[usize], dst: &mut [u16]) -> Result<(), IoError> {
+        SafeTensors::read_bf16_bits_into(self, name, shape, dst)
+    }
+    fn tensor_info(&self, name: &str) -> Result<TensorInfo, IoError> {
+        self.info(name).cloned()
+    }
+    fn read_u32_into(&self, name: &str, shape: &[usize], dst: &mut [u32]) -> Result<(), IoError> {
+        SafeTensors::read_u32_into(self, name, shape, dst)
+    }
+}
+
+/// A checkpoint's tensors across one or several `.safetensors` files, each
+/// name resolved through the index's `weight_map`.
+#[derive(Debug)]
+pub struct CheckpointView {
+    what: String,
+    shards: Vec<SafeTensors<'static>>,
+    owner: BTreeMap<String, usize>,
+}
+
+impl CheckpointView {
+    pub fn open(path: &Path) -> Result<Self, IoError> {
+        Self::open_with_limit(path, None)
+    }
+
+    pub fn open_with_limit(path: &Path, limit: Option<u64>) -> Result<Self, IoError> {
+        let what = path.display().to_string();
+        let md = std::fs::metadata(path).map_err(|e| IoError::new(format!("{what}: {e}")))?;
+        if md.is_dir() {
+            let index = path.join(INDEX_FILE_NAME);
+            return match std::fs::symlink_metadata(&index) {
+                Ok(_) => Self::open_index(&index, limit),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    Self::open_single(&path.join("model.safetensors"), limit)
+                }
+                Err(e) => Err(IoError::new(format!("{}: {e}", index.display()))),
+            };
+        }
+        if path.extension().is_some_and(|e| e == "json") {
+            Self::open_index(path, limit)
+        } else {
+            Self::open_single(path, limit)
+        }
+    }
+
+    pub fn shard_count(&self) -> usize {
+        self.shards.len()
+    }
+
+    fn open_single(path: &Path, _limit: Option<u64>) -> Result<Self, IoError> {
+        let st = SafeTensors::open(path)?;
+        let owner = st.names().map(|n| (n.to_string(), 0)).collect();
+        Ok(Self {
+            what: path.display().to_string(),
+            shards: vec![st],
+            owner,
+        })
+    }
+
+    fn open_index(index_path: &Path, limit: Option<u64>) -> Result<Self, IoError> {
+        let what = index_path.display().to_string();
+        let dir = match index_path.parent() {
+            Some(d) if !d.as_os_str().is_empty() => d,
+            _ => Path::new("."),
+        };
+        let text = std::fs::read_to_string(index_path)
+            .map_err(|e| IoError::new(format!("{what}: {e}")))?;
+        let by_file = parse_index(&text)?;
+
+        let mut paths: Vec<(&String, std::path::PathBuf)> = Vec::with_capacity(by_file.len());
+        for (file, names) in &by_file {
+            paths.push((file, shard_path(dir, file, &names[0])?));
+        }
+
+        let mut shards = Vec::with_capacity(paths.len());
+        let mut owner = BTreeMap::new();
+        let mut declared = 0u64;
+        for (i, ((file, path), names)) in paths.iter().zip(by_file.values()).enumerate() {
+            let st = SafeTensors::open(path)?;
+            let shard_data_len: u64 = st.tensors.values().map(|t| t.end.saturating_sub(t.begin)).sum();
+            declared = declared.saturating_add(shard_data_len);
+            if let Some(lim) = limit {
+                if declared > lim {
+                    return Err(IoError::new(format!(
+                        "{what}: payload budget exceeded: declared {declared} > limit {lim}"
+                    )));
+                }
+            }
+            for n in names {
+                if st.info(n).is_err() {
+                    return Err(IoError::new(format!(
+                        "{what}: weight_map puts {n:?} in {file:?}, which has no such tensor"
+                    )));
+                }
+            }
+            for n in st.names() {
+                if names.binary_search_by(|m| m.as_str().cmp(n)).is_err() {
+                    let elsewhere = by_file.iter().find(|(_, ns)| ns.iter().any(|m| m == n));
+                    return Err(IoError::new(match elsewhere {
+                        Some((other, _)) => format!("{what}: tensor {n:?} is in both {file:?} and {other:?}"),
+                        None => format!("{what}: {file:?} holds tensor {n:?}, which the weight_map does not list"),
+                    }));
+                }
+                owner.insert(n.to_string(), i);
+            }
+            shards.push(st);
+        }
+        Ok(Self { what, shards, owner })
+    }
+
+    pub fn tensor_info(&self, name: &str) -> Option<&TensorInfo> {
+        self.shard(name).ok()?.info(name).ok()
+    }
+
+    pub fn shard(&self, name: &str) -> Result<&SafeTensors<'static>, IoError> {
+        match self.owner.get(name) {
+            Some(&i) => Ok(&self.shards[i]),
+            None => Err(IoError::new(format!("{}: no tensor {name:?}", self.what))),
+        }
+    }
+}
+
+impl TensorSource for CheckpointView {
+    fn names(&self) -> Box<dyn Iterator<Item = &str> + '_> {
+        Box::new(self.owner.keys().map(String::as_str))
+    }
+    fn read_f32(&self, name: &str) -> Result<(Vec<usize>, Vec<f32>), IoError> {
+        let st = self.shard(name)?;
+        TensorSource::read_f32(st, name)
+    }
+    fn read_bf16_bits(&self, name: &str) -> Result<(Vec<usize>, Vec<u16>), IoError> {
+        let st = self.shard(name)?;
+        TensorSource::read_bf16_bits(st, name)
+    }
+    fn read_f32_into(&self, name: &str, shape: &[usize], dst: &mut [f32]) -> Result<(), IoError> {
+        self.shard(name)?.read_f32_into(name, shape, dst)
+    }
+    fn read_bf16_bits_into(&self, name: &str, shape: &[usize], dst: &mut [u16]) -> Result<(), IoError> {
+        self.shard(name)?.read_bf16_bits_into(name, shape, dst)
+    }
+    fn tensor_info(&self, name: &str) -> Result<TensorInfo, IoError> {
+        self.shard(name)?.info(name).cloned()
+    }
+    fn read_u32_into(&self, name: &str, shape: &[usize], dst: &mut [u32]) -> Result<(), IoError> {
+        self.shard(name)?.read_u32_into(name, shape, dst)
+    }
+}
+
+fn parse_index(text: &str) -> Result<BTreeMap<String, Vec<String>>, IoError> {
+    let val = crate::json::parse_json(text)?;
+    let obj = match val {
+        JsonValue::Object(o) => o,
+        _ => return Err(IoError::new("index is not a JSON object")),
+    };
+    let mut weight_map = None;
+    for (k, v) in obj {
+        match (k.as_str(), v) {
+            ("metadata", JsonValue::Object(_)) => {}
+            ("weight_map", JsonValue::Object(entries)) => weight_map = Some(entries),
+            (k, _) => return Err(IoError::new(format!("unexpected or mistyped field {k:?}"))),
+        }
+    }
+    let entries = weight_map.ok_or_else(|| IoError::new("no weight_map"))?;
+    if entries.is_empty() {
+        return Err(IoError::new("weight_map is empty"));
+    }
+    let mut by_file: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (name, file_val) in entries {
+        let file = match file_val {
+            JsonValue::String(s) => s,
+            _ => return Err(IoError::new(format!("weight_map entry {name:?} is not a file name"))),
+        };
+        by_file.entry(file).or_default().push(name);
+    }
+    for names in by_file.values_mut() {
+        names.sort_unstable();
+    }
+    Ok(by_file)
+}
+
+fn shard_path(dir: &Path, file: &str, tensor: &str) -> Result<std::path::PathBuf, IoError> {
+    let bare = !file.is_empty() && !file.contains(['/', '\\', '\0']) && file != "." && file != "..";
+    if !bare {
+        return Err(IoError::new(format!(
+            "shard {file:?} (for {tensor:?}) is not a bare file name in the checkpoint directory"
+        )));
+    }
+    Ok(dir.join(file))
 }
 
 /// Write tensors in `items` order. The header is padded with spaces so its

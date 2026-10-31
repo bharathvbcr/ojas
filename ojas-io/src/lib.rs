@@ -22,14 +22,14 @@
 
 mod checkpoint;
 mod error;
-mod half;
+pub mod half;
 pub mod json;
 mod json_write;
 pub mod npy;
 mod open;
 mod posread;
 mod replace;
-mod safetensors;
+pub mod safetensors;
 pub mod sha256;
 #[cfg(test)]
 mod test_util;
@@ -39,14 +39,15 @@ pub use checkpoint::{
     read_checkpoint_from, write_checkpoint, MAX_CHECKPOINT_BYTES,
 };
 pub use error::IoError;
-pub use half::{bf16_to_f32, f16_to_f32, f32_to_bf16, f32_to_f16};
+pub use half::{bf16_to_f32, f16_to_f32, f32_to_bf16, f32_to_f16, widen_in_place};
 pub use json::{parse_json, parse_json_with, JsonLimits, JsonNumber, JsonValue};
 pub use json_write::{quote, JsonObj};
 pub use open::open_nofollow;
 pub use replace::{recover_replaced_dir, replace_dir_with, replace_dir_with_if};
 pub use safetensors::{
-    encode_f32_as, encode_safetensors, safetensors_file_len, write_safetensors, SafeTensors,
-    SafeTensorsWriter, StDtype, TensorInfo, TensorOut, TensorSpec, MAX_HEADER_BYTES,
+    encode_f32_as, encode_safetensors, safetensors_file_len, write_safetensors, CheckpointView,
+    SafeTensors, SafeTensorsWriter, StDtype, TensorInfo, TensorOut, TensorSource, TensorSpec,
+    INDEX_FILE_NAME, MAX_HEADER_BYTES,
 };
 
 #[doc(hidden)]

@@ -1,6 +1,7 @@
 use crate::backend::BackendId;
 use crate::budget::{Budget, Reservation, Scratch};
 use crate::dtype::DType;
+use crate::hal::{HostLease, MappedBuffer};
 use crate::limits::shape_product;
 use crate::OjasError;
 use std::any::Any;
@@ -152,6 +153,7 @@ pub fn f32_all_finite(data: &[f32]) -> bool {
 enum Payload {
     Host(HostData),
     Device(Arc<dyn DeviceBuffer>),
+    Mapped(Arc<dyn MappedBuffer>),
 }
 
 /// Host elements. Which variant a storage holds follows from its dtype.
@@ -267,6 +269,7 @@ impl Storage {
         match &self.payload {
             Payload::Host(data) => data.byte_len(),
             Payload::Device(buf) => buf.byte_len(),
+            Payload::Mapped(buf) => buf.byte_len(),
         }
     }
 }
@@ -275,6 +278,32 @@ impl Storage {
 struct Window {
     start: usize,
     len: usize,
+}
+
+struct HostSliceLease {
+    bytes: Vec<u8>,
+    f32s: Option<Vec<f32>>,
+    u32s: Option<Vec<u32>>,
+}
+
+impl HostLease for HostSliceLease {
+    fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    fn as_f32(&self) -> Result<&[f32], OjasError> {
+        self.f32s.as_deref().ok_or_else(|| OjasError::Unsupported {
+            op: "HostLease::as_f32",
+            detail: "lease does not view as f32".to_string(),
+        })
+    }
+
+    fn as_u32(&self) -> Result<&[u32], OjasError> {
+        self.u32s.as_deref().ok_or_else(|| OjasError::Unsupported {
+            op: "HostLease::as_u32",
+            detail: "lease does not view as u32".to_string(),
+        })
+    }
 }
 
 impl Tensor {
@@ -699,11 +728,11 @@ impl Tensor {
     /// The contiguous host window, in elements. Placement before layout: a
     /// strided device view reports where it lives.
     fn host_window(&self, op: &'static str) -> Result<Window, OjasError> {
-        if let Payload::Device(buf) = &self.storage.payload {
+        if let Some(backend) = self.device() {
             return Err(OjasError::Placement {
                 op,
                 expected: None,
-                found: Some(buf.backend()),
+                found: Some(backend),
             });
         }
         if !self.is_contiguous()? {
@@ -735,12 +764,19 @@ impl Tensor {
     }
 
     fn host_data(&self, op: &'static str) -> Result<&HostData, OjasError> {
-        match &self.storage.payload {
-            Payload::Host(data) => Ok(data),
-            Payload::Device(buf) => Err(OjasError::Placement {
+        if let Some(backend) = self.device() {
+            return Err(OjasError::Placement {
                 op,
                 expected: None,
-                found: Some(buf.backend()),
+                found: Some(backend),
+            });
+        }
+        match &self.storage.payload {
+            Payload::Host(data) => Ok(data),
+            _ => Err(OjasError::Placement {
+                op,
+                expected: None,
+                found: self.device(),
             }),
         }
     }
@@ -751,6 +787,13 @@ impl Tensor {
     /// [`Tensor::all_finite_cached`] is reset here, once, for every mutator.
     /// Sole ownership means no other handle can be reading the flag.
     fn host_data_mut(&mut self, op: &'static str) -> Result<&mut HostData, OjasError> {
+        if let Some(backend) = self.device() {
+            return Err(OjasError::Placement {
+                op,
+                expected: None,
+                found: Some(backend),
+            });
+        }
         let storage = Arc::get_mut(&mut self.storage).ok_or_else(|| OjasError::Shape {
             op,
             detail: "contiguous write requires a uniquely owned allocation".to_string(),
@@ -760,6 +803,11 @@ impl Tensor {
         match &mut storage.payload {
             Payload::Host(data) => Ok(data),
             Payload::Device(buf) => Err(OjasError::Placement {
+                op,
+                expected: None,
+                found: Some(buf.backend()),
+            }),
+            Payload::Mapped(buf) => Err(OjasError::Placement {
                 op,
                 expected: None,
                 found: Some(buf.backend()),
@@ -873,6 +921,47 @@ impl Tensor {
         Ok(tensor)
     }
 
+    /// Wrap a unified memory buffer with reservation charged against budget.
+    pub fn from_mapped(
+        buffer: Arc<dyn MappedBuffer>,
+        shape: &[usize],
+        dtype: DType,
+        budget: &Budget,
+    ) -> Result<Self, OjasError> {
+        let nbytes_u64 = u64_len(buffer.byte_len(), "Tensor::from_mapped")?;
+        let reservation = budget.try_reserve(nbytes_u64)?;
+        Self::from_mapped_reserved(buffer, shape, dtype, reservation)
+    }
+
+    /// Wrap a unified memory buffer with pre-reserved budget.
+    pub fn from_mapped_reserved(
+        buffer: Arc<dyn MappedBuffer>,
+        shape: &[usize],
+        dtype: DType,
+        reservation: Reservation,
+    ) -> Result<Self, OjasError> {
+        let nbytes_u64 = u64_len(buffer.byte_len(), "Tensor::from_mapped_reserved")?;
+        if reservation.bytes() != nbytes_u64 {
+            return Err(OjasError::OutOfRange {
+                op: "Tensor::from_mapped_reserved",
+                detail: format!(
+                    "reservation of {} bytes != mapped buffer length {nbytes_u64}",
+                    reservation.bytes()
+                ),
+            });
+        }
+        let strides = contiguous_strides(shape)?;
+        let tensor = Self {
+            storage: Arc::new(Storage::new(Payload::Mapped(buffer), reservation)),
+            shape: shape.to_vec().into_boxed_slice(),
+            strides: strides.into_boxed_slice(),
+            dtype,
+            byte_offset: 0,
+        };
+        tensor.check_window()?;
+        Ok(tensor)
+    }
+
     /// Host tensor that takes the elements and the reservation from
     /// `scratch`. The dtype is `T`'s ([`HostElement::DTYPE`]).
     ///
@@ -937,6 +1026,7 @@ impl Tensor {
         match &self.storage.payload {
             Payload::Host(_) => None,
             Payload::Device(buf) => Some(buf.backend()),
+            Payload::Mapped(buf) => Some(buf.backend()),
         }
     }
 
@@ -945,6 +1035,15 @@ impl Tensor {
         match &self.storage.payload {
             Payload::Host(_) => None,
             Payload::Device(buf) => Some(buf),
+            Payload::Mapped(_) => None,
+        }
+    }
+
+    /// The mapped buffer behind this view, or `None` if the tensor is not mapped.
+    pub fn mapped_buffer(&self) -> Option<&Arc<dyn MappedBuffer>> {
+        match &self.storage.payload {
+            Payload::Mapped(buf) => Some(buf),
+            _ => None,
         }
     }
 
@@ -958,7 +1057,7 @@ impl Tensor {
     /// [`DeviceBuffer::as_any`].
     pub fn device_buffer_mut(&mut self) -> Result<&mut dyn DeviceBuffer, OjasError> {
         const OP: &str = "Tensor::device_buffer_mut";
-        if let Payload::Host(_) = &self.storage.payload {
+        if self.device().is_none() {
             return Err(OjasError::Placement {
                 op: OP,
                 expected: None,
@@ -988,6 +1087,40 @@ impl Tensor {
                         .to_string(),
                 }),
             },
+            Payload::Mapped(buf) => match Arc::get_mut(buf) {
+                Some(buf) => Ok(buf),
+                None => Err(OjasError::Shape {
+                    op: OP,
+                    detail: "mapped buffer is shared with another Arc<dyn MappedBuffer>"
+                        .to_string(),
+                }),
+            },
+        }
+    }
+
+    /// Acquire a shared read lease over mapped or host memory.
+    pub fn host_view(&self) -> Result<Box<dyn HostLease>, OjasError> {
+        match &self.storage.payload {
+            Payload::Mapped(mbuf) => mbuf.host_read().map_err(|e| e.into_ojas(mbuf.backend())),
+            Payload::Host(_) => {
+                let bytes = self.to_ne_bytes()?;
+                let f32s = if self.dtype == DType::F32 {
+                    Some(self.f32_slice()?.to_vec())
+                } else {
+                    None
+                };
+                let u32s = if self.dtype == DType::U32 {
+                    Some(self.u32_slice()?.to_vec())
+                } else {
+                    None
+                };
+                Ok(Box::new(HostSliceLease { bytes, f32s, u32s }))
+            }
+            Payload::Device(buf) => Err(OjasError::Placement {
+                op: "Tensor::host_view",
+                expected: None,
+                found: Some(buf.backend()),
+            }),
         }
     }
 
@@ -1006,6 +1139,13 @@ impl Tensor {
         const OP: &str = "Tensor::to_host";
         let buf = match &self.storage.payload {
             Payload::Host(_) => return Ok(self.clone()),
+            Payload::Mapped(mbuf) => {
+                let timeline = mbuf.timeline();
+                timeline
+                    .wait_for(timeline.current_value(), None)
+                    .map_err(OjasError::from)?;
+                return Ok(self.clone());
+            }
             Payload::Device(buf) => buf,
         };
         let (offset, len, strides, byte_offset) = if self.is_contiguous()? {
@@ -2661,5 +2801,114 @@ mod tests {
             }
         }
         assert!(f32_all_finite(&[]));
+    }
+
+    use crate::hal::{AllocError, FenceError, MappedBuffer, Timeline};
+
+    #[derive(Debug)]
+    struct FakeTimeline {
+        val: AtomicU64,
+    }
+
+    impl Timeline for FakeTimeline {
+        fn current_value(&self) -> u64 {
+            self.val.load(Ordering::Relaxed)
+        }
+        fn wait_for(&self, _value: u64, _timeout: Option<std::time::Duration>) -> Result<(), AllocError> {
+            Ok(())
+        }
+    }
+
+    #[derive(Debug)]
+    struct FakeMapped {
+        bytes: Vec<u8>,
+        timeline: FakeTimeline,
+    }
+
+    impl DeviceBuffer for FakeMapped {
+        fn backend(&self) -> BackendId {
+            BackendId::Metal
+        }
+        fn byte_len(&self) -> usize {
+            self.bytes.len()
+        }
+        fn read_bytes(&self, offset: usize, len: usize) -> Result<Vec<u8>, OjasError> {
+            Ok(self.bytes[offset..offset + len].to_vec())
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+
+    impl MappedBuffer for FakeMapped {
+        fn host_ptr(&self) -> *mut u8 {
+            std::ptr::null_mut()
+        }
+        fn gpu_address(&self) -> u64 {
+            0x4000
+        }
+        fn timeline(&self) -> &dyn Timeline {
+            &self.timeline
+        }
+        fn host_read(&self) -> Result<Box<dyn HostLease>, FenceError> {
+            let f32s: Vec<f32> = self.bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|b| f32::from_ne_bytes(*b))
+                .collect();
+            Ok(Box::new(HostSliceLease {
+                bytes: self.bytes.clone(),
+                f32s: Some(f32s),
+                u32s: None,
+            }))
+        }
+    }
+
+    #[test]
+    fn mapped_tensor_supports_zero_copy_to_host_and_enforces_fail_closed_placement() {
+        let budget = Budget::new(1024);
+        let values = [1.0f32, 2.0, 3.0, 4.0];
+        let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_ne_bytes()).collect();
+        let mapped = Arc::new(FakeMapped {
+            bytes,
+            timeline: FakeTimeline { val: AtomicU64::new(1) },
+        });
+
+        let t = Tensor::from_mapped(mapped.clone(), &[4], DType::F32, &budget).unwrap();
+        assert_eq!(t.device(), Some(BackendId::Metal));
+        assert!(t.mapped_buffer().is_some());
+        assert_eq!(budget.live_bytes().unwrap(), 16);
+
+        // Fail-closed placement checks on CPU accessors
+        assert!(matches!(
+            t.f32_slice().unwrap_err(),
+            OjasError::Placement { found: Some(BackendId::Metal), .. }
+        ));
+        assert!(matches!(
+            t.to_f32_vec().unwrap_err(),
+            OjasError::Placement { found: Some(BackendId::Metal), .. }
+        ));
+        let mut t_mut = t.clone();
+        assert!(matches!(
+            t_mut.write_f32(&values).unwrap_err(),
+            OjasError::Placement { found: Some(BackendId::Metal), .. }
+        ));
+
+        // host_view returns the lease
+        let lease = t.host_view().unwrap();
+        assert_eq!(lease.as_f32().unwrap(), &values);
+
+        // to_host is zero-copy: does not charge extra budget, returns clone
+        let host = t.to_host(&budget).unwrap();
+        assert_eq!(budget.live_bytes().unwrap(), 16);
+        assert_eq!(host.device(), Some(BackendId::Metal));
+
+        // from_mapped_reserved with matching reservation
+        let res = budget.try_reserve(16).unwrap();
+        let t2 = Tensor::from_mapped_reserved(mapped, &[4], DType::F32, res).unwrap();
+        assert_eq!(budget.live_bytes().unwrap(), 32);
+        drop((t, t_mut, host, t2));
+        assert_eq!(budget.live_bytes().unwrap(), 0);
     }
 }
