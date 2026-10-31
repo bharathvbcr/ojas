@@ -1,4 +1,4 @@
-//! Helpers shared by the GPU tests (`gpu_parity.rs`, `gpu_tape_2b.rs`,
+//! Helpers shared by the GPU tests (`gpu_tape_provider.rs`, `gpu_tape_2b.rs`,
 //! `gpu_memory_rows.rs`): the real-2B snapshot, tessl's `.npy` references,
 //! and the `ROW ` line a measurement prints for `bench/results/`.
 //!

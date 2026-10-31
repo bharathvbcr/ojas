@@ -269,20 +269,4 @@ impl OptimizerPlan {
     pub fn groups(&self) -> &[GroupSummary] {
         &self.groups
     }
-
-    /// The plan was built against exactly `table` (names, in order).
-    pub(crate) fn check_table(&self, table: &[TensorSpec]) -> Result<()> {
-        if self.names.len() != table.len()
-            || self.names.iter().zip(table).any(|(n, t)| *n != t.name)
-        {
-            return Err(Qwen35Error::Invalid {
-                op: "adamw_step",
-                detail:
-                    "the optimizer plan was built against another parameter table; rebuild it from \
-                         Qwen35Step::parameter_table"
-                        .into(),
-            });
-        }
-        Ok(())
-    }
 }

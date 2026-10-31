@@ -67,8 +67,3 @@ pub(crate) fn invalid(op: &'static str, detail: impl Into<String>) -> Qwen35Erro
         detail: detail.into(),
     }
 }
-
-/// tessl's `String` errors, tagged with the call that produced them.
-pub(crate) fn tessl(op: &'static str) -> impl Fn(String) -> Qwen35Error {
-    move |detail| Qwen35Error::Tessl { op, detail }
-}

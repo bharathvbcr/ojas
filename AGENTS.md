@@ -23,7 +23,7 @@ in `go/`.
 | `ojas-io`, `ojas-data` | Safetensors and checkpoint IO; token loaders and the BPE tokenizer |
 | `ojas-model`, `ojas-train`, `ojas-infer` | The nanolab GPT, its trainer and recipes, and CPU decoding |
 | `ojas-capi`, `ojas-gusset-engine` | The in-process C/Go surface; the static library cgo links |
-| `ojas-qwen35` | Qwen3.5 whole-step training provider over tessl (Metal only; not a `Backend`) |
+| `ojas-qwen35` | Host-neutral Qwen3.5 route: config reader, tensor names, optimizer groups, state-directory format (no step; Metal training is the Tape via `TapeStepProvider`) |
 
 Two sibling checkouts are path dependencies and must exist for any build:
 `../tessl` (github.com/bharathvbcr/tessl) and `../../devtools/gusset`

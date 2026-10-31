@@ -83,16 +83,29 @@ fn embeddings_and_the_lowest_layers_take_the_scale() {
     assert_eq!(plan.groups().len(), 4, "{:?}", plan.groups());
 }
 
-/// The exclusions are data: written as above they reproduce tessl's own
-/// `excluded_from_weight_decay` on every 2B parameter (norms and `dt_bias`
-/// at 0, `A_log` decayed), and a spec that decays everything decays norms.
+/// transformers' `Trainer.get_decay_parameter_names` exclusions, by name: a
+/// parameter whose name matches `bias`, `layernorm`, `rmsnorm`,
+/// `(^|\.)norm($|\.)` or `_norm($|\.)` takes no weight decay. This is the
+/// oracle the retired tessl `qwen35_adamw::excluded_from_weight_decay`
+/// implemented; the test owns it now that tessl's optimizer object is gone.
+fn transformers_excludes_from_weight_decay(name: &str) -> bool {
+    if name.contains("bias") || name.contains("layernorm") || name.contains("rmsnorm") {
+        return true;
+    }
+    name.split('.')
+        .any(|seg| seg == "norm" || seg.ends_with("_norm"))
+}
+
+/// The exclusions are data: written as above they reproduce transformers'
+/// exclusion rule on every 2B parameter (norms and `dt_bias` at 0, `A_log`
+/// decayed), and a spec that decays everything decays norms.
 #[test]
 fn weight_decay_exclusions_are_the_callers_data() {
     let t = table();
     let plan = OptimizerPlan::build(&t, &lappi_like()).unwrap();
     for (spec, &wd) in t.iter().zip(plan.weight_decay()) {
-        let tessl_says = tessl::qwen35_adamw::excluded_from_weight_decay(&spec.name);
-        assert_eq!(wd, if tessl_says { 0.0 } else { 0.01 }, "{}", spec.name);
+        let excluded = transformers_excludes_from_weight_decay(&spec.name);
+        assert_eq!(wd, if excluded { 0.0 } else { 0.01 }, "{}", spec.name);
     }
     let get =
         |p: &OptimizerPlan, n: &str| p.weight_decay()[t.iter().position(|x| x.name == n).unwrap()];
