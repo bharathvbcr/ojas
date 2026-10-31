@@ -793,6 +793,134 @@ pub(crate) fn interpolate_bilinear_forward(
     )
 }
 
+/// One bilinear axis seen from the input side, in compressed rows: input
+/// index `i` is read by the output indices `taps[starts[i]..starts[i + 1]]`,
+/// ascending, each with the `f64` weight it gives `i`. An output whose two
+/// source indices are the same (the last input index, where the forward
+/// reads it twice) lists that input once with the two weights added.
+struct AxisGather {
+    starts: Vec<usize>,
+    taps: Vec<(usize, f64)>,
+}
+
+impl AxisGather {
+    /// The inverse of [`bilinear_axis`]`(size, out, align_corners)`, built
+    /// from the same table so the backward uses the forward's own weights.
+    fn new(size: usize, out: usize, align_corners: bool) -> Self {
+        let axis = bilinear_axis(size, out, align_corners);
+        let mut starts = vec![0usize; size + 1];
+        for &(i0, i1, _) in &axis {
+            starts[i0 + 1] += 1;
+            if i1 != i0 {
+                starts[i1 + 1] += 1;
+            }
+        }
+        let mut run = 0usize;
+        for s in &mut starts {
+            run += *s;
+            *s = run;
+        }
+        let mut next = starts.clone();
+        let mut taps = vec![(0usize, 0.0f64); run];
+        for (o, &(i0, i1, lambda)) in axis.iter().enumerate() {
+            // The forward's own weights: `1.0 - lambda` in `f32` for the
+            // first source, `lambda` for the second.
+            let (w0, w1) = (f64::from(1.0 - lambda), f64::from(lambda));
+            if i1 == i0 {
+                taps[next[i0]] = (o, w0 + w1);
+                next[i0] += 1;
+            } else {
+                taps[next[i0]] = (o, w0);
+                next[i0] += 1;
+                taps[next[i1]] = (o, w1);
+                next[i1] += 1;
+            }
+        }
+        Self { starts, taps }
+    }
+
+    /// The `(output index, weight)` pairs that read input index `i`.
+    fn reading(&self, i: usize) -> &[(usize, f64)] {
+        &self.taps[self.starts[i]..self.starts[i + 1]]
+    }
+}
+
+/// [`ojas_core::Backend::interpolate_bilinear_backward`]: a gather. Input
+/// `(ih, iw)` sums `dy[oh, ow] * wy * wx` over the output rows that read
+/// row `ih` and the output columns that read column `iw`, in ascending `(oh,
+/// ow)`, as one `f64` sum rounded once. `wy` and `wx` are the forward's
+/// weights ([`AxisGather`]), so nothing is scattered, no two threads write
+/// one value, and the bits do not depend on the thread count. `d` comes from
+/// [`ojas_core::interpolate_bilinear_backward_dims`] and `dy` is the
+/// gradient `[batch, channels, out_height, out_width]`.
+pub(crate) fn interpolate_bilinear_backward(
+    op: &'static str,
+    budget: &Budget,
+    exec: Exec<'_>,
+    d: BilinearDims,
+    dy: &[f32],
+    align_corners: bool,
+) -> Result<Tensor, OjasError> {
+    let BilinearDims {
+        batch,
+        channels,
+        height,
+        width,
+        out_height,
+        out_width,
+    } = d;
+    let p = product(op, &[out_height, out_width])?;
+    let plane_len = product(op, &[height, width])?;
+    let planes = product(op, &[batch, channels])?;
+    if plane_len == 0 || p == 0 || dy.len() != product(op, &[planes, p])? {
+        return Err(crate::validate::shape(
+            op,
+            "bilinear backward gradient is empty or does not match shape",
+        ));
+    }
+    // The two axis tables are heap scratch, charged before they exist: per
+    // axis the forward table (three words an output), the compressed rows
+    // (a `usize` an input, one `(usize, f64)` or two an output) and the
+    // cursor copy of the row starts, in `f32` elements.
+    let outs = out_height.saturating_add(out_width);
+    let ins = height.saturating_add(width).saturating_add(2);
+    let table_f32s = outs
+        .saturating_mul(14)
+        .saturating_add(ins.saturating_mul(4));
+    let _tables = room_for(op, budget, table_f32s)?;
+    let ys = AxisGather::new(height, out_height, align_corners);
+    let xs = AxisGather::new(width, out_width, align_corners);
+    fill_rows(
+        op,
+        budget,
+        exec,
+        &[batch, channels, height, width],
+        planes,
+        plane_len,
+        |range, out| {
+            for (local, plane_index) in range.enumerate() {
+                let grads = &dy[plane_index * p..(plane_index + 1) * p];
+                let dst = &mut out[local * plane_len..(local + 1) * plane_len];
+                for (ih, dst_row) in dst.chunks_exact_mut(width).enumerate() {
+                    let rows = ys.reading(ih);
+                    for (iw, slot) in dst_row.iter_mut().enumerate() {
+                        let cols = xs.reading(iw);
+                        let mut acc = 0.0f64;
+                        for &(oh, wy) in rows {
+                            let row = &grads[oh * out_width..(oh + 1) * out_width];
+                            for &(ow, wx) in cols {
+                                acc += f64::from(row[ow]) * (wy * wx);
+                            }
+                        }
+                        *slot = acc as f32;
+                    }
+                }
+            }
+            Ok(())
+        },
+    )
+}
+
 /// [`ojas_core::Backend::rope_interleaved_forward`] (`inverse == false`) and
 /// [`ojas_core::Backend::rope_interleaved_backward`] (`inverse == true`, the
 /// rotation by `-angle`).

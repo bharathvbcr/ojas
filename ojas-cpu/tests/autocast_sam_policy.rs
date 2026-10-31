@@ -30,8 +30,6 @@ use ojas_cpu::CpuBackend;
 const REFUSED_ON_CPU_UNTIL_IMPLEMENTED: &[&str] = &[
     "gelu_tanh_forward",
     "gelu_tanh_backward",
-    "group_norm_backward",
-    "interpolate_bilinear_backward",
     "seq_mean_forward",
     "l2_normalize_forward",
 ];

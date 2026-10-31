@@ -37,6 +37,11 @@ use ojas_core::{
     Conv2dParams, ConvGrad, ConvTranspose2dParams,
 };
 
+// The cpu-sam lane's ops: GroupNorm and bilinear backward.
+use crate::encoder_ops::group_norm_backward;
+use crate::spatial::interpolate_bilinear_backward;
+use ojas_core::{group_norm_backward_dims, interpolate_bilinear_backward_dims};
+
 use crate::attn::general::{self, Extras, Geom};
 use crate::attn::{causal_sdpa_backward, causal_sdpa_forward, Dims as SdpaKernelDims};
 use crate::encoder_ops::{
@@ -1241,6 +1246,20 @@ impl Backend for CpuBackend {
         interpolate_bilinear_forward(OP, &self.budget, exec, dims, x, align_corners)
     }
 
+    fn interpolate_bilinear_backward(
+        &self,
+        input: &Tensor,
+        grad_output: &Tensor,
+        align_corners: bool,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "interpolate_bilinear_backward";
+        let dims = interpolate_bilinear_backward_dims(input, grad_output)?;
+        let exec = self.exec();
+        // `input` is read for its shape only, but scanned as every operand is.
+        let [_, dy] = f32_operands(OP, exec, [input, grad_output])?;
+        interpolate_bilinear_backward(OP, &self.budget, exec, dims, dy, align_corners)
+    }
+
     fn rope_interleaved_forward(
         &self,
         x: &Tensor,
@@ -1455,6 +1474,31 @@ impl Backend for CpuBackend {
             eps,
             input.shape(),
         )
+    }
+
+    fn group_norm_backward(
+        &self,
+        input: &Tensor,
+        weight: &Tensor,
+        bias: &Tensor,
+        grad_output: &Tensor,
+        groups: usize,
+        eps: f32,
+    ) -> Result<AffineGrad, OjasError> {
+        const OP: &str = "group_norm_backward";
+        let dims = group_norm_backward_dims(input, weight, bias, grad_output, groups, eps)?;
+        let exec = self.exec();
+        // `bias` is read for its shape only, but scanned as every operand is.
+        let [x, w, _, gy] = f32_operands(OP, exec, [input, weight, bias, grad_output])?;
+        let shapes = [input.shape(), weight.shape(), bias.shape()];
+        let [input, weight, bias] = fill_outs(OP, &self.budget, exec, shapes, |grads| {
+            group_norm_backward(OP, &self.budget, exec, [x, w, gy], dims, eps, grads)
+        })?;
+        Ok(AffineGrad {
+            input,
+            weight,
+            bias,
+        })
     }
 
     fn gelu_erf_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
