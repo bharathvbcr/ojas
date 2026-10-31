@@ -172,7 +172,7 @@
 <p>Two CPU paths already avoid the copy: <code>validate::f32_words</code> reads <code>&amp;[[u8; 4]]</code> in place, and <code>pool::scoped::fill</code> writes output blocks in place. They do not help an operand that has to be a <code>&amp;[f32]</code>, and they cost every kernel a decode at each load.</p>
 <h2 id="what-does-not-change">What does not change <a class="anchor" href="#what-does-not-change" aria-label="Link to this section">#</a></h2>
 <ul>
-<li><code>byte_offset</code>, <code>view</code>, <code>narrow</code>, <code>reshape</code>, <code>strides</code> and <code>storage_len</code> keep their meaning in bytes. The GPU crates bind buffers at byte offsets (<code>ojas-metal/src/gpu.rs</code>, <code>ojas-wgpu/src/backend.rs</code>).
+<li><code>byte_offset</code>, <code>view</code>, <code>narrow</code>, <code>reshape</code>, <code>strides</code> and <code>storage_len</code> keep their meaning in bytes. The GPU crates bind buffers at byte offsets (<code>ojas-metal/src/device.rs</code>, <code>ojas-wgpu/src/backend.rs</code>).
 </li>
 <li>A view never changes dtype (<code>Tensor::view</code> copies <code>self.dtype</code>). So a storage&#39;s element type is fixed when it is created.
 </li>

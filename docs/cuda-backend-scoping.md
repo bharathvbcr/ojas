@@ -279,7 +279,7 @@ Each of these is a **new trait method**, so a coordinator edit [V by comparison 
 #### 2.A.4 Size
 
 The existing GPU backends are the reference:
-- `ojas-metal` is about 6.4k Rust lines (`backend.rs` 1,198, `device.rs` 1,800, `gpu.rs` 3,407) plus 1,370 Metal shader lines;
+- `ojas-metal` is about 6.4k Rust lines (`backend.rs` 1,198, `device.rs` 1,800, and `gpu.rs` 3,407 before the tiny step was retired) plus 1,370 Metal shader lines;
 - `ojas-wgpu` is about 4.0k Rust lines (`backend.rs` 2,115, `context.rs` 1,215, `lib.rs` 654) plus 1,263 WGSL lines [V `wc -l`].
 
 A CUDA `Backend` at the same scope is **15–25 specialist days** for the nanolab op set [I].

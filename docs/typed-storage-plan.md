@@ -23,7 +23,7 @@ Two CPU paths already avoid the copy: `validate::f32_words` reads `&[[u8; 4]]` i
 
 ## What does not change
 
-- `byte_offset`, `view`, `narrow`, `reshape`, `strides` and `storage_len` keep their meaning in bytes. The GPU crates bind buffers at byte offsets (`ojas-metal/src/gpu.rs`, `ojas-wgpu/src/backend.rs`).
+- `byte_offset`, `view`, `narrow`, `reshape`, `strides` and `storage_len` keep their meaning in bytes. The GPU crates bind buffers at byte offsets (`ojas-metal/src/device.rs`, `ojas-wgpu/src/backend.rs`).
 - A view never changes dtype (`Tensor::view` copies `self.dtype`). So a storage's element type is fixed when it is created.
 - `byte_offset` must already be a multiple of the dtype size (`misaligned_byte_offset_is_refused`). On host storage it maps to element `byte_offset / dtype.size()` with no remainder.
 - `to_f32_vec`, `to_u32_vec`, `from_f32`, `from_u32` and `write_f32` keep their signatures. That covers 966 call sites across 12 crates, mostly tests, which do not change.

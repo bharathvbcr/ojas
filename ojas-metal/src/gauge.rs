@@ -7,10 +7,10 @@
 //!
 //! Two guards, one lock:
 //!
-//! - [`Lease`]: held by every runtime a test opens, from `Worker::open` and
-//!   `Session::open` until the runtime (and anything that shares it) drops,
-//!   so every test that can allocate on the device holds one without writing
-//!   it out. Leases share.
+//! - [`Lease`]: held by every runtime a test opens, from `Worker::open`,
+//!   until the runtime (and anything that shares it) drops, so every test
+//!   that can allocate on the device holds one without writing it out.
+//!   Leases share.
 //! - [`Measuring`]: held by every test that reads the figure. It waits for
 //!   every lease to drop and admits no new one while it is held, and
 //!   [`live_bytes`] takes it by reference, so a figure read cannot compile

@@ -4959,6 +4959,25 @@ mod tests {
 
     use ojas_core::{Backend, Budget, Tensor};
 
+    /// The bias-gradient grid is one SIMD-group per head, and a head count
+    /// whose grid does not fit `usize` is refused, not wrapped.
+    #[test]
+    fn the_gate_dbias_grid_is_one_simd_group_per_head_and_refuses_overflow() {
+        assert_eq!(gate_dbias_threads(0).expect("no heads"), 0);
+        assert_eq!(gate_dbias_threads(12).expect("12 heads"), 12 * 32);
+        let r = gate_dbias_threads(usize::MAX / GATE_DBIAS_LANES + 1);
+        assert!(
+            matches!(
+                &r,
+                Err(OjasError::OutOfRange {
+                    op: "gate_dbias_threads",
+                    ..
+                })
+            ),
+            "{r:?}"
+        );
+    }
+
     /// Every public op indexes elements with 32 bits, so no op on the
     /// backend can ask for more than the device's buffer limit (about
     /// 36 GiB here); the worker's own allocation is the lowest layer that

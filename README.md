@@ -250,7 +250,7 @@ flowchart TD
 ```
 
 > [!WARNING]
-> Metal and wgpu attention enforce a strict head dimension limit ($d_{\text{head}} \le 256$, `METAL_MAX_HEAD_DIM` and `ATTENTION_MAX_HEAD_DIM`). A larger head dimension returns `Err(OjasError::UnsupportedHeadDim)`; nothing is clamped or truncated. The tiny Metal training step in `ojas-metal/src/gpu.rs` keeps its own limit of 64. Causal SDPA accepts fewer KV heads than query heads.
+> Metal and wgpu attention enforce a strict head dimension limit ($d_{\text{head}} \le 256$, `METAL_MAX_HEAD_DIM` and `ATTENTION_MAX_HEAD_DIM`). A larger head dimension returns `Err(OjasError::UnsupportedHeadDim)`; nothing is clamped or truncated. Causal SDPA accepts fewer KV heads than query heads.
 
 ---
 
@@ -314,7 +314,7 @@ sequenceDiagram
 
 ### 6. Target Model: nanolab Default GPT
 
-The v1 target is the **124M parameter nanolab default GPT** (12 layers, width 768, 12 heads of 64, SwiGLU 2048, vocabulary 50304, tied embedding). [`ojas-model`](ojas-model) implements it once: `ModelSpec::nanolab_124m` and a small CI `ModelSpec::tiny`, nanolab `state_dict` names (so torch exports load unchanged), the block over a `Graph` trait, and a `Trainer`. CI runs the tiny spec and a checked-in 40 KB fixture (2 layers, d 16, vocabulary 64); docs/status.md records no full 124M training run. [`docs/framework-design.md`](docs/framework-design.md) has the design and [`docs/shape-contract.md`](docs/shape-contract.md) the shape rules every backend shares. `CpuGpt` in `ojas-infer` is the fast CPU decoder. The Metal training step in `ojas-metal/src/gpu.rs` is a separate tiny pre-norm block at width 128 with two heads, vocabulary at most 128 and sequence at most 16. The block below is the nanolab layer:
+The v1 target is the **124M parameter nanolab default GPT** (12 layers, width 768, 12 heads of 64, SwiGLU 2048, vocabulary 50304, tied embedding). [`ojas-model`](ojas-model) implements it once: `ModelSpec::nanolab_124m` and a small CI `ModelSpec::tiny`, nanolab `state_dict` names (so torch exports load unchanged), the block over a `Graph` trait, and a `Trainer`. CI runs the tiny spec and a checked-in 40 KB fixture (2 layers, d 16, vocabulary 64); docs/status.md records no full 124M training run. [`docs/framework-design.md`](docs/framework-design.md) has the design and [`docs/shape-contract.md`](docs/shape-contract.md) the shape rules every backend shares. `CpuGpt` in `ojas-infer` is the fast CPU decoder. Metal trains through `MetalBackend` and the same `Tape`; there is no separate Metal training step. The block below is the nanolab layer:
 
 ```mermaid
 flowchart TD

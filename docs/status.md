@@ -148,7 +148,6 @@ flowchart LR
 ```mermaid
 flowchart TD
     subgraph InvariantChecks["Defensive Hardening Guarantees"]
-        C1["CE dh offset preservation: 16 canary padding elements (DH_PAD)"]
         C2["AdamW step counter overflow: next_step checked_add refuses u64::MAX"]
         C3["All-ignored cross-entropy: Zero valid targets returns Err(NonFinite)"]
         C4["AdamW non-finite store: Aborts before touching moment buffers"]
@@ -157,7 +156,6 @@ flowchart TD
     end
 ```
 
-* **CE `dh` offset preservation (verified):** `ojas-metal` reserves 16 canary padding elements (`DH_PAD`) before the `dh` slice; verified by `ce_nonzero_dh_offset_keeps_prefix` (`ojas-metal/src/gpu.rs`).
-* **AdamW step counter overflow (verified):** `next_step` uses `checked_add` and refuses `u64::MAX`; verified by `step_count_at_u64_max_is_refused` (`ojas-metal/src/gpu.rs`).
+* **AdamW step counter overflow (verified):** `next_step` uses `checked_add` and refuses `u64::MAX`; verified by `step_counter_refuses_wrap` (`ojas-core/src/backend.rs`).
 * **All-ignored cross entropy (verified):** Mean loss over zero valid targets returns `OjasError::NonFinite`; verified by `all_ignored_cross_entropy_is_nonfinite_not_a_zero_loss` (`ojas-cpu/tests/redteam.rs`).
 * **AdamW non-finite store protection (verified):** Non-finite updates are rejected before moments change; verified by `adamw_refuses_a_nonfinite_f32_store_without_touching_moments` (`ojas-cpu/tests/redteam.rs`).
