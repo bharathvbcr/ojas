@@ -178,14 +178,16 @@ kernel void ojas_ln_bwd_rows(
         sgx = eb_add_f(eb_add_f(eb_add_f(sgx, pp.x), pp.y), dx.y * xhat);
     }
     const float4 tot = eb_tg_sum2(float4(sg, sgx), sh, t, T);
-    const float mean_g = precise::divide(tot.x, fd);
-    const float mean_gx = precise::divide(tot.z, fd);
+    const float2 mean_g = eb_div_f(tot.xy, fd);
+    const float2 mean_gx = eb_div_f(tot.zw, fd);
 
     bool bad_out = false;
     for (uint j = t; j < dim; j += T) {
-        const float dxhat = gy[base + j] * w[j];
+        const float2 dx = eb_two_prod(gy[base + j], w[j]);
         const float xhat = ((x[base + j] - mean.x) - mean.y) * rstd;
-        const float o = rstd * fma(-xhat, mean_gx, dxhat - mean_g);
+        const float term1 = ((dx.x - mean_g.x) + dx.y) - mean_g.y;
+        const float term2 = fma(xhat, mean_gx.x, xhat * mean_gx.y);
+        const float o = rstd * (term1 - term2);
         gx[base + j] = o;
         bad_out = bad_out || !isfinite(o);
     }
@@ -323,13 +325,15 @@ kernel void ojas_cln_bwd_pos(
         const float2 pp = eb_two_prod(dx.x, xhat);
         sgx = eb_add_f(eb_add_f(eb_add_f(sgx, pp.x), pp.y), dx.y * xhat);
     }
-    const float mean_g = precise::divide(sg.x, fc);
-    const float mean_gx = precise::divide(sgx.x, fc);
+    const float2 mean_g = eb_div_f(sg, fc);
+    const float2 mean_gx = eb_div_f(sgx, fc);
     for (uint c = 0u; c < channels; ++c) {
         const ulong i = base + c * step;
-        const float dxhat = gy[i] * w[c];
+        const float2 dx = eb_two_prod(gy[i], w[c]);
         const float xhat = ((x[i] - mean.x) - mean.y) * rstd;
-        const float o = rstd * fma(-xhat, mean_gx, dxhat - mean_g);
+        const float term1 = ((dx.x - mean_g.x) + dx.y) - mean_g.y;
+        const float term2 = fma(xhat, mean_gx.x, xhat * mean_gx.y);
+        const float o = rstd * (term1 - term2);
         gx[i] = o;
         bad_out = bad_out || !isfinite(o);
     }
