@@ -649,7 +649,7 @@ impl TesslArm {
             .map_err(|e| format!("read_entries: {e:?}"))?
             .into_iter()
             .map(|g| g.tensor.to_f32_vec().map(|v| (g.name, v)))
-            .collect::<Result<_, _>>()
+            .collect::<Result<Entries, OjasError>>()
             .map_err(|e| format!("to_f32_vec: {e:?}"))?;
         let embed = self
             .s
@@ -935,8 +935,9 @@ fn ab_compare_dumps() {
 #[test]
 #[ignore = "opens two Metal runtimes on the tiny fixture; run under the heavy-job lock"]
 fn gpu_ab_tiny_end_to_end() {
-    let dir =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../ojas-model/tests/fixtures/qwen35_tiny");
+    // tessl's committed two-layer fixture: the one `gpu_parity.rs` already opens
+    // a `Qwen35Step` on, and `cpu_tape_spec.rs` checks the Tape's spec against.
+    let dir = common::tessl_root().join("tests/fixtures/qwen35_train");
     let snap = Snapshot::from_dir(&dir).unwrap();
     let cfg = snap.config.clone();
     let reserved: Vec<u32> = cfg.reserved_token_ids.iter().map(|(_, id)| *id).collect();
