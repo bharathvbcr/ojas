@@ -7,6 +7,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+# First, because every gate below it needs cargo to resolve this workspace, and
+# this workspace path-depends on sibling checkouts (tessl, gusset). When one is
+# missing or this is a worktree, cargo fails with a manifest error that names
+# the wrong cause; this says what is actually wrong instead.
+echo "==> sibling checkouts and path dependencies"
+./scripts/check_siblings.sh
+
 echo "==> fmt"
 ./scripts/fmt_check.sh
 
