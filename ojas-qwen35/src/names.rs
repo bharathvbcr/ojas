@@ -3,10 +3,8 @@
 //!
 //! [`tower_tensors`] is written in the order of tessl's
 //! `Qwen35Model::parameter_table` (`tessl/src/qwen35_params.rs`, `slots`).
-//! That order is only a pre-flight convenience here: once a model is open,
-//! every per-entry vector is rebuilt against tessl's live table by name, so a
-//! drift between the two cannot put a weight decay on the wrong parameter
-//! (and `Qwen35Step::open` refuses a live table that differs from this one).
+//! That order is only a pre-flight convenience: tessl's live table is the
+//! authority for a tessl model, and the Tape tower reads tensors by name.
 
 use std::collections::BTreeMap;
 use std::path::Path;

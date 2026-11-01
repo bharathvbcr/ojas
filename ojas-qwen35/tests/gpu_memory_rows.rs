@@ -10,9 +10,6 @@
 //! ```
 //!
 //! Arms (`QWEN35_MEM_ARM`):
-//! - `provider-f32`: this crate's provider at `Precision::F32`,
-//!   `Numerics::ExactF32`; `provider-bf16`: `Precision::Bf16`,
-//!   `Numerics::Bf16Operands`. One forward, backward and AdamW step.
 //! - `tape-f32` / `tape-bf16`: ojas's Tape on `MetalBackend`, linear weights
 //!   loaded `F32` or `Bf16` (`load_hf`) and the tied table `F32`, every layer
 //!   a checkpointed segment, one forward and backward. `tape-bf16-table`:
@@ -98,10 +95,7 @@ use ojas_model::qwen35::{
     bind, forward_loss, load_hf, DeviceHooks, LoraInit, OpenConfig, Qwen35Tables, TapeStepProvider,
 };
 use ojas_model::{ActivationCheckpoint, DEFAULT_CE_CHUNK};
-use ojas_qwen35::{
-    AdamWHyper, GroupSpec, LrRule, Numerics, OptimizerPlan, Precision, Qwen35Step, Select,
-    Sequence, Snapshot, WdRule,
-};
+use ojas_qwen35::Snapshot;
 use ojas_train::lappi::step as lstep;
 use ojas_train::lappi::step::StepProvider as _;
 
@@ -148,8 +142,6 @@ fn gpu_memory_row() {
     row.num("tokens", tokens as u64);
     let started = Instant::now();
     let mut row = match arm.as_str() {
-        "provider-f32" => provider(&snap, &ids, Precision::F32, Numerics::ExactF32, row),
-        "provider-bf16" => provider(&snap, &ids, Precision::Bf16, Numerics::Bf16Operands, row),
         "tape-f32" => tape(&snap, &ids, DType::F32, DType::F32, row),
         "tape-bf16" => tape(&snap, &ids, DType::Bf16, DType::F32, row),
         "tape-bf16-table" => tape(&snap, &ids, DType::Bf16, DType::Bf16, row),
@@ -178,68 +170,6 @@ fn gpu_memory_row() {
     row.num("wall_ms", started.elapsed().as_millis() as u64);
     row.text("status", "ok");
     row.print();
-}
-
-fn provider(snap: &Snapshot, ids: &[u32], p: Precision, n: Numerics, mut r: Row) -> Row {
-    let mut s = match Qwen35Step::open(snap, n, p, Budget::new(16 * GIB)) {
-        Ok(s) => s,
-        Err(e) => refused(r, "open", e),
-    };
-    let open = s.device_bytes();
-    r.num("resident_bytes", open.allocated);
-    r.num("open_peak_bytes", open.peak);
-    r.phase("open");
-    s.reset_peak_device_bytes();
-    let rows: Vec<u32> = (0..ids.len() as u32 - 1).collect();
-    let k = rows.len();
-    let pending = match s.forward(&Sequence {
-        ids,
-        letter_rows: &rows,
-        letter_targets: &ids[1..],
-        letter_scale: 1.0 / k as f32,
-        span_positions: &[],
-    }) {
-        Ok(p) => p,
-        Err(e) => refused(r, "forward", e),
-    };
-    let loss = pending.letter_ce_sum() / k as f64;
-    let after_forward = s.device_bytes();
-    r.num("after_forward_bytes", after_forward.allocated);
-    r.num("forward_peak_bytes", after_forward.peak);
-    r.phase("forward");
-    if let Err(e) = s.backward(pending, None) {
-        refused(r, "backward", e);
-    }
-    let plan = OptimizerPlan::build(
-        s.parameter_table(),
-        &GroupSpec {
-            lr: vec![LrRule {
-                label: "all".into(),
-                select: Select::All,
-                lr_scale: 1.0,
-            }],
-            weight_decay: vec![WdRule {
-                label: "all".into(),
-                select: Select::All,
-                weight_decay: 0.0,
-            }],
-        },
-    )
-    .unwrap();
-    let hyper = AdamWHyper {
-        lr: 1e-5,
-        beta1: 0.9,
-        beta2: 0.95,
-        eps: 1e-8,
-        grad_scale: 1.0,
-    };
-    if let Err(e) = s.adamw_step(&hyper, &plan) {
-        refused(r, "adamw_step", e);
-    }
-    let end = s.device_bytes();
-    r.num("step_peak_bytes", end.peak);
-    r.text("loss", &format!("{loss:.6}"));
-    r
 }
 
 fn tape(snap: &Snapshot, ids: &[u32], linears: DType, table: DType, mut r: Row) -> Row {
