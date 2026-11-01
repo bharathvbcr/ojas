@@ -63,7 +63,12 @@ echo "==> gotip (optional)"
 ./scripts/gotip.sh
 
 echo "==> test (release, serialized)"
-cargo test --workspace --release -- --test-threads=1
+# --no-fail-fast to match test.yml's Linux job. Without it cargo stops at the
+# first test binary that fails, so the crates after it never run and a red
+# result says nothing about them — and this script exists precisely so a push
+# is not the first place a gate runs. If it reported less than CI does, it
+# would send exactly the drift it is meant to prevent.
+cargo test --workspace --release --no-fail-fast -- --test-threads=1
 
 # HIP is not compile-checked here. hip-runtime-sys 0.1.2 panics in its
 # build script when hip/hip_runtime_api.h is absent, which it is on this Mac.

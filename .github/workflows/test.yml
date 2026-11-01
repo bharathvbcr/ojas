@@ -87,9 +87,17 @@ jobs:
         # ojas-metal builds as a stub off macOS (tessl is a macOS-only
         # dependency), so the whole workspace is tested here. The opt-in lets
         # the wgpu tests run on lavapipe; without it they fail closed.
+        #
+        # --no-fail-fast because without it cargo stops at the first test
+        # binary that fails and never runs the rest, so a red run reports one
+        # crate's failure and says nothing at all about the crates after it.
+        # Fixing that one then reveals the next, one round trip per failure,
+        # and the run was never evidence about the whole workspace that its
+        # name claims. It does not hide anything: the step still exits
+        # non-zero if any binary failed.
         env:
           OJAS_WGPU_ALLOW_CPU_ADAPTER: "1"
-        run: cargo test --workspace --release -- --test-threads=1
+        run: cargo test --workspace --release --no-fail-fast -- --test-threads=1
 
   macos:
     name: macos (workspace incl. wgpu; ojas-metal tests build only)
@@ -131,10 +139,16 @@ jobs:
         # The Metal tests in other crates (ojas-model, ojas-infer) open the
         # same runtime. OJAS_ALLOW_NO_GPU=1 makes a backend that fails to open
         # print "SKIP (OJAS_ALLOW_NO_GPU=1)" and return; without it they fail.
+        #
+        # --no-fail-fast for the reason given on the Linux job: without it the
+        # first failing binary ends the run and the crates after it are never
+        # reported. That matters more here, where OJAS_ALLOW_NO_GPU turns some
+        # backends into SKIPs — a run that stops early leaves you unable to
+        # tell a crate that skipped from one that was never reached.
         working-directory: ${{ env.OJAS }}
         env:
           OJAS_ALLOW_NO_GPU: "1"
-        run: cargo test --workspace --release --exclude ojas-metal -- --test-threads=1
+        run: cargo test --workspace --release --exclude ojas-metal --no-fail-fast -- --test-threads=1
       - name: ojas-metal tests (build only)
         working-directory: ${{ env.OJAS }}
         run: cargo test -p ojas-metal --release --no-run
