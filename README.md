@@ -14,7 +14,18 @@
   <img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue?style=flat-square" alt="License: MIT or Apache-2.0">
 </p>
 
-**ojas** (vital energy, the essence training spends) is a deterministic, **training-first universal framework in Rust**: tensors, autograd, optimizers, training loops, data, checkpoints and IO, with a CPU reference backend and CUDA, HIP, wgpu and Metal plugging in as extensions. It is designed as a safe, modern alternative to PyTorch and TensorFlow for systems research and LLM training, and does only light inference (sampling and eval). On the Mac, [tessl](https://github.com/bharathvbcr/tessl) is the Metal extension (kernels, runtime, allocator) and the heavily optimized inference engine; the direction is no duplicated code between the two and one CPU/GPU memory pool on unified memory (direction, not yet done: see [`docs/architecture.md`](docs/architecture.md)).
+**ojas** (vital energy, the essence training spends) is a deterministic, **training-first universal framework in Rust**: tensors, autograd, optimizers, training loops, data, checkpoints and IO, with a CPU reference backend and CUDA, HIP, wgpu and Metal plugging in as extensions. It is designed as a safe, modern alternative to PyTorch and TensorFlow for systems research and LLM training, and does only light inference (sampling and eval).
+
+ojas serves as the central framework within a **modular compute ecosystem**:
+- **[tessl](https://github.com/bharathvbcr/tessl)**: Dedicated Apple Silicon / Metal 4 acceleration extension and Mac inference engine (MPP TensorOps `matmul2d`, unified memory allocator, ICB decode, MLX quantization, EmbeddingGemma 2 multimodal towers, and canonical Metal compute kernels for `ojas-metal`).
+- **[sparsl](https://github.com/bharathvbcr/sparsl)**: Dedicated Sparse Computing extension (CSR/CSC sparse matrix representations, deterministic SpMV, affine prefix scans, event-driven simulation, and structured sparsity).
+
+> [!NOTE]
+> **Modularity Rationale:** ojas, tessl, and sparsl are intentionally developed across separate checkouts and crates to guarantee:
+> 1. **Decoupled Compile Cycles:** The universal training core compiles cleanly on standard Linux, macOS, and Windows without dragging in Xcode/Metal toolchains or heavy sparse proptest/mutation suites.
+> 2. **Isolated Hardware Requirements:** Apple Silicon M-series specifics live in tessl; sparse event-driven kernels live in sparsl; universal CPU/wgpu/CUDA training lives in ojas.
+> 3. **Independent Profiling & Micro-Benchmarking:** GEMM tile sweeps and register tuning (tessl) vs sparsity crossover thresholds (sparsl) vs end-to-end training step throughput (ojas) iterate on their own benchmark harnesses.
+> 4. **Independent Release Cadence & Separate Checkouts:** Downstream applications import only what they need without bloat (see [`docs/modular-extensions.md`](docs/modular-extensions.md) and [`docs/architecture.md`](docs/architecture.md)).
 
 ojas pairs a compile-time safe Rust engine with an in-process Go API via `gusset`, zero-copy tensor views, reverse-mode automatic differentiation, and strict memory budgeting.
 
@@ -149,6 +160,11 @@ flowchart TD
         HIP["ojas-hip\n(Copy probe; no HIP kernel; not a Backend)"]
     end
 
+    subgraph ModularExtensions["Modular Compute Extensions (Dedicated Checkouts)"]
+        TesslExt["tessl (Metal 4 Extension & Mac Inference)\nMPP TensorOps, SharedBuf UMA, KV Caches, EmbeddingGemma 2"]
+        SparslExt["sparsl (Sparse Computing Extension)\nDeterministic SpMV, CSR/CSC, Affine Scans, Event Simulation"]
+    end
+
     GoApp --> Gusset
     Gusset --> CAPI
     ForeignApp --> CAPI
@@ -161,6 +177,9 @@ flowchart TD
     HighLevel --> HardwareBackends
     HardwareBackends --> CoreEngine
     CoreEngine --> HardwareBackends
+
+    Metal -->|Zero-Copy UMA & Metal 4 Kernels| TesslExt
+    CoreEngine -.->|Sparse Tensor & Linear Algebra| SparslExt
 ```
 
 ---
@@ -254,7 +273,32 @@ flowchart TD
 
 ---
 
-### 4. Dual Optimizer Architecture (`ojas-cpu`)
+### 4. Modular Compute Extensions (`tessl` & `sparsl`)
+
+ojas delegates platform-specialized and domain-specialized execution to dedicated, decoupled modular extensions:
+
+* **Apple Silicon Metal 4 Extension (`tessl`):**
+  - **Role:** High-throughput Mac inference engine and canonical Metal 4 compute substrate for `ojas-metal`.
+  - **Shared Memory Pools (Zero-Copy UMA):** `tessl::SharedBuf` implements `ojas_core::MappedBuffer` (`ojas-core/src/hal.rs`) over pooled `StorageModeShared` Metal allocations. CPU threads and Metal kernels access the same physical host pointers without intermediate memory copies, synchronized via timeline completion fences (`last_use`, `last_write`).
+  - **Authoritative Budgeting:** `ojas_core::Budget` governs memory consumption; `BudgetTrimHandler` automatically flushes tessl's buffer pool freelist under pressure before allocations fail.
+  - **Kernels:** MPP TensorOps `matmul2d`, cooperative register accumulation, flash cross-attention, KV-cache managers, MLX Q4/Q8 quantization, and EmbeddingGemma 2 multimodal towers.
+
+* **Sparse Computing Extension (`sparsl`):**
+  - **Role:** Deterministic sparse and scan compute kernels for event-driven simulation, structured sparsity, and sparse neural execution.
+  - **Representations & Operations:** Compressed Sparse Row (CSR) and Column (CSC) matrix representations, deterministic Sparse Matrix-Vector multiplication (SpMV), chunked prefix scans over affine maps, and structure-of-arrays column buffers.
+  - **Honesty Invariant & Fail-Closed Gates:** Backends cannot silently degrade or substitute CPU execution; every `SparseOp` validates column indices against matrix extents before dispatch.
+  - **Deep Learning Interop:** Provides sparse gradient masks, dynamic sparse recompute maps, and event gating (`st-gate`) for sparse neural architectures.
+
+* **The Modularity Rationale:**
+  1. *Decoupled Compile Cycles:* Xcode Metal toolchain builds (`xcrun metal`, `metallib`) and intensive sparse property testing (`proptest`, mutation suites) do not block or slow down core universal framework builds on Linux/Windows.
+  2. *Isolated Hardware Requirements:* Apple Silicon M-series specifics live in `tessl`; generic CPU and optional Metal sparse kernels live in `sparsl`; universal multi-platform training lives in `ojas`.
+  3. *Independent Profiling:* GEMM tile sweeps (`tessl`) vs sparse crossover thresholds (`sparsl`) iterate on distinct benchmark suites.
+  4. *Independent Release Cadence:* Lightweight downstream consumers depend only on the exact compute capabilities they require.
+  See [`docs/modular-extensions.md`](docs/modular-extensions.md) for full architectural contracts.
+
+---
+
+### 5. Dual Optimizer Architecture (`ojas-cpu`)
 
 Model parameters are automatically partitioned across two distinct optimizers based on tensor rank:
 
@@ -280,7 +324,7 @@ flowchart TD
 
 ---
 
-### 5. In-Process Multi-Language Integration (`go/`, `ojas-capi`)
+### 6. In-Process Multi-Language Integration (`go/`, `ojas-capi`)
 * **Zero-IPC Overhead:** Go calls the Rust engine in-process through CGO and `gusset`. Go sends paths, token ids and options; the engine holds each model on its device. The calls are `LoadModel`/`NewModel`, `OpenTrainer`, `TrainStep`, `SaveCheckpoint`/`Resume`, `LoadTokenizer`/`Tokenize`/`Detokenize`/`DetokenizeLossy`/`TokenID`, `GenerateIDs`, `SystemProfile`, `SetMemoryCeiling`, `Free`, and `Close` (see [`go/README.md`](go/README.md)). The old stub `Step` opcode is retired.
 * **Device Selection:** `LoadOptions.Device` selects `DeviceCPU`, `DeviceCPUParallel`, `DeviceCPUAuto`, `DeviceMetal` or `DeviceWgpu`. `DeviceCPUAuto` automatically sizes CPU pool threads to the system thread ceiling (usable CPUs capped by cgroup quota). A GPU backend that cannot open is an error, never a CPU model. A step reads back only its loss.
 * **One Memory Ceiling & Pressure Admission:** Every model's `BudgetBytes` is a child of a process-wide ceiling (default 1 GiB, or machine hard limit `hard_memory_limit` if smaller). `SetMemoryCeiling` raises it and is refused for 0, while any model is open, or if `bytes` exceeds physical RAM/cgroup limits (`ErrCapacity`). Under critical kernel memory pressure (`ErrPressure`), calls that allocate are refused before starting while `SaveCheckpoint` and `Free` continue to run.
@@ -312,7 +356,7 @@ sequenceDiagram
 
 ---
 
-### 6. Target Model: nanolab Default GPT
+### 7. Target Model: nanolab Default GPT
 
 The v1 target is the **124M parameter nanolab default GPT** (12 layers, width 768, 12 heads of 64, SwiGLU 2048, vocabulary 50304, tied embedding). [`ojas-model`](ojas-model) implements it once: `ModelSpec::nanolab_124m` and a small CI `ModelSpec::tiny`, nanolab `state_dict` names (so torch exports load unchanged), the block over a `Graph` trait, and a `Trainer`. CI runs the tiny spec and a checked-in 40 KB fixture (2 layers, d 16, vocabulary 64); docs/status.md records no full 124M training run. [`docs/framework-design.md`](docs/framework-design.md) has the design and [`docs/shape-contract.md`](docs/shape-contract.md) the shape rules every backend shares. `CpuGpt` in `ojas-infer` is the fast CPU decoder. Metal trains through `MetalBackend` and the same `Tape`; there is no separate Metal training step. The block below is the nanolab layer:
 

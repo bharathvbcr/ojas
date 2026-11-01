@@ -88,6 +88,7 @@
 <li><a href="data-formats.html">Image data formats</a></li>
 <li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
 <li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="modular-extensions.html">Modular Compute Extensions Architecture</a></li>
 <li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
 <li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
 </ul>
@@ -147,7 +148,26 @@
       <p class="ref-crumb"><a href="./">Reference</a> / Crates</p>
       <article class="prose-ojas">
 <h1 id="ojas">ojas <a class="anchor" href="#ojas" aria-label="Link to this section">#</a></h1>
-<p><strong>ojas</strong> (vital energy, the essence training spends) is a deterministic, <strong>training-first universal framework in Rust</strong>: tensors, autograd, optimizers, training loops, data, checkpoints and IO, with a CPU reference backend and CUDA, HIP, wgpu and Metal plugging in as extensions. It is designed as a safe, modern alternative to PyTorch and TensorFlow for systems research and LLM training, and does only light inference (sampling and eval). On the Mac, <a href="https://github.com/bharathvbcr/tessl" rel="noopener">tessl</a> is the Metal extension (kernels, runtime, allocator) and the heavily optimized inference engine; the direction is no duplicated code between the two and one CPU/GPU memory pool on unified memory (direction, not yet done: see <a href="architecture.html"><code>docs/architecture.md</code></a>).</p>
+<p><strong>ojas</strong> (vital energy, the essence training spends) is a deterministic, <strong>training-first universal framework in Rust</strong>: tensors, autograd, optimizers, training loops, data, checkpoints and IO, with a CPU reference backend and CUDA, HIP, wgpu and Metal plugging in as extensions. It is designed as a safe, modern alternative to PyTorch and TensorFlow for systems research and LLM training, and does only light inference (sampling and eval).</p>
+<p>ojas serves as the central framework within a <strong>modular compute ecosystem</strong>:</p>
+<ul>
+<li><strong><a href="https://github.com/bharathvbcr/tessl" rel="noopener">tessl</a></strong>: Dedicated Apple Silicon / Metal 4 acceleration extension and Mac inference engine (MPP TensorOps <code>matmul2d</code>, unified memory allocator, ICB decode, MLX quantization, EmbeddingGemma 2 multimodal towers, and canonical Metal compute kernels for <code>ojas-metal</code>).
+</li>
+<li><strong><a href="https://github.com/bharathvbcr/sparsl" rel="noopener">sparsl</a></strong>: Dedicated Sparse Computing extension (CSR/CSC sparse matrix representations, deterministic SpMV, affine prefix scans, event-driven simulation, and structured sparsity).
+</li>
+</ul>
+<aside class="alert alert-note"><p class="alert-title">Note</p><p><strong>Modularity Rationale:</strong> ojas, tessl, and sparsl are intentionally developed across separate checkouts and crates to guarantee:</p>
+<ol>
+<li><strong>Decoupled Compile Cycles:</strong> The universal training core compiles cleanly on standard Linux, macOS, and Windows without dragging in Xcode/Metal toolchains or heavy sparse proptest/mutation suites.
+</li>
+<li><strong>Isolated Hardware Requirements:</strong> Apple Silicon M-series specifics live in tessl; sparse event-driven kernels live in sparsl; universal CPU/wgpu/CUDA training lives in ojas.
+</li>
+<li><strong>Independent Profiling &amp; Micro-Benchmarking:</strong> GEMM tile sweeps and register tuning (tessl) vs sparsity crossover thresholds (sparsl) vs end-to-end training step throughput (ojas) iterate on their own benchmark harnesses.
+</li>
+<li><strong>Independent Release Cadence &amp; Separate Checkouts:</strong> Downstream applications import only what they need without bloat (see <a href="modular-extensions.html"><code>docs/modular-extensions.md</code></a> and <a href="architecture.html"><code>docs/architecture.md</code></a>).
+</li>
+</ol>
+</aside>
 <p>ojas pairs a compile-time safe Rust engine with an in-process Go API via <code>gusset</code>, zero-copy tensor views, reverse-mode automatic differentiation, and strict memory budgeting.</p>
 <h3 id="key-architectural-guarantees">Key Architectural Guarantees <a class="anchor" href="#key-architectural-guarantees" aria-label="Link to this section">#</a></h3>
 <ul>
@@ -291,6 +311,11 @@ License:         MIT OR Apache-2.0</code></pre></div>
         HIP[&#34;ojas-hip\n(Copy probe; no HIP kernel; not a Backend)&#34;]
     end
 
+    subgraph ModularExtensions[&#34;Modular Compute Extensions (Dedicated Checkouts)&#34;]
+        TesslExt[&#34;tessl (Metal 4 Extension &amp; Mac Inference)\nMPP TensorOps, SharedBuf UMA, KV Caches, EmbeddingGemma 2&#34;]
+        SparslExt[&#34;sparsl (Sparse Computing Extension)\nDeterministic SpMV, CSR/CSC, Affine Scans, Event Simulation&#34;]
+    end
+
     GoApp --&gt; Gusset
     Gusset --&gt; CAPI
     ForeignApp --&gt; CAPI
@@ -302,7 +327,10 @@ License:         MIT OR Apache-2.0</code></pre></div>
     HighLevel --&gt; CoreEngine
     HighLevel --&gt; HardwareBackends
     HardwareBackends --&gt; CoreEngine
-    CoreEngine --&gt; HardwareBackends</pre></figure>
+    CoreEngine --&gt; HardwareBackends
+
+    Metal --&gt;|Zero-Copy UMA &amp; Metal 4 Kernels| TesslExt
+    CoreEngine -.-&gt;|Sparse Tensor &amp; Linear Algebra| SparslExt</pre></figure>
 <hr>
 <h2 id="core-capabilities--subsystems">Core Capabilities &amp; Subsystems <a class="anchor" href="#core-capabilities--subsystems" aria-label="Link to this section">#</a></h2>
 <h3 id="1-general-purpose-tensor-engine-ojas-core">1. General-Purpose Tensor Engine (<code>ojas-core</code>) <a class="anchor" href="#1-general-purpose-tensor-engine-ojas-core" aria-label="Link to this section">#</a></h3>
@@ -394,7 +422,52 @@ License:         MIT OR Apache-2.0</code></pre></div>
 <aside class="alert alert-warning"><p class="alert-title">Warning</p><p>Metal and wgpu attention enforce a strict head dimension limit ($d_{\text{head}} \le 256$, <code>METAL_MAX_HEAD_DIM</code> and <code>ATTENTION_MAX_HEAD_DIM</code>). A larger head dimension returns <code>Err(OjasError::UnsupportedHeadDim)</code>; nothing is clamped or truncated. Causal SDPA accepts fewer KV heads than query heads.</p>
 </aside>
 <hr>
-<h3 id="4-dual-optimizer-architecture-ojas-cpu">4. Dual Optimizer Architecture (<code>ojas-cpu</code>) <a class="anchor" href="#4-dual-optimizer-architecture-ojas-cpu" aria-label="Link to this section">#</a></h3>
+<h3 id="4-modular-compute-extensions-tessl--sparsl">4. Modular Compute Extensions (<code>tessl</code> &amp; <code>sparsl</code>) <a class="anchor" href="#4-modular-compute-extensions-tessl--sparsl" aria-label="Link to this section">#</a></h3>
+<p>ojas delegates platform-specialized and domain-specialized execution to dedicated, decoupled modular extensions:</p>
+<ul>
+<li><strong>Apple Silicon Metal 4 Extension (<code>tessl</code>):</strong>
+<ul>
+<li><strong>Role:</strong> High-throughput Mac inference engine and canonical Metal 4 compute substrate for <code>ojas-metal</code>.
+</li>
+<li><strong>Shared Memory Pools (Zero-Copy UMA):</strong> <code>tessl::SharedBuf</code> implements <code>ojas_core::MappedBuffer</code> (<code>ojas-core/src/hal.rs</code>) over pooled <code>StorageModeShared</code> Metal allocations. CPU threads and Metal kernels access the same physical host pointers without intermediate memory copies, synchronized via timeline completion fences (<code>last_use</code>, <code>last_write</code>).
+</li>
+<li><strong>Authoritative Budgeting:</strong> <code>ojas_core::Budget</code> governs memory consumption; <code>BudgetTrimHandler</code> automatically flushes tessl&#39;s buffer pool freelist under pressure before allocations fail.
+</li>
+<li><strong>Kernels:</strong> MPP TensorOps <code>matmul2d</code>, cooperative register accumulation, flash cross-attention, KV-cache managers, MLX Q4/Q8 quantization, and EmbeddingGemma 2 multimodal towers.
+</li>
+</ul>
+</li>
+</ul>
+<ul>
+<li><strong>Sparse Computing Extension (<code>sparsl</code>):</strong>
+<ul>
+<li><strong>Role:</strong> Deterministic sparse and scan compute kernels for event-driven simulation, structured sparsity, and sparse neural execution.
+</li>
+<li><strong>Representations &amp; Operations:</strong> Compressed Sparse Row (CSR) and Column (CSC) matrix representations, deterministic Sparse Matrix-Vector multiplication (SpMV), chunked prefix scans over affine maps, and structure-of-arrays column buffers.
+</li>
+<li><strong>Honesty Invariant &amp; Fail-Closed Gates:</strong> Backends cannot silently degrade or substitute CPU execution; every <code>SparseOp</code> validates column indices against matrix extents before dispatch.
+</li>
+<li><strong>Deep Learning Interop:</strong> Provides sparse gradient masks, dynamic sparse recompute maps, and event gating (<code>st-gate</code>) for sparse neural architectures.
+</li>
+</ul>
+</li>
+</ul>
+<ul>
+<li><strong>The Modularity Rationale:</strong>
+<ol>
+<li><em>Decoupled Compile Cycles:</em> Xcode Metal toolchain builds (<code>xcrun metal</code>, <code>metallib</code>) and intensive sparse property testing (<code>proptest</code>, mutation suites) do not block or slow down core universal framework builds on Linux/Windows.
+</li>
+<li><em>Isolated Hardware Requirements:</em> Apple Silicon M-series specifics live in <code>tessl</code>; generic CPU and optional Metal sparse kernels live in <code>sparsl</code>; universal multi-platform training lives in <code>ojas</code>.
+</li>
+<li><em>Independent Profiling:</em> GEMM tile sweeps (<code>tessl</code>) vs sparse crossover thresholds (<code>sparsl</code>) iterate on distinct benchmark suites.
+</li>
+<li><em>Independent Release Cadence:</em> Lightweight downstream consumers depend only on the exact compute capabilities they require. See <a href="modular-extensions.html"><code>docs/modular-extensions.md</code></a> for full architectural contracts.
+</li>
+</ol>
+</li>
+</ul>
+<hr>
+<h3 id="5-dual-optimizer-architecture-ojas-cpu">5. Dual Optimizer Architecture (<code>ojas-cpu</code>) <a class="anchor" href="#5-dual-optimizer-architecture-ojas-cpu" aria-label="Link to this section">#</a></h3>
 <p>Model parameters are automatically partitioned across two distinct optimizers based on tensor rank:</p>
 <figure class="diagram"><pre class="mermaid">flowchart TD
     subgraph ModelParams[&#34;Model Parameter Topology&#34;]
@@ -418,7 +491,7 @@ License:         MIT OR Apache-2.0</code></pre></div>
 </li>
 </ul>
 <hr>
-<h3 id="5-in-process-multi-language-integration-go-ojas-capi">5. In-Process Multi-Language Integration (<code>go/</code>, <code>ojas-capi</code>) <a class="anchor" href="#5-in-process-multi-language-integration-go-ojas-capi" aria-label="Link to this section">#</a></h3>
+<h3 id="6-in-process-multi-language-integration-go-ojas-capi">6. In-Process Multi-Language Integration (<code>go/</code>, <code>ojas-capi</code>) <a class="anchor" href="#6-in-process-multi-language-integration-go-ojas-capi" aria-label="Link to this section">#</a></h3>
 <ul>
 <li><strong>Zero-IPC Overhead:</strong> Go calls the Rust engine in-process through CGO and <code>gusset</code>. Go sends paths, token ids and options; the engine holds each model on its device. The calls are <code>LoadModel</code>/<code>NewModel</code>, <code>OpenTrainer</code>, <code>TrainStep</code>, <code>SaveCheckpoint</code>/<code>Resume</code>, <code>LoadTokenizer</code>/<code>Tokenize</code>/<code>Detokenize</code>/<code>DetokenizeLossy</code>/<code>TokenID</code>, <code>GenerateIDs</code>, <code>SystemProfile</code>, <code>SetMemoryCeiling</code>, <code>Free</code>, and <code>Close</code> (see <a href="https://github.com/bharathvbcr/ojas/blob/main/go/README.md" rel="noopener"><code>go/README.md</code></a>). The old stub <code>Step</code> opcode is retired.
 </li>
@@ -451,7 +524,7 @@ License:         MIT OR Apache-2.0</code></pre></div>
 <aside class="alert alert-caution"><p class="alert-title">Caution</p><p>If a worker thread panics while holding the <code>ojas-capi</code> session table lock, the next lock acquisition <strong>clears every session in the table</strong> to prevent stale state corruption. <code>catch_unwind</code> cannot catch OS process aborts, stack overflows, or infallible memory allocation panics.</p>
 </aside>
 <hr>
-<h3 id="6-target-model-nanolab-default-gpt">6. Target Model: nanolab Default GPT <a class="anchor" href="#6-target-model-nanolab-default-gpt" aria-label="Link to this section">#</a></h3>
+<h3 id="7-target-model-nanolab-default-gpt">7. Target Model: nanolab Default GPT <a class="anchor" href="#7-target-model-nanolab-default-gpt" aria-label="Link to this section">#</a></h3>
 <p>The v1 target is the <strong>124M parameter nanolab default GPT</strong> (12 layers, width 768, 12 heads of 64, SwiGLU 2048, vocabulary 50304, tied embedding). <a href="crate-ojas-model.html"><code>ojas-model</code></a> implements it once: <code>ModelSpec::nanolab_124m</code> and a small CI <code>ModelSpec::tiny</code>, nanolab <code>state_dict</code> names (so torch exports load unchanged), the block over a <code>Graph</code> trait, and a <code>Trainer</code>. CI runs the tiny spec and a checked-in 40 KB fixture (2 layers, d 16, vocabulary 64); docs/status.md records no full 124M training run. <a href="framework-design.html"><code>docs/framework-design.md</code></a> has the design and <a href="shape-contract.html"><code>docs/shape-contract.md</code></a> the shape rules every backend shares. <code>CpuGpt</code> in <code>ojas-infer</code> is the fast CPU decoder. Metal trains through <code>MetalBackend</code> and the same <code>Tape</code>; there is no separate Metal training step. The block below is the nanolab layer:</p>
 <figure class="diagram"><pre class="mermaid">flowchart TD
     subgraph TransformerBlock[&#34;nanolab GPT Transformer Layer&#34;]
@@ -604,9 +677,10 @@ cd go &amp;&amp; PKG_CONFIG_PATH=&#34;$PWD&#34; go test -a -tags gusset_pkgconfi
 <li class="sub"><a href="#1-general-purpose-tensor-engine-ojas-core">1. General-Purpose Tensor Engine (ojas-core)</a></li>
 <li class="sub"><a href="#2-reverse-mode-automatic-differentiation-ojas-autograd">2. Reverse-Mode Automatic Differentiation (ojas-autograd)</a></li>
 <li class="sub"><a href="#3-native--portable-hardware-backends">3. Native &amp; Portable Hardware Backends</a></li>
-<li class="sub"><a href="#4-dual-optimizer-architecture-ojas-cpu">4. Dual Optimizer Architecture (ojas-cpu)</a></li>
-<li class="sub"><a href="#5-in-process-multi-language-integration-go-ojas-capi">5. In-Process Multi-Language Integration (go/, ojas-capi)</a></li>
-<li class="sub"><a href="#6-target-model-nanolab-default-gpt">6. Target Model: nanolab Default GPT</a></li>
+<li class="sub"><a href="#4-modular-compute-extensions-tessl--sparsl">4. Modular Compute Extensions (tessl &amp; sparsl)</a></li>
+<li class="sub"><a href="#5-dual-optimizer-architecture-ojas-cpu">5. Dual Optimizer Architecture (ojas-cpu)</a></li>
+<li class="sub"><a href="#6-in-process-multi-language-integration-go-ojas-capi">6. In-Process Multi-Language Integration (go/, ojas-capi)</a></li>
+<li class="sub"><a href="#7-target-model-nanolab-default-gpt">7. Target Model: nanolab Default GPT</a></li>
 <li><a href="#workspace-crate-catalog">Workspace Crate Catalog</a></li>
 <li><a href="#verification--test-commands">Verification &amp; Test Commands</a></li>
 <li class="sub"><a href="#in-process-go-client-tests">In-Process Go Client Tests</a></li>

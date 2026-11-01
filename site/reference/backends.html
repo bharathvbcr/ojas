@@ -88,6 +88,7 @@
 <li><a href="data-formats.html">Image data formats</a></li>
 <li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
 <li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="modular-extensions.html">Modular Compute Extensions Architecture</a></li>
 <li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
 <li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
 </ul>
@@ -206,6 +207,43 @@
 <blockquote><p>Attention and a non-finite <code>V</code> row: it is a fault on every backend, because the query at that position always attends to its own key. On Metal the tiled attention kernel zeroes <code>P</code> (not <code>V</code>) outside the window and multiplies the whole 64-key tile, so a non-finite <code>V</code> row in a visited tile reaches <code>O</code> as <code>0 * NaN</code> for every row that visits the tile, and the output check reports the op&#39;s <code>NonFinite</code> at the next <code>sync</code>; the backward checks every operand up front. wgpu skips out-of-window keys, so only the rows that see the key are non-finite; the CPU refuses the call before it runs (<code>attention_masked_nonfinite.rs</code> in each backend&#39;s tests).</p>
 </blockquote>
 <hr>
+<h2 id="modular-extensions-architecture">Modular Extensions Architecture <a class="anchor" href="#modular-extensions-architecture" aria-label="Link to this section">#</a></h2>
+<p>In addition to in-tree backends, ojas coordinates execution with dedicated, out-of-tree modular extensions that provide specialized hardware runtimes and mathematical substrates:</p>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    Ojas[&#34;ojas (Universal Training Framework)&#34;]
+    
+    subgraph MetalExtension[&#34;Apple Silicon Extension&#34;]
+        OMetal[&#34;ojas-metal (Adapter)&#34;]
+        Tessl[&#34;tessl (Metal 4 Runtime &amp; Mac Inference)&#34;]
+    end
+    
+    subgraph SparseExtension[&#34;Sparse Computing Extension&#34;]
+        Sparsl[&#34;sparsl (Deterministic SpMV &amp; Affine Scan)&#34;]
+    end
+    
+    Ojas --&gt; OMetal
+    OMetal --&gt;|Zero-Copy UMA &amp; Kernels| Tessl
+    Ojas -.-&gt;|Sparse Tensors &amp; Masks| Sparsl</pre></figure>
+<h3 id="1-tessl-dedicated-apple-silicon--metal-4-extension">1. <code>tessl</code>: Dedicated Apple Silicon / Metal 4 Extension <a class="anchor" href="#1-tessl-dedicated-apple-silicon--metal-4-extension" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><strong>Role:</strong> High-performance GPU tensor runtime for Apple Silicon and Mac inference engine.
+</li>
+<li><strong>Contract:</strong> Implements <code>ojas_core::MappedBuffer</code> (<code>SharedBuf</code>), providing zero-copy UMA sharing between host pointers and GPU device addresses, gated by timeline fences (<code>Timeline</code>, <code>HostLease</code>). Memory allocations are accounted under <code>ojas_core::Budget</code> with <code>BudgetTrimHandler</code> clearing freelist caches under pressure.
+</li>
+<li><strong>Why Separate:</strong> Isolates Xcode 26 toolchain and Metal AOT shader compilation (<code>-std=metal4.0</code>) from the universal cross-platform Rust training engine.
+</li>
+</ul>
+<h3 id="2-sparsl-dedicated-sparse-computing-extension">2. <code>sparsl</code>: Dedicated Sparse Computing Extension <a class="anchor" href="#2-sparsl-dedicated-sparse-computing-extension" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><strong>Role:</strong> Deterministic sparse and scan compute kernels (CSR/CSC, SpMV, prefix scans over affine maps, event-driven simulation).
+</li>
+<li><strong>Contract:</strong> Provides fail-closed backend gates (<code>BackendUnavailable</code> rather than silent fallback) and validated sparse operators (<code>SparseOp</code>). Bridges to ojas for sparse gradient masking, sparse attention recompute maps, and event gating.
+</li>
+<li><strong>Why Separate:</strong> Isolates sparse crossover profiling and heavy property-based testing suites (<code>proptest</code>, mutation suites) from dense neural network training loops.
+</li>
+</ul>
+<p>See <a href="modular-extensions.html"><code>modular-extensions.md</code></a> for full contracts and design details.</p>
+<hr>
 <h2 id="package-adoption-decisions">Package Adoption Decisions <a class="anchor" href="#package-adoption-decisions" aria-label="Link to this section">#</a></h2>
 <figure class="diagram"><pre class="mermaid">flowchart LR
     subgraph Adopted[&#34;Adopted Frameworks&#34;]
@@ -270,6 +308,9 @@
 <li><a href="#who-selects-the-device">Who Selects the Device</a></li>
 <li><a href="#memory-residency--zero-copy-lifecycle">Memory Residency &amp; Zero-Copy Lifecycle</a></li>
 <li><a href="#backend-status-2026-10-05-apple-m5-pro">Backend Status (2026-10-05, Apple M5 Pro)</a></li>
+<li><a href="#modular-extensions-architecture">Modular Extensions Architecture</a></li>
+<li class="sub"><a href="#1-tessl-dedicated-apple-silicon--metal-4-extension">1. tessl: Dedicated Apple Silicon / Metal 4 Extension</a></li>
+<li class="sub"><a href="#2-sparsl-dedicated-sparse-computing-extension">2. sparsl: Dedicated Sparse Computing Extension</a></li>
 <li><a href="#package-adoption-decisions">Package Adoption Decisions</a></li>
 <li class="sub"><a href="#adopted">Adopted</a></li>
 <li class="sub"><a href="#rejected">Rejected</a></li>

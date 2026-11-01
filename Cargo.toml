@@ -31,12 +31,12 @@ license = "MIT OR Apache-2.0"
 # field below gusset's rust-version.
 rust-version = "1.97"
 publish = false
-description = "Deterministic, high-performance Rust deep learning engine and framework"
+description = "Deterministic, high-performance Rust deep learning engine and framework with modular hardware and compute extensions"
 repository = "https://github.com/bharathvbcr/ojas"
 homepage = "https://ojas.vbcr.dev"
 documentation = "https://ojas.vbcr.dev/reference/"
 readme = "README.md"
-keywords = ["deep-learning", "machine-learning", "neural-network", "tensor", "autograd"]
+keywords = ["deep-learning", "machine-learning", "neural-network", "tensor", "autograd", "sparse"]
 categories = ["science", "mathematics", "hardware-support"]
 
 # panic = "unwind" is Cargo's default. It is set here so a profile cannot

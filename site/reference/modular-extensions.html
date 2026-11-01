@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Modular Compute Extensions Architecture · ojas reference</title>
+  <meta name="description" content="This document specifies the architecture, integration contracts, and design rationale behind ojas and its dedicated modular extensions: tessl (Apple Silicon Metal 4 acceleration and Mac inference) an…">
+  <meta name="keywords" content="ojas, modular compute extensions architecture, rust deep learning, machine learning, pytorch alternative, neural network, autograd, tensors, metal, wgpu">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/modular-extensions.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/modular-extensions.html">
+  <meta property="og:title" content="Modular Compute Extensions Architecture · ojas reference">
+  <meta property="og:description" content="This document specifies the architecture, integration contracts, and design rationale behind ojas and its dedicated modular extensions: tessl (Apple Silicon Metal 4 acceleration and Mac inference) an…">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Modular Compute Extensions Architecture · ojas reference">
+  <meta property="og:locale" content="en_US">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Modular Compute Extensions Architecture · ojas reference">
+  <meta name="twitter:description" content="This document specifies the architecture, integration contracts, and design rationale behind ojas and its dedicated modular extensions: tessl (Apple Silicon Metal 4 acceleration and Mac inference) an…">
+  <meta name="twitter:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta name="twitter:image:alt" content="Modular Compute Extensions Architecture · ojas reference">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "Modular Compute Extensions Architecture · ojas reference",
+    "description": "This document specifies the architecture, integration contracts, and design rationale behind ojas and its dedicated modular extensions: tessl (Apple Silicon Metal 4 acceleration and Mac inference) an…",
+    "url": "https://ojas.vbcr.dev/reference/modular-extensions.html",
+    "image": "https://ojas.vbcr.dev/assets/ojas-og.png",
+    "author": {
+      "@type": "Person",
+      "name": "Bharath Chandra Vaddaram",
+      "url": "https://bharath.vbcr.dev/"
+    },
+    "publisher": {
+      "@type": "Organization",
+      "name": "ojas",
+      "url": "https://ojas.vbcr.dev"
+    }
+  }
+  </script>
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adapter-checkpoint.html">Adapter checkpoint, layout version 1</a></li>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="data-formats.html">Image data formats</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="modular-extensions.html" class="current" aria-current="page">Modular Compute Extensions Architecture</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="lappi-lora-mac-runbook.html">Runbook: Lappi decision-model LoRA on the M5 Pro, bf16 then quantised (2026-10-17)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="status-archive-2026-10-05.html">ojas Status Archive: test runs through 2026-10-05</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+<li><a href="unification-plan.html">Unification Plan: ojas as the Training Framework, tessl as the Metal Extension</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+<li><a href="bench-plots.html">Benchmark Plots, Every Result Folder</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Design and contracts</p>
+      <article class="prose-ojas">
+<h1 id="modular-compute-extensions-architecture">Modular Compute Extensions Architecture <a class="anchor" href="#modular-compute-extensions-architecture" aria-label="Link to this section">#</a></h1>
+<p>This document specifies the architecture, integration contracts, and design rationale behind <strong>ojas</strong> and its dedicated modular extensions: <strong>tessl</strong> (Apple Silicon Metal 4 acceleration and Mac inference) and <strong>sparsl</strong> (deterministic sparse computing and scan kernels).</p>
+<hr>
+<h2 id="1-system-topology--ecosystem-roles">1. System Topology &amp; Ecosystem Roles <a class="anchor" href="#1-system-topology--ecosystem-roles" aria-label="Link to this section">#</a></h2>
+<p>The computing ecosystem is structured into three specialized, cleanly separated checkouts:</p>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    subgraph UniversalCore[&#34;Central Universal Framework: ojas&#34;]
+        Core[&#34;ojas-core (Tensor, DType, Budget, OjasError, HAL Traits)&#34;]
+        Tape[&#34;ojas-autograd (Dynamic Tape, Var, f64 Gradcheck)&#34;]
+        Cpu[&#34;ojas-cpu (CpuBackend, Numerics::Exact, Packed GEMM)&#34;]
+        Models[&#34;ojas-model / ojas-train (nanolab GPT, Trainers, TapeStepProvider)&#34;]
+        PortBe[&#34;ojas-wgpu (Portable WGSL) / ojas-cuda / ojas-hip&#34;]
+        MetalAd[&#34;ojas-metal (MetalBackend Adapter)&#34;]
+        Core --&gt; Tape --&gt; Models
+        Core --&gt; Cpu
+        Core --&gt; PortBe
+        Core --&gt; MetalAd
+    end
+
+    subgraph AppleExtension[&#34;Dedicated Metal 4 Extension: tessl&#34;]
+        SharedBuf[&#34;SharedBuf (StorageModeShared UMA)&#34;]
+        Pool[&#34;BufferPool with BudgetTrimHandler&#34;]
+        MetalKern[&#34;Metal 4 Kernels (MPP TensorOps, GEMM, Norms, Attention)&#34;]
+        MacInf[&#34;Mac Inference (Qwen3.5, EmbeddingGemma 2, ICB Decode, Quant)&#34;]
+        SharedBuf --&gt; Pool --&gt; MetalKern --&gt; MacInf
+    end
+
+    subgraph SparseExtension[&#34;Dedicated Sparse Extension: sparsl&#34;]
+        SparseRep[&#34;Sparse Formats (CSR, CSC, Structure-of-Arrays)&#34;]
+        SparseKern[&#34;Deterministic Kernels (SpMV, Affine Scan, LIF Update)&#34;]
+        SparseGates[&#34;Fail-Closed Gates (Device Availability, SparseOp Bounds)&#34;]
+        SparseRep --&gt; SparseKern --&gt; SparseGates
+    end
+
+    MetalAd --&gt;|MappedBuffer &amp; Timeline| SharedBuf
+    MetalAd --&gt;|Kernel Dispatch| MetalKern
+    Core -.-&gt;|Sparse Matrices &amp; Masking| SparseRep</pre></figure>
+<h3 id="role-separation-matrix">Role Separation Matrix <a class="anchor" href="#role-separation-matrix" aria-label="Link to this section">#</a></h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Component</th><th>Repository</th><th>Primary Role</th><th>Target Hardware</th><th>Code Duplication Rule</th></tr></thead>
+<tbody>
+<tr><td><strong><code>ojas</code></strong></td><td><code>github.com/bharathvbcr/ojas</code></td><td>Central universal training framework, autograd tape, budget ledger, CPU reference</td><td>Universal (x86_64, aarch64; CPU, wgpu, CUDA, Metal)</td><td>Authoritative owner of tensors, budgets, training loops, and validation contracts</td></tr>
+<tr><td><strong><code>tessl</code></strong></td><td><code>github.com/bharathvbcr/tessl</code></td><td>Dedicated Apple Silicon / Metal 4 acceleration and high-throughput Mac inference</td><td>Apple Silicon M-series (macOS 26+, Metal 4)</td><td>Canonical source for Metal kernels (<code>DEP_TESSL_KERNELS</code>) and Mac inference engines; no generic training loops</td></tr>
+<tr><td><strong><code>sparsl</code></strong></td><td><code>github.com/bharathvbcr/sparsl</code></td><td>Dedicated sparse computing, SpMV, and affine prefix scan substrate</td><td>Generic CPU (SIMD), optional Apple Silicon Metal</td><td>Canonical source for sparse matrix representations and scan algorithms; no dense tensor runtime duplication</td></tr>
+</tbody></table></div>
+<hr>
+<h2 id="2-the-modularity-rationale">2. The Modularity Rationale <a class="anchor" href="#2-the-modularity-rationale" aria-label="Link to this section">#</a></h2>
+<p>Why are <code>ojas</code>, <code>tessl</code>, and <code>sparsl</code> maintained as distinct repositories and crates rather than a single monolithic codebase?</p>
+<h3 id="1-decoupled-compile-cycles--toolchain-isolation">1. Decoupled Compile Cycles &amp; Toolchain Isolation <a class="anchor" href="#1-decoupled-compile-cycles--toolchain-isolation" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><strong>Toolchain Independence:</strong> <code>ojas</code> builds with standard Rust compilers (<code>cargo build</code>) across Linux, macOS, and Windows. In contrast, <code>tessl</code> unconditionally requires the Apple Xcode Metal toolchain (<code>xcrun metal</code>, <code>metallib</code>), Metal 4 language headers (<code>-std=metal4.0</code>), and macOS Objective-C runtime bindings (<code>objc2</code>, <code>objc2-metal</code>).
+</li>
+<li><strong>Build Speed &amp; CI Agility:</strong> Forcing <code>ojas</code> to absorb <code>tessl</code> would force every Linux and Windows developer or CI agent to manage Xcode dependencies or navigate complex build-tag exclusions.
+</li>
+<li><strong>Verification Decoupling:</strong> <code>sparsl</code> contains rigorous mathematical mutation campaigns and heavy property-based testing suites (<code>proptest</code>). Running these intensive fuzzing and mutation passes on every minor DL training tweak would degrade developer iteration speed.
+</li>
+</ul>
+<h3 id="2-isolated-hardware-requirements">2. Isolated Hardware Requirements <a class="anchor" href="#2-isolated-hardware-requirements" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><strong>Hardware Targeting:</strong> <code>tessl</code> targets the neural accelerators on Apple M-series chips through Metal Performance Primitives (MPP) <code>matmul2d</code> and cooperative destination registers.
+</li>
+<li><strong>Sparse vs. Dense Execution:</strong> <code>sparsl</code> addresses event-driven sparse computation where matrices have 90–99% zero entries, requiring completely different memory layouts (CSR, CSC) and non-contiguous memory access patterns.
+</li>
+<li><strong>Portability:</strong> <code>ojas</code> provides portable universal execution (CPU reference, wgpu WGSL for Vulkan/Metal/DX12, CUDA/HIP probes). Keeping platform-specific and domain-specific code in modular extensions prevents runtime bloat.
+</li>
+</ul>
+<h3 id="3-independent-profiling--micro-benchmarking">3. Independent Profiling &amp; Micro-Benchmarking <a class="anchor" href="#3-independent-profiling--micro-benchmarking" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><strong>Metal Tuning:</strong> <code>tessl</code> demands register-occupancy sweeps, cooperative tile geometry tuning (<code>bench_gemm_sweep</code>, <code>bench_gemm_tile_tune</code>), and ICB command-stream replay optimization.
+</li>
+<li><strong>Sparsity Crossover:</strong> <code>sparsl</code> demands crossover benchmark suites (<code>scan_crossover</code>, <code>spike_crossover</code>, <code>narrow_crossover</code>) that empirically measure the exact matrix dimension and sparsity percentage where sparse CSR formats outperform dense GEMM.
+</li>
+<li><strong>Training Convergence:</strong> <code>ojas</code> focuses on end-to-end training step throughput, autograd tape overhead, optimizer step convergence, and PyTorch parity tolerances.
+</li>
+</ul>
+<h3 id="4-independent-release-cadence--separate-checkouts">4. Independent Release Cadence &amp; Separate Checkouts <a class="anchor" href="#4-independent-release-cadence--separate-checkouts" aria-label="Link to this section">#</a></h3>
+<ul>
+<li>Downstream systems take only the components they need:
+<ul>
+<li>An event-driven simulation or spiking neural network imports <code>sparsl</code>.
+</li>
+<li>A local Mac LLM/embedding deployment tool imports <code>tessl</code>.
+</li>
+<li>A multi-platform training harness imports <code>ojas</code>, pulling in <code>ojas-metal -&gt; tessl</code> or <code>sparsl</code> only when required.
+</li>
+</ul>
+</li>
+</ul>
+<hr>
+<h2 id="3-integration-contracts--shared-memory-architecture">3. Integration Contracts &amp; Shared Memory Architecture <a class="anchor" href="#3-integration-contracts--shared-memory-architecture" aria-label="Link to this section">#</a></h2>
+<h3 id="shared-memory-pools-zero-copy-uma">Shared Memory Pools (Zero-Copy UMA) <a class="anchor" href="#shared-memory-pools-zero-copy-uma" aria-label="Link to this section">#</a></h3>
+<p>On Apple Silicon, unified memory allows CPU cores and GPU execution units to access the same physical DRAM. <code>ojas</code> and <code>tessl</code> share memory with zero copies through an explicit Hardware Abstraction Layer (HAL):</p>
+<ol>
+<li><strong><code>ojas_core::hal::MappedBuffer</code> Trait:</strong> Implemented by <code>tessl::SharedBuf</code> (<code>src/shared_buf.rs</code>) over pooled <code>StorageModeShared</code> allocations. Exposes a raw host pointer (<code>*mut u8</code>), a 64-bit GPU device address (<code>gpu_address</code>), and a timeline reference.
+</li>
+<li><strong><code>Payload::Mapped</code> on <code>Tensor</code>:</strong> <code>ojas_core::Tensor</code> wraps <code>Arc&lt;dyn MappedBuffer&gt;</code>. Calling <code>to_host()</code> on a mapped tensor acquires a timeline-fenced <code>HostLease</code> over the existing memory without <code>memcpy</code>. Calling <code>upload()</code> verifies the buffer is resident in unified memory and wraps it as a device tensor without copying.
+</li>
+<li><strong>Timeline Completion Fences:</strong> RAII leases (<code>HostLease</code>, <code>HostLeaseMut</code>) synchronize CPU reads and writes against GPU timeline stamps (<code>last_use</code>, <code>last_write</code>). Submitting a GPU command encoder against a buffer held by a host write lease returns <code>FenceError::Busy</code> immediately.
+</li>
+<li><strong>Hierarchical Budget Ledger:</strong> <code>ojas_core::Budget</code> serves as the sole authoritative ledger. <code>tessl::BufferPool</code> allocates within a child budget (<code>pool.cache</code>). Under memory pressure, <code>BudgetTrimHandler</code> automatically flushes freelist caches before any allocation is refused.
+</li>
+</ol>
+<h3 id="sparse-substrate-interoperability">Sparse Substrate Interoperability <a class="anchor" href="#sparse-substrate-interoperability" aria-label="Link to this section">#</a></h3>
+<p><code>sparsl</code> interoperates with <code>ojas</code> for structured and unstructured sparse neural network execution:</p>
+<ul>
+<li><strong>Sparse Recompute Masks:</strong> <code>sparsl::CsrMatrix</code> generates boolean and integer change maps for video object tracking and attention recomputation gating (<code>st-gate</code>).
+</li>
+<li><strong>Gradient Pruning:</strong> Sparse projection masks generated by <code>sparsl</code> allow <code>ojas-autograd</code> to zero or bypass inactive parameter gradient updates without dense matrix instantiation.
+</li>
+<li><strong>Fail-Closed Availability:</strong> <code>sparsl</code> backends fail closed with <code>BackendUnavailable</code> if requested hardware is absent, honoring <code>ojas</code>&#39;s core invariant of zero silent fallback.
+</li>
+</ul>
+<hr>
+<h2 id="4-invariants-enforced-across-extensions">4. Invariants Enforced Across Extensions <a class="anchor" href="#4-invariants-enforced-across-extensions" aria-label="Link to this section">#</a></h2>
+<ol>
+<li><strong>Zero Silent Fallback:</strong> A GPU or accelerator backend that cannot execute an operation returns an explicit error (<code>OjasError::Unsupported</code> or <code>BackendUnavailable</code>). It never quietly executes on host CPU threads.
+</li>
+<li><strong>Deterministic Bit-Identicality:</strong> Reductions under <code>Numerics::Exact</code> run in a single-threaded-order, index-increasing accumulation order, guaranteeing identical bits across machines, thread counts, and scheduling runs.
+</li>
+<li><strong>Budget Governance:</strong> Allocations must reserve space in an explicit <code>Budget</code>. Over-budget requests fail immediately with <code>OjasError::CapacityExceeded</code>.
+</li>
+<li><strong>Boundary Validation:</strong> All tensor shapes, dtypes, and sparse column bounds are validated prior to kernel dispatch or memory reservation.
+</li>
+<li><strong>No Duplicate Kernels:</strong> Metal compute kernels are single-sourced in <code>tessl</code> via <code>DEP_TESSL_KERNELS</code>; sparse representations are single-sourced in <code>sparsl</code>; autograd tape and universal training algorithms are single-sourced in <code>ojas</code>.
+</li>
+</ol>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/modular-extensions.md" rel="noopener"><code>docs/modular-extensions.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="framework-design.html" rel="prev"><span>Previous</span>Framework layer design (approved; items 1–13 landed)</a>
+        <a href="op-coverage.html" rel="next" class="next"><span>Next</span>Op Coverage — nanolab Default GPT</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#1-system-topology--ecosystem-roles">1. System Topology &amp; Ecosystem Roles</a></li>
+<li class="sub"><a href="#role-separation-matrix">Role Separation Matrix</a></li>
+<li><a href="#2-the-modularity-rationale">2. The Modularity Rationale</a></li>
+<li class="sub"><a href="#1-decoupled-compile-cycles--toolchain-isolation">1. Decoupled Compile Cycles &amp; Toolchain Isolation</a></li>
+<li class="sub"><a href="#2-isolated-hardware-requirements">2. Isolated Hardware Requirements</a></li>
+<li class="sub"><a href="#3-independent-profiling--micro-benchmarking">3. Independent Profiling &amp; Micro-Benchmarking</a></li>
+<li class="sub"><a href="#4-independent-release-cadence--separate-checkouts">4. Independent Release Cadence &amp; Separate Checkouts</a></li>
+<li><a href="#3-integration-contracts--shared-memory-architecture">3. Integration Contracts &amp; Shared Memory Architecture</a></li>
+<li class="sub"><a href="#shared-memory-pools-zero-copy-uma">Shared Memory Pools (Zero-Copy UMA)</a></li>
+<li class="sub"><a href="#sparse-substrate-interoperability">Sparse Substrate Interoperability</a></li>
+<li><a href="#4-invariants-enforced-across-extensions">4. Invariants Enforced Across Extensions</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

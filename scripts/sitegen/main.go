@@ -60,6 +60,7 @@ var docCategory = map[string]string{
 	"architecture": "design", "framework-design": "design", "shape-contract": "design",
 	"dtype-policy": "design", "op-coverage": "design", "backends": "design",
 	"checkpoint-v1": "design", "adaptive-resources": "design", "data-formats": "design", "adapter-checkpoint": "design",
+	"modular-extensions": "design",
 	"status": "status", "status-archive-2026-10-05": "status", "baseline": "status", "typed-storage-plan": "status",
 	"pytorch-parity-plan": "status", "unification-plan": "status", "cuda-backend-scoping": "status", "metal-deferred-faults": "status", "lappi-lora-mac-runbook": "status",
 	"bench-cpu-vs-torch": "bench", "bench-gpu-vs-torch": "bench", "bench-plots": "bench",

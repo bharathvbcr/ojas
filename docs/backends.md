@@ -81,6 +81,42 @@ flowchart LR
 
 ---
 
+## Modular Extensions Architecture
+
+In addition to in-tree backends, ojas coordinates execution with dedicated, out-of-tree modular extensions that provide specialized hardware runtimes and mathematical substrates:
+
+```mermaid
+flowchart TD
+    Ojas["ojas (Universal Training Framework)"]
+    
+    subgraph MetalExtension["Apple Silicon Extension"]
+        OMetal["ojas-metal (Adapter)"]
+        Tessl["tessl (Metal 4 Runtime & Mac Inference)"]
+    end
+    
+    subgraph SparseExtension["Sparse Computing Extension"]
+        Sparsl["sparsl (Deterministic SpMV & Affine Scan)"]
+    end
+    
+    Ojas --> OMetal
+    OMetal -->|Zero-Copy UMA & Kernels| Tessl
+    Ojas -.->|Sparse Tensors & Masks| Sparsl
+```
+
+### 1. `tessl`: Dedicated Apple Silicon / Metal 4 Extension
+- **Role:** High-performance GPU tensor runtime for Apple Silicon and Mac inference engine.
+- **Contract:** Implements `ojas_core::MappedBuffer` (`SharedBuf`), providing zero-copy UMA sharing between host pointers and GPU device addresses, gated by timeline fences (`Timeline`, `HostLease`). Memory allocations are accounted under `ojas_core::Budget` with `BudgetTrimHandler` clearing freelist caches under pressure.
+- **Why Separate:** Isolates Xcode 26 toolchain and Metal AOT shader compilation (`-std=metal4.0`) from the universal cross-platform Rust training engine.
+
+### 2. `sparsl`: Dedicated Sparse Computing Extension
+- **Role:** Deterministic sparse and scan compute kernels (CSR/CSC, SpMV, prefix scans over affine maps, event-driven simulation).
+- **Contract:** Provides fail-closed backend gates (`BackendUnavailable` rather than silent fallback) and validated sparse operators (`SparseOp`). Bridges to ojas for sparse gradient masking, sparse attention recompute maps, and event gating.
+- **Why Separate:** Isolates sparse crossover profiling and heavy property-based testing suites (`proptest`, mutation suites) from dense neural network training loops.
+
+See [`modular-extensions.md`](modular-extensions.md) for full contracts and design details.
+
+---
+
 ## Package Adoption Decisions
 
 ```mermaid

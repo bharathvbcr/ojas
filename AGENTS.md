@@ -25,14 +25,16 @@ in `go/`.
 | `ojas-capi`, `ojas-gusset-engine` | The in-process C/Go surface; the static library cgo links |
 | `ojas-qwen35` | Host-neutral Qwen3.5 route: config reader, tensor names, optimizer groups, state-directory format (no step; Metal training is the Tape via `TapeStepProvider`) |
 
-Direction (2026-10-31; target state, not yet done): ojas is the universal,
-training-first framework, and tessl is the Metal extension and the Mac
-inference engine, with one CPU/GPU memory pool on unified memory as the goal.
-See "Direction" in `docs/architecture.md` for the layers today and the target.
+Direction & Modular Extensions: ojas is the universal, training-first framework,
+and tessl and sparsl are its canonical modular extensions:
+- `tessl`: dedicated Apple Silicon Metal 4 extension and Mac inference engine (unified memory allocator, MPP TensorOps, and Metal compute kernels for `ojas-metal`).
+- `sparsl`: dedicated Sparse Computing extension (deterministic SpMV, CSR/CSC matrix representations, affine prefix scans, event-driven simulation, and sparse recompute masks).
+See `docs/modular-extensions.md` and `docs/architecture.md` for full rationale and contracts.
 
-Two sibling checkouts are path dependencies and must exist for any build:
-`../tessl` (github.com/bharathvbcr/tessl) and `../../devtools/gusset`
-(github.com/bharathvbcr/gusset), relative to this checkout.
+Sibling checkouts:
+- `../tessl` (github.com/bharathvbcr/tessl): Apple Silicon Metal 4 extension (path dependency for `ojas-metal`).
+- `../../devtools/gusset` (github.com/bharathvbcr/gusset): in-process FFI bridge (path dependency for `ojas-gusset-engine`).
+- `../sparsl` (github.com/bharathvbcr/sparsl): Sparse computing extension.
 `.github/workflows/test.yml` reproduces that layout.
 
 ## Invariants a change must keep
@@ -53,16 +55,17 @@ Two sibling checkouts are path dependencies and must exist for any build:
   every backend refuses a malformed call with the same variant and op name.
   The CPU backend refuses non-finite operands with `OjasError::NonFinite`
   instead of propagating them; new ops follow it.
-- **No generic logic in an extension; no duplicate kernels.** Shape and dtype
-  validation, autocast, budget accounting, optimizer scalar formation, the
-  `Tape` and the training loop live once, in ojas-core and the crates above
-  it. A backend extension (`ojas-metal`, `ojas-wgpu`, `ojas-cuda`, `ojas-hip`)
-  only maps a `Backend` op onto its device. Do not add an ojas `.metal` kernel
-  where tessl already has one: call tessl's. Where both repos already carry
-  the same op, converging them is a numerics decision (math mode, reduction
-  order, fault word) that needs its own parity gate. Mac inference engines
-  (prefill/decode, ICB, quantization, KV caches) are tessl's product; ojas
-  does sampling and eval only.
+- **No generic logic in an extension; no duplicate kernels.** Extensions provide
+  dedicated compute substrates (`tessl` for Metal 4, `sparsl` for sparse
+  computing). Shape and dtype validation, autocast, budget accounting, optimizer
+  scalar formation, the `Tape` and the training loop live once, in ojas-core and
+  the crates above it. A backend extension (`ojas-metal`, `ojas-wgpu`, `ojas-cuda`,
+  `ojas-hip`) only maps a `Backend` op onto its device. Do not add an ojas
+  `.metal` kernel where tessl already has one: call tessl's. Where both repos
+  already carry the same op, converging them is a numerics decision (math mode,
+  reduction order, fault word) that needs its own parity gate. Mac inference
+  engines (prefill/decode, ICB, quantization, KV caches) are tessl's product;
+  ojas does sampling and eval only.
 - **Safe Rust.** Most library crates set `#![forbid(unsafe_code)]` in
   `lib.rs`. `ojas-cuda` and `ojas-hip` lift it only under their device
   features. `ojas-simd`, `ojas-device` and `ojas-gusset-engine` (the C ABI)

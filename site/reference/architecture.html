@@ -88,6 +88,7 @@
 <li><a href="data-formats.html">Image data formats</a></li>
 <li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
 <li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="modular-extensions.html">Modular Compute Extensions Architecture</a></li>
 <li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
 <li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
 </ul>
@@ -149,52 +150,89 @@
 <h1 id="ojas-architecture--system-design">ojas Architecture &amp; System Design <a class="anchor" href="#ojas-architecture--system-design" aria-label="Link to this section">#</a></h1>
 <p>This document specifies the technical architecture, memory model, execution graphs, and invariants of <strong>ojas</strong> as a modern, deterministic deep learning framework and PyTorch/TensorFlow alternative.</p>
 <hr>
-<h2 id="direction-ojas-trains-everywhere-tessl-is-the-metal-extension-and-the-mac-inference-engine">Direction: ojas trains everywhere; tessl is the Metal extension and the Mac inference engine <a class="anchor" href="#direction-ojas-trains-everywhere-tessl-is-the-metal-extension-and-the-mac-inference-engine" aria-label="Link to this section">#</a></h2>
-<aside class="alert alert-note"><p class="alert-title">Note</p><p><strong>Status of this section.</strong> Everything under &#34;Target&#34; below is the owner&#39;s direction (2026-10-31), not shipped behaviour. &#34;Today&#34; statements are read from the code at this commit and carry <code>file:line</code>. Nothing here changes an invariant in <a href="https://github.com/bharathvbcr/ojas/blob/main/AGENTS.md" rel="noopener"><code>AGENTS.md</code></a>: no silent fallback, <code>Numerics::Exact</code> stays bit-identical, budgets refuse, shapes are validated at the boundary, and library crates stay safe Rust.</p>
+<h2 id="modular-ecosystem-ojas-universal-framework-with-tessl-and-sparsl-extensions">Modular Ecosystem: ojas Universal Framework with tessl and sparsl Extensions <a class="anchor" href="#modular-ecosystem-ojas-universal-framework-with-tessl-and-sparsl-extensions" aria-label="Link to this section">#</a></h2>
+<aside class="alert alert-note"><p class="alert-title">Note</p><p><strong>Status of this section.</strong> Everything under &#34;Target&#34; below reflects the unified modular architecture. &#34;Today&#34; statements are read from the code at this commit and carry <code>file:line</code>. Nothing here changes an invariant in <a href="https://github.com/bharathvbcr/ojas/blob/main/AGENTS.md" rel="noopener"><code>AGENTS.md</code></a>: no silent fallback, <code>Numerics::Exact</code> stays bit-identical, budgets refuse, shapes are validated at the boundary, and library crates stay safe Rust.</p>
 </aside>
-<p><strong>The split.</strong> ojas is the universal, training-first framework in Rust. It owns <code>Tensor</code>, <code>DType</code>, <code>OjasError</code>, <code>Budget</code>, the <code>Backend</code> trait, the shape validators, autocast, the autograd <code>Tape</code>, optimizers, training loops, data, checkpoints, IO and the CPU backend. CUDA, HIP, wgpu and Metal plug in beneath it as extensions. ojas does light inference only (sampling and eval) and builds no second Mac inference engine.</p>
-<p>tessl is Metal plus heavily optimized inference on the Mac. Its hand-tuned paths (Qwen3.5 prefill and decode, ICB decode, quantization, EmbeddingGemma 2, BERT, KV caches, fused kernels) are its product. It is also the Metal extension for ojas: the kernels, the runtime and the allocator that <code>ojas-metal</code> drives for training and general ops.</p>
+<p><strong>The Split and System Roles:</strong></p>
+<ul>
+<li><strong><code>ojas</code></strong>: The central, universal, training-first framework in Rust. It owns <code>Tensor</code>, <code>DType</code>, <code>OjasError</code>, <code>Budget</code> (root ledger), the <code>Backend</code> trait, the shape validators, autocast, the autograd <code>Tape</code>, optimizers, training loops, data, checkpoints, IO, and the CPU reference backend (<code>Numerics::Exact</code>). Portable GPU compute (<code>wgpu</code>) and probes (<code>cuda</code>, <code>hip</code>) plug in directly. ojas does light inference only (sampling and eval) and deliberately avoids building redundant platform-specific or domain-specific engines.
+</li>
+<li><strong><code>tessl</code></strong>: The dedicated <strong>Apple Silicon / Metal 4 acceleration extension and Mac inference engine</strong>. Its hand-tuned paths (Qwen3.5 prefill and decode, ICB decode, quantization, EmbeddingGemma 2 multimodal towers, BERT, KV caches, fused kernels) are its product. It is also the canonical Metal compute substrate for ojas: providing the Metal runtime, unified memory allocator (<code>SharedBuf</code>), and kernels that <code>ojas-metal</code> drives for training and general ops.
+</li>
+<li><strong><code>sparsl</code></strong>: The dedicated <strong>Sparse Computing extension of ojas</strong>. It provides deterministic sparse matrix representations (CSR, CSC), sparse linear algebra (SpMV), chunked prefix scans over affine maps, and event-driven simulation. In neural graph execution, sparsl provides sparse gradient masking, dynamic sparse recompute maps, and event gating (<code>st-gate</code>).
+</li>
+</ul>
+<h3 id="the-modularity-rationale-why-ojas-tessl-and-sparsl-are-separate-checkouts">The Modularity Rationale: Why ojas, tessl, and sparsl are separate checkouts <a class="anchor" href="#the-modularity-rationale-why-ojas-tessl-and-sparsl-are-separate-checkouts" aria-label="Link to this section">#</a></h3>
+<p>Developing <code>ojas</code>, <code>tessl</code>, and <code>sparsl</code> as decoupled checkouts rather than a single monolithic repository is an intentional architectural decision driven by four core constraints:</p>
+<ol>
+<li><strong>Decoupled Compile Cycles &amp; Toolchain Isolation:</strong>
+<ul>
+<li><code>ojas</code> targets standard cross-platform Rust environments across x86_64, aarch64, Linux, macOS, and Windows.
+</li>
+<li><code>tessl</code> requires Xcode 26, the macOS Metal Toolchain (<code>xcrun metal</code>, <code>metallib</code>), and Objective-C bindings (<code>objc2</code>, <code>objc2-metal</code>). Absorbing <code>tessl</code> directly into <code>ojas</code> would impose heavy macOS/Xcode build prerequisites on all core engine developers and Linux CI runners.
+</li>
+<li><code>sparsl</code> incorporates extensive property-based testing suites (<code>proptest</code>, mutation testing campaigns) that iterate independently of deep learning neural graph training.
+</li>
+</ul>
+</li>
+<li><strong>Isolated Hardware Requirements:</strong>
+<ul>
+<li><code>tessl</code> targets Apple Silicon Neural Accelerators and Metal 4 (<code>MTL4*</code>).
+</li>
+<li><code>sparsl</code> targets sparse event-driven execution on generic CPUs with optional Apple Silicon Metal compute.
+</li>
+<li><code>ojas</code> provides portable cross-platform execution (CPU, wgpu, CUDA, HIP). Isolating platform-specific runtimes prevents dependency bloat and eliminates compile-time friction.
+</li>
+</ul>
+</li>
+<li><strong>Independent Profiling &amp; Hardware Tuning:</strong>
+<ul>
+<li><code>tessl</code> development requires micro-benchmarking register occupancy, cooperative destination swizzling, tile geometry tuning (<code>bench_gemm_sweep</code>, <code>bench_gemm_tile_tune</code>), and ICB replay benchmarks.
+</li>
+<li><code>sparsl</code> development requires crossover benchmark suites (<code>scan_crossover</code>, <code>spike_crossover</code>, <code>narrow_crossover</code>) characterizing exact density thresholds where sparse formats beat dense GEMM.
+</li>
+<li><code>ojas</code> focuses on end-to-end training step throughput, autograd tape overhead, optimizer step convergence, and PyTorch parity tolerances.
+</li>
+</ul>
+</li>
+<li><strong>Independent Release Cadence &amp; Clean Dependency Boundaries:</strong>
+<ul>
+<li>Downstream consumers take only what they need: an event-driven simulation imports <code>sparsl</code>; a Mac inference tool imports <code>tessl</code>; a training system imports <code>ojas</code> (pulling in <code>ojas-metal -&gt; tessl</code> or <code>sparsl</code> only when requested).
+</li>
+</ul>
+</li>
+</ol>
 <h3 id="crate-layers-today-and-target">Crate layers: today and target <a class="anchor" href="#crate-layers-today-and-target" aria-label="Link to this section">#</a></h3>
-<p>Today, the dependency points one way (ojas to tessl, by path) and each side keeps its own foundations:</p>
+<p>Today, ojas connects to its modular extensions via clean path dependencies:</p>
 <figure class="diagram"><pre class="mermaid">flowchart TD
-    subgraph OjasToday[&#34;ojas today&#34;]
-        TCore[&#34;ojas-core: Tensor (Host Vec or opaque DeviceBuffer), Budget, OjasError, Backend&#34;]
-        TCpu[&#34;ojas-cpu / ojas-wgpu / ojas-cuda / ojas-hip&#34;]
-        TMetal[&#34;ojas-metal: own Link/Cmd/Worker thread, own ~95 ojas_* kernels, own commit and OOM policy&#34;]
-        TQ35[&#34;ojas-qwen35: Qwen3.5 whole-step shell over tessl&#34;]
-        TCore --&gt; TCpu
-        TCore --&gt; TMetal
-        TCore --&gt; TQ35
-    end
-    subgraph TesslToday[&#34;tessl today&#34;]
-        TRt[&#34;GpuRuntime + BufferPool (StorageModeShared)&#34;]
-        TKern[&#34;nn / gemm / qwen35 / gdn_train / embedgemma2 kernels, String errors&#34;]
-        TInf[&#34;inference products: prefill, ICB decode, quant, KV caches&#34;]
-        TRt --&gt; TKern --&gt; TInf
-    end
-    TMetal --&gt; TRt
-    TQ35 --&gt; TRt</pre></figure>
-<p>Target (direction): ojas-core holds the portable types and the one ledger; <code>ojas-metal</code> shrinks to a thin adapter over tessl; tessl keeps the Mac inference products and exports the allocator and kernel library:</p>
-<figure class="diagram"><pre class="mermaid">flowchart TD
-    subgraph OjasTarget[&#34;ojas: training, everywhere&#34;]
+    subgraph OjasUniversal[&#34;ojas: Universal Framework&#34;]
         GCore[&#34;ojas-core: Tensor, DType, OjasError, Budget, Backend, validators, autocast&#34;]
-        GTrain[&#34;ojas-autograd, ojas-model, ojas-train, ojas-io, ojas-data, ojas-infer (light: sampling, eval)&#34;]
+        GTrain[&#34;ojas-autograd, ojas-model, ojas-train, ojas-io, ojas-data, ojas-infer&#34;]
         GCpu[&#34;ojas-cpu (reference, Exact)&#34;]
-        GExt[&#34;extensions: ojas-cuda, ojas-hip, ojas-wgpu&#34;]
-        GAdapter[&#34;ojas-metal: Metal extension ADAPTER only (maps Backend ops onto tessl; no generic logic, no duplicate kernels)&#34;]
+        GExt[&#34;portable backends: ojas-wgpu, ojas-cuda, ojas-hip&#34;]
+        GAdapter[&#34;ojas-metal: Metal extension ADAPTER (maps Backend ops onto tessl)&#34;]
         GTrain --&gt; GCore
         GCpu --&gt; GCore
         GExt --&gt; GCore
         GAdapter --&gt; GCore
     end
-    subgraph TesslTarget[&#34;tessl: Metal runtime and Mac inference&#34;]
-        GRt[&#34;one shared runtime + allocator (host pointer and GPU address, one pool)&#34;]
-        GKern[&#34;kernel library: GEMM, norms, attention, AdamW, GDN, quant&#34;]
-        GProd[&#34;inference engines: Qwen3.5, EmbeddingGemma 2, BERT, KV caches, ICB decode&#34;]
-        GRt --&gt; GKern --&gt; GProd
+
+    subgraph TesslExtension[&#34;tessl: Apple Silicon Metal 4 Extension&#34;]
+        TRt[&#34;SharedBuf (StorageModeShared) + BufferPool under Budget&#34;]
+        TKern[&#34;kernel library: GEMM, norms, attention, AdamW, GDN, quant&#34;]
+        TInf[&#34;inference engines: Qwen3.5, EmbeddingGemma 2, BERT, KV caches, ICB decode&#34;]
+        TRt --&gt; TKern --&gt; TInf
     end
-    GAdapter --&gt; GRt</pre></figure>
-<p>The diagram is a target. Which side owns a shared leaf (a new crate under both, or <code>ojas-core</code> as a dependency of tessl) is an open decision, because tessl must keep building without an ojas checkout in its own CI and <code>links = &#34;tessl&#34;</code> allows one tessl source per build.</p>
+
+    subgraph SparslExtension[&#34;sparsl: Sparse Computing Extension&#34;]
+        SRpr[&#34;Sparse Representations: CSR, CSC, Structure-of-Arrays&#34;]
+        SKern[&#34;Sparse Kernels: SpMV, Affine Scan, Event Simulation&#34;]
+        SGate[&#34;Fail-Closed Gates &amp; Property Verification&#34;]
+        SRpr --&gt; SKern --&gt; SGate
+    end
+
+    GAdapter --&gt;|HAL Traits &amp; Kernels| TRt
+    GCore -.-&gt;|Sparse Matrices &amp; Masking| SRpr</pre></figure>
 <h3 id="unified-memory-single-shared-pool-for-cpu-and-gpu-shipped-in-m2">Unified memory: single shared pool for CPU and GPU (shipped in M2) <a class="anchor" href="#unified-memory-single-shared-pool-for-cpu-and-gpu-shipped-in-m2" aria-label="Link to this section">#</a></h3>
 <p>On Apple Silicon, one authoritative root ledger (<code>ojas_core::Budget</code>) manages unified-memory allocations that carry both a host pointer and a GPU address, eliminating duplicate memory representations and bridging <code>tessl::SharedBuf</code> and <code>ojas-core::MappedBuffer</code> via <code>Payload::Mapped</code>.</p>
 <ul>
@@ -213,14 +251,16 @@
 <ul>
 <li><strong>No generic logic in an extension.</strong> Shape and dtype validation (<code>ojas_core::*_dims</code>), autocast, <code>Budget</code> accounting, optimizer scalar formation, the <code>Tape</code>, models and the training loop live once, in ojas. An extension only maps a <code>Backend</code> op onto its device.
 </li>
-<li><strong>No ojas <code>.metal</code> kernel where tessl has one.</strong> GEMM, GDN, conv1d, gated RMS norm, encoder attention, layer norm and erf GELU are already single-sourced in tessl. The families that exist twice today (RMS norm, AdamW, softmax, argmax, reduce, residual add, embedding gather, KV write, general attention) are candidates for convergence, but they are not byte-identical: they differ in reduction order, math mode (<code>-fmetal-math-mode=safe</code> and <code>-ffp-contract=off</code> in ojas against <code>fast</code> in tessl) and fault semantics (the ojas status word and transactional apply). Removing either copy is a numerics decision that needs its own parity gate, and AdamW alone has seven implementation sites today.
+<li><strong>No ojas <code>.metal</code> kernel where tessl has one.</strong> GEMM, GDN, conv1d, gated RMS norm, encoder attention, layer norm and erf GELU are single-sourced in tessl. Where both repos carry an op, converging them is a numerics decision that respects parity gates.
 </li>
 <li><strong>No second Mac inference engine in ojas.</strong> New Mac inference engines belong in tessl. <code>ojas-qwen35</code> stays a thin ojas-typed shell over tessl&#39;s Qwen3.5 step, and <code>ojas-infer</code> stays CPU sampling and eval.
 </li>
-<li><strong>No tessl copy of ojas types.</strong> tessl has no <code>Budget</code>, no typed error and no <code>Tape</code>; it should not grow them. Conversely ojas does not grow Metal runtime code.
+<li><strong>No sparse primitives duplicated in ojas.</strong> Sparse representations (CSR/CSC), deterministic SpMV, and affine scans live strictly in <code>sparsl</code>.
+</li>
+<li><strong>No tessl or sparsl copy of ojas types.</strong> Neither tessl nor sparsl grows its own <code>Budget</code>, typed error, or <code>Tape</code>. Conversely ojas does not grow Metal runtime code.
 </li>
 </ul>
-<p>What stays separate on purpose: ojas&#39;s CPU reference and the <code>Numerics::Exact</code> contract (CPU only, never blurred with Fast-tier GPU bits), the wgpu, CUDA and HIP backends, and tessl&#39;s inference-specific kernels.</p>
+<p>What stays separate on purpose: ojas&#39;s CPU reference and the <code>Numerics::Exact</code> contract (CPU only, never blurred with Fast-tier GPU bits), the wgpu, CUDA and HIP backends, tessl&#39;s inference-specific kernels, and sparsl&#39;s event-driven sparse kernels.</p>
 <hr>
 <h2 id="1-system-philosophy-a-modern-dl-engine">1. System Philosophy: A Modern DL Engine <a class="anchor" href="#1-system-philosophy-a-modern-dl-engine" aria-label="Link to this section">#</a></h2>
 <p>ojas is architected from first principles to overcome fundamental design flaws common in legacy machine learning frameworks:</p>
@@ -490,7 +530,8 @@
       </nav>
     </main>
     <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
-<li><a href="#direction-ojas-trains-everywhere-tessl-is-the-metal-extension-and-the-mac-inference-engine">Direction: ojas trains everywhere; tessl is the Metal extension and the Mac inference engine</a></li>
+<li><a href="#modular-ecosystem-ojas-universal-framework-with-tessl-and-sparsl-extensions">Modular Ecosystem: ojas Universal Framework with tessl and sparsl Extensions</a></li>
+<li class="sub"><a href="#the-modularity-rationale-why-ojas-tessl-and-sparsl-are-separate-checkouts">The Modularity Rationale: Why ojas, tessl, and sparsl are separate checkouts</a></li>
 <li class="sub"><a href="#crate-layers-today-and-target">Crate layers: today and target</a></li>
 <li class="sub"><a href="#unified-memory-single-shared-pool-for-cpu-and-gpu-shipped-in-m2">Unified memory: single shared pool for CPU and GPU (shipped in M2)</a></li>
 <li class="sub"><a href="#what-is-deliberately-not-duplicated">What is deliberately not duplicated</a></li>
