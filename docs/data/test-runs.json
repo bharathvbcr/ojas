@@ -4,7 +4,7 @@
     "commit": "51825fd",
     "host": "macOS, Metal and wgpu on the real GPU, no SKIP lines",
     "command": "cargo test --workspace --release -- --test-threads=2",
-    "source": "Milestones M1-M5 E2E and adversarial hardening gate (142 E2E tests across Tiers 1-4, 38 Tier-5 adversarial tests)",
+    "source": "UNVERIFIED PROVENANCE (checked 2026-11-01 at dac0b5b): attributed to the Milestones M1-M5 gate, but no run log, captured cargo output or committed artifact for these four numbers was found in ojas, tessl, sparsl, SpikeTrack/.agents, ~/.claude transcripts, /tmp or ~/Library/Logs. Derived, not measured. Note the 142 Tier 1-4 E2E tests are CPU-only (they build CpuBackend only; ojas-oracle declares no ojas-metal or ojas-wgpu dependency), so they are not part of any multi-backend E2E claim; the 14 Metal tests in the 38 Tier-5 set do drive the GPU. Replace this field with a real recorded run rather than re-deriving it.",
     "passed": 2005,
     "failed": 0,
     "ignored": 41,
@@ -15,7 +15,7 @@
     "commit": "51825fd",
     "host": "Apple M5 Pro, macOS 27",
     "command": "cargo test -p <crate> --release --no-fail-fast -- --test-threads=1",
-    "source": "Milestones M1-M5: SAM 3.1 & Gemma embedding kernels with PyTorch parity, unified HAL, zero-copy UMA, Tier 1-5 test suites",
+    "source": "UNVERIFIED PROVENANCE (checked 2026-11-01 at dac0b5b): attributed to Milestones M1-M5, but no run log or captured cargo output for these per-crate rows was found in any of the four repositories, ~/.claude transcripts, /tmp or ~/Library/Logs. Derived, not measured; the suites were not re-run to check them. Also note 'zero-copy UMA' in the earlier wording of this field overstated the code: Payload::Mapped exists but no production path constructs one (only tests call Tensor::from_mapped). Replace this field with a real recorded run rather than re-deriving it.",
     "crates": [
       {"name": "ojas-core", "passed": 260, "ignored": 2},
       {"name": "ojas-cpu", "passed": 564, "ignored": 12},

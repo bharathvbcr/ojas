@@ -60,7 +60,7 @@ Use `./scripts/dev_fast_check.sh`:
 |---|---|---|---|---|
 | **Tier 1** | Pure shape/dims validators & core traits | `ojas-core` | < 10s | `cargo test -p ojas-core --lib` |
 | **Tier 2** | CPU reference backend & bit-exact numerics | `ojas-cpu` | < 30s | `cargo test -p ojas-cpu --lib --test exact_golden` |
-| **Tier 3** | Autograd reverse-mode Tape & gradchecks | `ojas-autograd` | < 45s | `cargo test -p ojas-autograd --test tape_parity` |
+| **Tier 3** | Autograd reverse-mode Tape & gradchecks | `ojas-autograd` | < 45s | `cargo test -p ojas-autograd --test gradcheck --test gradcheck_random --test tape_grad_shape` |
 | **Tier 4** | Metal backend unit tests (Metal hardware) | `ojas-metal` | < 60s | `cargo test -p ojas-metal --lib -- --test-threads=1` |
 | **Tier 5** | Release Workspace Smoke (Pre-commit) | Full Workspace | < 3m | `cargo test --workspace --release --exclude ojas-metal -- --test-threads=4` |
 
