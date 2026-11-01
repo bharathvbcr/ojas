@@ -11,6 +11,8 @@
 //!
 //! Commands run one at a time, in the order the channel delivers them.
 
+use std::any::Any;
+use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 
@@ -543,6 +545,20 @@ pub(crate) enum RopeMode {
     Interleaved { time: u32, heads: u32 },
 }
 
+/// A provider closure bound for the device thread. This file builds without
+/// tessl, so the runtime crosses as `&dyn Any` (the device thread passes its
+/// `Arc<GpuRuntime>`); `MetalBackend::with_runtime`, which exists only where
+/// tessl does, is the typed wrapper that downcasts it. Nothing `!Send` is in
+/// the box: whatever the closure builds from the runtime is made on the
+/// device thread and dropped there.
+pub(crate) struct RunBox(pub Box<dyn FnOnce(&dyn Any) -> Res<()> + Send + 'static>);
+
+impl fmt::Debug for RunBox {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("RunBox(..)")
+    }
+}
+
 /// One op. Dimensions are validated by the caller; the device thread checks
 /// buffer ids and windows again before it binds anything.
 #[derive(Debug)]
@@ -552,6 +568,9 @@ pub(crate) enum Cmd {
     Upload {
         src: ojas_core::Tensor,
     },
+    /// Run a provider closure on the device thread with that thread's own
+    /// tessl runtime ([`RunBox`]).
+    Run(RunBox),
     /// Wait for everything recorded, then report the pending fault.
     Sync,
     /// Wait for everything recorded, then copy the bytes out. A fault found

@@ -40,8 +40,8 @@ use crate::link::{
     cached_attn_origin, cached_attn_part, cached_attn_splits, copied_at, device_lost, metal_err,
     norm_chunks, reduce_groups, rms_w_chunks, Arg, AttnExtra, AttnGeom, BilinearGeom, Cmd,
     Conv1dGeom, ConvGeom, DeviceInfo, EmbedRows, EncAttnGeom, GdnArgs, GroupNormGeom, Lane,
-    LceGeom, Msg, NewBuf, ReadAs, Reply, Res, RmsSide, RopeMode, SdpaGeom, Wait, Waits,
-    SQ_OUT_WORDS,
+    LceGeom, Msg, NewBuf, ReadAs, Reply, Res, RmsSide, RopeMode, RunBox, SdpaGeom, Wait, Waits,
+    SQ_OUT_WORDS, SQ_PIECE,
 };
 use crate::permute::{self, Plan};
 
@@ -707,6 +707,37 @@ impl Worker {
                 let _ = reply.send(out);
             }
         }
+    }
+
+    /// Run a provider closure (`MetalBackend::with_runtime`) on this thread
+    /// with this worker's runtime: the pool, queue, pipeline cache and
+    /// residency set every ojas op uses, not a second `GpuRuntime::new`.
+    ///
+    /// The closure starts from a settled device (everything recorded is
+    /// committed, waited and scanned, and a pending fault is reported
+    /// first, as `Cmd::Sync` does) and with the runtime's own default of
+    /// one command buffer per dispatch (`async_encode` off), the state a
+    /// provider that opened its own runtime ran in. It ends on a waited
+    /// commit, so every buffer the closure dropped is back in the pool
+    /// and the worker's next op sees an idle device. The runtime's async
+    /// flag is restored whatever the closure returned. The closure's
+    /// dispatches are not folded into the worker's `Book` (they are the
+    /// provider's own), and its allocations are not counted toward the
+    /// worker's memory cap: the provider charges its own bytes to the
+    /// `Budget` it is given.
+    fn run_provider(&self, job: RunBox) -> Res<Reply> {
+        self.settle(Scan::All, Wait::Sync)?;
+        self.report()?;
+        let async_encode = self.rt.async_encode_enabled();
+        self.rt.set_async_encode(false).map_err(metal_err)?;
+        let ran = (job.0)(&self.rt);
+        let _ = self.rt.take_dispatch_count();
+        let idle = self.rt.synchronize().map_err(metal_err);
+        let restored = self.rt.set_async_encode(async_encode).map_err(metal_err);
+        ran?;
+        idle?;
+        restored?;
+        Ok(Reply::Done)
     }
 
     /// A command that failed on a runtime tessl has poisoned (a command
@@ -1457,6 +1488,7 @@ impl Worker {
                 Ok(Reply::Done)
             }
             Cmd::Upload { src } => self.upload(&src),
+            Cmd::Run(job) => self.run_provider(job),
             #[cfg(test)]
             Cmd::InjectPanic => {
                 let st = self.status("inject_panic")?;
