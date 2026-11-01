@@ -70,7 +70,8 @@ use std::sync::Arc;
 
 use ojas_core::{
     accumulate_grad_dims, adamw_step_dims, argmax_rows_dims, cached_attention_dims,
-    causal_sdpa_backward_dims, causal_sdpa_forward_dims, clip_grad_norm_dims, clip_scale,
+    cached_attention_partial_elems, causal_sdpa_backward_dims, causal_sdpa_forward_dims,
+    check_adamw, checked_product, clip_grad_norm_dims, clip_scale,
     cross_entropy_mean_backward_dims, cross_entropy_mean_forward_dims, embedding_backward_dims,
     embedding_forward_dims, kv_cache_write_dims, linear_backward_dims, linear_ce_dims,
     linear_forward_dims, mul_backward_dims, mul_forward_dims, muon_ns5_step_dims,
@@ -394,10 +395,7 @@ fn overflow(op: Op, detail: impl Into<String>) -> OjasError {
 }
 
 fn product(op: Op, dims: &[usize]) -> Result<usize, OjasError> {
-    dims.iter().try_fold(1usize, |n, &d| {
-        n.checked_mul(d)
-            .ok_or_else(|| overflow(op, "shape product overflows"))
-    })
+    checked_product(op.name(), dims)
 }
 
 fn u(op: Op, value: usize) -> Result<u32, OjasError> {
@@ -3135,7 +3133,8 @@ impl Backend for WgpuBackend {
         // first key (`origin`) to `kv_len`.
         let origin = dims.visible(kv_len, 0).start;
         let (split, splits) = cached_attention_splits(rows, kv_len - origin)?;
-        let partial = product(op, &[rows, splits, dims.head_dim + 2])?;
+        let partial = cached_attention_partial_elems(rows, splits, dims.head_dim)
+            .ok_or_else(|| overflow(op, "shape product overflows"))?;
         u(op, partial)?;
         self.fits(op, partial)?;
         // The (query row * head) axis is cut into dispatches of at most

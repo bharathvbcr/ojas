@@ -14,7 +14,9 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 
-use ojas_core::{BackendId, CeGrads, OjasError, MAX_PERMUTE_RANK};
+use ojas_core::{
+    cached_attention_partial_elems, window_start, BackendId, CeGrads, OjasError, MAX_PERMUTE_RANK,
+};
 
 pub(crate) type Res<T> = Result<T, OjasError>;
 
@@ -247,6 +249,14 @@ const CA_MIN_KEYS: usize = 64;
 /// (query, head, batch) rows over `kv_len` keys: enough to reach
 /// [`CA_TARGET_GROUPS`] threadgroups, each split at least [`CA_MIN_KEYS`]
 /// keys. 1 means one pass and no merge.
+///
+/// This is Metal's own tuning, not a copy of `ojas_kernels::cached_attention_splits`:
+/// that rule sizes WGSL workgroups of 64 lanes (512 groups, 1024-key
+/// splits, a merge always run), this one sizes `ojas_cached_attn`
+/// threadgroups (96 groups, 64-key splits, no merge at one split), and the
+/// two answer differently at the edges (127 keys: one split here, two
+/// there). Only the window origin and the partials' size are shared, from
+/// `ojas-core`.
 pub(crate) fn cached_attn_splits(rows: usize, kv_len: usize) -> usize {
     let want = CA_TARGET_GROUPS.div_ceil(rows.max(1));
     want.min(kv_len / CA_MIN_KEYS).max(1)
@@ -254,12 +264,13 @@ pub(crate) fn cached_attn_splits(rows: usize, kv_len: usize) -> usize {
 
 /// The first cached position `ojas_cached_attn` reads for `tq` new queries
 /// over `kv_len` positions: query 0's window start, or 0 with no window.
-/// Its splits cover `origin..kv_len`.
+/// Its splits cover `origin..kv_len`. The rule is `ojas_core::window_start`;
+/// this only maps the device's raw counts (`window` 0 meaning none) to it.
 pub(crate) fn cached_attn_origin(tq: u32, kv_len: u32, window: u32) -> u32 {
-    match window {
-        0 => 0,
-        w => (kv_len.saturating_sub(tq) + 1).saturating_sub(w),
-    }
+    let first = kv_len.saturating_sub(tq) as usize;
+    let window = (window != 0).then_some(window as usize);
+    // At most `first`, which came from a u32.
+    window_start(first, window) as u32
 }
 
 /// f32 values of the split partials `ojas_cached_attn` writes for its
@@ -269,7 +280,7 @@ pub(crate) fn cached_attn_origin(tq: u32, kv_len: u32, window: u32) -> u32 {
 pub(crate) fn cached_attn_part(rows: usize, span: usize, d: usize) -> Option<usize> {
     match cached_attn_splits(rows, span) {
         1 => Some(0),
-        splits => rows.checked_mul(splits)?.checked_mul(d.checked_add(2)?),
+        splits => cached_attention_partial_elems(rows, splits, d),
     }
 }
 

@@ -26,34 +26,12 @@ pub use context::{
 pub use memory::WgpuMemory;
 
 use ojas_device::{require_kind, Device, DeviceError, DeviceInfo};
-use ojas_kernels::affine_wgsl;
+use ojas_kernels::{affine_wgsl, fold_grid};
 
 const AFFINE_SHADER: &str = affine_wgsl();
 
 /// Lanes per workgroup in `AFFINE_SHADER`.
 const WORKGROUP: u32 = 64;
-
-/// Workgroup grid `(x, y)` covering `n` lanes when each dimension is capped
-/// at `max_per_dim`. Rows past the first are full `x` rows; the shader guards
-/// the tail.
-fn workgroup_grid(n: u32, max_per_dim: u32) -> Result<(u32, u32), DeviceError> {
-    let groups = n.div_ceil(WORKGROUP);
-    if max_per_dim == 0 {
-        return Err(gpu_error(
-            "device reports a workgroup-per-dimension limit of 0",
-        ));
-    }
-    if groups <= max_per_dim {
-        return Ok((groups, 1));
-    }
-    let rows = groups.div_ceil(max_per_dim);
-    if rows > max_per_dim {
-        return Err(gpu_error(format!(
-            "{n} lanes need {rows} workgroup rows, past the device limit {max_per_dim}"
-        )));
-    }
-    Ok((max_per_dim, rows))
-}
 
 /// Result of `y = x * scale + bias` on the selected adapter.
 #[derive(Clone, Debug, PartialEq)]
@@ -231,7 +209,12 @@ fn dispatch_affine(
             "{byte_len} bytes exceed the device storage binding limit {cap}"
         )));
     }
-    let (groups_x, groups_y) = workgroup_grid(n, limits.max_compute_workgroups_per_dimension)?;
+    // Rows past the first are full `x` rows; the shader guards the tail.
+    let (groups_x, groups_y) = fold_grid(
+        u64::from(n.div_ceil(WORKGROUP)),
+        limits.max_compute_workgroups_per_dimension,
+    )
+    .map_err(gpu_error)?;
     let oom_scope = session
         .device()
         .push_error_scope(wgpu::ErrorFilter::OutOfMemory);
@@ -531,25 +514,6 @@ mod tests {
         let err = affine_f32(Device::Vulkan, &input, 1.0, 0.0).unwrap_err();
         assert!(matches!(err, DeviceError::NoDevice { .. }), "{err}");
         assert!(err.to_string().contains("limit"), "{err}");
-    }
-
-    #[test]
-    fn workgroup_grid_covers_every_lane_within_the_cap() {
-        assert_eq!(workgroup_grid(1, 65_535).unwrap(), (1, 1));
-        assert_eq!(workgroup_grid(64, 65_535).unwrap(), (1, 1));
-        assert_eq!(workgroup_grid(65, 65_535).unwrap(), (2, 1));
-        assert_eq!(workgroup_grid(64 * 4, 2).unwrap(), (2, 2));
-        assert!(workgroup_grid(64 * 4 + 1, 2)
-            .unwrap_err()
-            .to_string()
-            .contains("limit"));
-        assert!(workgroup_grid(1, 0).is_err());
-        for n in [1u32, 63, 65, 1023, 1025, 4_194_241, u32::MAX / 4] {
-            let (x, y) = workgroup_grid(n, 65_535).unwrap();
-            assert!(x <= 65_535 && y <= 65_535, "{n}");
-            assert!(u64::from(x) * u64::from(y) * 64 >= u64::from(n), "{n}");
-            assert!(u64::from(x) * u64::from(y - 1) * 64 < u64::from(n), "{n}");
-        }
     }
 
     #[test]

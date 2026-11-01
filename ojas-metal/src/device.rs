@@ -5404,6 +5404,33 @@ mod tests {
         }
     }
 
+    /// The origin and the split scratch come from `ojas-core`, the rules wgpu
+    /// uses; these are the shapes this device is called with (a decode, a
+    /// prefill chunk, a window, none), spelled with the values the in-crate
+    /// formulas gave before they moved.
+    #[test]
+    fn cached_attn_origin_and_part_are_the_shared_rules() {
+        for (tq, kv_len, window, want) in [
+            (1u32, 1024u32, 0u32, 0u32),
+            (1, 1024, 128, 896),
+            (4, 100, 16, 81),
+            (4, 10, 16, 0),
+            (1, 5, 1, 4),
+            (3, 3, 2, 0),
+        ] {
+            assert_eq!(
+                cached_attn_origin(tq, kv_len, window),
+                want,
+                "tq {tq}, kv_len {kv_len}, window {window}"
+            );
+        }
+        // 12 heads over 1024 keys split 8 ways: max, sum and 64 outputs each.
+        assert_eq!(cached_attn_part(12, 1024, 64), Some(12 * 8 * 66));
+        // A batch that fills the GPU runs one pass and writes no partials.
+        assert_eq!(cached_attn_part(96, 1024, 64), Some(0));
+        assert_eq!(cached_attn_part(12, 1024, usize::MAX), None);
+    }
+
     fn pattern(n: usize, seed: u64) -> Vec<f32> {
         let mut s = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(1);
         (0..n)

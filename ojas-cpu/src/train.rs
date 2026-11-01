@@ -18,7 +18,9 @@
 
 use std::sync::Arc;
 
-use ojas_core::{clip_scale, next_step, AdamWConfig, MuonNs5Config, Numerics, OjasError};
+use ojas_core::{
+    checked_product, clip_scale, next_step, AdamWConfig, MuonNs5Config, Numerics, OjasError,
+};
 
 use crate::optim::{adamw, muon_ns5, total_norm};
 use crate::pool::{Exec, Pool};
@@ -404,12 +406,5 @@ fn shape_product(op: &'static str, shape: &[usize]) -> Result<usize, OjasError> 
             detail: "empty tensor".to_string(),
         });
     }
-    let mut n = 1usize;
-    for dim in shape {
-        n = n.checked_mul(*dim).ok_or_else(|| OjasError::OutOfRange {
-            op,
-            detail: "parameter length overflows".to_string(),
-        })?;
-    }
-    Ok(n)
+    checked_product(op, shape)
 }

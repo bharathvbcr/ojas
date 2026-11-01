@@ -2406,12 +2406,32 @@ impl KvDims {
     /// `j % capacity`.
     pub fn visible(&self, kv_len: usize, i: usize) -> std::ops::Range<usize> {
         let p = kv_len - self.new + i;
-        let start = match self.window {
-            Some(w) => (p + 1).saturating_sub(w),
-            None => 0,
-        };
-        start..p + 1
+        window_start(p, self.window)..p + 1
     }
+}
+
+/// The oldest position a query at absolute position `p` reads: `0` without
+/// a window, `max(0, p + 1 - window)` with one. [`KvDims::visible`] and the
+/// Metal device (which holds only raw counts, no [`KvDims`]) both start
+/// their key walks here, so the windowed-attention rule has one owner.
+pub fn window_start(p: usize, window: Option<usize>) -> usize {
+    match window {
+        Some(w) => p.saturating_add(1).saturating_sub(w),
+        None => 0,
+    }
+}
+
+/// f32 values of the partials a split cached attention writes for its
+/// merge: max, sum and a `head_dim` output per row and split. `rows` is
+/// `batch * new * heads`. `None` on overflow. Backends charge this as
+/// scratch; whether a single split writes any is theirs to say.
+pub fn cached_attention_partial_elems(
+    rows: usize,
+    splits: usize,
+    head_dim: usize,
+) -> Option<usize> {
+    let width = head_dim.checked_add(2)?;
+    rows.checked_mul(splits)?.checked_mul(width)
 }
 
 const ATTENTION_FORWARD: &str = "attention_forward";
@@ -4301,6 +4321,60 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    /// The Metal device walks keys from `window_start(kv_len - tq, window)`
+    /// (it holds raw counts, `0` meaning no window) and wgpu from
+    /// `KvDims::visible(kv_len, 0).start`; both must be the rule the Metal
+    /// backend used to spell itself: `(kv_len - tq + 1).saturating_sub(w)`.
+    #[test]
+    fn window_start_is_the_one_rule_for_every_backend() {
+        assert_eq!(window_start(9, None), 0);
+        assert_eq!(window_start(9, Some(4)), 6);
+        assert_eq!(window_start(2, Some(4)), 0);
+        assert_eq!(window_start(0, Some(1)), 0);
+        assert_eq!(window_start(5, Some(1)), 5);
+        let budget = Budget::new(1 << 16);
+        let f = |shape: &[usize]| {
+            let n = shape.iter().product::<usize>();
+            Tensor::from_f32(&vec![0.0; n], shape, &budget).unwrap()
+        };
+        for tq in 1..=6usize {
+            let q = f(&[1, tq, 2, 4]);
+            let cache = f(&[1, 32, 2, 4]);
+            for kv_len in tq..=12 {
+                for w in 0..=14usize {
+                    let legacy = if w == 0 {
+                        0
+                    } else {
+                        (kv_len.saturating_sub(tq) + 1).saturating_sub(w)
+                    };
+                    let window = (w != 0).then_some(w);
+                    assert_eq!(
+                        window_start(kv_len - tq, window),
+                        legacy,
+                        "tq {tq}, kv_len {kv_len}, window {w}"
+                    );
+                    let dims = cached_attention_dims(&q, &cache, &cache, kv_len, window).unwrap();
+                    assert_eq!(
+                        dims.visible(kv_len, 0).start,
+                        legacy,
+                        "tq {tq}, kv_len {kv_len}, window {w}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Split-decode scratch for the shapes the Metal and wgpu callers use
+    /// (12 heads over 1024 keys, one decode query): `rows * splits * (d + 2)`.
+    #[test]
+    fn cached_attention_partial_elems_is_rows_splits_and_d_plus_two() {
+        assert_eq!(cached_attention_partial_elems(12, 8, 64), Some(12 * 8 * 66));
+        assert_eq!(cached_attention_partial_elems(1, 64, 128), Some(64 * 130));
+        assert_eq!(cached_attention_partial_elems(0, 8, 64), Some(0));
+        assert_eq!(cached_attention_partial_elems(usize::MAX, 2, 64), None);
+        assert_eq!(cached_attention_partial_elems(1, 1, usize::MAX - 1), None);
     }
 
     #[test]

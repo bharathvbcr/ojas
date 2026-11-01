@@ -10,8 +10,9 @@
 //! checkpointing).
 
 use ojas_core::{
-    inverse_permutation, permute_output_shape, AffineGrad, AttentionOpts, Backend, BackendId,
-    CeChunk, CeGrads, Conv2dParams, ConvGrad, ConvTranspose2dParams, GdnInputs, OjasError, Tensor,
+    checked_product, inverse_permutation, permute_output_shape, AffineGrad, AttentionOpts, Backend,
+    BackendId, CeChunk, CeGrads, Conv2dParams, ConvGrad, ConvTranspose2dParams, GdnInputs,
+    OjasError, Tensor,
 };
 use ojas_cpu::CpuBackend;
 
@@ -2416,20 +2417,7 @@ fn shape_product(op: &'static str, shape: &[usize]) -> Result<usize, OjasError> 
             detail: "empty tensor".to_string(),
         });
     }
-    let mut n = 1usize;
-    for dim in shape {
-        n = n.checked_mul(*dim).ok_or_else(|| OjasError::OutOfRange {
-            op,
-            detail: "shape product overflows".to_string(),
-        })?;
-    }
-    if n == 0 {
-        return Err(OjasError::Shape {
-            op,
-            detail: "empty tensor".to_string(),
-        });
-    }
-    Ok(n)
+    checked_product(op, shape)
 }
 
 /// The policy in [`Tape::backward_seeded`]: a positive normal `f32`.
