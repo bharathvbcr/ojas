@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Unification Plan: ojas as the Training Framework, tessl as the Metal Extension · ojas reference</title>
+  <meta name="description" content="Status (2026-10-31): a plan, not a landing. No code changed with this document. The eleven owner decisions in section 10 are OPEN; nothing here presumes an answer, and no phase that depends on one st…">
+  <meta name="keywords" content="ojas, unification plan: ojas as the training framework, tessl as the metal extension, rust deep learning, machine learning, pytorch alternative, neural network, autograd, tensors, metal, wgpu">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/unification-plan.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/unification-plan.html">
+  <meta property="og:title" content="Unification Plan: ojas as the Training Framework, tessl as the Metal Extension · ojas reference">
+  <meta property="og:description" content="Status (2026-10-31): a plan, not a landing. No code changed with this document. The eleven owner decisions in section 10 are OPEN; nothing here presumes an answer, and no phase that depends on one st…">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Unification Plan: ojas as the Training Framework, tessl as the Metal Extension · ojas reference">
+  <meta property="og:locale" content="en_US">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Unification Plan: ojas as the Training Framework, tessl as the Metal Extension · ojas reference">
+  <meta name="twitter:description" content="Status (2026-10-31): a plan, not a landing. No code changed with this document. The eleven owner decisions in section 10 are OPEN; nothing here presumes an answer, and no phase that depends on one st…">
+  <meta name="twitter:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta name="twitter:image:alt" content="Unification Plan: ojas as the Training Framework, tessl as the Metal Extension · ojas reference">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "Unification Plan: ojas as the Training Framework, tessl as the Metal Extension · ojas reference",
+    "description": "Status (2026-10-31): a plan, not a landing. No code changed with this document. The eleven owner decisions in section 10 are OPEN; nothing here presumes an answer, and no phase that depends on one st…",
+    "url": "https://ojas.vbcr.dev/reference/unification-plan.html",
+    "image": "https://ojas.vbcr.dev/assets/ojas-og.png",
+    "author": {
+      "@type": "Person",
+      "name": "Bharath Chandra Vaddaram",
+      "url": "https://bharath.vbcr.dev/"
+    },
+    "publisher": {
+      "@type": "Organization",
+      "name": "ojas",
+      "url": "https://ojas.vbcr.dev"
+    }
+  }
+  </script>
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adapter-checkpoint.html">Adapter checkpoint, layout version 1</a></li>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="data-formats.html">Image data formats</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="lappi-lora-mac-runbook.html">Runbook: Lappi decision-model LoRA on the M5 Pro, bf16 then quantised (2026-10-17)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="status-archive-2026-10-05.html">ojas Status Archive: test runs through 2026-10-05</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+<li><a href="unification-plan.html" class="current" aria-current="page">Unification Plan: ojas as the Training Framework, tessl as the Metal Extension</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+<li><a href="bench-plots.html">Benchmark Plots, Every Result Folder</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Status and plans</p>
+      <article class="prose-ojas">
+<h1 id="unification-plan-ojas-as-the-training-framework-tessl-as-the-metal-extension">Unification Plan: ojas as the Training Framework, tessl as the Metal Extension <a class="anchor" href="#unification-plan-ojas-as-the-training-framework-tessl-as-the-metal-extension" aria-label="Link to this section">#</a></h1>
+<p>Status (2026-10-31): a plan, not a landing. No code changed with this document. The eleven owner decisions in section 10 are <strong>OPEN</strong>; nothing here presumes an answer, and no phase that depends on one starts before it is made.</p>
+<p>This page is the repository&#39;s copy of the synthesized judgement written for the ojas and tessl unification. It keeps the source plan&#39;s labels: <strong>V</strong> verified by a read, grep or DevMap query (with <code>file:line</code>), <strong>I</strong> inferred, <strong>U</strong> unverified. The tessl claims are grep and read only, because tessl&#39;s DevMap index is stale (generation 1470). ojas&#39;s DevMap is fresh (generation 7156) but <code>degraded: partial</code>: every walk hit its depth cap, so DevMap counts below are lower bounds. Line counts are <code>wc -l</code> unless marked &#34;non-blank&#34;. Nothing was built or run on the GPU to write the plan.</p>
+<h2 id="1-owner-direction">1. Owner direction <a class="anchor" href="#1-owner-direction" aria-label="Link to this section">#</a></h2>
+<p>Two statements bind the plan. The source plan does not record when each was made, so the date column is the date the pair was recorded in this repository, and the original dates are unverified.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Statement</th><th>Content</th><th>Recorded</th></tr></thead>
+<tbody>
+<tr><td>Decision</td><td>The Cargo arrow points from the extension to ojas&#39;s core, and the Metal backend is tessl&#39;s. ojas is the universal framework.</td><td>2026-10-31</td></tr>
+<tr><td>Refinement</td><td>ojas has more focus on training with Rust (CPU, CUDA, Metal through tessl, wgpu). tessl is Metal and heavy optimization for inference on the Mac, and ojas&#39;s Metal extension.</td><td>2026-10-31</td></tr>
+</tbody></table></div>
+<p>Two goals follow from them: no duplicate code, and one CPU and GPU memory pool on unified memory.</p>
+<p>The refinement came after the three proposals the plan judged, so the plan resolves a fork none of them decided: who owns Metal training (section 4).</p>
+<h2 id="2-verdict-of-the-judgement">2. Verdict of the judgement <a class="anchor" href="#2-verdict-of-the-judgement" aria-label="Link to this section">#</a></h2>
+<p>Three proposals were scored on seven dimensions (1 to 10).</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Dimension</th><th style="text-align:right">A: tessl absorbs the backend</th><th style="text-align:right">B: device HAL in ojas-core</th><th style="text-align:right">C: staged extension</th></tr></thead>
+<tbody>
+<tr><td>Correctness against the code</td><td style="text-align:right">7</td><td style="text-align:right">8</td><td style="text-align:right">7</td></tr>
+<tr><td>Memory design soundness</td><td style="text-align:right">8</td><td style="text-align:right">8</td><td style="text-align:right">8</td></tr>
+<tr><td>Dedup completeness</td><td style="text-align:right">8</td><td style="text-align:right">4</td><td style="text-align:right">5</td></tr>
+<tr><td>Migration safety</td><td style="text-align:right">5</td><td style="text-align:right">8</td><td style="text-align:right">7</td></tr>
+<tr><td>Respect for constraints</td><td style="text-align:right">5</td><td style="text-align:right">9</td><td style="text-align:right">7</td></tr>
+<tr><td>Cost</td><td style="text-align:right">5</td><td style="text-align:right">8</td><td style="text-align:right">6</td></tr>
+<tr><td>Adherence to both owner statements</td><td style="text-align:right">7</td><td style="text-align:right">4</td><td style="text-align:right">6</td></tr>
+<tr><td><strong>Total</strong></td><td style="text-align:right"><strong>45</strong></td><td style="text-align:right"><strong>49</strong></td><td style="text-align:right"><strong>46</strong></td></tr>
+</tbody></table></div>
+<p>B wins on points. It is the only proposal whose every phase is consistent with the code as it is evolving (kernel lanes are adding <code>Cmd</code> variants to ojas-metal now, section 9), it needs no tessl MSRV change, and its claims checked clean. It loses on the two things the owner asked for: the Cargo arrow stays <code>ojas-metal -&gt; tessl</code>, and tessl&#39;s generic copies (readers, <code>String</code> errors, the hand-written training step) stay. The synthesis takes B&#39;s HAL in ojas-core and additive phase order, A&#39;s dedup targets (readers, scalar formation, the ojas-metal accounting layer) behind one MSRV probe, and C&#39;s stop points and sibling-crate mechanism.</p>
+<h3 id="spot-check-ledger">Spot-check ledger <a class="anchor" href="#spot-check-ledger" aria-label="Link to this section">#</a></h3>
+<p>The verifications behind the scores, condensed.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Claim</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td><code>ojas-core</code> has an empty <code>[dependencies]</code> table and <code>forbid(unsafe_code)</code></td><td>V: <code>ojas-core/Cargo.toml:10</code>, <code>ojas-core/src/lib.rs:9</code></td></tr>
+<tr><td>tessl exports its kernel directory as <code>DEP_TESSL_KERNELS</code></td><td>V: <code>tessl/build.rs:57</code> emits <code>cargo:kernels=</code>, <code>tessl/Cargo.toml:14-17</code></td></tr>
+<tr><td>ojas-metal&#39;s <code>build.rs</code> does not consume it</td><td>V: no <code>DEP_TESSL</code> in <code>ojas-metal/build.rs</code>; it compiles <code>kernels/{name}</code> only (<code>:21, :46</code>)</td></tr>
+<tr><td><code>MetalBackend::numerics()</code> is <code>Fast</code></td><td>V: <code>ojas-metal/src/backend.rs:1977-1979</code></td></tr>
+<tr><td><code>GpuRuntime</code> stays <code>!Send</code></td><td>V: <code>tessl/src/runtime.rs:1023-1030</code>; the compile_fail doctest is attached to <code>type PendingRecycle</code> (<code>runtime.rs:574-586</code>), not <code>GpuRuntime</code>, so tessl <code>docs/architecture.md:499</code> is stale on that point</td></tr>
+<tr><td>CUDA already charges the one <code>Budget</code></td><td>V: <code>ojas-cuda/src/budget.rs:10-17</code></td></tr>
+<tr><td>tessl&#39;s manifest has no ojas dependency and its CI has no ojas checkout</td><td>V: <code>tessl/Cargo.toml</code>; <code>ci.yml</code> jobs <code>fmt</code>, <code>kernel-emulator</code> (ubuntu) and <code>check</code> (macos-26)</td></tr>
+<tr><td><code>ojas-core</code> inherits <code>rust-version.workspace</code> (1.97); tessl declares 1.82</td><td>V: <code>Cargo.toml:32</code>, <code>ojas-core/Cargo.toml:6</code>, <code>tessl/Cargo.toml:5</code></td></tr>
+<tr><td>tessl is not a Cargo workspace</td><td>V: no <code>[workspace]</code> table in <code>tessl/Cargo.toml</code>; <code>numcheck/</code> is the precedent for an unpublished sibling package</td></tr>
+<tr><td>No consumer pins tessl or ojas by revision</td><td>V: <code>ojas-metal/Cargo.toml:22</code>, <code>ojas-qwen35/Cargo.toml:21</code>, Lappi and gemma-metal use path dependencies</td></tr>
+<tr><td><code>device.rs:5062</code> pins the OOM strings with <code>include_str!</code> of tessl&#39;s <code>runtime.rs</code></td><td>V</td></tr>
+<tr><td><code>StepProvider</code> is defined twice</td><td>V: <code>ojas-train/src/lappi/step.rs:267</code> and <code>ojas-cuda/src/step.rs:285</code></td></tr>
+<tr><td>Four <code>GpuRuntime::new</code> sites</td><td>V for three: <code>ojas-metal/src/device.rs:576</code>, <code>ojas-metal/src/gpu.rs:330</code>, <code>ojas-qwen35/src/step.rs:399</code>; the fourth, gemma-metal <code>kernels.rs:816</code>, came from a probe (not re-read)</td></tr>
+</tbody></table></div>
+<h3 id="refuted-and-corrected-claims">Refuted and corrected claims <a class="anchor" href="#refuted-and-corrected-claims" aria-label="Link to this section">#</a></h3>
+<ol>
+<li><strong>&#34;I saw no kernels-directory export.&#34;</strong> Refuted: <code>tessl/build.rs:57</code> emits it. B&#39;s <code>-I ../../tessl/kernels</code> should be <code>-I $DEP_TESSL_KERNELS</code>.
+</li>
+<li><strong>Proposal A: &#34;tessl hand-backward is the fast Apple provider.&#34;</strong> Unsupported. No paired Tape-versus-provider throughput row exists under <code>bench/results/</code> (checked: <code>2026-10-15-qwen35-2b-tape-gate</code>, <code>2026-10-17-lora-step</code>, <code>2026-10-21-lora-stepcost-ab</code>, <code>2026-10-21-tape-provider-memory</code>, all Tape arms). The provider&#39;s 2B leg was stopped by the memory guard.
+</li>
+<li><strong>&#34;0.8B LoRA step 3,110 ms&#34; as a provider reference.</strong> That row is the Tape arm (<code>2026-10-17-lora-step/README.md</code>, <code>tape-lora</code>).
+</li>
+<li><strong>&#34;ojas-qwen35 implements neither StepProvider trait.&#34;</strong> True inside the ojas workspace, misleading overall: Lappi&#39;s <code>qd-train-metal/src/provider.rs:297</code> implements <code>StepProvider for Qwen35Provider</code> over <code>ojas_qwen35</code> (V). Retiring the tessl step is therefore a Lappi change.
+</li>
+<li><strong>&#34;tessl cross entropy lacks collapse handling.&#34;</strong> Refuted by the kernels probe (tessl never uses the collapsing form); <code>cross_entropy.metal</code> was not re-read, so this stays I.
+</li>
+<li><strong><code>tests/build_artifact_contract.rs:179</code> &#34;asserts the fast flag on every compile.&#34;</strong> Narrower: lines 172-184 are a shell shim that checks one synthetic TensorOps compile for <code>-fmetal-math-mode=fast</code> and refuses <code>-ffp-contract=off</code> on it. <code>build.rs:274-279</code> turns contraction off only for <code>qwen35_adamw.metal</code>. &#34;Every compile&#34; stays I.
+</li>
+<li><strong>&#34;Three live <code>GpuRuntime::new</code> sites.&#34;</strong> Four (above). Two of the four disappear by deletion in P6, not by migration.
+</li>
+<li><strong>&#34;Phase 6 pin bump: yes.&#34;</strong> Wrong: no pins exist (above). A Phase 6 move is a coordinated landing, not a bump.
+</li>
+<li><strong>&#34;The C ABI shields internal types.&#34;</strong> True for memory, incomplete for training: 13 of the 31 <code>capi.rs</code> exports are the Qwen3.5 training step, AdamW and GDN-train (<code>capi.rs:928-2071</code>, V), bound by <code>python/tessl_torch/__init__.py:322-368</code> (section 4).
+</li>
+<li><strong><code>ojas-metal/src/gpu.rs</code> (3,735 lines) is a third Qwen-shaped training step inside ojas.</strong> DevMap <code>impact(gpu.rs::Session)</code> at depth 2 finds only <code>gpu.rs</code>&#39;s own tests and one import from <code>device.rs</code> (<code>gate_dbias_threads</code>, <code>device.rs:39</code>). <code>rg</code> across the workspace (excluding <code>backups/</code>) finds no <code>TinyState</code> or <code>gpu::Session</code> user outside the file, and <code>lib.rs:73</code> exports the module with no external importer found. Both signals are lower bounds. It is a delete candidate (D11).
+</li>
+</ol>
+<h2 id="3-who-owns-metal-training-ojas">3. Who owns Metal training: ojas <a class="anchor" href="#3-who-owns-metal-training-ojas" aria-label="Link to this section">#</a></h2>
+<p><strong>Decision recorded in the plan: ojas owns Metal training. tessl serves it as the Metal extension: the training kernels and their launchers stay in tessl, and the whole-step Rust orchestration retires.</strong> This is a recommendation pending D5; nothing is removed until the owner answers.</p>
+<p>Evidence (V unless marked):</p>
+<ul>
+<li>The 2026-10-09 re-rank already named &#34;ojas-model&#39;s Tape on ojas-metal, with the tessl provider (ojas-qwen35) getting small fixes only&#34; as the Mac LoRA route (<code>tasks/gp-imported-research-trees.md:66</code>).
+</li>
+<li>The real 2B step runs through the Tape within tessl&#39;s own bounds against transformers: loss 4.54e-5 relative (bound 1e-4), 149 of 149 gradients within 1e-2 of peak (worst 4.05e-3), the Tape within 2.3e-7 of tessl&#39;s own step loss, 17.60 GB device peak (<code>bench/results/2026-10-15-qwen35-2b-tape-gate/README.md</code>).
+</li>
+<li>The tessl provider&#39;s 2B leg is 30.13 GB resident at open and stages a whole f32 table to read back any gradient, over the guard (same README). Its <code>grad_sq_norm</code> downloads every bank entry (<code>ojas-model/src/qwen35/bank.rs:314-341</code>, I).
+</li>
+<li>LoRA and full-dW steps are measured on the Tape at 0.8B and 2B, T=2,048 and 9,638, min of 5 paired (<code>2026-10-21-lora-stepcost-ab</code>, <code>2026-10-17-lora-step</code>).
+</li>
+</ul>
+<p>What it means for the code:</p>
+<ul>
+<li><strong>Stays in tessl (kernels and launchers):</strong> <code>gdn_train.metal</code>, <code>qwen35_bwd.metal</code>, <code>qwen35_attn_bwd.metal</code>, <code>qwen35_adamw.metal</code> with <code>qwen35_adamw_math.h</code>, <code>cross_entropy.metal</code>, <code>qwen35_train_storage.metal</code>, and the per-op Rust launchers ojas-metal already imports (<code>device.rs:25-33</code>: gdn_train, gated_rms_norm, conv1d_silu and their backwards). tessl&#39;s ubuntu <code>kernel-emulator</code> CI job keeps gating them.
+</li>
+<li><strong>Retires from tessl (generic training orchestration, a second copy):</strong> the whole-step layer in <code>qwen35_train.rs</code> (4,725 lines: <code>PendingStep</code>, <code>Qwen35Grads</code>, the bank, <code>Supervise</code>), the host AdamW object and scalar formation in <code>qwen35_adamw.rs</code> (1,518 lines, <code>adamw_scalars</code> at <code>:507</code>), and the step-sequencing part of <code>qwen35_bwd.rs</code> (988). The split inside those files is I; the ceiling is 7,231 lines. This line is conditional on D5(a).
+</li>
+<li><strong>Retires from ojas:</strong> the tessl-step shell in <code>ojas-qwen35</code> (<code>step.rs</code>, the <code>Snapshot</code> and provider plumbing; the host-neutral <code>config</code>, names, groups and validators stay, because <code>Qwen35TextConfig::tape_spec</code> feeds the Tape tower, <code>ojas-qwen35/Cargo.toml:23</code>), and <code>ojas-metal/src/gpu.rs</code> (D11).
+</li>
+<li><strong>Retires in Lappi (the owner&#39;s call):</strong> <code>qd-train-metal</code>&#39;s <code>Qwen35Provider</code> repoints to <code>TapeStepProvider</code>.
+</li>
+<li><strong>Gate before anything is deleted:</strong> one paired, interleaved, min-of-N A/B of <code>TapeStepProvider</code> against the tessl provider at 0.8B-Base, T=2,048, micro-batch 1, checkpointing on (both fit under 28 GiB there), with gradient parity between the two recorded. If the provider wins by more than the threshold the owner sets, the answer is not to keep two engines but to promote its fused per-layer backward kernels as <code>Backend</code> ops behind the Tape (the &#34;trait decision that has to cover CPU, Metal and wgpu&#34;, <code>ojas-qwen35/src/lib.rs:8-10</code>), then retire the step.
+</li>
+<li><strong>The training step crosses tessl&#39;s C ABI.</strong> <code>capi.rs</code> exports 13 training symbols (<code>tessl_qwen35_train_step</code>, <code>_step_ragged</code>, <code>_forward</code>, <code>_backward</code>, <code>_discard</code>, <code>tessl_qwen35_adamw_init/free/step/set_step_count/step_count</code>, <code>tessl_qwen35_grad_sq_norm</code>, <code>tessl_gdn_train_forward/backward</code>; <code>capi.rs:928-2071</code>), bound by <code>python/tessl_torch/__init__.py:322-368</code> and pinned by <code>python/tests/test_qwen35.py</code> and <code>tests/capi*.rs</code>. Retiring the orchestration is an ABI-breaking removal (13 to 14) that ends <code>tessl_torch</code>&#39;s Qwen3.5 training path. That is D5: (a) retire the training ABI with the step, consistent with &#34;tessl is inference on the Mac&#34;; or (b) keep the C-ABI training product, in which case tessl&#39;s step stays as that product&#39;s engine and only the ojas-side duplicates retire, with Lappi repointing to the Tape. Under (b) the second copy of training logic in tessl is accepted knowingly, for a named consumer, and the two engines stay parity-gated against each other (<code>real_2b_step_matches_transformers</code> on the tessl side, <code>gpu_tape_2b.rs</code> on the ojas side).
+</li>
+</ul>
+<h2 id="4-target-architecture-and-ownership">4. Target architecture and ownership <a class="anchor" href="#4-target-architecture-and-ownership" aria-label="Link to this section">#</a></h2>
+<div class="code"><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>                         ojas workspace (universal; Linux + macOS CI)
+ ojas-core      Tensor, DType, OjasError, Budget (THE ledger), Backend, *_dims, autocast,
+                DeviceBuffer + HAL: AllocError, MappedBuffer/HostLease, Timeline, Provenance tag,
+                StepProvider contract (moved here or to ojas-model; see ledger)
+ ojas-io/data   safetensors (+ per-entry read, &#34;read into caller slab&#34; sink), json, npy, BPE
+ ojas-cpu/simd  reference backend, Numerics::Exact contract       ojas-autograd  Tape
+ ojas-model/train/infer   towers, TapeStepProvider, optimizers, trainer loop, light decode/sampling
+ ojas-kernels   launch geometry, WGSL, parity harness
+ ojas-capi / ojas-gusset-engine / ojas-device
+ ---- device extensions: each depends on ojas-core (and ojas-kernels/io); none on another ----
+ ojas-cpu (in tree)         ojas-wgpu, ojas-cuda, ojas-hip (in tree; copy-based; host_view = Unsupported)
+ ojas-metal (in tree)       Metal op router: impl Backend, Link/Cmd device thread, ojas_* overlay
+                            kernels (safe math, status words). Depends on tessl. Linux: stub.
+ tessl (sibling repo)       Apple/Metal extension and Mac inference product:
+   depends on ojas-core     runtime, queue, pipelines, BufferPool (StorageModeShared), SharedBuf +
+   (after the MSRV probe)   Timeline implementing ojas-core&#39;s HAL traits, typed AllocError -&gt; OjasError,
+                            canonical kernel sources (DEP_TESSL_KERNELS), training kernel launchers,
+                            Qwen3.5/EmbeddingGemma 2/BERT inference engines (ICB, q4/q8, KV, decode
+                            graphs), C ABI (python, go), gemma-metal/Lappi qd-metal/BINN consumers</code></pre></div>
+<p>The arrow is <code>ojas-metal -&gt; tessl -&gt; ojas-core</code>. There is no cycle because <code>ojas-core</code> has no dependencies and no other ojas crate is reached from tessl. <code>tessl -&gt; ojas-io</code> is a second, separately gated step (P8).</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Concern</th><th>Owner</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>Types, errors, dtype, bf16 and f16 bit rules</td><td>ojas-core</td><td>tessl&#39;s <code>_gpu</code> conversion (hardware-flush model, <code>tensor.rs:815</code>) stays in tessl as a named, tested variant; the host copy is deleted only after an all-2^16-input bit-diff</td></tr>
+<tr><td>Ledger</td><td><code>ojas_core::Budget</code></td><td>One process root; children per host pool, tessl pool cache and session; charges the bucket (<code>allocated_bytes_for</code>, <code>runtime.rs:1178</code>)</td></tr>
+<tr><td>Allocator and pool</td><td>tessl <code>BufferPool</code> (<code>runtime.rs:245</code>)</td><td>One <code>Arc&lt;Shared&gt;</code> (pool, deferred queues, timeline, poison) per process; runtimes stay per thread</td></tr>
+<tr><td>Fences</td><td>tessl <code>Timeline</code> and <code>SharedBuf</code> stamps</td><td>Section 5</td></tr>
+<tr><td>Device thread, encoding, pipelines, residency</td><td>tessl <code>GpuRuntime</code> (<code>!Send</code>, <code>runtime.rs:1023-1030</code>)</td><td>ojas-metal&#39;s <code>Link/Cmd</code> stays as the thread boundary; it shrinks by the copy paths, <code>Book</code>, <code>MemCap</code> and <code>classify_alloc</code></td></tr>
+<tr><td>Kernel arithmetic shared by both</td><td>tessl headers (<code>qwen35_adamw_math.h</code>, <code>reduce_tree.h</code>, <code>attn_tiled.h</code>)</td><td>ojas-metal entry points <code>#include</code> them through <code>DEP_TESSL_KERNELS</code>; ojas keeps the status-word and degenerate-row contract; two metallibs (fast and safe) stay</td></tr>
+<tr><td>Training engine</td><td>ojas (Tape, <code>Backend::adamw_step</code>, bank, <code>StepProvider</code>, trainer)</td><td>Section 3</td></tr>
+<tr><td>Mac inference engines</td><td>tessl</td><td>Qwen3.5 prefill and decode with ICB and quantization, EmbeddingGemma 2 encode, BERT, KV caches, decode graphs; <code>ojas-infer</code> stays a light <code>DeviceDecoder</code> over <code>Backend</code> (<code>ojas-infer/src/lib.rs:9-15</code>), not a tuned Mac engine</td></tr>
+<tr><td>Checkpoint and weight IO</td><td>ojas-io</td><td>tessl&#39;s readers delete at P8; tessl&#39;s inference loaders use the slab sink</td></tr>
+<tr><td>Tokenizers</td><td>ojas-data (BPE, training data); tessl <code>embedgemma2_tok.rs</code> (Gemma inference)</td><td>Different algorithms serving different products, not a duplicate; a shared rank core would be a one-caller abstraction, so no</td></tr>
+<tr><td>Qwen3.5 config</td><td>ojas-qwen35 <code>config</code> (host-neutral) for training; tessl <code>config_json.rs</code> for inference</td><td>One parser, two refusal lists, after the owner names the owner (D7)</td></tr>
+</tbody></table></div>
+<h2 id="5-memory-design">5. Memory design <a class="anchor" href="#5-memory-design" aria-label="Link to this section">#</a></h2>
+<p>Premise (V): every tessl pooled buffer is <code>StorageModeShared</code> (<code>tessl/src/runtime.rs:299</code>). The CPU and GPU already see the same bytes and the software hides it: <code>HostData</code> is an owned <code>Vec</code> (<code>ojas-core/src/tensor.rs:159-164</code>) and <code>DeviceBuffer::read_bytes</code> copies (<code>tensor.rs:19-33</code>).</p>
+<p><strong>One ledger.</strong> <code>ojas_core::Budget</code> is the only accountant. The tessl pool charges <code>allocated_bytes_for(bytes, kind)</code> (the bucket) to a <code>Budget</code> child before <code>newBufferWithLength</code>. A failed charge is <code>OjasError::CapacityExceeded</code> through a typed <code>AllocError</code>, never a clamp and never a string (<code>device.rs:515-551</code> and its <code>include_str!</code> pin at <code>:5062</code> go). Free-listed bytes are charged to a <code>pool.cache</code> child so the 2 GiB cache (<code>runtime.rs:60</code>) is visible. On a refused charge the pool runs a fixed ladder: trim the free list, retry once, refuse. The ladder never waits on the GPU inside <code>try_reserve</code>; a caller that wants deferred releases drained calls an explicit <code>reclaim(timeline_value)</code> first. This changes <code>Budget</code> from &#34;live&#34; to &#34;resident&#34; semantics (cache plus recycle lag count): <strong>decision D3, OPEN</strong>. It replaces ojas-metal&#39;s <code>Book</code>, <code>freed_since_wait</code> and <code>mem_cap</code> (<code>device.rs:449-483, 761-822</code>) and the stale bucket copy at <code>gpu.rs:214</code> (deleted with <code>gpu.rs</code>).</p>
+<p><strong>One pool per process.</strong> The pool, deferred-release queues, timeline state and poison latch move into an <code>Arc&lt;Shared&gt;: Send + Sync</code>. <code>GpuRuntime</code> keeps its <code>!Send</code> encoding state plus the <code>Arc</code>. Buffers stay pinned to the runtime that encodes them (<code>nn.rs:92-96</code>). After P6 only two constructors remain in this repo family (<code>device.rs:576</code> and gemma-metal <code>kernels.rs:816</code>); <code>gpu.rs:330</code> and <code>step.rs:399</code> go by deletion.</p>
+<p><strong>Same bytes.</strong> <code>ojas-core</code> gains, all defaulted to <code>Unsupported</code>:</p>
+<ul>
+<li><code>AllocError</code>.
+</li>
+<li><code>trait MappedBuffer: DeviceBuffer { host_read() -&gt; Box&lt;dyn HostLease&gt;; host_write() }</code>, with <code>HostLease: Send + Sync</code> exposing <code>as_bytes</code>, <code>as_f32</code> and <code>as_u32</code>.
+</li>
+<li><code>trait Timeline { submitted, completed, wait }</code>.
+</li>
+</ul>
+<p><code>Payload</code> gains <code>Mapped(Arc&lt;dyn MappedBuffer&gt;)</code>, charged once through <code>from_device_reserved</code> (<code>tensor.rs:848-874</code>, probe). <code>Tensor::host_view()</code> returns a short-scoped guard; <code>f32_slice</code> keeps refusing with <code>Placement</code>. CPU kernels take the guard through the <code>validate::f32_values</code> and <code>u32_values</code> funnel (<code>validate.rs:313-323</code>, V; about 60 production sites, probe). <code>validate::Shared</code> (<code>kv.rs</code>, the one <code>&#39;static</code> persistent-pool user) needs the <code>Send</code> lease and waits for P3b. For outputs, <code>Scratch&lt;T&gt;</code> becomes an enum over <code>Vec</code> and a mapped allocation at the <code>into_raw</code> seam (<code>budget.rs:484</code>, probe), opt-in; the default stays <code>Vec</code>, so Exact callers are untouched. A write lease resets <code>finite</code> to unknown and <code>compute</code> to f32, as <code>host_data_mut</code> does.</p>
+<p><strong>Fence protocol</strong> (sync probe, pieces re-verified):</p>
+<ul>
+<li>Each <code>SharedBuf</code> carries atomic <code>last_use</code> and <code>last_write</code>, set at bind time to <code>pending_commit_value()</code> (<code>runtime.rs:2188-2196</code>, the same stamp deferred release uses).
+</li>
+<li>A CPU read waits for <code>completed &gt;= last_write</code>. A CPU write waits for <code>completed &gt;= last_use</code> and is exclusive. Fencing is whole-buffer, because Metal makes even non-overlapping unsynchronized writes undefined (<code>MTLBuffer.rs:15-21</code>, V).
+</li>
+<li>A GPU bind against a live host view is refused with an error, never blocked.
+</li>
+<li>A stamp above <code>submitted</code> returns <code>NotSubmitted</code>; the caller flushes through the device thread (<code>commit(false)</code>) and retries. Nothing waits on an uncommitted value.
+</li>
+<li>Every fence result checks poison. Waiting goes through the private <code>lifetime_event</code>, never the forgeable <code>handoff_event</code> (<code>runtime.rs:392-396, 1278</code>).
+</li>
+<li>Role-aware <code>bind_shared_ro</code> and <code>bind_shared_rw</code> are required, because the binders record only &#34;bound&#34; (<code>dispatch.rs:302, 316</code>, probe).
+</li>
+<li>The one new <code>unsafe impl Send + Sync</code> sits in tessl on a <code>(NonNull&lt;u8&gt;, len, Retained&lt;MTLBuffer&gt;)</code> wrapper; objc2 marks device, queues and events thread-safe but not <code>MTLBuffer</code> (<code>MTLBuffer.rs:23</code>, V). <code>ojas-core</code> and <code>ojas-metal</code> stay <code>forbid(unsafe_code)</code>. Asserting it is <strong>decision D6, OPEN</strong>; no lane may add it before then.
+</li>
+</ul>
+<p><strong>Exact determinism.</strong> Exact is a property of the CPU op&#39;s fixed reduction order. A mapped operand changes neither order nor alignment assumptions (SIMD uses unaligned loads). Metal is <code>Numerics::Fast</code>, so GPU-written bytes are Fast-tier: the buffer carries a <code>Provenance { Exact, Fast }</code> tag beside the existing compute tag (<code>tensor.rs:109-124</code>). <code>CpuBackend</code> under Exact records and allows by default, and refuses when the caller asks for end-to-end Exact (<strong>D4, OPEN</strong>). Gate: Exact CPU outputs from <code>Vec</code> and from a mapped slab are bit-identical at 1, 2 and N threads.</p>
+<p><strong>No silent fallback.</strong> wgpu, CUDA and HIP keep counted copies; <code>host_read</code> is <code>Unsupported</code>; an op they lack is <code>Unsupported</code>. CUDA already charges <code>Budget</code>. Whether wgpu&#39;s 512 MiB staging (<code>context.rs:109</code>, probe) is charged is U and is P9&#39;s first check.</p>
+<p><strong>Two blockers before any <code>SharedBuf</code> code lands.</strong></p>
+<ol>
+<li>ICB replay: <code>decode_icb.rs</code> captures binds, so per-bind stamps are wrong on replayed command buffers unless replay re-stamps (U).
+</li>
+<li>The scratch spike crate at <code>/Users/bharath/Code/research/ojas-ug-spike-uma</code> (834 lines, not a git repository, depends on tessl by path) encodes the four probes this design needs: T1 pointer sharing bit-check, T2 event fence correctness and cost, T3 copy versus lease versus raw-pointer cost at 4, 64 and 512 MiB over 5 interleaved rounds, T4 <code>bytesNoCopy</code> over a page-aligned mmap. No results are recorded anywhere in ojas. Running it and committing its rows is P0&#39;s first artifact.
+</li>
+</ol>
+<p><strong>What to promise.</strong> Copies are at most 45.5 of 2,566.5 ms per SAM frame (1.8%; 5.7% with mixed rows; n=1 at load 9-21) and well under 1% of a Qwen LoRA step (cost probe). The win is one ledger, one pool, fewer host copies (E20: -330 and -569 MiB) and less code, not throughput.</p>
+<h2 id="6-dedup-ledger">6. Dedup ledger <a class="anchor" href="#6-dedup-ledger" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Family</th><th>Canonical owner</th><th>Deleted</th><th>Lines (<code>wc -l</code> unless noted)</th></tr></thead>
+<tbody>
+<tr><td>Qwen3.5 training step orchestration</td><td>ojas (Tape, <code>TapeStepProvider</code>)</td><td><code>ojas-qwen35</code> step shell; Lappi <code>qd-train-metal</code> provider repointed; and only under D5(a), tessl <code>qwen35_train.rs</code> step layer, <code>qwen35_adamw.rs</code> host optimizer and <code>adamw_scalars</code>, step sequencing in <code>qwen35_bwd.rs</code>, the 13 training C-ABI symbols and their Python binding (ABI 14)</td><td>most of 3,062 in ojas-qwen35; up to 7,231 in tessl under D5(a) (split inside files is I)</td></tr>
+<tr><td>Legacy tiny Metal step</td><td>none (delete)</td><td><code>ojas-metal/src/gpu.rs</code> (keep <code>gate_dbias_threads</code>, moved to <code>device.rs</code>) and <code>per_head_gate.metal</code> if no other caller (U)</td><td>-3,735</td></tr>
+<tr><td><code>StepProvider</code> trait</td><td>One definition below the extensions (ojas-core, or ojas-model if it must stay out of the frozen API)</td><td><code>ojas-cuda/src/step.rs:285-326</code>; <code>ojas-train/src/lappi/step.rs:267</code> re-exports</td><td>about -40, one contract</td></tr>
+<tr><td>AdamW scalar formation</td><td><code>ojas-core</code> (<code>check_adamw</code>, <code>clip_scale</code>, <code>next_step</code>, <code>AdamWConfig</code>, <code>backend.rs:129-262</code>, plus one <code>scalars_for_step -&gt; [f32; 8]</code>)</td><td>tessl <code>qwen35_adamw.rs:507</code> (with the step), ojas-metal <code>backend.rs:1403</code>, ojas-train <code>lappi/adamw.rs:166-171</code></td><td>3 copies to 1</td></tr>
+<tr><td>AdamW MSL math</td><td>tessl <code>qwen35_adamw_math.h</code> (8-float struct with <code>grad_scale</code>)</td><td>ojas <code>ojas_adamw_elem</code> (<code>ojas_backend.metal:1528-1541</code>); the <code>check</code> and <code>apply</code> entry points keep the status gate and <code>#include</code> the header; ojas&#39;s 7-float struct becomes tessl&#39;s 8</td><td>about -14 MSL, one math source</td></tr>
+<tr><td>Residual add, embedding fwd and bwd, argmax</td><td>tessl arithmetic headers; ojas entry points keep status and policy as constants</td><td><code>ojas_backend.metal:410-425, 805-820, 995-1013, 854-904</code></td><td>about -100 MSL</td></tr>
+<tr><td>RMS norm</td><td>Tolerance-level merge only (bits differ)</td><td><code>ojas_backend.metal:556-631</code></td><td>about -76 MSL, optional</td></tr>
+<tr><td>Softmax, cross entropy, general attention, reductions, KV write</td><td>Two by design</td><td>Nothing</td><td>0 (D8)</td></tr>
+<tr><td>ojas-metal accounting and copy layer</td><td>tessl pool and <code>Budget</code></td><td><code>classify_alloc</code> and the <code>include_str!</code> pin (<code>device.rs:515-551, 5062</code>), <code>Book</code>, <code>MemCap</code> and <code>freed_since_wait</code> (<code>:449-483, 761-822</code>), the retry loop (<code>:934-994</code>), the <code>to_vec</code> plus decode readback and <code>settle(Wait::Upload)</code> copy routes (<code>:1787-1855</code>), <code>memory.rs</code> slack</td><td>about -300 (I)</td></tr>
+<tr><td>Allocation error strings</td><td>tessl typed <code>AllocError</code> at alloc and poison boundaries</td><td>tessl&#39;s other ~915 <code>Result&lt;_, String&gt;</code> signatures stay behind the additive typed API</td><td>boundary only</td></tr>
+<tr><td>safetensors, json and npy readers</td><td>ojas-io</td><td>tessl <code>safetensors.rs</code> 950, <code>json.rs</code> 516, <code>npy.rs</code> 417, <code>plain.rs</code> 145 (its <code>unsafe</code> fill); tessl Syntax profiles become ojas-io limits; <code>parser_mutation.rs</code> re-pointed</td><td>-2,028 in tessl, gated on P5 and P8</td></tr>
+<tr><td>CUDA format code</td><td>ojas-io and ojas-core</td><td><code>ojas-cuda</code> <code>json.rs</code>, <code>npy.rs</code>, <code>bf16.rs</code> (646, from proposal B&#39;s count, U)</td><td>about -646</td></tr>
+<tr><td>bf16 and f16 conversions</td><td>Both, named</td><td>None now; tessl host <code>tensor.rs:796</code> only after an exhaustive bit-diff</td><td>0</td></tr>
+<tr><td>Tokenizers</td><td>ojas-data and tessl, by product</td><td>None</td><td>0</td></tr>
+<tr><td>Qwen3.5 config double parse</td><td>One parser, two refusal lists (D7)</td><td><code>cross_check</code> (<code>config.rs:727</code>) once the owner is named</td><td>small</td></tr>
+<tr><td>Four <code>GpuRuntime::new</code> sites</td><td>One <code>Arc&lt;Shared&gt;</code></td><td><code>gpu.rs:330</code> and <code>step.rs:399</code> by deletion; <code>device.rs:576</code> and gemma-metal opt in</td><td>4 to 2</td></tr>
+</tbody></table></div>
+<p>Net, as the plan states it: kernel merges are about 200 MSL lines out of 3,610. The real deletions are the training-step duplicates (about 10-11k lines across tessl, ojas-qwen35 and <code>gpu.rs</code>), tessl&#39;s readers (2,028) and the ojas-metal accounting layer (about 300). Every row that removes a duplicate deletes the old path in the same change that moves its callers, and needs two independent signals (DevMap <code>devmap_impact</code> and <code>rg -uu</code>) before the delete.</p>
+<h2 id="7-phases">7. Phases <a class="anchor" href="#7-phases" aria-label="Link to this section">#</a></h2>
+<p>Every phase lands alone and reverts by reverting its commit. No consumer pin exists (all path dependencies), so a tessl phase lands in Lappi, gemma-metal and arch02 at once: each is a coordinated landing announced before it merges. tessl edits come from a tessl-rooted session. GPU runs go through the heavy-step queue (the owner). Phases marked (lanes) wait for the in-flight kernel lanes of section 8.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Phase</th><th>Content</th><th>Fails before</th><th>Parity gate</th><th>Benchmark</th><th>Repos</th><th>Size</th></tr></thead>
+<tbody>
+<tr><td><strong>P0 measure and clean</strong></td><td>Run and record the <code>ojas-ug-spike-uma</code> T1-T4 rows. Add the <code>upload</code> and <code>to_host</code> micro-bench at 1, 16, 66 and 170 MB against a memcpy arm and a GPU-streaming arm (interleaved, min-of-N, load recorded). Drop the <code>to_host</code> zero-fill and the <code>to_vec</code> plus decode double pass (<code>tensor.rs:1005-1081</code>, <code>device.rs:1848-1854</code>). Add the f32 <code>fresh_from</code> twin. Fix stale text: <code>typed-storage-plan.md:3-8</code>, <code>ojas-metal/build.rs:3</code>, <code>ojas_backend.metal:1</code>, the two UMA-card lines, tessl <code>architecture.md:499</code></td><td>Bench shows 7-16x above the floor; a readback byte-equality test</td><td>Readback bytes identical (tolerance 0.0 already at <code>backend_parity.rs:337-368</code>)</td><td>The bench itself</td><td>ojas (plus spike rows)</td><td>S</td></tr>
+<tr><td><strong>P1 tessl primitives</strong></td><td>Typed <code>AllocError</code>; <code>Deferred</code> queues and timeline state into <code>Arc&lt;Shared&gt;</code>; <code>Timeline</code>; <code>SharedBuf</code> with role-aware <code>bind_shared_ro</code> and <code>bind_shared_rw</code>; settle ICB re-stamping first. All additive; the <code>HostMapping</code> lease is untouched</td><td>New tests: reader overlap, writer exclusivity, <code>NotSubmitted</code>, poison propagates, GPU write-bind refused against a live reader, ICB replay re-stamps</td><td>All tessl kernel tests bit-identical (no kernel change)</td><td><code>bench_nn_kernels</code> before and after (two relaxed stores per bind; the <code>active_m4</code> lock in <code>pending_commit_value</code>)</td><td>tessl</td><td>M</td></tr>
+<tr><td><strong>P2 ojas-core HAL and contract moves</strong></td><td><code>AllocError</code>, <code>MappedBuffer</code> and <code>HostLease</code>, <code>Timeline</code>, <code>Provenance</code>, all defaulted to refuse; the harness test lists them like <code>the_method_list_names_every_trait_method</code>; <code>StepProvider</code> moved to its canonical home, ojas-train and ojas-cuda import it</td><td>Trait-list test; CUDA <code>step_refuses.rs</code> compiles against the moved trait</td><td>None (no behaviour change)</td><td>None</td><td>ojas</td><td>S</td></tr>
+<tr><td><strong>P3a one ledger</strong> (lanes)</td><td>ojas-metal maps <code>AllocError</code> to <code>CapacityExceeded</code>; the pool charges buckets to a <code>Budget</code> child; release on recycle; free list charged; trim ladder; delete <code>classify_alloc</code>, the <code>include_str!</code> pin, <code>Book</code>, <code>MemCap</code>, <code>freed_since_wait</code> and the retry loop. Depends on D3</td><td>A test that rewords tessl&#39;s OOM text (breaks the classifier today); refusal at exactly the bucket total; charged equals allocated bucket bytes</td><td><code>adversarial_oom.rs</code> (463 lines) green</td><td>Decode alloc A/B; peak resident bytes</td><td>ojas, tessl (small)</td><td>M</td></tr>
+<tr><td><strong>P3b mapped tensors</strong> (lanes)</td><td><code>Payload::Mapped</code>, <code>host_view</code>, <code>MetalBuffer: MappedBuffer</code> over <code>SharedBuf</code> (lease handed back through <code>Reply</code> once per tensor); readback and upload via leases; <code>Scratch</code> enum opt-in; <code>Provenance</code> tag; cache resets. Depends on D4 and D6</td><td>A counter shows zero <code>read_bytes</code> copies on a mapped readback; stale <code>FINITE_YES</code> after a GPU write caught</td><td>Exact CPU outputs bit-identical, <code>Vec</code> versus mapped, at 1, 2 and N threads</td><td>Against P0: SAM readbacks (9.0 and 11.2 ms) and mask uploads (25.3 ms) against the memcpy floor</td><td>ojas</td><td>L</td></tr>
+<tr><td><strong>P4 one pool</strong></td><td><code>GpuRuntime::with_shared(Arc&lt;Shared&gt;)</code>; <code>device.rs:576</code> uses it; gemma-metal opts in; process-global <code>TriFlags</code> (<code>ab_flags.rs</code>, <code>decode_icb.rs</code>) into <code>Shared</code>; tests keep a per-test <code>Shared::new()</code></td><td>Two runtimes under one <code>Shared</code> show one resident total</td><td>Existing Metal parity gates</td><td>Qwen LoRA step (10-21 rows) and decode A/B</td><td>tessl, ojas, gemma-metal</td><td>M</td></tr>
+<tr><td><strong>P5 the arrow</strong></td><td>Probe: <code>cargo +1.82 check -p ojas-core</code> (from a build-allowed session). Pass: <code>ojas-core</code> sets its own <code>rust-version</code>, tessl adds <code>ojas-core = { path = &#34;../ojas/ojas-core&#34; }</code>, tessl implements <code>ojas_core::{MappedBuffer, Timeline}</code> directly and returns <code>OjasError</code> at alloc and poison boundaries; ojas-metal&#39;s adapters delete; tessl CI gains a macOS job with an ojas checkout (mirroring ojas&#39;s <code>TESSL_REF</code> layout). Fail: D2 (raise tessl to 1.97, or stop at proposal B&#39;s arrow)</td><td>A tessl test constructing <code>OjasError::CapacityExceeded</code> from the pool</td><td>All tessl and ojas-metal suites unchanged</td><td>None</td><td>tessl, ojas; every tessl consumer needs the sibling checkout (coordinated landing)</td><td>M</td></tr>
+<tr><td><strong>P6 training ownership</strong></td><td>Paired A/B of the Tape against the tessl provider at 0.8B, T=2,048 (section 3). Then delete <code>ojas-metal/src/gpu.rs</code> and the <code>ojas-qwen35</code> step shell (<code>config</code> stays); Lappi repoints (the owner). Under D5(a) also: tessl&#39;s step orchestration, host AdamW and the 13 training C-ABI symbols, ABI 13 to 14, with <code>python/tests/test_qwen35.py</code> and <code>tests/capi*.rs</code> updated. If the provider wins by more than the threshold: promote its fused per-layer ops as <code>Backend</code> methods first (the AGENTS.md checklist), then retire</td><td>A Tape-versus-provider gradient parity row; <code>gpu_tape_2b.rs</code> still green; under D5(a) a capi contract test that the removed symbols are absent</td><td>2B tape gate bounds unchanged</td><td>The A/B itself; <code>2026-10-21-lora-stepcost-ab</code> re-run</td><td>ojas, tessl, Lappi (owner), <code>python/tessl_torch</code> under D5(a)</td><td>L</td></tr>
+<tr><td><strong>P7 kernel single-sourcing</strong> (lanes)</td><td><code>-I $DEP_TESSL_KERNELS</code> in <code>ojas-metal/build.rs</code>; AdamW header first, then residual add, embedding and argmax; RMS at tolerance; two metallibs stay; ST_OUT kernels stay in the safe lib until <code>nnan/ninf</code> is shown not to hide a computed NaN; an entry-name suffix, because <code>add_overlay</code> refuses duplicates (<code>runtime.rs:1771-1799</code>)</td><td>Byte-compare old against new on adversarial inputs per family</td><td>Bit-equal for AdamW, add, embedding and argmax; tolerance for RMS; tessl kernel census and IR lint</td><td>Kernel suites against current kernels</td><td>ojas, tessl (headers)</td><td>M</td></tr>
+<tr><td><strong>P8 IO</strong></td><td>ojas-io gains per-entry read and a &#34;read into caller slab&#34; sink (page-aligned pool slab, <code>pread</code> straight in); tessl&#39;s inference loaders use it; delete tessl readers and <code>plain.rs</code>; <code>parser_mutation.rs</code> re-pointed; <code>cargo +1.82 check -p ojas-io</code> first. Depends on D9 and D10</td><td><code>parser_mutation</code> re-pointed; checkpoint bit-equality</td><td>Load bit-equality for SAM f32, Gemma bf16, Qwen bf16</td><td>Load time against today (SAM 3.20 s)</td><td>ojas, tessl</td><td>M</td></tr>
+<tr><td><strong>P9 siblings</strong></td><td>wgpu staging charged to <code>Budget</code> (check first); ojas-cuda <code>json</code>, <code>npy</code> and <code>bf16</code> delegate to ojas-io and ojas-core; CUDA-C is unchecked on this Mac</td><td>Existing tests</td><td>Existing gates</td><td>None</td><td>ojas</td><td>S</td></tr>
+</tbody></table></div>
+<p><strong>Stop points.</strong> After P0 (the cheap win quantified). After P4 (one ledger, one pool: the memory goal). After P6 (one training engine). After P8 (no generic copy left in tessl). P7 and P9 can run any time after P2.</p>
+<h2 id="8-how-the-in-flight-kernel-lanes-fit">8. How the in-flight kernel lanes fit <a class="anchor" href="#8-how-the-in-flight-kernel-lanes-fit" aria-label="Link to this section">#</a></h2>
+<p>The plan&#39;s snapshot: five worktrees sat at <code>c389342</code> (the main commit) with uncommitted edits (V, <code>git status</code> in each).</p>
+<ul>
+<li><code>gp/ug-core</code>: six new <code>Backend</code> methods (<code>interpolate_bilinear_backward</code>, <code>group_norm_backward</code>, <code>gelu_tanh_forward</code> and <code>_backward</code>, <code>seq_mean_forward</code>, <code>l2_normalize_forward</code>) in <code>ojas-core/src/backend.rs</code>, plus autocast, shapes, spatial, CPU general attention and tests; 26 files, +1,460 and -118.
+</li>
+<li><code>gp/ug-metal-attn-bwd</code>, <code>-encoder-bwd</code>, <code>-maxpool</code> and <code>-spatial-bwd</code>: each edits <code>ojas-metal/{build.rs, src/backend.rs, src/device.rs, src/link.rs}</code> and adds new <code>.metal</code> files (<code>attn_gen_bwd.metal</code> with <code>attn_bwd_tiled.h</code>, <code>encoder_bwd.metal</code>, <code>max_pool.metal</code>, <code>spatial_bwd.metal</code>), new <code>src/backend/</code> and <code>src/device/</code> submodules, oracle fixtures and tests.
+</li>
+</ul>
+<p>Other sprint lanes (<code>gp/ug-docs-ojas</code>, <code>-bucket-dedup</code>, <code>-alloc-error</code>, <code>-const-dedup</code>, <code>-adamw-scalars</code>, <code>-geometry-dedup</code>, <code>-tiny-step</code>, <code>-one-runtime</code>, and <code>ug/docs</code> in tessl) were opened after the plan&#39;s snapshot, so the plan does not classify them; they are shown in this repository&#39;s worktree list. The mapping below is inferred from the lane names alone (their diffs were not read for this document), so treat each row as I:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Lane (by name)</th><th>Nearest plan item</th><th>Basis</th></tr></thead>
+<tbody>
+<tr><td><code>gp/ug-alloc-error</code></td><td>P1 and P3a: typed <code>AllocError</code>, retiring the <code>classify_alloc</code> string match</td><td>name</td></tr>
+<tr><td><code>gp/ug-bucket-dedup</code></td><td>Ledger row &#34;ojas-metal accounting layer&#34;: one bucket formula (<code>gpu.rs:214</code> copy)</td><td>name</td></tr>
+<tr><td><code>gp/ug-adamw-scalars</code></td><td>Ledger row &#34;AdamW scalar formation&#34;: three copies to one</td><td>name</td></tr>
+<tr><td><code>gp/ug-const-dedup</code>, <code>gp/ug-geometry-dedup</code></td><td>Dedup of shared constants and launch geometry; no row in the ledger above, so the match is loose</td><td>name</td></tr>
+<tr><td><code>gp/ug-tiny-step</code></td><td>The legacy tiny Metal step (<code>gpu.rs</code>) and D11</td><td>name</td></tr>
+<tr><td><code>gp/ug-one-runtime</code></td><td>P4 one pool: fewer <code>GpuRuntime::new</code> sites</td><td>name</td></tr>
+<tr><td><code>gp/ug-docs-ojas</code>, <code>ug/docs</code> (tessl)</td><td>Documentation of the same direction; this page is a sibling of that work</td><td>name</td></tr>
+</tbody></table></div>
+<p>Any of these that deletes code the owner has not yet approved (for example <code>gpu.rs</code>, D11) must stop short of the deletion; section 9 lists what stays.</p>
+<p>How the kernel lanes fit: they are ojas-contract training kernels (safe math, status words, &#34;tessl has no kernel for the rest&#34;, <code>attn_bwd_tiled.h:1-10</code>) for EmbeddingGemma 2 and SAM backwards. They belong in ojas-metal&#39;s overlay under the ownership rule (tessl owns arithmetic both sides need; ojas owns its training contract), and they need no tessl change. Three consequences:</p>
+<ol>
+<li>P1 to P6 avoid <code>link.rs</code>, <code>backend.rs</code> and <code>device.rs</code> except for the small accounting regions (<code>device.rs:449-551, 761-822, 934-994, 1787-1855</code>). P3a and P3b land after the Metal lanes or rebase onto them. Any structural reshaping of <code>Cmd</code> (proposal A&#39;s closure owner) or relocation of ojas-metal (proposal C&#39;s Phase 6) is off the table until the lanes land, and is the owner&#39;s decision afterwards (D1).
+</li>
+<li>P7&#39;s <code>-I $DEP_TESSL_KERNELS</code> should land before the attention-backward lane finalizes <code>attn_bwd_tiled.h</code>, so it includes tessl&#39;s <code>attn_tiled.h</code> and <code>reduce_tree.h</code> pieces instead of copying them. Whether it copies today is U; the header says it is &#34;after tessl&#39;s <code>qwen35_attn_bwd.metal</code>&#34;.
+</li>
+<li>Under the refinement, ojas&#39;s EmbeddingGemma 2 ops are training and evaluation ops over <code>Backend</code>; the tuned Mac encode path is tessl&#39;s <code>embedgemma2*</code> (C ABI, go/engine). Do not grow a second tuned Gemma encode in ojas-metal; a Mac inference caller uses tessl.
+</li>
+</ol>
+<h2 id="9-what-does-not-change-until-the-owner-answers">9. What does not change until the owner answers <a class="anchor" href="#9-what-does-not-change-until-the-owner-answers" aria-label="Link to this section">#</a></h2>
+<p>This document is the plan only. Until the matching decision in section 10 is made:</p>
+<ul>
+<li>No <code>unsafe impl Send</code> or <code>Sync</code> is added anywhere (D6).
+</li>
+<li>No <code>Budget</code> semantic change is made; &#34;live&#34; stays the meaning (D3).
+</li>
+<li>No C-ABI symbol is removed from tessl or from <code>ojas-capi</code>, and the tessl C ABI stays at 13 training symbols (D5).
+</li>
+<li>tessl&#39;s <code>rust-version</code> stays 1.82 and its CI stays standalone (D2).
+</li>
+<li>No tessl training code (<code>qwen35_train.rs</code>, <code>qwen35_adamw.rs</code>, <code>qwen35_bwd.rs</code>) is deleted (D5).
+</li>
+<li><code>ojas-metal/src/gpu.rs</code> and <code>per_head_gate.metal</code> stay (D11).
+</li>
+</ul>
+<h2 id="10-open-owner-decisions">10. Open owner decisions <a class="anchor" href="#10-open-owner-decisions" aria-label="Link to this section">#</a></h2>
+<p>All eleven are <strong>OPEN</strong>. The &#34;plan&#39;s lean&#34; column repeats what the source plan recommended; it is not an answer.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>ID</th><th>Decision</th><th>Plan&#39;s lean</th><th>Status</th></tr></thead>
+<tbody>
+<tr><td>D1</td><td>Where <code>impl Backend for MetalBackend</code> lives. Stay in the ojas workspace as <code>ojas-metal</code> (training-side op router, Linux stub, no generic logic), with tessl implementing ojas-core&#39;s HAL directly; or, matching the decision&#39;s literal wording, a <code>tessl-ojas</code> package in the tessl repo (needs a <code>[workspace]</code> table there) after the lanes land. The second is a pure move with zero deletion and puts the training backend in the inference repo</td><td>Stay in ojas</td><td><strong>OPEN</strong></td></tr>
+<tr><td>D2</td><td>MSRV. If <code>ojas-core</code> (and later <code>ojas-io</code>) does not build at 1.82: raise tessl to 1.97, or stop the arrow at proposal B&#39;s shape. Decides whether tessl CI stays standalone</td><td>Probe first (P5)</td><td><strong>OPEN</strong></td></tr>
+<tr><td>D3</td><td>Budget semantics: resident (cache and recycle lag charged, trim on pressure) versus live</td><td>Resident</td><td><strong>OPEN</strong></td></tr>
+<tr><td>D4</td><td>Exact default with Fast-provenance operands: record and allow, or refuse</td><td>Record and allow</td><td><strong>OPEN</strong></td></tr>
+<tr><td>D5</td><td>Training retirement. (a) Retire tessl&#39;s Qwen3.5 training step with its 13 C-ABI training symbols and <code>tessl_torch</code>&#39;s training path (ABI 14), or (b) keep the C-ABI training product and retire only the ojas-side duplicates. Plus the threshold for the Tape-versus-provider A/B, and the Lappi <code>qd-train-metal</code> repoint (a consumer change in another repository)</td><td>No lean stated beyond the A/B gate</td><td><strong>OPEN</strong></td></tr>
+<tr><td>D6</td><td>Permission to assert <code>Send + Sync</code> on tessl&#39;s buffer wrapper, and to amend AGENTS.md naming tessl <code>SharedBuf</code> as the sanctioned owner (Apple states no explicit <code>MTLBuffer</code> thread-safety; objc2&#39;s markers and refcounting are the basis, I)</td><td>Not stated</td><td><strong>OPEN</strong></td></tr>
+<tr><td>D7</td><td>Qwen3.5 config refusal-list owner (training versus inference lists)</td><td>Not stated</td><td><strong>OPEN</strong></td></tr>
+<tr><td>D8</td><td>Permanent two-kernel families (softmax, cross entropy, attention, KV write, decode kernels) accepted as by design</td><td>Accept</td><td><strong>OPEN</strong></td></tr>
+<tr><td>D9</td><td>Weight loading: pool slab with <code>pread</code> versus whole-file mmap for SAM f32 only (per-tensor no-copy is dead: 0 of 1,623, 1,376 and 632 tensors page-aligned, cost probe)</td><td>Pool slab with <code>pread</code></td><td><strong>OPEN</strong></td></tr>
+<tr><td>D10</td><td>gemma-metal: stay a tessl consumer with its own crates, or adopt ojas-io and ojas-data (new-dependency rule)</td><td>Not stated</td><td><strong>OPEN</strong></td></tr>
+<tr><td>D11</td><td>Delete <code>ojas-metal/src/gpu.rs</code> and <code>per_head_gate.metal</code> (two callerless signals, both lower bounds)</td><td>Delete</td><td><strong>OPEN</strong></td></tr>
+</tbody></table></div>
+<h2 id="11-gaps-and-unverified">11. Gaps and unverified <a class="anchor" href="#11-gaps-and-unverified" aria-label="Link to this section">#</a></h2>
+<ul>
+<li>DevMap: every walk capped (<code>walk_incomplete</code>), 52 files pattern-recovered, Metal call resolution 4.4%, Metal-to-Rust edges invisible; the tessl index is stale, so all tessl blast radius is grep.
+</li>
+<li>Not measured: fence-wait cost against the copy path (spike T2 and T3 unrun), the <code>active_m4</code> lock cost per bind, Tape-versus-provider throughput, a fresh <code>block_ab</code> profile.
+</li>
+<li>Not checked: <code>cargo +1.82 check -p ojas-core</code>; ICB replay re-stamping; whether <code>E0277</code> is checked on stable; whether <code>attn_bwd_tiled.h</code> copies tessl header code; the wgpu staging charge; the inner split of <code>qwen35_train.rs</code> and <code>qwen35_bwd.rs</code> between launch and orchestration; <code>per_head_gate.metal</code> callers beyond <code>gpu.rs</code>.
+</li>
+<li>The advisor review of the source plan&#39;s finished document did not run (rate-limited); a first advisor pass shaped its sections on the verdict, ownership and in-flight work.
+</li>
+<li>CUDA-C edits cannot be checked on this Mac.
+</li>
+<li>The original dates of the two owner statements in section 1 are not in the source plan.
+</li>
+</ul>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/unification-plan.md" rel="noopener"><code>docs/unification-plan.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="typed-storage-plan.html" rel="prev"><span>Previous</span>Typed Host Storage: Plan</a>
+        <a href="bench-cpu-vs-torch.html" rel="next" class="next"><span>Next</span>CPU Reference versus PyTorch CPU Benchmarks</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#1-owner-direction">1. Owner direction</a></li>
+<li><a href="#2-verdict-of-the-judgement">2. Verdict of the judgement</a></li>
+<li class="sub"><a href="#spot-check-ledger">Spot-check ledger</a></li>
+<li class="sub"><a href="#refuted-and-corrected-claims">Refuted and corrected claims</a></li>
+<li><a href="#3-who-owns-metal-training-ojas">3. Who owns Metal training: ojas</a></li>
+<li><a href="#4-target-architecture-and-ownership">4. Target architecture and ownership</a></li>
+<li><a href="#5-memory-design">5. Memory design</a></li>
+<li><a href="#6-dedup-ledger">6. Dedup ledger</a></li>
+<li><a href="#7-phases">7. Phases</a></li>
+<li><a href="#8-how-the-in-flight-kernel-lanes-fit">8. How the in-flight kernel lanes fit</a></li>
+<li><a href="#9-what-does-not-change-until-the-owner-answers">9. What does not change until the owner answers</a></li>
+<li><a href="#10-open-owner-decisions">10. Open owner decisions</a></li>
+<li><a href="#11-gaps-and-unverified">11. Gaps and unverified</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>
