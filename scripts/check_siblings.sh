@@ -89,6 +89,7 @@ echo "primary checkout: $ROOT"
 echo "==> path dependencies resolve"
 missing=0
 checked=0
+external=0
 siblings=""
 
 # The manifest list comes from `git ls-files`, not a glob. ojas's manifests sit
@@ -129,6 +130,9 @@ for manifest in $manifests; do
     case "$target" in
       "$ROOT"/*|"$ROOT") ;;
       *)
+        # Leaves the repository, so it is one of the dependencies this script
+        # exists for. Counted separately from `checked`: see the guard below.
+        external=$((external + 1))
         repo="$(git -C "$target" rev-parse --show-toplevel 2>/dev/null || true)"
         [ -n "$repo" ] && siblings="$siblings$repo
 "
@@ -139,13 +143,32 @@ $(grep -oE 'path[[:space:]]*=[[:space:]]*"[^"]+"' "$manifest" 2>/dev/null | sed 
 EOF_PATHS
 done
 
-if [ "$checked" -eq 0 ]; then
-  fail "parsed no out-of-tree path dependencies at all; this script's parser has
-       stopped matching the manifests and is reporting success for having
-       looked at nothing. Fix the parser, do not ignore this."
+# The guard is on `external`, not on `checked`. `checked` counts every `path`
+# containing `..`, and most of those never leave the repository — `../ojas-core`
+# and its siblings are in-tree workspace members. So `checked` is ~70 whatever
+# happens, and a guard on it could never fire: a parser that stopped matching
+# only the dependencies that LEAVE the tree (the whole point of this script)
+# would still report dozens and pass.
+#
+# That is the same defect as the glob fixed in 6577c1a, one level subtler: not
+# reading fewer files than claimed, but counting the wrong things and so
+# claiming a coverage check that cannot fail. Found by the tessl mirror's
+# verification, which demonstrated it there with a scratch repository.
+#
+# Concretely, the hole this closes: the grep at the top of the loop requires
+# DOUBLE-quoted TOML (`path = "..."`). Rewrite one dependency with TOML's
+# equally valid single quotes and this script stops seeing it — and before this
+# change it would still have printed a reassuring two-digit total.
+if [ "$external" -eq 0 ]; then
+  fail "parsed $checked path dependencies but NONE of them leaves this
+       repository. ojas path-depends on tessl (../../tessl) and gusset
+       (../../../devtools/gusset/crates/gusset), so zero is impossible and the
+       parser has stopped matching them — note it requires double-quoted TOML.
+       This check is now blind to exactly what it exists to check. Fix the
+       parser; do not ignore this."
 fi
-[ "$missing" -eq 0 ] || fail "$missing of $checked out-of-tree path dependencies do not resolve (see above)"
-echo "$checked out-of-tree path dependencies resolve"
+[ "$missing" -eq 0 ] || fail "$missing of $checked path dependencies do not resolve (see above)"
+echo "$checked path dependencies resolve, $external of them leaving this repository"
 
 # ---------------------------------------------------------------------------
 # 3. What state are those siblings in?
