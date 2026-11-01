@@ -30,7 +30,7 @@ use std::io::BufWriter;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
-use ojas_io::{replace_dir_with, IoError, SafeTensors, SafeTensorsWriter, StDtype};
+use ojas_io::{SafeTensors, SafeTensorsWriter, StDtype};
 
 use crate::error::{invalid, Qwen35Error, Result};
 use crate::names::TensorSpec;

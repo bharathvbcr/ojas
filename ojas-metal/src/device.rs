@@ -41,7 +41,7 @@ use crate::link::{
     norm_chunks, reduce_groups, rms_w_chunks, Arg, AttnExtra, AttnGeom, BilinearGeom, Cmd,
     Conv1dGeom, ConvGeom, DeviceInfo, EmbedRows, EncAttnGeom, GdnArgs, GroupNormGeom, Lane,
     LceGeom, Msg, NewBuf, ReadAs, Reply, Res, RmsSide, RopeMode, RunBox, SdpaGeom, Wait, Waits,
-    SQ_OUT_WORDS, SQ_PIECE,
+    SQ_OUT_WORDS,
 };
 use crate::permute::{self, Plan};
 
