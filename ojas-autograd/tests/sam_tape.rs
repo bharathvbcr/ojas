@@ -299,3 +299,151 @@ fn the_tape_chains_rope_interleaved_backward() {
     let want = be.rope_interleaved_backward(&seed, &cos, &sin).unwrap();
     assert_eq!(bits(tape.grad(vx).unwrap()), bits(&want));
 }
+
+#[test]
+fn adversarial_vision_tape_all_ops_chaining_and_checkpointing() {
+    let be = cpu();
+    let x = tensor(&be, 501, &[1, 4, 2, 4]);
+    let cos = tensor(&be, 502, &[4, 2]);
+    let sin = tensor(&be, 503, &[4, 2]);
+    let gn_w = near_one(&be, 504, &[4]);
+    let gn_b = tensor(&be, 505, &[4]);
+    let side = tensor(&be, 506, &[1, 2, 2, 4]);
+
+    let run_net = |tape: &mut Tape<CpuBackend>, vx: Var, vw: Var, vb: Var, vside: Var| -> Var {
+        let r = tape.rope_interleaved(vx, cos.clone(), sin.clone()).unwrap();
+        let gn = tape.group_norm(r, vw, vb, 2, 1e-5).unwrap();
+        let act = tape.relu(gn).unwrap();
+        let sl = tape.slice(act, 1, 0, 2).unwrap();
+        let cat = tape.concat(&[sl, vside], 1).unwrap();
+        tape.interpolate_bilinear(cat, [4, 6], false).unwrap()
+    };
+
+    // By hand backward:
+    let r_fwd = be.rope_interleaved_forward(&x, &cos, &sin).unwrap();
+    let gn_fwd = be
+        .group_norm_forward(&r_fwd, &gn_w, &gn_b, 2, 1e-5)
+        .unwrap();
+    let act_fwd = be.relu_forward(&gn_fwd).unwrap();
+    let sl_fwd = be.slice(&act_fwd, 1, 0, 2).unwrap();
+    let cat_fwd = be.concat(&[&sl_fwd, &side], 1).unwrap();
+    let out_fwd = be
+        .interpolate_bilinear_forward(&cat_fwd, [4, 6], false)
+        .unwrap();
+
+    let seed = ones_like(&be, &out_fwd);
+    let g_cat = be
+        .interpolate_bilinear_backward(&cat_fwd, &seed, false)
+        .unwrap();
+    let g_sl = be.slice(&g_cat, 1, 0, 2).unwrap();
+    let g_side_want = be.slice(&g_cat, 1, 2, 2).unwrap();
+    let g_act = be.slice_backward(&g_sl, &[1, 4, 2, 4], 1, 0).unwrap();
+    let g_gn = be.relu_backward(&gn_fwd, &g_act).unwrap();
+    let gn_grads = be
+        .group_norm_backward(&r_fwd, &gn_w, &gn_b, &g_gn, 2, 1e-5)
+        .unwrap();
+    let g_x_want = be
+        .rope_interleaved_backward(&gn_grads.input, &cos, &sin)
+        .unwrap();
+    let g_w_want = gn_grads.weight;
+    let g_b_want = gn_grads.bias;
+
+    // Normal tape run:
+    let mut tape = Tape::new(be.clone());
+    let vx = tape.leaf(x.clone()).unwrap();
+    let vw = tape.leaf(gn_w.clone()).unwrap();
+    let vb = tape.leaf(gn_b.clone()).unwrap();
+    let vside = tape.leaf(side.clone()).unwrap();
+    let out = run_net(&mut tape, vx, vw, vb, vside);
+    tape.backward(out).unwrap();
+
+    assert_eq!(bits(tape.grad(vx).unwrap()), bits(&g_x_want));
+    assert_eq!(bits(tape.grad(vw).unwrap()), bits(&g_w_want));
+    assert_eq!(bits(tape.grad(vb).unwrap()), bits(&g_b_want));
+    assert_eq!(bits(tape.grad(vside).unwrap()), bits(&g_side_want));
+
+    // Checkpointed segment run:
+    let mut tape_cp = Tape::new(be.clone());
+    let vx = tape_cp.leaf(x.clone()).unwrap();
+    let vw = tape_cp.leaf(gn_w.clone()).unwrap();
+    let vb = tape_cp.leaf(gn_b.clone()).unwrap();
+    let vside = tape_cp.leaf(side.clone()).unwrap();
+    let out_cp = tape_cp
+        .checkpoint(|t| Ok(vec![run_net(t, vx, vw, vb, vside)]))
+        .unwrap();
+    tape_cp.backward(out_cp[0]).unwrap();
+
+    assert_eq!(bits(tape_cp.grad(vx).unwrap()), bits(&g_x_want));
+    assert_eq!(bits(tape_cp.grad(vw).unwrap()), bits(&g_w_want));
+    assert_eq!(bits(tape_cp.grad(vb).unwrap()), bits(&g_b_want));
+    assert_eq!(bits(tape_cp.grad(vside).unwrap()), bits(&g_side_want));
+
+    // Frozen leaf run (e.g. frozen weight and frozen side):
+    let mut tape_frz = Tape::new(be.clone());
+    let vx = tape_frz.leaf(x.clone()).unwrap();
+    let vw = tape_frz.frozen_leaf(gn_w.clone()).unwrap();
+    let vb = tape_frz.leaf(gn_b.clone()).unwrap();
+    let vside = tape_frz.frozen_leaf(side.clone()).unwrap();
+    let out_frz = run_net(&mut tape_frz, vx, vw, vb, vside);
+    tape_frz.backward(out_frz).unwrap();
+
+    assert!(tape_frz.grad(vw).is_none());
+    assert!(tape_frz.grad(vside).is_none());
+    assert_eq!(bits(tape_frz.grad(vx).unwrap()), bits(&g_x_want));
+    assert_eq!(bits(tape_frz.grad(vb).unwrap()), bits(&g_b_want));
+}
+
+#[test]
+fn adversarial_multi_branch_fanin_summation() {
+    let be = cpu();
+    let x = tensor(&be, 601, &[1, 4, 4, 4]);
+    let mut tape = Tape::new(be.clone());
+    let vx = tape.leaf(x.clone()).unwrap();
+
+    // Branch 1: relu
+    let y1 = tape.relu(vx).unwrap();
+    // Branch 2: interpolate_bilinear (align_corners = false)
+    let y2 = tape.interpolate_bilinear(vx, [4, 4], false).unwrap();
+    // Branch 3: interpolate_bilinear (align_corners = true)
+    let y3 = tape.interpolate_bilinear(vx, [4, 4], true).unwrap();
+
+    // Sum branches on the tape to test fan-in accumulation into vx
+    let y12 = tape.add(y1, y2).unwrap();
+    let y = tape.add(y12, y3).unwrap();
+
+    // Run backwards independently through backend to compute exact expected gradients:
+    let ones = ones_like(&be, &x);
+    let g1 = be.relu_backward(&x, &ones).unwrap();
+    let g2 = be.interpolate_bilinear_backward(&x, &ones, false).unwrap();
+    let g3 = be.interpolate_bilinear_backward(&x, &ones, true).unwrap();
+
+    let g_total: Vec<u32> = g1
+        .to_f32_vec()
+        .unwrap()
+        .iter()
+        .zip(g2.to_f32_vec().unwrap())
+        .zip(g3.to_f32_vec().unwrap())
+        .map(|((a, b), c)| (a + b + c).to_bits())
+        .collect();
+
+    tape.backward(y).unwrap();
+
+    assert_eq!(bits(tape.grad(vx).unwrap()), g_total);
+}
+
+#[test]
+fn adversarial_invalid_shape_rejection() {
+    let be = cpu();
+    let mut tape = Tape::new(be.clone());
+    let x = tape.leaf(tensor(&be, 701, &[2, 4, 6, 8])).unwrap();
+
+    // Slice: start + len > dim (start 3, len 6 on axis 1 of size 4)
+    assert!(tape.slice(x, 1, 3, 6).is_err());
+    // Concat: mismatched shapes along non-concat axis
+    let bad_cat = tape.leaf(tensor(&be, 702, &[2, 3, 5, 8])).unwrap();
+    assert!(tape.concat(&[x, bad_cat], 1).is_err());
+    // RopeInterleaved: mismatched cos/sin
+    let bad_cos = tensor(&be, 703, &[5, 5]);
+    let bad_sin = tensor(&be, 704, &[5, 5]);
+    assert!(tape.rope_interleaved(x, bad_cos, bad_sin).is_err());
+}

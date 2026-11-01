@@ -509,6 +509,88 @@ fn the_broadcast_and_bias_sums_are_correctly_rounded_over_a_long_reduction() {
     );
 }
 
+#[test]
+fn adversarial_double_single_precision_n5184_d2_and_error_free_transforms() {
+    let m = metal();
+    // 1. Error-Free Transformation mathematical properties:
+    let two_sum = |a: f32, b: f32| -> (f32, f32) {
+        let s = a + b;
+        let bb = s - a;
+        let e = (a - (s - bb)) + (b - bb);
+        (s, e)
+    };
+    let two_prod = |a: f32, b: f32| -> (f32, f32) {
+        let p = a * b;
+        let e = a.mul_add(b, -p);
+        (p, e)
+    };
+    for (a, b) in [
+        (1.0f32, 1e-7f32),
+        (1e7, -1e7 + 0.1),
+        (std::f32::consts::PI, std::f32::consts::E),
+        (1e-12, 1e-12), // product 1e-24 > 2^-102 (residual error is normal float32)
+        (1e20, 1e10),   // product 1e30 < f32::MAX (3.4e38)
+    ] {
+        let (s, e) = two_sum(a, b);
+        let exact_sum = f64::from(a) + f64::from(b);
+        let recovered_sum = f64::from(s) + f64::from(e);
+        assert_eq!(recovered_sum, exact_sum, "eb_two_sum failed on ({a}, {b})");
+
+        let (p, pe) = two_prod(a, b);
+        let exact_prod = f64::from(a) * f64::from(b);
+        let recovered_prod = f64::from(p) + f64::from(pe);
+        assert_eq!(
+            recovered_prod, exact_prod,
+            "eb_two_prod failed on ({a}, {b})"
+        );
+    }
+
+    // Residual subnormal boundary verification:
+    // When |a * b| < 2^-102 (~2e-31), the residual error e = fl(a*b - p) enters the
+    // subnormal exponent range (< 2^-126) and loses bits through gradual underflow.
+    let sub_a = 1e-18f32;
+    let sub_b = 1e-18f32;
+    let (sub_p, sub_pe) = two_prod(sub_a, sub_b);
+    let sub_exact = f64::from(sub_a) * f64::from(sub_b);
+    let sub_rec = f64::from(sub_p) + f64::from(sub_pe);
+    assert!(
+        (sub_rec - sub_exact).abs() < 1e-44,
+        "subnormal residual is bounded by f32 subnormal precision"
+    );
+
+    // 2. ViT sequence length N=5184, small head dimension D=2:
+    let (rows, dim) = (5184usize, 2usize);
+    let x: Vec<f32> = values(rows * dim, 991, 1.5)
+        .iter()
+        .map(|v| v + 1000.0)
+        .collect();
+    let gy: Vec<f32> = values(rows * dim, 992, 1.0);
+    let w = vec![1.2f32, 0.8f32];
+    let b = vec![0.1f32, -0.1f32];
+
+    let want = layer_norm_f64(&x, &w, &gy, dim, 1e-5);
+    let got = ok(
+        "metal ln n5184 d2",
+        m.layer_norm_backward(
+            &up(&m, &host(&x, &[rows, dim])),
+            &up(&m, &host(&w, &[dim])),
+            &up(&m, &host(&b, &[dim])),
+            &up(&m, &host(&gy, &[rows, dim])),
+            1e-5,
+        ),
+    );
+    for (name, g, w) in [
+        ("dx", &got.input, &want[0]),
+        ("dw", &got.weight, &want[1]),
+        ("db", &got.bias, &want[2]),
+    ] {
+        let e = err64(&down(g), w);
+        eprintln!("ERR adversarial N=5184 D=2 {name} vs f64: {e:.2e}");
+        let tol = if name == "dx" { 1.5e-3 } else { 3e-6 };
+        assert!(e <= tol, "{name}: {e:e} > {tol:e}");
+    }
+}
+
 // ---- determinism and dispatch ----
 
 #[test]
