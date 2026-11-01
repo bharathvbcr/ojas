@@ -143,14 +143,20 @@ Each row is an op of the `Backend` trait (`ojas-core/src/backend.rs`). The Metal
 > (`ojas-core/src/hal.rs`), and the constructors `Tensor::from_mapped` / `from_mapped_reserved`
 > (`tensor.rs:955`, `:967`). What is missing is a caller. Three signals, all pointing the same way:
 > every call of either constructor outside tests is **absent** — the only callers are
-> `ojas-core/src/tensor.rs`'s own unit tests (`:3007`, `:3047`) and
-> `ojas-metal/tests/adversarial_tier5_metal.rs` (`:298`, `:361`, `:367`, `:650`); the only
-> non-test `MappedBuffer` implementer anywhere is tessl's `SharedBuf`
-> (`tessl/src/shared_buf.rs:680`), and nothing in production constructs one into a `Tensor` (the
-> other implementers — `FakeMapped`, `Plain`, `Buf` — are test types); and `MetalBackend` builds
-> every real tensor through `Tensor::from_device_reserved` instead (`ojas-metal/src/backend.rs`
-> `:945`, `:2174`, `:2246`, `:2300-2301`, `:3267`, `:3432`), whose readback copies through the
-> device thread. So SpikeTrack `PROJECT.md` feature 9 ("Zero-Copy UMA Buffer Sharing —
+> `ojas-core/src/tensor.rs`'s own unit tests (`:3007`, `:3047`),
+> `ojas-metal/tests/adversarial_tier5_metal.rs` (`:298`, `:361`, `:367`, `:650`, `:777`) and, in
+> the sibling repository, tessl's own `tests/shared_runtime.rs` (`:171`, `:204`, on `origin/main`);
+> the only non-test `MappedBuffer` implementer anywhere is tessl's `SharedBuf`
+> (`tessl/src/shared_buf.rs:658` on tessl `origin/main`, `a00521f`), and nothing in production
+> constructs one into a `Tensor` (the other implementers — `FakeMapped`, `Plain`, `Buf` — are test
+> types); and `ojas-metal/src` contains **no** `from_mapped` call at all (`rg -uu from_mapped
+> ojas-metal/src/` returns nothing), while every device tensor `MetalBackend` hands back is built by
+> `Tensor::from_device_reserved` (`ojas-metal/src/backend.rs` `:945`, `:2174`, `:2246`,
+> `:2300-2301`, `:3267`, `:3432`), whose readback copies through the device thread. `MetalBackend`
+> does also call `Tensor::from_f32` outside its test module (`:2582`, `:2590`, `:2595`, `:4017`),
+> but each of those builds a **host** staging tensor (`host_ones`, `host`) that is immediately
+> passed to `self.upload(…)` — and `upload` itself ends in `from_device_reserved`
+> (`backend.rs:2125-2177`, the call at `:2174`), so it is not a sharing path either. So SpikeTrack `PROJECT.md` feature 9 ("Zero-Copy UMA Buffer Sharing —
 > `Payload::Mapped` on `Tensor`; timeline-fenced zero-copy `to_host` and `upload`") is **not
 > landed**: it is reachable from a test, not from the framework. Treat any "zero-copy UMA" or
 > "`Payload::Mapped` integrated" wording elsewhere in `docs/` as describing the HAL surface, not a
