@@ -551,7 +551,8 @@ pub(crate) enum RopeMode {
 /// tessl does, is the typed wrapper that downcasts it. Nothing `!Send` is in
 /// the box: whatever the closure builds from the runtime is made on the
 /// device thread and dropped there.
-pub(crate) struct RunBox(pub Box<dyn FnOnce(&dyn Any) -> Res<()> + Send + 'static>);
+pub(crate) type RunFn = Box<dyn FnOnce(&dyn Any) -> Res<()> + Send + 'static>;
+pub(crate) struct RunBox(pub RunFn);
 
 impl fmt::Debug for RunBox {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
