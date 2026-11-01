@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ojas · ojas reference</title>
-  <meta name="description" content="ojas (vital energy, the essence training spends) is a deterministic, high-performance Rust deep learning engine and framework designed as a safe, modern alternative to PyTorch and TensorFlow for syst…">
+  <meta name="description" content="ojas (vital energy, the essence training spends) is a deterministic, training-first universal framework in Rust: tensors, autograd, optimizers, training loops, data, checkpoints and IO, with a CPU re…">
   <meta name="keywords" content="ojas, ojas, rust deep learning, machine learning, pytorch alternative, neural network, autograd, tensors, metal, wgpu">
   <meta name="author" content="Bharath Chandra Vaddaram">
   <meta name="robots" content="index, follow">
@@ -14,7 +14,7 @@
   <meta property="og:site_name" content="ojas">
   <meta property="og:url" content="https://ojas.vbcr.dev/reference/readme.html">
   <meta property="og:title" content="ojas · ojas reference">
-  <meta property="og:description" content="ojas (vital energy, the essence training spends) is a deterministic, high-performance Rust deep learning engine and framework designed as a safe, modern alternative to PyTorch and TensorFlow for syst…">
+  <meta property="og:description" content="ojas (vital energy, the essence training spends) is a deterministic, training-first universal framework in Rust: tensors, autograd, optimizers, training loops, data, checkpoints and IO, with a CPU re…">
   <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
@@ -22,7 +22,7 @@
   <meta property="og:locale" content="en_US">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="ojas · ojas reference">
-  <meta name="twitter:description" content="ojas (vital energy, the essence training spends) is a deterministic, high-performance Rust deep learning engine and framework designed as a safe, modern alternative to PyTorch and TensorFlow for syst…">
+  <meta name="twitter:description" content="ojas (vital energy, the essence training spends) is a deterministic, training-first universal framework in Rust: tensors, autograd, optimizers, training loops, data, checkpoints and IO, with a CPU re…">
   <meta name="twitter:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
   <meta name="twitter:image:alt" content="ojas · ojas reference">
   <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
@@ -40,7 +40,7 @@
     "@context": "https://schema.org",
     "@type": "TechArticle",
     "headline": "ojas · ojas reference",
-    "description": "ojas (vital energy, the essence training spends) is a deterministic, high-performance Rust deep learning engine and framework designed as a safe, modern alternative to PyTorch and TensorFlow for syst…",
+    "description": "ojas (vital energy, the essence training spends) is a deterministic, training-first universal framework in Rust: tensors, autograd, optimizers, training loops, data, checkpoints and IO, with a CPU re…",
     "url": "https://ojas.vbcr.dev/reference/readme.html",
     "image": "https://ojas.vbcr.dev/assets/ojas-og.png",
     "author": {
@@ -146,7 +146,7 @@
       <p class="ref-crumb"><a href="./">Reference</a> / Crates</p>
       <article class="prose-ojas">
 <h1 id="ojas">ojas <a class="anchor" href="#ojas" aria-label="Link to this section">#</a></h1>
-<p><strong>ojas</strong> (vital energy, the essence training spends) is a deterministic, high-performance <strong>Rust deep learning engine and framework</strong> designed as a safe, modern alternative to PyTorch and TensorFlow for systems research, LLM training, and edge inference.</p>
+<p><strong>ojas</strong> (vital energy, the essence training spends) is a deterministic, <strong>training-first universal framework in Rust</strong>: tensors, autograd, optimizers, training loops, data, checkpoints and IO, with a CPU reference backend and CUDA, HIP, wgpu and Metal plugging in as extensions. It is designed as a safe, modern alternative to PyTorch and TensorFlow for systems research and LLM training, and does only light inference (sampling and eval). On the Mac, <a href="https://github.com/bharathvbcr/tessl" rel="noopener">tessl</a> is the Metal extension (kernels, runtime, allocator) and the heavily optimized inference engine; the direction is no duplicated code between the two and one CPU/GPU memory pool on unified memory (direction, not yet done: see <a href="architecture.html"><code>docs/architecture.md</code></a>).</p>
 <p>ojas pairs a compile-time safe Rust engine with an in-process Go API via <code>gusset</code>, zero-copy tensor views, reverse-mode automatic differentiation, and strict memory budgeting.</p>
 <h3 id="key-architectural-guarantees">Key Architectural Guarantees <a class="anchor" href="#key-architectural-guarantees" aria-label="Link to this section">#</a></h3>
 <ul>

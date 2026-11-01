@@ -14,7 +14,7 @@
   <img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue?style=flat-square" alt="License: MIT or Apache-2.0">
 </p>
 
-**ojas** (vital energy, the essence training spends) is a deterministic, high-performance **Rust deep learning engine and framework** designed as a safe, modern alternative to PyTorch and TensorFlow for systems research, LLM training, and edge inference.
+**ojas** (vital energy, the essence training spends) is a deterministic, **training-first universal framework in Rust**: tensors, autograd, optimizers, training loops, data, checkpoints and IO, with a CPU reference backend and CUDA, HIP, wgpu and Metal plugging in as extensions. It is designed as a safe, modern alternative to PyTorch and TensorFlow for systems research and LLM training, and does only light inference (sampling and eval). On the Mac, [tessl](https://github.com/bharathvbcr/tessl) is the Metal extension (kernels, runtime, allocator) and the heavily optimized inference engine; the direction is no duplicated code between the two and one CPU/GPU memory pool on unified memory (direction, not yet done: see [`docs/architecture.md`](docs/architecture.md)).
 
 ojas pairs a compile-time safe Rust engine with an in-process Go API via `gusset`, zero-copy tensor views, reverse-mode automatic differentiation, and strict memory budgeting.
 
