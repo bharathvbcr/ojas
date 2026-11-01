@@ -91,7 +91,24 @@ missing=0
 checked=0
 siblings=""
 
-for manifest in Cargo.toml */Cargo.toml; do
+# The manifest list comes from `git ls-files`, not a glob. ojas's manifests sit
+# at more than one depth — arch02/burn-port and arch02/metal-native are two
+# levels down — so `Cargo.toml */Cargo.toml` silently skipped them, and a check
+# that looks at fewer files than it claims is this script's own failure mode,
+# one level up from the one it exists to catch. Neither of those two carries an
+# out-of-tree dependency today, so the answer was right by luck; the first one
+# added would have been missed in silence. tessl's mirror of this script
+# (tessl cd54859) reached the same conclusion independently.
+#
+# Tracked files only, which is what CI checks out. An untracked new manifest is
+# not covered — the parser-sanity failure below is the backstop if the list ever
+# comes back empty.
+manifests="$(git ls-files '*Cargo.toml' 2>/dev/null || true)"
+[ -n "$manifests" ] || fail "\`git ls-files '*Cargo.toml'\` returned nothing. Either this is not a git
+       checkout or no manifest is tracked; both mean this check cannot see what
+       it is meant to check. Fix that rather than ignoring it."
+
+for manifest in $manifests; do
   [ -f "$manifest" ] || continue
   dir="$(dirname "$manifest")"
   # Only `path = "..."` entries that leave the member directory; a path with no
