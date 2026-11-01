@@ -1,16 +1,46 @@
 # SAM memory cross-attention: which kernel runs (2026-11-01)
 
-Rules: `rules.md` in this directory, committed as `c47986b` **before** any run.
+Rules: `rules.md` in this directory, committed as `c47986b`. **Read "What was
+and was not pre-registered" below before treating any prediction here as one.**
 Harness: `ojas-metal/examples/attention_flash_bench.rs` at `dac0b5b`.
 
 ## Outcome in one line
 
-**Q1 and Q3 are settled; Q2 (timing) did not run.** The SAM memory
-cross-attention shape takes the **flash** kernel, and a biased call takes
-**split-K**, not the scalar kernel — both as predicted in `rules.md`. No
-millisecond is reported, because no clean or even lock-eligible window existed.
+**The routing has two regimes, and which one SAM is in depends on the number of
+memory frames.** At one or two memory frames the call runs tessl's tiled
+`encoder_attn` pad route; at three or more it runs the **flash** kernel. The
+profiled shape (36,320 keys, seven frames) is in the flash regime. A biased
+call takes **split-K**, not the scalar kernel. **Q2 (timing) did not run.**
 
-## Q2 first: the timing run did NOT happen
+## What was and was not pre-registered
+
+The actual sequence, local time, 2026-11-01:
+
+| time | event | evidence |
+|---|---|---|
+| 14:37:39 | the Q1 test run finished (`1 passed … 12.70s`) | `main_flash_test.log` mtime |
+| 15:18:14 | `rules.md` committed (`c47986b`) | `git log --date=iso-local` |
+| 15:48:33 | bench binary ready | `mac-heavy-wait.log` |
+| 15:48–16:03 | `mac_heavy` waited and gave up, exit 76 | `mac-heavy-wait.log` |
+| 16:07:28 | this summary first committed (`4d02dc0`) | `git log --date=iso-local` |
+
+So:
+
+- **Q1 was not pre-registered.** Its "prediction" was written forty minutes
+  after a run that had already confirmed it. It was pre-stated *knowledge*, not
+  a prediction, and it cannot count as evidence that the answer was not chosen
+  after the fact. `rules.md`'s own wording ("before the first *timed* run") is
+  literally true only because no timed run ever happened. An earlier version of
+  this file said `rules.md` was committed "before any run"; that was wrong.
+- **Q2 was genuinely pre-registered**, and never ran.
+- **Q3 was pre-stated from source**, with no run before or after it.
+- **The pre-registration also missed the pad-route regime below.** Q1 asked
+  "which kernel does the dispatcher encode" as though there were one answer for
+  the SAM shape. There are two, selected by `Tk / Tq`. `rules.md` is left
+  unedited — patching a pre-registration after the fact is the failure being
+  recorded here, not its repair.
+
+## Q2: the timing run did NOT happen
 
 `mac_heavy.sh` was given a 900 s cap (`MAC_HEAVY_MAX_WAIT_S=900`) so it would
 fail fast rather than take its 4 h default. It **never acquired the lock**:
@@ -38,43 +68,92 @@ machine — six attempts and a three-hour wait at loads of 6.3 to 111, verdict
 baseline quoted elsewhere remains SpikeTrack's `--profile ops` figure, measured
 in a different harness at unrecorded load, and is **not** reproduced here.
 
-## Q1 — the SAM shape runs the flash kernel
+## Q1 — two regimes, selected by the memory frame count
 
 The call is `[b, 8, T, 32]` with `AttentionOpts::default()`
 (`SpikeTrack/crates/st-model/src/tracker/memory_attention.rs:20-22, 150,
 163-173`): head dim **32**, 8 heads, no bias, no key lengths, non-causal.
 
-Three independent lines of evidence, none of which depends on machine load:
+### The pad route is tested first
 
-1. **Router source** [VERIFIED by reading]. `flash_cross_covers`
-   (`ojas-metal/src/backend.rs:1888`) admits it: d=32 ∈ `FLASH_CROSS_HEAD_DIMS`,
-   `!causal`, `window == 0`, `bias.is_none()`, `!has_lens`, both lengths > 0,
-   planes within i32. `flash_groups` (`:1878`) = `ceil(5184/32) · bh` =
-   162 · 8 = **1296 ≥ FLASH_MIN_GROUPS (384)**. `AttnExtra::scalar_only()`
-   (`link.rs:440`) is false — it is only `radius != 0 || dead_rows`, and
-   `dead_rows` requires key lengths with `q_len == kv_len`.
-2. **A committed test at the identical geometry, re-run today** [VERIFIED by
-   running]. `ojas-metal/tests/attention_flash.rs:465`
-   `attention_forward_beyond_the_pad_ratio_runs_the_flash_kernel` uses
-   `Case::new(1, 8, 8, 5184, 15584)` with `const D = 32` — B=1, H=8, Tq=5184,
-   D=32, the SAM geometry — and asserts `Ran::FLASH` **and 6 dispatches**
-   ("3 scans, the kernel, 2 output checks"), against split-K's 7. It passed on
-   this machine today: `test result: ok. 1 passed; … finished in 12.70s`.
-   TensorOps is available here, so it took the `Ran::FLASH` branch and not the
-   `Ran::SPLITK` one — `ojas-metal/examples/alloc_bench.rs:500` carries an
-   unconditional `assert!(main.has_tensorops())` and the committed
-   `bench/results/2026-10-27-alloc/smoke-output.txt` contains the `# backend
-   24 GiB: …` line printed immediately after it.
-3. **A committed statement of the rule at the SAM key count** [COMMITTED CLAIM].
+[VERIFIED by reading]. SpikeTrack calls `attention_forward`, the inference
+form. That method checks `routes_to_encoder_attn`
+(`ojas-metal/src/backend.rs:1706`, predicate at `:1712`) at **`:2669`, before
+it reaches `attn_forward` and the flash ladder at all**, and hands the call to
+tessl's tiled `encoder_attn` when every term holds. For this call they all do
+except the length ratio: head dim 32 is in `ENCODER_ATTN_HEAD_DIMS` (`:1671`),
+there is no bias, causal flag, window, radius or key length, and the planes fit.
+What decides it is
+
+```rust
+dims.kv_len as f64 <= max_ratio * dims.q_len as f64   // ENCODER_ATTN_MAX_PAD_RATIO = 2.25, :1688
+```
+
+so with `Tq = 5184` the boundary is **11,664 keys**.
+
+### Which frame counts land where
+
+SAM's key count is `Tk = F · 5184 + P` for `F` memory frames and `P` object-
+pointer tokens (`memory_attention.rs:118-127`: `m != mi + p` and
+`mi % tokens != 0` are refused, `frames = mi / tokens`, `tokens` = 5184 at
+1008×1008). Object pointers arrive 16 tokens at a time — ojas's own comment at
+`backend.rs:1684-1686` states the ratio as `F + P · 16 / 5184` — and the
+profiled 36,320 is `7 · 5184 + 32`, seven frames and two pointer groups.
+
+| memory frames | `Tk` | `Tk / Tq` | kernel |
+|---|---|---|---|
+| 1 | 5,184 + P | 1.00 … | tessl `encoder_attn` (pad route) |
+| 2 | 10,368 + P | 2.00 … | tessl `encoder_attn` (pad route) |
+| 3 | 15,552 + P | 3.00 … | **flash** |
+| 7 (profiled) | 36,320 | 7.006 | **flash** |
+
+At `F = 2` the pad route holds for any pointer count up to `P = 1,296` tokens
+(81 groups), so every realistic two-frame call takes it. At `F = 3` the ratio
+starts at 3.00, already past 2.25, so no three-frame call takes it. There is no
+`F` for which the boundary is in doubt — which is what the 2.25 bound was chosen
+for (`:1680-1687`).
+
+**One caveat on the pad regime** [VERIFIED by reading]: `encoder_attn_forward`
+returns `Ok(None)` when the budget has room for the output but not for the pad
+route's scratch (`:1068-1072`), and the caller then falls through. So an `F ≤ 2`
+call on a tight budget *does* reach the flash ladder, and `flash_cross_covers`
+would admit it. The pad route is the kernel for `F ≤ 2` whenever the budget
+allows it, not unconditionally.
+
+### Evidence that the flash regime runs the flash kernel
+
+1. **Router source** [VERIFIED by reading] — the primary evidence.
+   `flash_cross_covers` (`ojas-metal/src/backend.rs:1888`) admits the call:
+   d=32 ∈ `FLASH_CROSS_HEAD_DIMS`, `!causal`, `window == 0`, `bias.is_none()`,
+   `!has_lens`, both lengths > 0, planes within i32. `flash_groups` (`:1878`) =
+   `ceil(5184/32) · bh` = 162 · 8 = **1296 ≥ FLASH_MIN_GROUPS (384)**.
+   `AttnExtra::scalar_only()` (`link.rs:440`) is false — it is only
+   `radius != 0 || dead_rows`, and `dead_rows` requires key lengths with
+   `q_len == kv_len`. And the pad route is excluded, because 36,320 > 11,664.
+2. **A committed statement of the rule at the SAM key count** [COMMITTED CLAIM].
    `ojas-metal/tests/attention_tiled.rs:574-577`, in the `tk ∈ [5200, 10400,
    15616, 36544]` loop: "`attention_forward` takes the pad route up to
    Tk = 2.25 Tq (11664 keys here); beyond it, at head dim 32 with these 1296
-   threadgroups, it runs the flash kernel". 36,320 and 36,400 are both far
-   beyond 11,664.
-
-Nothing in the routing depends on `Tk` beyond `kv_len > 0` and the i32 plane
-bound (36,400 · 32 = 1.16 M, far inside it), so the step from Tk = 15,584
-(asserted, re-run today) to Tk = 36,400 carries.
+   threadgroups, it runs the flash kernel". That sentence states both regimes,
+   and its loop exercises both sides of the boundary.
+3. **A committed test at the three-frame shape, re-run today** — the run is
+   [VERIFIED by running]; what it proves about the kernel is **[INFERRED]**.
+   `ojas-metal/tests/attention_flash.rs:465`
+   `attention_forward_beyond_the_pad_ratio_runs_the_flash_kernel` uses
+   `Case::new(1, 8, 8, 5184, 15584)` with `const D = 32`. Its `Tk` is
+   `3 · 5184 + 32` — exactly the **smallest flash-regime SAM shape**, which is
+   why the test's own doc comment says it covers the case "where the pad route
+   does not (`Tk` beyond 2.25 `Tq`)". It passed on this machine today:
+   `test result: ok. 1 passed; … finished in 12.70s`.
+   **It is not evidence of which kernel ran.** Its assertion is inside
+   `if m.has_tensorops()` (`:479`): with TensorOps it asserts `Ran::FLASH` and 6
+   dispatches, and without it asserts `Ran::SPLITK` and 7 — so the test passes
+   on either branch and cannot fail on the question Q1 asks. That this machine
+   has TensorOps is itself inferred, from `alloc_bench.rs:500`'s unconditional
+   `assert!(main.has_tensorops())` and the committed
+   `bench/results/2026-10-27-alloc/smoke-output.txt`, an October 27 artifact —
+   not established today. A test that pins the kernel at this shape regardless
+   of TensorOps does not exist.
 
 **Not verified:** the assertion was not re-run at Tk = 36,320 itself; that was
 the row the lock refused.
@@ -103,7 +182,9 @@ split-K.
 
 For the detector row specifically (`[1,8,201,32]` over `[1,8,5184,32]`, bias
 `[1,8,201,5184]`): flash is excluded twice — `bias.is_none()` fails *and*
-`flash_groups = ceil(201/32)·8 = 56 < 384` — and split-K takes it.
+`flash_groups = ceil(201/32)·8 = 56 < 384` — and split-K takes it. The pad route
+is excluded too: `padded_ok` requires `q_len <= kv_len` *and* the ratio bound,
+and 5184 / 201 is 25.8.
 
 **Not verified:** this test was not re-run today (the lock refused); it is a
 committed assertion in the suite. Its shapes are synthetic (Tk = 64), sized
@@ -118,9 +199,13 @@ to scalar" fails on the head dim *and* on this, independently.
 
 ## What this run changes, and what it does not
 
-- **Settled:** the routing. There is no routing gap at the SAM shape, so the
-  briefed work — widening flash to cover bias and key lengths at head dim 256 —
-  would not touch this call.
+- **Settled:** the routing, and that it has two regimes. There is no routing gap
+  at the SAM shape in either of them, so the briefed work — widening flash to
+  cover bias and key lengths at head dim 256 — would not touch this call.
+- **New:** nobody had noticed the pad-route regime. A SAM tracker running on one
+  or two memory frames is not exercising the flash kernel at all, so a flash
+  change measured at seven frames says nothing about it, and the reverse.
+  Any future attention measurement for SpikeTrack has to name its frame count.
 - **Untouched:** `ATT_BQ` and every other kernel constant. Raising it was
   considered and **withdrawn**: it lives in the shared
   `ojas-metal/kernels/attn_bwd_tiled.h:62-65` and is compiled into the causal
@@ -161,4 +246,15 @@ because ojas's sibling path dependencies (`tessl = ../../tessl`, gusset
 `../../../devtools/gusset`) do not resolve from `.claude/worktrees/<lane>/`,
 and symlinks cannot fix it (cargo canonicalizes; a sibling crate linked under
 the ojas tree is captured into ojas's workspace, and tessl depends back on
-`../ojas/ojas-core`). Both checkouts were clean at `dac0b5b`.
+`../ojas/ojas-core`).
+
+**Checkout state** [VERIFIED by `stat` and `git status`]. The main checkout was
+clean of modifications when the Q1 test ran (14:37:39) and when the binary was
+built (15:48:33). By 15:51:45 and 15:52:42 a sibling session had modified
+`ojas-oracle/python/gemma_ops_fixture.py` and
+`ojas-oracle/fixtures/gemma_ops/golden.txt` — a Python fixture generator and its
+golden text, neither compiled into the flash path — so the main checkout was
+*not* clean when this summary was first written at 16:07:28, as an earlier
+version of this sentence claimed. The Rust edits now present there
+(`ojas-metal/src/backend.rs` and others, 16:44 onward) all postdate that commit.
+This worktree was clean throughout.
