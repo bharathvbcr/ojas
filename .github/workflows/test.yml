@@ -76,6 +76,17 @@ jobs:
           ./scripts/check_tracked_targets_test.sh
           ./scripts/check_tracked_targets_adversarial_test.sh
           ./scripts/check_tracked_targets.sh
+      - name: Sibling layout guard self-tests
+        working-directory: ${{ env.OJAS }}
+        # The self-test, not check_siblings.sh itself: the guard runs first in
+        # ci_local.sh, and on a hosted runner the sibling checkouts are what
+        # the job's own checkout steps provide. What needs pinning here is that
+        # the guard still FAILS when it should — it has three times reported
+        # success while blind to something (a glob that read fewer manifests
+        # than it claimed, a counter that made the zero-dependency guard unable
+        # to fire, and word splitting that skipped a manifest path containing a
+        # space).
+        run: ./scripts/check_siblings_test.sh
       - name: fmt (ojas packages only, not the tessl/gusset path deps)
         working-directory: ${{ env.OJAS }}
         run: ./scripts/fmt_check.sh

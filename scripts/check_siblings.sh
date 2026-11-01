@@ -109,7 +109,14 @@ manifests="$(git ls-files '*Cargo.toml' 2>/dev/null || true)"
        checkout or no manifest is tracked; both mean this check cannot see what
        it is meant to check. Fix that rather than ignoring it."
 
-for manifest in $manifests; do
+# Read on fd 3, one line per manifest, rather than `for manifest in $manifests`.
+# Word splitting would break `my crate/Cargo.toml` into two non-existent paths,
+# both of which the `-f` test below skips in silence — so a manifest whose path
+# contains a space was simply not checked, and with it any out-of-tree
+# dependency it declared. Caught by check_siblings_test.sh case 7; fd 3 keeps
+# this loop's input clear of the inner heredoc below.
+while IFS= read -r manifest <&3; do
+  [ -n "$manifest" ] || continue
   [ -f "$manifest" ] || continue
   dir="$(dirname "$manifest")"
   # Only `path = "..."` entries that leave the member directory; a path with no
@@ -141,7 +148,9 @@ for manifest in $manifests; do
   done <<EOF_PATHS
 $(grep -oE 'path[[:space:]]*=[[:space:]]*"[^"]+"' "$manifest" 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/' || true)
 EOF_PATHS
-done
+done 3<<EOF_MANIFESTS
+$manifests
+EOF_MANIFESTS
 
 # The guard is on `external`, not on `checked`. `checked` counts every `path`
 # containing `..`, and most of those never leave the repository — `../ojas-core`
