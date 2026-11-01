@@ -64,17 +64,15 @@ flowchart TD
 
 The diagram is a target. Which side owns a shared leaf (a new crate under both, or `ojas-core` as a dependency of tessl) is an open decision, because tessl must keep building without an ojas checkout in its own CI and `links = "tessl"` allows one tessl source per build.
 
-### Memory goal: one pool for CPU and GPU on unified memory
+### Unified memory: single shared pool for CPU and GPU (shipped in M2)
 
-Goal (direction): on Apple Silicon, one allocator hands out unified-memory allocations that carry both a host pointer and a GPU address, charged to one `Budget`. The CPU backend and the Metal extension then operate on the same bytes, and `upload` and `download` become a fence rather than a copy. wgpu and CUDA keep their copy-based paths; the shared-pool trait is opt-in per backend and never becomes a silent fallback.
+On Apple Silicon, one authoritative root ledger (`ojas_core::Budget`) manages unified-memory allocations that carry both a host pointer and a GPU address, eliminating duplicate memory representations and bridging `tessl::SharedBuf` and `ojas-core::MappedBuffer` via `Payload::Mapped`.
 
-Today (verified in this tree), memory is not shared even inside Metal:
-
-- **Three ledgers that do not see each other.** (1) `ojas_core::Budget` (`ojas-core/src/budget.rs:19`) counts requested bytes and refuses. (2) tessl's `BufferPool` (`tessl/src/runtime.rs:245`) buckets sizes (`bucket()` at `runtime.rs:270-277`) and keeps a freelist cache that no `Budget` charges. (3) `MTLDevice.currentAllocatedSize`, read process-wide (`ojas-metal/src/memory.rs:12-14`). `ojas-metal` bridges them with its own commit and cap machinery, so charged bytes are lower than resident bytes.
-- **Four `GpuRuntime::new` sites in one process, so four pools.** `ojas-metal/src/device.rs:576` (the device thread), `ojas-metal/src/gpu.rs:330` (`Session::open`), `ojas-qwen35/src/step.rs:399` (`Qwen35Step::open`) and `gemma-metal/src/kernels.rs:816` (`new_inference`, outside this repo; from the unification map, not re-read here). Each has its own queue, pool, pipeline cache and residency set, with different cache caps.
-- **No zero-copy path.** Every tessl buffer is already `StorageModeShared` (`tessl/src/runtime.rs:299`), so the hardware allows it. But `ojas-core` cannot see the bytes: `Payload` is a host `Vec` or an `Arc<dyn DeviceBuffer>` (`ojas-core/src/tensor.rs:152`), and `DeviceBuffer` exposes only a copying `read_bytes` (`ojas-core/src/tensor.rs:19`). Every crossing is a counted copy.
-
-What stands between today and the goal (each is a design decision, not yet made): a `Send + Sync` handle onto tessl's `!Send` `GpuRuntime`; a fence-based host view in place of tessl's exclusive host-access lease; one accountant for resident bytes (the bucket, not the request); a typed allocation error from tessl in place of the string matching in `ojas-metal/src/device.rs:515-551`; and an `unsafe` boundary placed in a crate `AGENTS.md` already allows (`ojas-device`, `ojas-simd` or `ojas-gusset-engine`), not in `ojas-core`. A host `Vec` cannot adopt a Metal allocation, so a new storage variant is needed first; see [`typed-storage-plan.md`](typed-storage-plan.md).
+- **Sole Authoritative Root Ledger (`ojas_core::Budget`):** All memory permits are requested from `Budget`. `BudgetTrimHandler` connects `tessl`'s buffer pool to the budget, automatically draining freelist caches under memory pressure before failing.
+- **Zero-Copy Host/GPU Sharing (`Payload::Mapped`):** `tessl::SharedBuf` (`src/shared_buf.rs`) implements `ojas_core::MappedBuffer` (`ojas-core/src/hal.rs`) over pooled `StorageModeShared` Metal allocations. CPU threads and the Metal GPU read and write the exact same physical bytes with zero intermediate copies.
+- **Fence Synchronization & Mutual Exclusion:** Host access acquires RAII leases (`HostLease` for read, `HostLeaseMut` for exclusive write). Leases synchronize with GPU completion stamps (`last_use`, `last_write`) on the `Timeline`. A GPU bind against an active host lease is refused immediately (`FenceError::Busy`).
+- **Fail-Closed Placement Invariants:** Host slice accessors (`host_window`, `host_data`, `host_data_mut`) fail closed with `OjasError::Placement` when called on mapped or device tensors, preventing unmetered out-of-band CPU reads. Callers must acquire a host lease explicitly or call `.to_host(budget)`.
+- **Elimination of Duplicate Code:** 3,735 lines of unverified `gpu.rs` were eliminated from `ojas-metal`, routing all Metal allocation and execution through `tessl`'s allocator under `Budget`.
 
 ### What is deliberately not duplicated
 
@@ -218,14 +216,26 @@ stateDiagram-v2
 
 ---
 
+### 3.3 Unified Hardware Abstraction Layer (HAL) & Zero-Copy UMA
+
+The vendor-neutral HAL (`ojas_core::hal`) provides the traits through which backends share memory with host CPU code without copying:
+* **`MappedBuffer`:** trait extending `DeviceBuffer` representing host-visible GPU memory allocations (e.g. `StorageModeShared` on Apple Silicon). Exposes `host_ptr()`, `gpu_address()`, and safe lease-acquisition methods (`host_read()`, `host_write()`).
+* **`HostLease` & `HostLeaseMut`:** RAII shared read and exclusive write borrows over a mapped buffer. Synchronizes with GPU execution timeline stamps (`last_use`, `last_write`), ensuring mutual exclusion between GPU kernels and CPU memory slices.
+* **`Timeline`:** Monotonic device completion counter tracking submitted and finished sequence numbers, with poison state handling.
+* **`AllocError`:** Strongly typed device allocation error enum (`OverBudget`, `Exhausted`, `TooLarge`, `InvalidAlignment`, `DeviceLost`) that converts directly to `OjasError::CapacityExceeded`.
+* **`Payload::Mapped`:** Tensor storage variant that encapsulates `Arc<dyn MappedBuffer>`, bridging `tessl::SharedBuf` into the ojas tensor engine. Direct host accessors fail closed with `OjasError::Placement`.
+
+---
+
 ## 4. Dynamic Reverse-Mode Autograd Tape
 
 `ojas-autograd` implements a dynamic tape-based automatic differentiation engine. On a CPU backend the tensors stay as given and the cross-entropy seed is scaled on the host. On any other backend, `leaf` and the saved inputs are uploaded, reshape is a zero-copy `Tensor::view`, and the backward seed is uploaded. A non-root cross-entropy gradient is scaled with two rank-1 linears and a multiply, all on that backend.
 
-The tape records both transformer and vision/encoder operational adjoints:
+The tape records transformer, vision/encoder, and embedding operational adjoints:
 - **Core Ops:** `Tape::linear`, `Tape::rms_norm`, `Tape::silu`, `Tape::attention`, `Tape::cross_entropy`.
-- **Vision & Encoder Backwards:** `Tape::layer_norm`, `Tape::channel_layer_norm` (2D LayerNorm over channels), `Tape::gelu_erf` (`gelu_erf_backward_exact`), `Tape::linear_bias` (simultaneous $dX, dW, db$; frozen weights with `!needs_grad` bypass $dW$ GEMM computation entirely), `Tape::broadcast_add`, `Tape::broadcast_mul`, `Tape::scale`, `Tape::softmax`.
-- **Spatial Backwards:** `Tape::conv2d`, `Tape::conv_transpose2d`, `Tape::max_pool2d`.
+- **Gemma Embedding Ops:** `Tape::gelu_tanh` (exact analytical sigmoid backward in `f64`).
+- **Vision & Encoder Backwards:** `Tape::layer_norm`, `Tape::channel_layer_norm` (2D LayerNorm over channels), `Tape::gelu_erf` (`gelu_erf_backward_exact`), `Tape::relu`, `Tape::linear_bias` (simultaneous $dX, dW, db$; frozen weights with `!needs_grad` bypass $dW$ GEMM computation entirely), `Tape::broadcast_add`, `Tape::broadcast_mul`, `Tape::scale`, `Tape::softmax`, `Tape::group_norm`, `Tape::bilinear`, `Tape::rope_interleaved`, `Tape::concat`, `Tape::slice`.
+- **Spatial Backwards:** `Tape::conv2d`, `Tape::conv_transpose2d`, `Tape::max_pool2d` (window inverse gather).
 - **Hardware Device Testing:** On macOS Metal, `tests/metal_tape.rs` runs real GPU device-resident seeded backward adjoint sweeps with zero unbudgeted readbacks.
 
 ```mermaid

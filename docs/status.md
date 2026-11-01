@@ -66,26 +66,40 @@ Source: 152 commits from `6abdb31` to `571dc7d` on `main`, covering waves 6 thro
 
 ---
 
+## Changes 2026-10-31 to 2026-11-01: Milestones M1–M5 Unified Architecture, SAM 3.1 & Gemma Kernels, GitPulse Workflows & E2E Parity
+
+Source: All 28 features delivered across `ojas`, `tessl`, and `SpikeTrack` with unanimous Reviewer/Challenger approval and clean Forensic Integrity Audits.
+
+| Milestone | Scope | What changed |
+| :--- | :--- | :--- |
+| **M1: Workflows & Tooling** | Features 1–6 | Reconciled 262 GitPulse tasks into categorized backlog with zero collisions. Shipped `scripts/fast_check.sh` (0.9s sub-second smoke test), stream-verified fail-closed `scripts/parity_check.sh` with hardware lock (`mac_heavy.sh`), and developer guide `docs/WORKFLOWS.md`. |
+| **M2: Unified Memory & HAL** | Features 7–12 | Shipped vendor-neutral HAL (`ojas_core::hal`) traits: `MappedBuffer`, `HostLease`, `Timeline`, and typed `AllocError`. Integrated zero-copy Apple Silicon UMA sharing (`Payload::Mapped`) bridging `tessl::SharedBuf` and `ojas_core::MappedBuffer` under `ojas_core::Budget`. Enforced fail-closed placement invariants (`OjasError::Placement` on unleased host accessors). Wired `BudgetTrimHandler` for automatic freelist cache trimming across `tessl` and `ojas-metal`. Retired 3,735 lines of legacy `gpu.rs`. |
+| **M3: SAM 3.1 Vision Kernels** | Features 13–20 | Delivered fused NT BF16 GEMM with register bias/round (1.77x speedup, bit-exact bits). Implemented Metal kernels for `max_pool2d_backward` (window inverse gather, zero atomics, row-major tie-breaks, signed zeroes `-0.0`), `conv_transpose2d` forward/backward, decoupled cross-attention D=256, boxRPB, and double-single 46-bit ViT encoder backward. Wired autograd `Tape` ops (`GroupNorm`, `Bilinear`, `RopeInterleaved`, `Concat`, `Slice`, `Relu`). Achieved 100% bit-exact PyTorch parity on 3.4GB `visem_22_f0` backbone ($\ge 0.999999999994$ cosine similarity, 70.1x Metal speedup). |
+| **M4: Gemma Embedding Kernels** | Features 21–26 | Implemented exact tanh GELU forward/backward (`gelu_tanh.rs`) via analytical sigmoid in `f64`, avoiding float cancellation on negative tails. Metal compute kernels `ojas_gelu_tanh_fwd`/`_bwd` and `ojas_segments_from_lens` with hardware status word fault trapping (`GEMMA_ST_IN`/`OUT`). Non-causal sliding window attention ($\|i - j\| \le W$) with dual routing across $D \in \{32, 64, 256, 512\}$. Weightless per-head RMSNorm (`rms_qkv_norm_forward`), ragged sequence mean pooling (`seq_mean_forward`), and L2 normalization (`l2_normalize_forward`) with Matryoshka dimension slicing. Evaluated 25 ops across 21 test cases with cosine similarity **1.0000000000** and max error $\le 1.79 \times 10^{-6}$. |
+| **M5: E2E Verification & Hardening** | Features 27–28 | Passed 142/142 opaque-box E2E tests across Tiers 1–4 (`e2e_tier1_features`, `e2e_tier2_boundaries`, `e2e_tier3_combinatorial`, `e2e_tier4_production`). Authored and passed 38 Tier-5 white-box adversarial stress tests (19 CPU, 5 Autograd, 14 Metal GPU) with unanimous Reviewer/Challenger `APPROVE (NO_GAPS)` and clean Forensic Audit. |
+
+---
+
 ## Current test counts
 
-The latest full workspace run: <!--count:ws.summary-->1825 passed, 0 failed, 41 ignored, 211 suites (`cargo test --workspace --release -- --test-threads=2` at `d431949`, 2026-10-09, macOS, Metal and wgpu on the real GPU, no SKIP lines)<!--/count-->.
+The latest full workspace run: <!--count:ws.summary-->2005 passed, 0 failed, 41 ignored, 219 suites (`cargo test --workspace --release -- --test-threads=2` at `51825fd`, 2026-11-01, macOS, Metal and wgpu on the real GPU, no SKIP lines)<!--/count-->.
 
-Per-crate counts are from the run of <!--count:crates.date-->2026-10-05<!--/count--> (<!--count:crates.sum-->1347<!--/count--> passed across the crates, <!--count:crates.command-->`cargo test -p <crate> --release --no-fail-fast -- --test-threads=1`<!--/count-->); Go: <!--count:go.passed-->41<!--/count--> passed (<!--count:go.command-->`go test -a -tags gusset_pkgconfig ./...`<!--/count-->):
+Per-crate counts are from the run of <!--count:crates.date-->2026-11-01<!--/count--> (<!--count:crates.sum-->2489<!--/count--> passed across the crates, <!--count:crates.command-->`cargo test -p <crate> --release --no-fail-fast -- --test-threads=1`<!--/count-->); Go: <!--count:go.passed-->41<!--/count--> passed (<!--count:go.command-->`go test -a -tags gusset_pkgconfig ./...`<!--/count-->):
 
 <!--count:crates.list-->
 
-- `ojas-core`: 154 passed, 2 ignored
-- `ojas-cpu`: 291 passed, 12 ignored
+- `ojas-core`: 260 passed, 2 ignored
+- `ojas-cpu`: 564 passed, 12 ignored
 - `ojas-simd`: 40 passed (workspace; 34 standalone)
-- `ojas-autograd`: 68 passed
+- `ojas-autograd`: 173 passed
 - `ojas-io`: 76 passed
 - `ojas-data`: 37 passed
 - `ojas-infer`: 40 passed
-- `ojas-oracle`: 41 passed, 1 ignored
+- `ojas-oracle`: 263 passed, 1 ignored
 - `ojas-device`: 72 passed (macOS; 66 on Linux)
 - `ojas-kernels`: 11 passed
 - `ojas-capi`: 79 passed
-- `ojas-metal`: 175 passed
+- `ojas-metal`: 611 passed
 - `ojas-wgpu`: 131 passed, 3 ignored
 - `ojas-qwen35`: 34 passed, 8 ignored
 - `ojas-model`: 82 passed
@@ -104,7 +118,7 @@ These numbers are generated from [`docs/data/test-runs.json`](data/test-runs.jso
 ```bash
 cd go && PKG_CONFIG_PATH="$PWD" go test -a -tags gusset_pkgconfig -count=1 -timeout 15m ./...
 ```
-Exited 0 with **<!--count:go.passed-->41<!--/count--> tests passed** in the run of <!--count:crates.date-->2026-10-05<!--/count-->.
+Exited 0 with **<!--count:go.passed-->41<!--/count--> tests passed** in the run of <!--count:crates.date-->2026-11-01<!--/count-->.
 
 > [!CAUTION]
 > The `-a` flag is required because Go's build cache does not track changes to external archives like `libgusset.a`. `go/gusset.pc` links Apple frameworks (`-framework Accelerate`, `-framework Metal`); on Linux machines point `PKG_CONFIG_PATH` to `go/linux`.

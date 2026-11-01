@@ -190,12 +190,21 @@
 <tr><td><strong>LayerNorm</strong></td><td><code>Tape::layer_norm</code></td><td>Exact two-pass LayerNorm backward for activations, gamma, and beta.</td></tr>
 <tr><td><strong>Channel LayerNorm</strong></td><td><code>Tape::channel_layer_norm</code></td><td>2D LayerNorm backward over channel dimension $[B, C, H, W]$.</td></tr>
 <tr><td><strong>GELU (erf)</strong></td><td><code>Tape::gelu_erf</code></td><td>Exact Gaussian error function and derivative backward (<code>gelu_erf_backward_exact</code>).</td></tr>
+<tr><td><strong>GELU (tanh)</strong></td><td><code>Tape::gelu_tanh</code></td><td>Analytical double-precision sigmoid formulation backward avoiding negative-tail float cancellation.</td></tr>
+<tr><td><strong>ReLU</strong></td><td><code>Tape::relu</code></td><td>Rectified Linear Unit gradient step masking ($dX = dY \cdot \mathbb{I}_{X &gt; 0}$).</td></tr>
 <tr><td><strong>Softmax</strong></td><td><code>Tape::softmax</code></td><td>Softmax adjoint $dX = S \odot (dY - \sum (dY \odot S))$ along dimension.</td></tr>
 <tr><td><strong>Broadcast Add</strong></td><td><code>Tape::broadcast_add</code></td><td>Gradient passed to operands, reducing across broadcast dimensions.</td></tr>
 <tr><td><strong>Broadcast Mul</strong></td><td><code>Tape::broadcast_mul</code></td><td>Scaled gradient passed to operands with reduction across broadcast dimensions.</td></tr>
 <tr><td><strong>Scale</strong></td><td><code>Tape::scale</code></td><td>Scalar multiplication adjoint $dX = dY \cdot \alpha$.</td></tr>
 <tr><td><strong>Attention</strong></td><td><code>Tape::attention</code></td><td>Causal and general attention adjoints (dQ, dK, dV, and optional score bias).</td></tr>
 <tr><td><strong>Cross-Entropy</strong></td><td><code>Tape::cross_entropy</code></td><td>Target-excluded or fused chunked softmax cross-entropy adjoint.</td></tr>
+<tr><td><strong>Conv2D</strong></td><td><code>Tape::conv2d</code></td><td>2D spatial convolution adjoint (input and weight gradients).</td></tr>
+<tr><td><strong>ConvTranspose2D</strong></td><td><code>Tape::conv_transpose2d</code></td><td>2D transposed convolution adjoint.</td></tr>
+<tr><td><strong>MaxPool2D</strong></td><td><code>Tape::max_pool2d</code></td><td>Deterministic window inverse gather with first-occurrence tie breaking.</td></tr>
+<tr><td><strong>GroupNorm</strong></td><td><code>Tape::group_norm</code></td><td>Two-pass normalization adjoint across channel groups.</td></tr>
+<tr><td><strong>Bilinear Interpolation</strong></td><td><code>Tape::bilinear</code></td><td>Continuous bilinear sampling adjoint with dual <code>align_corners</code> modes.</td></tr>
+<tr><td><strong>RoPE Interleaved</strong></td><td><code>Tape::rope_interleaved</code></td><td>Adjacent-pair 2D axial rotary position embedding adjoint.</td></tr>
+<tr><td><strong>Concat &amp; Slice</strong></td><td><code>Tape::concat</code> / <code>Tape::slice</code></td><td>Multi-branch gradient fan-in routing and slice gradient placement.</td></tr>
 </tbody></table></div>
 <hr>
 <h2 id="numerical-gradcheck-oracle-central-diff">Numerical Gradcheck Oracle (<code>central_diff</code>) <a class="anchor" href="#numerical-gradcheck-oracle-central-diff" aria-label="Link to this section">#</a></h2>

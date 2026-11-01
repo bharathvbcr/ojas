@@ -262,6 +262,28 @@
 </li>
 </ul>
 </li>
+<li><strong>Gemma Embedding Operations Suite (<code>src/gemma_ops.rs</code>, since 2026-10-31):</strong>
+<ul>
+<li><strong>GELU Tanh Forward &amp; Backward (<code>gelu_tanh_forward</code>/<code>_backward</code>):</strong> Exact tanh-approximate GELU evaluated via double-precision analytical sigmoid formulation $y = x \cdot \sigma(2 \cdot \sqrt{2/\pi} \cdot (x + 0.044715 x^3))$ in <code>f64</code>. Avoids the catastrophic float cancellation and NaN hazards found in naive $1 + \tanh(\dots)$ implementations on extreme negative tails.
+</li>
+<li><strong>Ragged Sequence Mean Pooling (<code>seq_mean_forward</code>, <code>segment_mean_rows</code>):</strong> Evaluates mean embeddings over ragged variable-length sequences from boundary segment offsets without padding waste or heap allocation overhead.
+</li>
+<li><strong>$L_2$ Normalization &amp; Matryoshka Slicing (<code>l2_normalize_forward</code>, <code>l2_normalize_rows</code>):</strong> Evaluates unit-norm vectors with $\epsilon$ denominator stabilization, verifying invariance across full-dimension and Matryoshka dimension prefixes (e.g. 512, 256, 128).
+</li>
+<li><strong>Weightless Per-Head RMS QK/V Norm (<code>rms_qkv_norm_forward</code>):</strong> Evaluates per-head normalization without learned affine weights across $Q$, $K$, and $V$ tensors with strict non-finite checking.
+</li>
+</ul>
+</li>
+<li><strong>SAM Vision Operations &amp; Exact Numerics Contract (since 2026-10-31):</strong>
+<ul>
+<li><strong>Max Pooling Forward &amp; Backward (<code>max_pool2d_forward</code>/<code>_backward</code>):</strong> Evaluates 2D spatial pooling with deterministic row-major first-occurrence tie-breaking. The backward pass executes a window inverse gather with zero atomic contentions, preserving signed zero (<code>-0.0</code>) gradients.
+</li>
+<li><strong>Transposed Convolution (<code>conv_transpose2d_forward</code>/<code>_backward</code>):</strong> Implements exact 2D transposed convolution supporting arbitrary stride, padding, dilation, and output padding, verified against PyTorch golden references.
+</li>
+<li><strong>Bit-Identical Exact Numerics (<code>Numerics::Exact</code>):</strong> Every reduction runs in a fixed, documented ascending order. Parallel execution splits whole independent rows without splitting summations, guaranteeing bit-identical outputs regardless of worker thread count (1..=256 threads). Any non-finite operand fails closed immediately with <code>OjasError::NonFinite</code>.
+</li>
+</ul>
+</li>
 </ol>
 </aside>
       </article>

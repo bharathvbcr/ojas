@@ -263,13 +263,17 @@
 <h2 id="compute-backend-contract-backend">Compute Backend Contract (<code>Backend</code>) <a class="anchor" href="#compute-backend-contract-backend" aria-label="Link to this section">#</a></h2>
 <p>The <code>Backend</code> trait defines the uniform operator interface implemented by compute engines (<code>CpuBackend</code>, <code>MetalBackend</code>, <code>WgpuBackend</code>):</p>
 <ul>
-<li>Forward and backward linear transformations, activations (GELU, SiLU, ReLU, Sigmoid), and causal multi-head attention.
+<li>Forward and backward linear transformations, activations (GELU erf, GELU tanh, SiLU, ReLU, Sigmoid), and causal multi-head attention.
+</li>
+<li><strong>GELU Tanh (<code>gelu_tanh</code>):</strong> Exact tanh-approximate Gaussian Error Linear Unit forward and backward evaluated via an analytical sigmoid formulation in <code>f64</code> (<code>ojas_core::gelu_tanh</code>), avoiding catastrophic negative-tail floating-point cancellation.
 </li>
 <li><strong>General attention:</strong> <code>attention_forward</code>, <code>attention_forward_saving</code>, and <code>attention_backward</code> with <code>AttentionOpts { causal, window, bias, key_lens }</code> for bidirectional attention, cross-attention ($T_q \ne T_k$), broadcastable additive score bias $[B, H, T_q, T_k]$, and key-length masks.
 </li>
-<li><strong>Spatial operations (<code>ojas_core::spatial</code>):</strong> forward and backward for <code>conv2d</code> and <code>conv_transpose2d</code>, <code>max_pool2d_forward</code>/<code>_backward</code>, <code>interpolate_bilinear_forward</code>, <code>rope_interleaved_forward</code>/<code>_backward</code>, and window partition/merge (supporting zero-padding for non-divisible dimensions) and pixel shuffle/unshuffle helpers.
+<li><strong>Gemma embedding operations:</strong> <code>seq_mean_forward</code> (ragged sequence mean pooling over variable-length inputs without padding waste), <code>l2_normalize_forward</code> (L2 vector normalization with epsilon stabilization and Matryoshka dimension prefix slicing), and <code>rms_qkv_norm_forward</code> (weightless per-head Q/K/V RMSNorm).
 </li>
-<li><strong>Vision and encoder operations:</strong> forward and backward <code>layer_norm_forward</code>/<code>_backward</code>, <code>channel_layer_norm_forward</code>/<code>_backward</code>, <code>group_norm_forward</code>, <code>gelu_erf_forward</code>/<code>_backward</code>, <code>relu_forward</code>, <code>linear_bias_forward</code>/<code>_backward</code>, <code>broadcast_add_forward</code>/<code>_backward</code>, <code>broadcast_mul_forward</code>/<code>_backward</code>, <code>scale_forward</code>, <code>softmax_forward</code>/<code>_backward</code>, <code>concat</code>, <code>slice</code>, and <code>fill</code>.
+<li><strong>Spatial operations (<code>ojas_core::spatial</code>):</strong> forward and backward for <code>conv2d</code> and <code>conv_transpose2d</code>, <code>max_pool2d_forward</code>/<code>_backward</code>, <code>interpolate_bilinear_forward</code>/<code>_backward</code>, <code>rope_interleaved_forward</code>/<code>_backward</code>, and window partition/merge (supporting zero-padding for non-divisible dimensions) and pixel shuffle/unshuffle helpers.
+</li>
+<li><strong>Vision and encoder operations:</strong> forward and backward <code>layer_norm_forward</code>/<code>_backward</code>, <code>channel_layer_norm_forward</code>/<code>_backward</code>, <code>group_norm_forward</code>/<code>_backward</code>, <code>gelu_erf_forward</code>/<code>_backward</code>, <code>relu_forward</code>/<code>_backward</code>, <code>linear_bias_forward</code>/<code>_backward</code>, <code>broadcast_add_forward</code>/<code>_backward</code>, <code>broadcast_mul_forward</code>/<code>_backward</code>, <code>scale_forward</code>, <code>softmax_forward</code>/<code>_backward</code>, <code>concat</code>, <code>slice</code>/<code>slice_backward</code>, and <code>fill</code>.
 </li>
 <li><strong>Numerics &amp; Exponentials (<code>ojas_core::exp_exact</code>):</strong> Bit-exact ascending exponential reductions, <code>ln_wide</code>, and <code>log1p_exact</code> providing stable loss evaluation for softmax collapse / target-excluded cross-entropy forms.
 </li>
@@ -280,6 +284,52 @@
 <li>In-place optimizer steps: <code>adamw_step</code> and <code>muon_ns5_step</code>.
 </li>
 <li><strong>Optimizer Scratch Sizing:</strong> <code>optimizer_scratch_bytes(kind, rows, cols)</code> reports the exact or bounding scratch memory needed for an optimizer step. This permits training routines to preflight memory before taking steps, preventing out-of-memory errors from poisoning parameter states.
+</li>
+</ul>
+<hr>
+<h2 id="unified-hardware-abstraction-layer-hal--zero-copy-uma">Unified Hardware Abstraction Layer (HAL) &amp; Zero-Copy UMA <a class="anchor" href="#unified-hardware-abstraction-layer-hal--zero-copy-uma" aria-label="Link to this section">#</a></h2>
+<p><code>ojas-core</code> provides a vendor-neutral Hardware Abstraction Layer (<code>ojas_core::hal</code>) defining traits for unified memory architectures (Apple Silicon UMA):</p>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    subgraph RootBudget[&#34;Authoritative Root Ledger (ojas_core::Budget)&#34;]
+        Ledger[&#34;live_bytes / peak_bytes / cap_bytes&#34;]
+        Trim[&#34;BudgetTrimHandler (freelist cache trimming)&#34;]
+    end
+
+    subgraph UMATensor[&#34;Zero-Copy UMA Tensor (Payload::Mapped)&#34;]
+        Mapped[&#34;MappedBuffer Trait&#34;]
+        TimelineSync[&#34;Timeline (Monotonic Completion Counter)&#34;]
+    end
+
+    subgraph Accessors[&#34;Safe Access Invariants&#34;]
+        ReadLease[&#34;MappedBuffer::host_read() -&gt; HostLease&#34;]
+        WriteLease[&#34;MappedBuffer::host_write() -&gt; HostLeaseMut&#34;]
+        CPUReject[&#34;Direct host accessors (host_data) FAIL CLOSED\nReturns Err(OjasError::Placement)&#34;]
+    end
+
+    RootBudget --&gt; Mapped
+    Trim -.-&gt;|Pressure Callback| Mapped
+    Mapped --&gt; TimelineSync
+    TimelineSync --&gt; ReadLease
+    TimelineSync --&gt; WriteLease
+    Mapped --&gt; CPUReject</pre></figure>
+<h3 id="core-hal-traits-ojas-corehal">Core HAL Traits (<code>ojas_core::hal</code>) <a class="anchor" href="#core-hal-traits-ojas-corehal" aria-label="Link to this section">#</a></h3>
+<ol>
+<li><strong><code>MappedBuffer</code>:</strong> Extends <code>DeviceBuffer</code> for host-visible GPU memory (e.g. <code>StorageModeShared</code> on Apple Silicon). Exposes <code>host_ptr()</code>, <code>gpu_address()</code>, and safe fence-guarded lease accessors (<code>host_read()</code>, <code>host_write()</code>).
+</li>
+<li><strong><code>HostLease</code> &amp; <code>HostLeaseMut</code>:</strong> RAII shared (read) and exclusive (write) leases. A lease waits on the underlying <code>Timeline</code> until in-flight GPU dispatches finish before yielding raw slices (<code>as_slice()</code>, <code>as_mut_slice()</code>). GPU bindings against a live host lease are refused immediately (<code>FenceError::Busy</code>).
+</li>
+<li><strong><code>Timeline</code>:</strong> Monotonic device completion sequence counter. Tracks submitted and completed stamps; detects command buffer timeouts and marks the device poisoned (<code>FenceError::Poisoned</code>).
+</li>
+<li><strong><code>AllocError</code>:</strong> Strongly typed device allocation failures (<code>OverBudget</code>, <code>Exhausted</code>, <code>TooLarge</code>, <code>InvalidAlignment</code>, <code>DeviceLost</code>). Maps directly to <code>OjasError::CapacityExceeded</code> without string parsing.
+</li>
+</ol>
+<h3 id="zero-copy-uma-integration-payloadmapped">Zero-Copy UMA Integration (<code>Payload::Mapped</code>) <a class="anchor" href="#zero-copy-uma-integration-payloadmapped" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><code>Tensor::from_mapped(buffer, shape, dtype)</code> constructs zero-copy tensors whose underlying buffer implements <code>MappedBuffer</code> (e.g. <code>tessl::SharedBuf</code>).
+</li>
+<li><strong>Fail-Closed Placement Invariants:</strong> Calling <code>.host_window()</code>, <code>.host_data()</code>, or <code>.host_data_mut()</code> on device or mapped tensors is an explicit programming defect that fails closed with <code>OjasError::Placement</code>. Callers must either acquire an explicit lease via <code>.host_lease()</code> or call <code>.to_host(budget)</code> to obtain a host-fenced copy.
+</li>
+<li><strong><code>BudgetTrimHandler</code>:</strong> Registered via <code>Budget::set_trim_handler()</code>. When memory requests encounter budget pressure, the budget invokes this callback to trim cached freelist slabs across <code>tessl</code> and <code>ojas-metal</code> before failing.
 </li>
 </ul>
 <hr>
@@ -330,6 +380,9 @@
 <li><a href="#zero-copy-tensor-view-model">Zero-Copy Tensor View Model</a></li>
 <li><a href="#memory-budgeting--capacity-control">Memory Budgeting &amp; Capacity Control</a></li>
 <li><a href="#compute-backend-contract-backend">Compute Backend Contract (Backend)</a></li>
+<li><a href="#unified-hardware-abstraction-layer-hal--zero-copy-uma">Unified Hardware Abstraction Layer (HAL) &amp; Zero-Copy UMA</a></li>
+<li class="sub"><a href="#core-hal-traits-ojas-corehal">Core HAL Traits (ojas_core::hal)</a></li>
+<li class="sub"><a href="#zero-copy-uma-integration-payloadmapped">Zero-Copy UMA Integration (Payload::Mapped)</a></li>
 <li><a href="#device-tensors--readback-tracking">Device Tensors &amp; Readback Tracking</a></li>
 <li><a href="#immutable-numerical-invariants">Immutable Numerical Invariants</a></li>
 </ol></nav>

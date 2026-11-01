@@ -227,17 +227,33 @@
 </li>
 <li><strong>Spatial operators</strong>:
 <ul>
-<li><code>conv2d_forward</code>: arbitrary stride and padding using <code>ojas_im2col</code> scratch followed by tessl NT GEMM and <code>ojas_conv_nchw</code>; depthwise convolution (<code>groups == in == out</code>) runs the direct single-pass kernel <code>ojas_dwconv</code>.
+<li><code>conv2d_forward</code> &amp; <code>conv2d_backward</code>: arbitrary stride and padding using <code>ojas_im2col</code> scratch followed by tessl NT GEMM and <code>ojas_conv_nchw</code>; depthwise convolution (<code>groups == in == out</code>) runs the direct single-pass kernel <code>ojas_dwconv</code>.
 </li>
 <li><strong>1x1 Stride-1 Unpadded Route:</strong> When <code>kernel == 1</code>, <code>stride == 1</code>, <code>padding == 0</code>, <code>dilation == 1</code>, and <code>groups == 1</code>, <code>conv2d_forward</code> skips <code>im2col</code> scratch generation entirely and routes directly to tessl NN GEMM per image with no intermediate layout pass ($2.03\times$ speedup on f32, $2.1\times$ on bf16-exact at $[1, 256, 288, 288]$).
 </li>
 <li><strong>BF16 GEMM Lane Selection:</strong> <code>conv2d_forward</code> selects the bf16 GEMM lane (<code>Link::lane</code>) when operands are bf16-exact.
 </li>
-<li><code>conv_transpose2d_forward</code>: (kernel == stride) executed via <code>ojas_permute</code> to NHWC, tessl NN GEMM, and <code>ojas_convt_nchw</code>.
+<li><code>conv_transpose2d_forward</code> &amp; <code>conv_transpose2d_backward</code>: (kernel == stride) executed via <code>ojas_permute</code> to NHWC, tessl NN GEMM, and <code>ojas_convt_nchw</code>.
+</li>
+<li><code>max_pool2d_forward</code> &amp; <code>max_pool2d_backward</code>: <code>max_pool2d_fwd</code> with row-major first-occurrence tie-breaking; <code>max_pool2d_bwd</code> window inverse gather with zero atomics, preserving signed zero <code>-0.0</code> values.
 </li>
 <li><code>interpolate_bilinear_forward</code>: <code>ojas_bilinear</code> computes taps directly in the shader for both <code>align_corners</code> modes with zero axis-table allocations.
 </li>
 <li><code>rope_interleaved_forward</code> / <code>_backward</code>: adjacent-pair rotation on <code>ojas_rope</code> mode 2, matching CPU axial 2D tables.
+</li>
+</ul>
+</li>
+<li><strong>Gemma embedding operators (<code>kernels/gemma_ops.metal</code>)</strong>:
+<ul>
+<li><code>gelu_tanh_forward</code> &amp; <code>gelu_tanh_backward</code>: <code>ojas_gelu_tanh_fwd</code> and <code>ojas_gelu_tanh_bwd</code> evaluating exact tanh GELU via analytical sigmoid in <code>f64</code> with hardware status word trapping (<code>GEMMA_ST_IN</code>, <code>GEMMA_ST_OUT</code>).
+</li>
+<li><code>seq_mean_forward</code>: ragged sequence mean pooling using <code>ojas_segments_from_lens</code> on GPU.
+</li>
+<li><code>l2_normalize_forward</code>: L2 vector normalization with epsilon stabilization and Matryoshka dimension prefix slicing.
+</li>
+<li><code>rms_qkv_norm_forward</code>: weightless per-head RMSNorm across Q, K, and V heads.
+</li>
+<li>Non-causal sliding window attention ($|i - j| \le W$) with dual routing (tiled SIMD vs scalar) across head dimensions $D \in \{32, 64, 256, 512\}$.
 </li>
 </ul>
 </li>
@@ -363,6 +379,37 @@
 <p><code>ojas-metal</code> reserves <code>DH_PAD = 16</code> padding elements before the <code>dh</code> slice and rigorously verifies in test <code>ce_nonzero_dh_offset_keeps_prefix</code> that the leading prefix remains bit-identical after cross-entropy writes.</p>
 </aside>
 <hr>
+<h2 id="unified-hal--tessl-runtime-integration">Unified HAL &amp; Tessl Runtime Integration <a class="anchor" href="#unified-hal--tessl-runtime-integration" aria-label="Link to this section">#</a></h2>
+<p><code>ojas-metal</code> acts as the Metal extension adapter bridging <code>ojas-core</code>&#39;s unified memory abstractions to <code>tessl</code>:</p>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    subgraph OjasStack[&#34;ojas Framework&#34;]
+        Budget[&#34;ojas_core::Budget (Authoritative Root Ledger)&#34;]
+        MappedPayload[&#34;Payload::Mapped (Zero-Copy UMA View)&#34;]
+        HAL[&#34;MappedBuffer Trait&#34;]
+    end
+
+    subgraph TesslSubstrate[&#34;tessl Metal Substrate&#34;]
+        SharedBuf[&#34;tessl::SharedBuf (Send + Sync Core)&#34;]
+        Pool[&#34;BufferPool (StorageModeShared)&#34;]
+        Timeline[&#34;HostFence (MTLSharedEvent Monotonic Timeline)&#34;]
+    end
+
+    Budget --&gt; Pool
+    HAL --&gt; SharedBuf
+    SharedBuf --&gt; Pool
+    SharedBuf --&gt; Timeline
+    MappedPayload --&gt; HAL</pre></figure>
+<ul>
+<li><strong>Zero-Copy Host/GPU Sharing (<code>Payload::Mapped</code>):</strong> <code>tessl::SharedBuf</code> implements <code>ojas_core::MappedBuffer</code>. Tensors wrap shared Metal allocations directly with no memory copying across CPU and Apple Silicon GPU.
+</li>
+<li><strong>Lease Fencing &amp; Mutex Protection:</strong> Host reads (<code>host_read</code>) and writes (<code>host_write</code>) obtain fenced leases that synchronize with GPU timeline stamps (<code>last_use</code>, <code>last_write</code>), rejecting concurrent GPU execution while host leases are live.
+</li>
+<li><strong><code>BudgetTrimHandler</code> Cache Eviction:</strong> <code>ojas-metal</code> connects <code>ojas_core::Budget</code> to <code>tessl</code>&#39;s buffer pool. Under allocation pressure, the budget triggers freelist cache trimming across the unified pool.
+</li>
+<li><strong>Structural Dead Code Elimination:</strong> 3,735 lines of redundant, unverified <code>gpu.rs</code> code were retired from <code>ojas-metal</code>. All device memory allocations, command buffers, and kernel pipelines are managed via <code>tessl</code> under the authoritative root <code>Budget</code>.
+</li>
+</ul>
+<hr>
 <h2 id="key-invariants--refusal-policies">Key Invariants &amp; Refusal Policies <a class="anchor" href="#key-invariants--refusal-policies" aria-label="Link to this section">#</a></h2>
 <aside class="alert alert-important"><p class="alert-title">Important</p><ol>
 <li><strong>Shape First</strong> (<code>docs/shape-contract.md</code>): every op calls its <code>ojas_core::shapes</code> validator before placement, contiguity, token-id ranges, device limits or the budget, so a malformed call returns the validator&#39;s exact error whatever the budget holds and wherever its operands live. <code>tests/shape_first.rs</code> sweeps every op in four modes (Budget 0, a cap that holds only the inputs, a NaN operand, host operands).
@@ -392,6 +439,7 @@
 <li class="sub"><a href="#1-per-head-attention-gate-kernelsper-head-gatemetal">1. Per-Head Attention Gate (kernels/per_head_gate.metal)</a></li>
 <li class="sub"><a href="#2-backend-extension-shaders-kernelsojas-backendmetal">2. Backend Extension Shaders (kernels/ojas_backend.metal)</a></li>
 <li><a href="#cross-entropy-canary-offset-defense">Cross-Entropy Canary Offset Defense</a></li>
+<li><a href="#unified-hal--tessl-runtime-integration">Unified HAL &amp; Tessl Runtime Integration</a></li>
 <li><a href="#key-invariants--refusal-policies">Key Invariants &amp; Refusal Policies</a></li>
 </ol></nav>
   </div>

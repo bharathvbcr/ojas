@@ -59,12 +59,21 @@ The dynamic reverse-mode tape records forward operations and evaluates analytica
 | **LayerNorm** | `Tape::layer_norm` | Exact two-pass LayerNorm backward for activations, gamma, and beta. |
 | **Channel LayerNorm** | `Tape::channel_layer_norm` | 2D LayerNorm backward over channel dimension $[B, C, H, W]$. |
 | **GELU (erf)** | `Tape::gelu_erf` | Exact Gaussian error function and derivative backward (`gelu_erf_backward_exact`). |
+| **GELU (tanh)** | `Tape::gelu_tanh` | Analytical double-precision sigmoid formulation backward avoiding negative-tail float cancellation. |
+| **ReLU** | `Tape::relu` | Rectified Linear Unit gradient step masking ($dX = dY \cdot \mathbb{I}_{X > 0}$). |
 | **Softmax** | `Tape::softmax` | Softmax adjoint $dX = S \odot (dY - \sum (dY \odot S))$ along dimension. |
 | **Broadcast Add** | `Tape::broadcast_add` | Gradient passed to operands, reducing across broadcast dimensions. |
 | **Broadcast Mul** | `Tape::broadcast_mul` | Scaled gradient passed to operands with reduction across broadcast dimensions. |
 | **Scale** | `Tape::scale` | Scalar multiplication adjoint $dX = dY \cdot \alpha$. |
 | **Attention** | `Tape::attention` | Causal and general attention adjoints (dQ, dK, dV, and optional score bias). |
 | **Cross-Entropy** | `Tape::cross_entropy` | Target-excluded or fused chunked softmax cross-entropy adjoint. |
+| **Conv2D** | `Tape::conv2d` | 2D spatial convolution adjoint (input and weight gradients). |
+| **ConvTranspose2D** | `Tape::conv_transpose2d` | 2D transposed convolution adjoint. |
+| **MaxPool2D** | `Tape::max_pool2d` | Deterministic window inverse gather with first-occurrence tie breaking. |
+| **GroupNorm** | `Tape::group_norm` | Two-pass normalization adjoint across channel groups. |
+| **Bilinear Interpolation** | `Tape::bilinear` | Continuous bilinear sampling adjoint with dual `align_corners` modes. |
+| **RoPE Interleaved** | `Tape::rope_interleaved` | Adjacent-pair 2D axial rotary position embedding adjoint. |
+| **Concat & Slice** | `Tape::concat` / `Tape::slice` | Multi-branch gradient fan-in routing and slice gradient placement. |
 
 ---
 

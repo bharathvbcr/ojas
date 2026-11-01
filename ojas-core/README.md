@@ -135,15 +135,60 @@ stateDiagram-v2
 ## Compute Backend Contract (`Backend`)
 
 The `Backend` trait defines the uniform operator interface implemented by compute engines (`CpuBackend`, `MetalBackend`, `WgpuBackend`):
-* Forward and backward linear transformations, activations (GELU, SiLU, ReLU, Sigmoid), and causal multi-head attention.
+* Forward and backward linear transformations, activations (GELU erf, GELU tanh, SiLU, ReLU, Sigmoid), and causal multi-head attention.
+* **GELU Tanh (`gelu_tanh`):** Exact tanh-approximate Gaussian Error Linear Unit forward and backward evaluated via an analytical sigmoid formulation in `f64` (`ojas_core::gelu_tanh`), avoiding catastrophic negative-tail floating-point cancellation.
 * **General attention:** `attention_forward`, `attention_forward_saving`, and `attention_backward` with `AttentionOpts { causal, window, bias, key_lens }` for bidirectional attention, cross-attention ($T_q \ne T_k$), broadcastable additive score bias $[B, H, T_q, T_k]$, and key-length masks.
-* **Spatial operations (`ojas_core::spatial`):** forward and backward for `conv2d` and `conv_transpose2d`, `max_pool2d_forward`/`_backward`, `interpolate_bilinear_forward`, `rope_interleaved_forward`/`_backward`, and window partition/merge (supporting zero-padding for non-divisible dimensions) and pixel shuffle/unshuffle helpers.
-* **Vision and encoder operations:** forward and backward `layer_norm_forward`/`_backward`, `channel_layer_norm_forward`/`_backward`, `group_norm_forward`, `gelu_erf_forward`/`_backward`, `relu_forward`, `linear_bias_forward`/`_backward`, `broadcast_add_forward`/`_backward`, `broadcast_mul_forward`/`_backward`, `scale_forward`, `softmax_forward`/`_backward`, `concat`, `slice`, and `fill`.
+* **Gemma embedding operations:** `seq_mean_forward` (ragged sequence mean pooling over variable-length inputs without padding waste), `l2_normalize_forward` (L2 vector normalization with epsilon stabilization and Matryoshka dimension prefix slicing), and `rms_qkv_norm_forward` (weightless per-head Q/K/V RMSNorm).
+* **Spatial operations (`ojas_core::spatial`):** forward and backward for `conv2d` and `conv_transpose2d`, `max_pool2d_forward`/`_backward`, `interpolate_bilinear_forward`/`_backward`, `rope_interleaved_forward`/`_backward`, and window partition/merge (supporting zero-padding for non-divisible dimensions) and pixel shuffle/unshuffle helpers.
+* **Vision and encoder operations:** forward and backward `layer_norm_forward`/`_backward`, `channel_layer_norm_forward`/`_backward`, `group_norm_forward`/`_backward`, `gelu_erf_forward`/`_backward`, `relu_forward`/`_backward`, `linear_bias_forward`/`_backward`, `broadcast_add_forward`/`_backward`, `broadcast_mul_forward`/`_backward`, `scale_forward`, `softmax_forward`/`_backward`, `concat`, `slice`/`slice_backward`, and `fill`.
 * **Numerics & Exponentials (`ojas_core::exp_exact`):** Bit-exact ascending exponential reductions, `ln_wide`, and `log1p_exact` providing stable loss evaluation for softmax collapse / target-excluded cross-entropy forms.
 * **Pure shape contract (`ojas_core::shapes`):** Pure `*_dims` validators for every backend operation (forward and backward), evaluated before budget allocation or kernel dispatch to guarantee uniform error classification across backends.
 * Fused head cross-entropy computation (`linear_cross_entropy_mean`) and key-value cache operations.
 * In-place optimizer steps: `adamw_step` and `muon_ns5_step`.
 * **Optimizer Scratch Sizing:** `optimizer_scratch_bytes(kind, rows, cols)` reports the exact or bounding scratch memory needed for an optimizer step. This permits training routines to preflight memory before taking steps, preventing out-of-memory errors from poisoning parameter states.
+
+---
+
+## Unified Hardware Abstraction Layer (HAL) & Zero-Copy UMA
+
+`ojas-core` provides a vendor-neutral Hardware Abstraction Layer (`ojas_core::hal`) defining traits for unified memory architectures (Apple Silicon UMA):
+
+```mermaid
+flowchart TD
+    subgraph RootBudget["Authoritative Root Ledger (ojas_core::Budget)"]
+        Ledger["live_bytes / peak_bytes / cap_bytes"]
+        Trim["BudgetTrimHandler (freelist cache trimming)"]
+    end
+
+    subgraph UMATensor["Zero-Copy UMA Tensor (Payload::Mapped)"]
+        Mapped["MappedBuffer Trait"]
+        TimelineSync["Timeline (Monotonic Completion Counter)"]
+    end
+
+    subgraph Accessors["Safe Access Invariants"]
+        ReadLease["MappedBuffer::host_read() -> HostLease"]
+        WriteLease["MappedBuffer::host_write() -> HostLeaseMut"]
+        CPUReject["Direct host accessors (host_data) FAIL CLOSED\nReturns Err(OjasError::Placement)"]
+    end
+
+    RootBudget --> Mapped
+    Trim -.->|Pressure Callback| Mapped
+    Mapped --> TimelineSync
+    TimelineSync --> ReadLease
+    TimelineSync --> WriteLease
+    Mapped --> CPUReject
+```
+
+### Core HAL Traits (`ojas_core::hal`)
+1. **`MappedBuffer`:** Extends `DeviceBuffer` for host-visible GPU memory (e.g. `StorageModeShared` on Apple Silicon). Exposes `host_ptr()`, `gpu_address()`, and safe fence-guarded lease accessors (`host_read()`, `host_write()`).
+2. **`HostLease` & `HostLeaseMut`:** RAII shared (read) and exclusive (write) leases. A lease waits on the underlying `Timeline` until in-flight GPU dispatches finish before yielding raw slices (`as_slice()`, `as_mut_slice()`). GPU bindings against a live host lease are refused immediately (`FenceError::Busy`).
+3. **`Timeline`:** Monotonic device completion sequence counter. Tracks submitted and completed stamps; detects command buffer timeouts and marks the device poisoned (`FenceError::Poisoned`).
+4. **`AllocError`:** Strongly typed device allocation failures (`OverBudget`, `Exhausted`, `TooLarge`, `InvalidAlignment`, `DeviceLost`). Maps directly to `OjasError::CapacityExceeded` without string parsing.
+
+### Zero-Copy UMA Integration (`Payload::Mapped`)
+* `Tensor::from_mapped(buffer, shape, dtype)` constructs zero-copy tensors whose underlying buffer implements `MappedBuffer` (e.g. `tessl::SharedBuf`).
+* **Fail-Closed Placement Invariants:** Calling `.host_window()`, `.host_data()`, or `.host_data_mut()` on device or mapped tensors is an explicit programming defect that fails closed with `OjasError::Placement`. Callers must either acquire an explicit lease via `.host_lease()` or call `.to_host(budget)` to obtain a host-fenced copy.
+* **`BudgetTrimHandler`:** Registered via `Budget::set_trim_handler()`. When memory requests encounter budget pressure, the budget invokes this callback to trim cached freelist slabs across `tessl` and `ojas-metal` before failing.
 
 ---
 

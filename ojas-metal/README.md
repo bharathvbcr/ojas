@@ -71,12 +71,19 @@ Implements elementwise operations, vector arithmetic, and reduction passes requi
   * Head dims 16 and 32 with bias run split-K tiled kernels (`ojas_xattn_part_dD`, `ojas_xattn_combine_dD`), splitting key ranges across threadgroups to saturate the GPU for short queries.
   * General shapes, windowing, and causal cross-attention fall back to scalar `ojas_attn_gen_fwd` (one simdgroup per row, D ≤ 256).
 * **Spatial operators**:
-  * `conv2d_forward`: arbitrary stride and padding using `ojas_im2col` scratch followed by tessl NT GEMM and `ojas_conv_nchw`; depthwise convolution (`groups == in == out`) runs the direct single-pass kernel `ojas_dwconv`.
+  * `conv2d_forward` & `conv2d_backward`: arbitrary stride and padding using `ojas_im2col` scratch followed by tessl NT GEMM and `ojas_conv_nchw`; depthwise convolution (`groups == in == out`) runs the direct single-pass kernel `ojas_dwconv`.
   * **1x1 Stride-1 Unpadded Route:** When `kernel == 1`, `stride == 1`, `padding == 0`, `dilation == 1`, and `groups == 1`, `conv2d_forward` skips `im2col` scratch generation entirely and routes directly to tessl NN GEMM per image with no intermediate layout pass ($2.03\times$ speedup on f32, $2.1\times$ on bf16-exact at $[1, 256, 288, 288]$).
   * **BF16 GEMM Lane Selection:** `conv2d_forward` selects the bf16 GEMM lane (`Link::lane`) when operands are bf16-exact.
-  * `conv_transpose2d_forward`: (kernel == stride) executed via `ojas_permute` to NHWC, tessl NN GEMM, and `ojas_convt_nchw`.
+  * `conv_transpose2d_forward` & `conv_transpose2d_backward`: (kernel == stride) executed via `ojas_permute` to NHWC, tessl NN GEMM, and `ojas_convt_nchw`.
+  * `max_pool2d_forward` & `max_pool2d_backward`: `max_pool2d_fwd` with row-major first-occurrence tie-breaking; `max_pool2d_bwd` window inverse gather with zero atomics, preserving signed zero `-0.0` values.
   * `interpolate_bilinear_forward`: `ojas_bilinear` computes taps directly in the shader for both `align_corners` modes with zero axis-table allocations.
   * `rope_interleaved_forward` / `_backward`: adjacent-pair rotation on `ojas_rope` mode 2, matching CPU axial 2D tables.
+* **Gemma embedding operators (`kernels/gemma_ops.metal`)**:
+  * `gelu_tanh_forward` & `gelu_tanh_backward`: `ojas_gelu_tanh_fwd` and `ojas_gelu_tanh_bwd` evaluating exact tanh GELU via analytical sigmoid in `f64` with hardware status word trapping (`GEMMA_ST_IN`, `GEMMA_ST_OUT`).
+  * `seq_mean_forward`: ragged sequence mean pooling using `ojas_segments_from_lens` on GPU.
+  * `l2_normalize_forward`: L2 vector normalization with epsilon stabilization and Matryoshka dimension prefix slicing.
+  * `rms_qkv_norm_forward`: weightless per-head RMSNorm across Q, K, and V heads.
+  * Non-causal sliding window attention ($|i - j| \le W$) with dual routing (tiled SIMD vs scalar) across head dimensions $D \in \{32, 64, 256, 512\}$.
 * **Vision & encoder operators**:
   * `group_norm_forward`: three passes (`ojas_gn_mean_var`, `ojas_gn_reduce`, `ojas_gn_apply`) splitting rows into up to 512 threadgroups per row; uses large-mean residual correction for numerical precision.
   * `layer_norm_forward` & `channel_layer_norm_forward`: routed to tessl BERT layer norm (channel norm composed with permutes).
@@ -141,6 +148,38 @@ flowchart LR
 > Legacy Metal implementations frequently overwrite memory preceding a buffer slice because internal kernels forcibly assume an offset of zero (`Cols::dense`). 
 > 
 > `ojas-metal` reserves `DH_PAD = 16` padding elements before the `dh` slice and rigorously verifies in test `ce_nonzero_dh_offset_keeps_prefix` that the leading prefix remains bit-identical after cross-entropy writes.
+
+---
+
+## Unified HAL & Tessl Runtime Integration
+
+`ojas-metal` acts as the Metal extension adapter bridging `ojas-core`'s unified memory abstractions to `tessl`:
+
+```mermaid
+flowchart TD
+    subgraph OjasStack["ojas Framework"]
+        Budget["ojas_core::Budget (Authoritative Root Ledger)"]
+        MappedPayload["Payload::Mapped (Zero-Copy UMA View)"]
+        HAL["MappedBuffer Trait"]
+    end
+
+    subgraph TesslSubstrate["tessl Metal Substrate"]
+        SharedBuf["tessl::SharedBuf (Send + Sync Core)"]
+        Pool["BufferPool (StorageModeShared)"]
+        Timeline["HostFence (MTLSharedEvent Monotonic Timeline)"]
+    end
+
+    Budget --> Pool
+    HAL --> SharedBuf
+    SharedBuf --> Pool
+    SharedBuf --> Timeline
+    MappedPayload --> HAL
+```
+
+* **Zero-Copy Host/GPU Sharing (`Payload::Mapped`):** `tessl::SharedBuf` implements `ojas_core::MappedBuffer`. Tensors wrap shared Metal allocations directly with no memory copying across CPU and Apple Silicon GPU.
+* **Lease Fencing & Mutex Protection:** Host reads (`host_read`) and writes (`host_write`) obtain fenced leases that synchronize with GPU timeline stamps (`last_use`, `last_write`), rejecting concurrent GPU execution while host leases are live.
+* **`BudgetTrimHandler` Cache Eviction:** `ojas-metal` connects `ojas_core::Budget` to `tessl`'s buffer pool. Under allocation pressure, the budget triggers freelist cache trimming across the unified pool.
+* **Structural Dead Code Elimination:** 3,735 lines of redundant, unverified `gpu.rs` code were retired from `ojas-metal`. All device memory allocations, command buffers, and kernel pipelines are managed via `tessl` under the authoritative root `Budget`.
 
 ---
 
