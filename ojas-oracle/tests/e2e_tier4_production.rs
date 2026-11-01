@@ -30,6 +30,11 @@ fn upload(be: &CpuBackend, data: &[f32], shape: &[usize]) -> Tensor {
     be.upload(&t).expect("upload")
 }
 
+fn upload_u32(be: &CpuBackend, data: &[u32], shape: &[usize]) -> Tensor {
+    let t = Tensor::from_u32(data, shape, be.budget()).expect("from_u32");
+    be.upload(&t).expect("upload")
+}
+
 fn varied_vector(len: usize, scale: f32) -> Vec<f32> {
     (0..len)
         .map(|i| (((i % 23) as f32) - 11.0) * scale + 0.1)
@@ -273,22 +278,26 @@ fn tier4_scenario_b_gemma_embedding_production_inference_pipeline() {
     let k = be.permute(&k_bthd, &[0, 2, 1, 3]).expect("k permute");
     let v = be.permute(&v_bthd, &[0, 2, 1, 3]).expect("v permute");
 
-    // Per-head Query and Key RMSNorm
+    // Per-head Query, Key, and Value RMSNorm (learned weights for Q and K, weightless for V)
     let rms_scale = upload(&be, &vec![1.0f32; 16], &[16]);
-    let (q_norm, k_norm) = be
-        .rms_qk_norm_forward(&q, &k, &rms_scale, &rms_scale, 1e-6)
-        .expect("qk norm");
+    let (q_norm, k_norm, v_norm) = be
+        .rms_qkv_norm_forward(&q, &k, &v, Some(&rms_scale), Some(&rms_scale), 1e-6)
+        .expect("qkv norm");
 
-    // Local Sliding Window Attention (W=4, causal=true)
+    // Sequence 0 has valid tokens [0..10], Sequence 1 has valid tokens [0..16]
+    let key_lens = upload_u32(&be, &[10, 16], &[2]);
+
+    // Local Sliding Window Attention (W=4, symmetric non-causal |i - j| <= W, scale=1.0)
     let attn_opts = AttentionOpts {
-        causal: true,
-        window: Some(4),
+        causal: false,
+        radius: Some(4),
+        scale: Some(1.0),
         bias: None,
-        key_lens: None,
+        key_lens: Some(&key_lens),
         ..Default::default()
     };
     let attn_out = be
-        .attention_forward(&q_norm, &k_norm, &v, attn_opts)
+        .attention_forward(&q_norm, &k_norm, &v_norm, attn_opts)
         .expect("window attn");
     assert_eq!(attn_out.shape(), &[2, 4, 16, 16]);
 
@@ -299,7 +308,7 @@ fn tier4_scenario_b_gemma_embedding_production_inference_pipeline() {
         .residual_add_forward(&tokens, &attn_merged)
         .expect("res1");
 
-    // GeGLU Feedforward: gate * gelu(up) -> linear down
+    // GeGLU Feedforward: gate * gelu_tanh(up) -> linear down
     let res1_flat = res1.reshape(&[32, 64]).expect("flat res1");
     let w_gate = upload(&be, &varied_vector(128 * 64, 0.03), &[128, 64]);
     let w_up = upload(&be, &varied_vector(128 * 64, 0.03), &[128, 64]);
@@ -307,7 +316,7 @@ fn tier4_scenario_b_gemma_embedding_production_inference_pipeline() {
 
     let gate = be.linear_forward(&res1_flat, &w_gate).expect("gate");
     let up = be.linear_forward(&res1_flat, &w_up).expect("up");
-    let act = be.gelu_erf_forward(&gate).expect("geglu act");
+    let act = be.gelu_tanh_forward(&gate).expect("geglu act");
     let ffn_hidden = be.mul_forward(&act, &up).expect("geglu mul");
     let ffn_down = be.linear_forward(&ffn_hidden, &w_down).expect("ffn down");
     let ffn_shaped = ffn_down.reshape(&[2, 16, 64]).expect("ffn shaped");
@@ -320,67 +329,47 @@ fn tier4_scenario_b_gemma_embedding_production_inference_pipeline() {
         .layer_norm_forward(&encoder_out, &ln_w, &ln_b, 1e-6)
         .expect("final ln");
 
-    // Step 4: Masked Sequence Mean Pooling
-    // Sequence 0 has valid tokens [0..10], Sequence 1 has valid tokens [0..16]
-    let host_tokens = host(&be, &norm_out);
-    let valid_spans = [[0usize, 10usize], [16usize, 32usize]];
-    let mut pooled_embeddings = Vec::new(); // 2 rows of 64 dims
-    for span in &valid_spans {
-        let (start, end) = (span[0], span[1]);
-        let count = (end - start) as f32;
-        let mut row_mean = vec![0.0f32; 64];
-        for t in start..end {
-            for c in 0..64 {
-                row_mean[c] += host_tokens[t * 64 + c];
-            }
-        }
-        for c in 0..64 {
-            row_mean[c] /= count;
-        }
-        pooled_embeddings.push(row_mean);
-    }
-    assert_eq!(pooled_embeddings.len(), 2);
+    // Step 4: Masked Sequence Mean Pooling via backend op
+    let pooled_embeddings = be.seq_mean_forward(&norm_out, &key_lens).expect("seq mean");
+    assert_eq!(pooled_embeddings.shape(), &[2, 64]);
 
-    // Step 5 & 6: Matryoshka Prefix Truncation (64 -> 32 -> 16) and L2 Normalization
+    // Step 5 & 6: Matryoshka Prefix Truncation (64 -> 32 -> 16) and L2 Normalization via backend ops
     let target_dims = [64, 32, 16];
     for &d in &target_dims {
-        for (seq_idx, full_emb) in pooled_embeddings.iter().enumerate() {
-            let truncated_slice = &full_emb[..d];
+        let prefix = be.slice(&pooled_embeddings, 1, 0, d).expect("slice prefix");
+        assert_eq!(prefix.shape(), &[2, d]);
 
-            // Compute L2 norm
-            let sum_sq: f64 = truncated_slice
-                .iter()
-                .map(|&v| f64::from(v) * f64::from(v))
-                .sum();
-            let norm = sum_sq.sqrt();
-            assert!(
-                norm > 0.0,
-                "Norm must be strictly positive for seq {seq_idx}"
-            );
+        let normalized = be
+            .l2_normalize_forward(&prefix, 1e-12)
+            .expect("l2 normalize");
+        assert_eq!(normalized.shape(), &[2, d]);
 
-            // L2 normalize
-            let normalized: Vec<f32> = truncated_slice
-                .iter()
-                .map(|&v| (f64::from(v) / norm) as f32)
-                .collect();
+        let prefix_host = host(&be, &prefix);
+        let norm_host = host(&be, &normalized);
+
+        for seq_idx in 0..2 {
+            let row_norm = &norm_host[seq_idx * d..(seq_idx + 1) * d];
+            let row_prefix = &prefix_host[seq_idx * d..(seq_idx + 1) * d];
 
             // Verify Unit Sphere Norm condition: ||y||_2 = 1.0 ± 1e-6
-            let final_norm: f64 = normalized
+            let unit_norm: f64 = row_norm
                 .iter()
                 .map(|&v| (v as f64) * (v as f64))
                 .sum::<f64>()
                 .sqrt();
             assert!(
-                (final_norm - 1.0).abs() < 1e-6,
-                "Unit sphere normalization failed for d={d}, seq={seq_idx}: got {final_norm}"
+                (unit_norm - 1.0).abs() < 1e-6,
+                "Unit sphere normalization failed for d={d}, seq={seq_idx}: got {unit_norm}"
             );
 
             // Cosine similarity check between full embedding prefix and normalized vector
             let mut dot = 0.0f64;
-            for (&a, &b) in truncated_slice.iter().zip(&normalized) {
+            let mut prefix_sq = 0.0f64;
+            for (&a, &b) in row_prefix.iter().zip(row_norm) {
                 dot += f64::from(a) * f64::from(b);
+                prefix_sq += f64::from(a) * f64::from(a);
             }
-            let cos_sim = dot / norm;
+            let cos_sim = dot / (prefix_sq.sqrt() * unit_norm);
             assert!(
                 (cos_sim - 1.0).abs() < 1e-6,
                 "Cosine similarity must be 1.0 against unnormalized direction: got {cos_sim}"

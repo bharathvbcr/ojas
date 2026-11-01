@@ -408,18 +408,47 @@ pub(crate) struct AttnBwdGeom {
     pub bias_grad: bool,
 }
 
-/// One bidirectional attention launch on tessl's `encoder_attn`: `k` and `v`
-/// are `[batch, heads, seq, d]`, every key visible, and `q` is `[batch,
-/// heads, q_len, d]` with `q_len <= seq`. A shorter `q` is zero-padded to
-/// `seq` rows, attends like any other, and only its first `q_len` output
-/// rows are kept.
+/// What `AttentionOpts` adds to one general attention launch
+/// (`ojas_attn_gen_fwd` and the tiled kernels): the score `scale`, the
+/// symmetric `radius` (`0`: none; bidirectional, `Tq == Tk` only) and
+/// whether query rows past the key length are dead (`key_lens` with `Tq ==
+/// Tk`: they sit outside the sequence, see no key and write zeros and an
+/// lse of 0). A radius or a dead row runs only the scalar kernel: the
+/// split-K and flash kernels have neither.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct AttnExtra {
+    pub scale: f32,
+    pub radius: u32,
+    pub dead_rows: bool,
+}
+
+impl AttnExtra {
+    /// Whether only the scalar kernel can run the call.
+    pub(crate) fn scalar_only(&self) -> bool {
+        self.radius != 0 || self.dead_rows
+    }
+}
+
+/// One bidirectional attention launch on tessl's `encoder_attn`: `q` is
+/// `[batch, heads, q_len, d]` with `q_len <= seq`, `k` and `v` are `[batch,
+/// kv_heads, seq, d]` (grouped-query heads are read in place, never
+/// expanded). A shorter `q` is zero-padded to `seq` rows, attends like any
+/// other, and only its first `q_len` output rows are kept. Without a length
+/// buffer every key is visible; with one (`Cmd::EncoderAttn::lens`, `q_len
+/// == seq`) keys at or past a batch row's length are masked and its query
+/// rows at or past it are written as zeros. `radius` is `0` for every key,
+/// else only keys with `|i - j| <= radius` (`q_len == seq`). `scale`
+/// multiplies `q . k`.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct EncAttnGeom {
     pub batch: u32,
     pub heads: u32,
+    pub kv_heads: u32,
     pub seq: u32,
     pub q_len: u32,
     pub d: u32,
+    pub radius: u32,
+    pub scale: f32,
 }
 
 /// GroupNorm over `rows` (image, group) rows of `width` contiguous values,
@@ -733,6 +762,7 @@ pub(crate) enum Cmd {
         bias: Option<Arg>,
         lens: Option<Arg>,
         geom: AttnGeom,
+        extra: AttnExtra,
     },
     /// `conv2d_forward` as im2col, a GEMM on `lane` and a layout pass; replies
     /// with the NCHW output. `pointwise` (1 x 1, stride 1, no padding, views
@@ -759,15 +789,17 @@ pub(crate) enum Cmd {
         bias: Option<Arg>,
         geom: ConvGeom,
     },
-    /// Bidirectional attention without a bias, key lengths or window on
-    /// tessl's tiled `encoder_attn` (head dim 32 or 64), `q_len <= seq`:
-    /// permutes in (padding a shorter Q), attends, permutes out. Replies
-    /// with the output alone; `op` names a fault.
+    /// Bidirectional attention without a bias or causal window on tessl's
+    /// tiled `encoder_attn` (head dim 32, 64, 256 or 512), `q_len <= seq`:
+    /// permutes in (padding a shorter Q), attends, permutes out. `lens` is
+    /// the `[batch]` U32 key-length buffer (`q_len == seq`), or `None` for
+    /// every key. Replies with the output alone; `op` names a fault.
     EncoderAttn {
         op: &'static str,
         q: Arg,
         k: Arg,
         v: Arg,
+        lens: Option<Arg>,
         geom: EncAttnGeom,
     },
     /// `conv2d_forward` with `groups == c == o`: one direct kernel, no
@@ -1172,6 +1204,30 @@ pub(crate) enum Cmd {
         bias: Option<Arg>,
         lens: Option<Arg>,
         geom: AttnBwdGeom,
+    },
+    /// `gelu_tanh_forward` (`kernels/gemma_ops.metal`): torch's
+    /// `gelu(approximate="tanh")`, tessl's own formula.
+    GeluTanh {
+        x: Arg,
+    },
+    /// `gelu_tanh_backward`: `gy * gelu_tanh'(x)`.
+    GeluTanhBwd {
+        x: Arg,
+        gy: Arg,
+    },
+    /// `seq_mean_forward`: the mean of the first `min(lens[b], seq)` rows of
+    /// each batch row of `x`, `[batch, dim]`, on tessl's `segment_mean_rows`.
+    SeqMean {
+        x: Arg,
+        lens: Arg,
+        geom: crate::gemma_ops::SeqMeanGeom,
+    },
+    /// `l2_normalize_forward` at eps `1e-12`, the only one tessl's
+    /// `l2_normalize_rows` has: a copy of `x` normalized in place.
+    L2Normalize {
+        x: Arg,
+        rows: u32,
+        dim: u32,
     },
 }
 

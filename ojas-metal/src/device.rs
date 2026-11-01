@@ -38,9 +38,10 @@ use tessl::DType;
 
 use crate::link::{
     cached_attn_origin, cached_attn_part, cached_attn_splits, copied_at, device_lost, metal_err,
-    norm_chunks, reduce_groups, rms_w_chunks, Arg, AttnGeom, BilinearGeom, Cmd, Conv1dGeom,
-    ConvGeom, DeviceInfo, EmbedRows, EncAttnGeom, GdnArgs, GroupNormGeom, Lane, LceGeom, Msg,
-    NewBuf, ReadAs, Reply, Res, RmsSide, RopeMode, SdpaGeom, Wait, Waits, SQ_OUT_WORDS,
+    norm_chunks, reduce_groups, rms_w_chunks, Arg, AttnExtra, AttnGeom, BilinearGeom, Cmd,
+    Conv1dGeom, ConvGeom, DeviceInfo, EmbedRows, EncAttnGeom, GdnArgs, GroupNormGeom, Lane,
+    LceGeom, Msg, NewBuf, ReadAs, Reply, Res, RmsSide, RopeMode, SdpaGeom, Wait, Waits,
+    SQ_OUT_WORDS,
 };
 use crate::permute::{self, Plan};
 
@@ -607,7 +608,11 @@ impl Worker {
             return Err(metal_err("embedded ojas-metal metallib is empty"));
         }
         rt.add_metallib_bytes(lib).map_err(metal_err)?;
-        for name in KERNELS.iter().chain(crate::encoder_bwd::KERNELS) {
+        for name in KERNELS
+            .iter()
+            .chain(crate::encoder_bwd::KERNELS)
+            .chain(crate::gemma_ops::KERNELS)
+        {
             rt.pipeline(name).map_err(metal_err)?;
         }
         for name in spatial_bwd::KERNELS {
@@ -1592,7 +1597,8 @@ impl Worker {
                 bias,
                 lens,
                 geom,
-            } => self.attn_gen(op, [q, k, v], bias, lens, geom),
+                extra,
+            } => self.attn_gen(op, [q, k, v], bias, lens, geom, extra),
             Cmd::Conv2d {
                 op,
                 x,
@@ -1615,7 +1621,14 @@ impl Worker {
                 bias,
                 geom,
             } => self.conv_transpose2d(op, [x, w], bias, geom),
-            Cmd::EncoderAttn { op, q, k, v, geom } => self.encoder_attn(op, [q, k, v], geom),
+            Cmd::EncoderAttn {
+                op,
+                q,
+                k,
+                v,
+                lens,
+                geom,
+            } => self.encoder_attn(op, [q, k, v], lens, geom),
             Cmd::DepthwiseConv2d {
                 op,
                 x,
@@ -1862,6 +1875,10 @@ impl Worker {
                 scan,
                 geom,
             } => self.bcast_grad(op, g, other, &scan, &geom),
+            Cmd::GeluTanh { x } => self.gelu_tanh(x, None),
+            Cmd::GeluTanhBwd { x, gy } => self.gelu_tanh(x, Some(gy)),
+            Cmd::SeqMean { x, lens, geom } => self.seq_mean(x, lens, geom),
+            Cmd::L2Normalize { x, rows, dim } => self.l2_normalize(x, rows, dim),
         }
     }
 
@@ -2588,10 +2605,23 @@ impl Worker {
         bias: Option<Arg>,
         lens: Option<Arg>,
         g: AttnGeom,
+        extra: AttnExtra,
     ) -> Res<Reply> {
         // One simdgroup per query row, four to a threadgroup.
         const ROWS_PER_TG: usize = ATTN_THREADS / 32;
-        let scale = sdpa_scale(g.d)?;
+        let scale = extra.scale;
+        if !scale.is_finite() {
+            return Err(OjasError::NonFinite { op });
+        }
+        let banded = extra.radius != 0;
+        if (banded && (g.causal || g.window != 0 || g.q_len != g.kv_len))
+            || (extra.dead_rows && (!g.has_lens || g.q_len != g.kv_len))
+        {
+            return Err(metal_err(format!(
+                "{op}: a radius needs a bidirectional Tq == Tk call and dead rows need key lengths with Tq == Tk, not radius {} causal {} window {} lens {} Tq {} Tk {}",
+                extra.radius, g.causal, g.window, g.has_lens, g.q_len, g.kv_len
+            )));
+        }
         if g.d > ATTN_MAX_HEAD_DIM || g.rep == 0 || !g.bh.is_multiple_of(g.rep) {
             return Err(metal_err(format!(
                 "{op}: head dim {} over {} planes of {} per KV plane",
@@ -2625,7 +2655,12 @@ impl Worker {
         // The ranges must cover every key, or some would be dropped silently.
         let covers = u64::from(g.splits) * u64::from(g.per_split) >= u64::from(g.kv_len);
         if tiled
-            && (g.causal || g.window != 0 || !matches!(g.d, 16 | 32) || g.per_split == 0 || !covers)
+            && (g.causal
+                || g.window != 0
+                || extra.scalar_only()
+                || !matches!(g.d, 16 | 32)
+                || g.per_split == 0
+                || !covers)
         {
             return Err(metal_err(format!(
                 "{op}: the split-K kernel runs non-causal head dim 16 or 32 over ranges that cover every key, not causal {} window {} d {} splits {} x {} for {} keys",
@@ -2639,6 +2674,7 @@ impl Worker {
             if tiled
                 || g.causal
                 || g.window != 0
+                || extra.scalar_only()
                 || !matches!(g.d, 32 | 64 | 128 | 256)
                 || g.bias.is_some()
                 || g.has_lens
@@ -2681,7 +2717,6 @@ impl Worker {
             if qv.n > 0 {
                 // One threadgroup per 32 query rows of a plane, four
                 // simdgroups, no partials: `ojas_attn_fwd_d{width}` with `cross`.
-                let scale = sdpa_scale(g.d)?;
                 let width = Self::attn_width(g.d)?;
                 let name = format!("ojas_attn_fwd_d{width}");
                 self.ktg(
@@ -2752,7 +2787,12 @@ impl Worker {
         } else if qv.n > 0 {
             let flags = u32::from(g.causal)
                 | (u32::from(g.bias.is_some()) << 1)
-                | (u32::from(g.has_lens) << 2);
+                | (u32::from(g.has_lens) << 2)
+                | (u32::from(banded) << 3)
+                | (u32::from(extra.dead_rows) << 4);
+            // `W` is the causal window, or the radius of the symmetric band
+            // (the two never meet: the validator refuses a radius with a window).
+            let window = if banded { extra.radius } else { g.window };
             let [bias_b, bias_h, bias_q] = g.bias.unwrap_or([1, 1, 1]);
             // A buffer the kernel does not read this call is still bound:
             // Metal's validation wants every declared argument set.
@@ -2777,7 +2817,7 @@ impl Worker {
                     set_u32(b, g.heads, 11);
                     set_u32(b, g.rep, 12);
                     set_u32(b, flags, 13);
-                    set_u32(b, g.window, 14);
+                    set_u32(b, window, 14);
                     set_u32(b, bias_b, 15);
                     set_u32(b, bias_h, 16);
                     set_u32(b, bias_q, 17);
@@ -3383,51 +3423,86 @@ impl Worker {
         Ok(self.keep(vec![y]))
     }
 
-    /// Bidirectional attention on tessl's `embedgemma2::encoder_attn`
-    /// (the tiled TensorOps kernel at head dim 32 or 64), which wants
-    /// `[batch, seq, heads, d]`: each operand is permuted in, the output is
-    /// permuted back. tessl scales `q . k` by `scale` (here `sdpa_scale(d)`,
-    /// the CPU reference's `1 / sqrt(d)`) and masks by a per-batch length
-    /// buffer, built per call as `seq` for every batch (every key visible).
-    /// The kernel scans nothing, so the operands and the output are checked
-    /// here; the output of a non-finite input is flagged under `op`.
-    fn encoder_attn(&mut self, op: &'static str, args: [Arg; 3], g: EncAttnGeom) -> Res<Reply> {
+    /// Attention on tessl's `embedgemma2::encoder_attn` (the tiled TensorOps
+    /// kernel at head dim 32, 64, 256 or 512), which wants `[batch, seq,
+    /// heads, d]` for Q and O and `[batch, seq, kv_heads, d]` for K and V:
+    /// each operand is permuted in (K and V with their own head count, never
+    /// expanded to Q's), the output is permuted back. tessl multiplies `q .
+    /// k` by `g.scale` and masks by a per-batch length buffer: the caller's
+    /// `lens` (keys at or past a length are hidden and a query row at or
+    /// past it is written as zeros, tessl's contract), or `seq` for every
+    /// batch row, built per call (every key visible). `g.radius` is tessl's
+    /// inclusive `window`: `|t_k - t_q| <= radius`. The kernel scans
+    /// nothing, so the operands and the output are checked here; the output
+    /// of a non-finite input is flagged under `op`. `lens` is U32 and needs
+    /// no finite check; a length past `seq` is clamped by the kernel.
+    fn encoder_attn(
+        &mut self,
+        op: &'static str,
+        args: [Arg; 3],
+        lens: Option<Arg>,
+        g: EncAttnGeom,
+    ) -> Res<Reply> {
         let [qv, kv, vv] = self.wholes(args)?;
-        let elems = |rows: u32| {
+        let lens_v = lens.map(|a| self.wholes([a])).transpose()?;
+        let elems = |heads: u32, rows: u32| {
             (g.batch as usize)
-                .checked_mul(g.heads as usize)
+                .checked_mul(heads as usize)
                 .and_then(|n| n.checked_mul(rows as usize))
                 .and_then(|n| n.checked_mul(g.d as usize))
                 .ok_or_else(|| metal_err(format!("{op}: attention extent overflows")))
         };
-        let (nq, nk) = (elems(g.q_len)?, elems(g.seq)?);
-        if g.q_len == 0 || g.q_len > g.seq || qv.n != nq || kv.n != nk || vv.n != nk {
+        let (nq, nq_pad) = (elems(g.heads, g.q_len)?, elems(g.heads, g.seq)?);
+        let nkv = elems(g.kv_heads, g.seq)?;
+        let masked = lens_v.is_some() || g.radius != 0;
+        let lens_fit = lens_v.as_ref().is_none_or(|[l]| l.n == g.batch as usize);
+        if g.q_len == 0
+            || g.q_len > g.seq
+            || g.kv_heads == 0
+            || !g.heads.is_multiple_of(g.kv_heads)
+            || (masked && g.q_len != g.seq)
+            || !lens_fit
+            || qv.n != nq
+            || kv.n != nkv
+            || vv.n != nkv
+        {
             return Err(metal_err(format!(
-                "{op}: buffers do not hold q [{}, {}, {}, {}] over k and v [.., {}, ..]",
-                g.batch, g.heads, g.q_len, g.d, g.seq
+                "{op}: buffers do not hold q [{}, {}, {}, {}] over k and v [{}, {}, {}, {}] with lengths {} (a length buffer or a radius needs Tq == Tk)",
+                g.batch, g.heads, g.q_len, g.d, g.batch, g.kv_heads, g.seq, g.d, lens_v.is_some()
             )));
         }
-        u32_of(nk)?;
-        let scale = sdpa_scale(g.d)?;
-        let (b, h, t, tq, d) = (g.batch, g.heads, g.seq, g.q_len, g.d);
-        // [B, H, T, D] -> [B, T, H, D] reads the input at (H T D, D, T D, 1);
-        // back reads the first Tq rows of [B, T, H, D] at (T H D, D, H D, 1).
-        let to_bthd = ([b, t, h, d], [h * t * d, d, t * d, 1]);
+        if !g.scale.is_finite() {
+            return Err(OjasError::NonFinite { op });
+        }
+        u32_of(nq_pad)?;
+        let (b, h, hk, t, tq, d) = (g.batch, g.heads, g.kv_heads, g.seq, g.q_len, g.d);
+        // [B, H, T, D] -> [B, T, H, D] reads the input at (H T D, D, T D, 1)
+        // (K and V with Hkv); back reads the first Tq rows of [B, T, H, D] at
+        // (T H D, D, H D, 1).
+        let q_to_bthd = ([b, t, h, d], [h * t * d, d, t * d, 1]);
+        let kv_to_bthd = ([b, t, hk, d], [hk * t * d, d, t * d, 1]);
         let to_bhtd = ([b, h, tq, d], [t * h * d, d, h * d, 1]);
-        let (qt, kt, vt) = (self.fresh(nk)?, self.fresh(nk)?, self.fresh(nk)?);
-        let (o, y) = (self.fresh(nk)?, self.fresh(nq)?);
-        let lens = self.fresh_from(&vec![t; b as usize])?;
+        let (qt, kt, vt) = (self.fresh(nq_pad)?, self.fresh(nkv)?, self.fresh(nkv)?);
+        let (o, y) = (self.fresh(nq_pad)?, self.fresh(nq)?);
+        let built;
+        let lens_buf = match lens_v.as_ref() {
+            Some([l]) => l,
+            None => {
+                built = self.fresh_from(&vec![t; b as usize])?;
+                &built
+            }
+        };
         let st = self.status(op)?;
         for v in [&qv, &kv, &vv] {
             self.check(&st, v, ST_IN)?;
         }
         if tq == t {
-            self.permute_into(&qv, &qt, 4, &to_bthd.0, &to_bthd.1, &st)?;
+            self.permute_into(&qv, &qt, 4, &q_to_bthd.0, &q_to_bthd.1, &st)?;
         } else {
-            self.k1("ojas_pad_q", nk, |bd| {
+            self.k1("ojas_pad_q", nq_pad, |bd| {
                 bind(bd, &qv, 0);
                 bind(bd, &qt, 1);
-                set_u32(bd, nk as u32, 2);
+                set_u32(bd, nq_pad as u32, 2);
                 set_u32(bd, h, 3);
                 set_u32(bd, tq, 4);
                 set_u32(bd, t, 5);
@@ -3435,7 +3510,7 @@ impl Worker {
             })?;
         }
         for (src, dst) in [(&kv, &kt), (&vv, &vt)] {
-            self.permute_into(src, dst, 4, &to_bthd.0, &to_bthd.1, &st)?;
+            self.permute_into(src, dst, 4, &kv_to_bthd.0, &kv_to_bthd.1, &st)?;
         }
         encoder_attn(
             &self.rt,
@@ -3443,15 +3518,15 @@ impl Worker {
             &kt.buf,
             &vt.buf,
             &o.buf,
-            &lens.buf,
+            &lens_buf.buf,
             EncoderAttnDims {
                 batch: b,
                 seq: t,
                 heads: h,
-                heads_kv: h,
+                heads_kv: hk,
                 head_dim: d,
-                window: 0,
-                scale,
+                window: g.radius,
+                scale: g.scale,
             },
         )
         .map_err(metal_err)?;
@@ -5073,6 +5148,7 @@ impl Worker {
 }
 
 mod enc_bwd_dev;
+mod gemma_dev;
 
 #[cfg(test)]
 mod tests {

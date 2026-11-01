@@ -76,6 +76,10 @@ enum Rec {
         lse: Option<Tensor>,
         causal: bool,
         window: Option<usize>,
+        /// [`AttentionOpts::scale`]: `None` is `1 / sqrt(D)`.
+        scale: Option<f32>,
+        /// [`AttentionOpts::radius`]: a symmetric band, bidirectional only.
+        radius: Option<usize>,
     },
     Gate {
         x: usize,
@@ -282,6 +286,10 @@ enum Rec {
     Relu {
         x: usize,
     },
+    /// The tanh-approximate GELU ([`Backend::gelu_tanh_forward`]).
+    GeluTanh {
+        x: usize,
+    },
 }
 
 impl Rec {
@@ -328,6 +336,8 @@ impl Rec {
                 lse,
                 causal,
                 window,
+                scale,
+                radius,
             } => Rec::Attn {
                 q: m(q),
                 k: m(k),
@@ -338,6 +348,8 @@ impl Rec {
                 lse,
                 causal,
                 window,
+                scale,
+                radius,
             },
             Rec::Gate {
                 x,
@@ -511,6 +523,7 @@ impl Rec {
                 in_shape,
             },
             Rec::Relu { x } => Rec::Relu { x: m(x) },
+            Rec::GeluTanh { x } => Rec::GeluTanh { x: m(x) },
         }
     }
 
@@ -754,6 +767,27 @@ impl<B: Backend> Tape<B> {
         causal: bool,
         window: Option<usize>,
     ) -> Result<Var, OjasError> {
+        self.attention_with(q, k, v, bias, key_lens, causal, window, None, None)
+    }
+
+    /// [`Tape::attention`] with [`AttentionOpts::scale`] and
+    /// [`AttentionOpts::radius`]: `scale` multiplies the scores (`None` is
+    /// `1 / sqrt(D)`; EmbeddingGemma 2 passes `Some(1.0)`), and `radius` is
+    /// a symmetric sliding band `|i - j| <= radius`, which the backend
+    /// accepts only for a bidirectional call with `Tq == Tk` and no window.
+    #[allow(clippy::too_many_arguments)]
+    pub fn attention_with(
+        &mut self,
+        q: Var,
+        k: Var,
+        v: Var,
+        bias: Option<Var>,
+        key_lens: Option<Tensor>,
+        causal: bool,
+        window: Option<usize>,
+        scale: Option<f32>,
+        radius: Option<usize>,
+    ) -> Result<Var, OjasError> {
         const OP: &str = "Tape::attention";
         let q = self.index(q, OP)?;
         let k = self.index(k, OP)?;
@@ -770,6 +804,8 @@ impl<B: Backend> Tape<B> {
             lse: None,
             causal,
             window,
+            scale,
+            radius,
         })
     }
 
@@ -1046,6 +1082,13 @@ impl<B: Backend> Tape<B> {
     pub fn gelu_erf(&mut self, x: Var) -> Result<Var, OjasError> {
         let x = self.index(x, "Tape::gelu_erf")?;
         self.record(Rec::Gelu { x })
+    }
+
+    /// The tanh-approximate GELU ([`Backend::gelu_tanh_forward`]), torch's
+    /// `F.gelu(x, approximate="tanh")`.
+    pub fn gelu_tanh(&mut self, x: Var) -> Result<Var, OjasError> {
+        let x = self.index(x, "Tape::gelu_tanh")?;
+        self.record(Rec::GeluTanh { x })
     }
 
     /// `x @ w^T + b` ([`Backend::linear_bias_forward`]): `x` `[..., in]`, `w`
@@ -1357,6 +1400,8 @@ impl<B: Backend> Tape<B> {
                 key_lens,
                 causal,
                 window,
+                scale,
+                radius,
                 ..
             } => {
                 let opts = AttentionOpts {
@@ -1364,7 +1409,8 @@ impl<B: Backend> Tape<B> {
                     window,
                     bias: bias.map(|b| &v[b]),
                     key_lens: key_lens.as_ref(),
-                    ..Default::default()
+                    scale,
+                    radius,
                 };
                 let (y, lse) = be.attention_forward_saving(&v[q], &v[k], &v[vi], opts)?;
                 let rec = Rec::Attn {
@@ -1377,6 +1423,8 @@ impl<B: Backend> Tape<B> {
                     lse: Some(lse),
                     causal,
                     window,
+                    scale,
+                    radius,
                 };
                 (y, rec)
             }
@@ -1505,6 +1553,7 @@ impl<B: Backend> Tape<B> {
             }
             Rec::Relu { x } => (be.relu_forward(&v[x])?, rec),
             Rec::Gelu { x } => (be.gelu_erf_forward(&v[x])?, rec),
+            Rec::GeluTanh { x } => (be.gelu_tanh_forward(&v[x])?, rec),
             Rec::LinearBias { x, w, b } => (be.linear_bias_forward(&v[x], &v[w], &v[b])?, rec),
             Rec::BroadcastAdd { a, b } => (be.broadcast_add_forward(&v[a], &v[b])?, rec),
             Rec::BroadcastMul { a, b } => (be.broadcast_mul_forward(&v[a], &v[b])?, rec),
@@ -1866,6 +1915,8 @@ impl<B: Backend> Tape<B> {
                 lse,
                 causal,
                 window,
+                scale,
+                radius,
             } => {
                 let lse = lse.ok_or_else(|| self.missing("attention's lse"))?;
                 let opts = AttentionOpts {
@@ -1873,7 +1924,8 @@ impl<B: Backend> Tape<B> {
                     window,
                     bias: bias.map(|b| &self.values[b]),
                     key_lens: key_lens.as_ref(),
-                    ..Default::default()
+                    scale,
+                    radius,
                 };
                 let bias_grad = bias.is_some_and(|b| !self.is_frozen(b));
                 let g = self.backend.attention_backward(
@@ -2108,6 +2160,11 @@ impl<B: Backend> Tape<B> {
             Rec::Gelu { x } => {
                 let xv = self.values[x].clone();
                 let gx = self.backend.gelu_erf_backward(&xv, grad)?;
+                self.acc(x, gx)
+            }
+            Rec::GeluTanh { x } => {
+                let xv = self.values[x].clone();
+                let gx = self.backend.gelu_tanh_backward(&xv, grad)?;
                 self.acc(x, gx)
             }
             // A frozen weight: no weight gradient is formed, as for

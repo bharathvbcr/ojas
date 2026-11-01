@@ -16,6 +16,7 @@ mod dtype;
 mod erf_exact;
 mod error;
 mod exp_exact;
+mod gelu_tanh;
 mod hal;
 mod limits;
 mod rope;
@@ -54,6 +55,7 @@ pub use dtype::DType;
 pub use erf_exact::{erf_exact, erf_f64, gelu_erf_backward_exact, gelu_erf_exact};
 pub use error::OjasError;
 pub use exp_exact::{exp_exact, log1p_exact, log_sum_exp_exact};
+pub use gelu_tanh::{gelu_tanh_backward_exact, gelu_tanh_exact};
 pub use hal::{
     AllocError, FenceError, HostLease, HostLeaseMut, MappedBuffer, Provenance, Timeline,
 };
@@ -78,15 +80,16 @@ pub use shapes::{
     per_head_sigmoid_gate_forward_dims, permute_dims, permute_output_shape, relu_backward_dims,
     relu_forward_dims, residual_add_backward_dims, residual_add_forward_dims,
     rms_norm_backward_dims, rms_norm_forward_dims, rms_qk_norm_backward_dims,
-    rms_qk_norm_forward_dims, rope_half_split_backward_dims, rope_half_split_forward_dims,
-    rope_partial_backward_dims, rope_partial_forward_dims, scale_forward_dims, scale_grad_dims,
-    seq_mean_forward_dims, sigmoid_backward_dims, sigmoid_forward_dims, silu_backward_dims,
-    silu_forward_dims, slice_backward_dims, slice_dims, softmax_backward_dims,
-    softmax_forward_dims, topk_rows_dims, value_residual_blend_backward_dims,
-    value_residual_blend_forward_dims, AttentionBias, AttentionDims, BroadcastDims, CeDims,
-    ChannelNormDims, ConcatDims, Conv1dDims, EmbeddingDims, GateDims, GdnDecayDims, GdnDims,
-    GroupNormDims, KvDims, LinearCeDims, LinearDims, MuonDims, PartialRopeDims, RmsDims, RopeDims,
-    RopeLayout, SdpaDims, SeqMeanDims, SliceDims, MAX_BROADCAST_RANK, MAX_PERMUTE_RANK,
+    rms_qk_norm_forward_dims, rms_qkv_norm_forward_dims, rope_half_split_backward_dims,
+    rope_half_split_forward_dims, rope_partial_backward_dims, rope_partial_forward_dims,
+    scale_forward_dims, scale_grad_dims, seq_mean_forward_dims, sigmoid_backward_dims,
+    sigmoid_forward_dims, silu_backward_dims, silu_forward_dims, slice_backward_dims, slice_dims,
+    softmax_backward_dims, softmax_forward_dims, topk_rows_dims,
+    value_residual_blend_backward_dims, value_residual_blend_forward_dims, AttentionBias,
+    AttentionDims, BroadcastDims, CeDims, ChannelNormDims, ConcatDims, Conv1dDims, EmbeddingDims,
+    GateDims, GdnDecayDims, GdnDims, GroupNormDims, KvDims, LinearCeDims, LinearDims, MuonDims,
+    PartialRopeDims, RmsDims, RopeDims, RopeLayout, SdpaDims, SeqMeanDims, SliceDims,
+    MAX_BROADCAST_RANK, MAX_PERMUTE_RANK,
 };
 pub use spatial::{
     axial_rope_2d_tables, conv2d_backward_dims, conv2d_forward_dims,

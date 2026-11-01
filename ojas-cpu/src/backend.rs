@@ -4,10 +4,12 @@ use ojas_core::{
     broadcast_add_backward_dims, broadcast_add_forward_dims, broadcast_mul_backward_dims,
     broadcast_mul_forward_dims, broadcast_shapes, channel_layer_norm_backward_dims,
     channel_layer_norm_forward_dims, concat_dims, fill_dims, gelu_erf_backward_dims,
-    gelu_erf_forward_dims, group_norm_forward_dims, layer_norm_backward_dims,
+    gelu_erf_forward_dims, gelu_tanh_backward_dims, gelu_tanh_forward_dims,
+    group_norm_forward_dims, l2_normalize_forward_dims, layer_norm_backward_dims,
     layer_norm_forward_dims, linear_bias_backward_dims, linear_bias_forward_dims,
-    relu_backward_dims, relu_forward_dims, scale_forward_dims, slice_backward_dims, slice_dims,
-    softmax_backward_dims, softmax_forward_dims, AffineGrad, LinearDims,
+    relu_backward_dims, relu_forward_dims, scale_forward_dims, seq_mean_forward_dims,
+    slice_backward_dims, slice_dims, softmax_backward_dims, softmax_forward_dims, AffineGrad,
+    LinearDims,
 };
 use ojas_core::{
     causal_conv1d_silu_backward_dims, causal_conv1d_silu_forward_dims, clip_scale,
@@ -26,9 +28,9 @@ use ojas_core::{
     mul_forward_dims, per_head_sigmoid_gate_backward_dims, per_head_sigmoid_gate_forward_dims,
     residual_add_backward_dims, residual_add_forward_dims, rms_norm_backward_dims,
     rms_norm_forward_dims, rms_qk_norm_backward_dims, rms_qk_norm_forward_dims,
-    rope_half_split_backward_dims, rope_half_split_forward_dims, silu_backward_dims,
-    silu_forward_dims, value_residual_blend_backward_dims, value_residual_blend_forward_dims,
-    AttentionDims, AttentionGrad, AttentionOpts, RmsDims,
+    rms_qkv_norm_forward_dims, rope_half_split_backward_dims, rope_half_split_forward_dims,
+    silu_backward_dims, silu_forward_dims, value_residual_blend_backward_dims,
+    value_residual_blend_forward_dims, AttentionDims, AttentionGrad, AttentionOpts, RmsDims,
 };
 use ojas_core::{
     conv2d_backward_dims, conv2d_forward_dims, conv_transpose2d_backward_dims,
@@ -52,6 +54,7 @@ use crate::encoder_ops::{
 };
 use crate::gdn::{self, GradsOut, Operands as GdnOperands};
 use crate::gemm::whole_call;
+use crate::gemma_ops;
 use crate::hybrid::{
     conv1d_silu_backward, conv1d_silu_forward, gated_rms_backward, gated_rms_forward,
     gdn_log_decay_backward, gdn_log_decay_forward, rope_partial, sigmoid_backward, sigmoid_forward,
@@ -698,6 +701,35 @@ impl Backend for CpuBackend {
         let (gq, gqw) = self.rms_norm_bwd(qd, q, q_weight, grad_q, eps)?;
         let (gk, gkw) = self.rms_norm_bwd(kd, k, k_weight, grad_k, eps)?;
         Ok((gq, gk, gqw, gkw))
+    }
+
+    fn rms_qkv_norm_forward(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        q_weight: Option<&Tensor>,
+        k_weight: Option<&Tensor>,
+        eps: f32,
+    ) -> Result<(Tensor, Tensor, Tensor), OjasError> {
+        let (qd, kd, vd) = rms_qkv_norm_forward_dims(q, k, v, q_weight, k_weight, eps)?;
+        let qn = match q_weight {
+            Some(w) => self.rms_norm_fwd(qd, q, w, eps)?,
+            None => {
+                let ones = Tensor::from_f32(&vec![1.0; qd.dim], &[qd.dim], &self.budget)?;
+                self.rms_norm_fwd(qd, q, &ones, eps)?
+            }
+        };
+        let kn = match k_weight {
+            Some(w) => self.rms_norm_fwd(kd, k, w, eps)?,
+            None => {
+                let ones = Tensor::from_f32(&vec![1.0; kd.dim], &[kd.dim], &self.budget)?;
+                self.rms_norm_fwd(kd, k, &ones, eps)?
+            }
+        };
+        let v_ones = Tensor::from_f32(&vec![1.0; vd.dim], &[vd.dim], &self.budget)?;
+        let vn = self.rms_norm_fwd(vd, v, &v_ones, eps)?;
+        Ok((qn, kn, vn))
     }
 
     fn causal_sdpa_forward(
@@ -1861,5 +1893,38 @@ impl Backend for CpuBackend {
 
     fn kv_cache_write(&self, cache: &mut Tensor, src: &Tensor, at: usize) -> Result<(), OjasError> {
         crate::kv::kv_cache_write("kv_cache_write", cache, src, at)
+    }
+
+    fn gelu_tanh_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "gelu_tanh_forward";
+        gelu_tanh_forward_dims(input)?;
+        let [x] = f32_operands(OP, self.exec(), [input])?;
+        gemma_ops::gelu_tanh_forward(OP, &self.budget, self.exec(), x, input.shape())
+    }
+
+    fn gelu_tanh_backward(
+        &self,
+        input: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "gelu_tanh_backward";
+        gelu_tanh_backward_dims(input, grad_output)?;
+        let [x, gy] = f32_operands(OP, self.exec(), [input, grad_output])?;
+        gemma_ops::gelu_tanh_backward(OP, &self.budget, self.exec(), x, gy, input.shape())
+    }
+
+    fn seq_mean_forward(&self, x: &Tensor, key_lens: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "seq_mean_forward";
+        let dims = seq_mean_forward_dims(x, key_lens)?;
+        let [values] = f32_operands(OP, self.exec(), [x])?;
+        let lens = u32_values(OP, key_lens)?;
+        gemma_ops::seq_mean_forward(OP, &self.budget, self.exec(), values, lens, dims)
+    }
+
+    fn l2_normalize_forward(&self, x: &Tensor, eps: f32) -> Result<Tensor, OjasError> {
+        const OP: &str = "l2_normalize_forward";
+        let dims = l2_normalize_forward_dims(x, eps)?;
+        let [values] = f32_operands(OP, self.exec(), [x])?;
+        gemma_ops::l2_normalize_forward(OP, &self.budget, self.exec(), values, dims, eps, x.shape())
     }
 }

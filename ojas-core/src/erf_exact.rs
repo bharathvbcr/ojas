@@ -78,7 +78,7 @@ const EXP_RANGE: f64 = 104.0;
 /// product of two of its values. An `h` above `2 * EXP_RANGE` is `0.0`: there
 /// `x * phi(x)` is below `4e-90`, so even a gradient of `3.4e38` scales it to
 /// below `1e-50`, which is under the smallest `f32`.
-fn exp_neg(h: f64) -> f64 {
+pub(crate) fn exp_neg(h: f64) -> f64 {
     if h <= EXP_RANGE {
         exp_in_range_f64(-h)
     } else if h <= 2.0 * EXP_RANGE {

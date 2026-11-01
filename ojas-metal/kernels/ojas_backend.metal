@@ -2839,9 +2839,14 @@ OJAS_ATTN_TILED(256)
 //   S   = scale * Q Kᵀ + bias,   O = softmax(S) V,   lse = log sum_j exp(S_ij)
 //
 //   flags  bit 0 causal   bit 1 a bias is bound   bit 2 key lengths are bound
+//          bit 3 symmetric band   bit 4 dead rows
 //   causal: query i sits at position pos = i + Tk - Tq and sees keys
 //           pos - W < j <= pos (W = 0: every earlier key); pos < 0 sees none
 //   lens:   keys j < lens[b], clamped to Tk (0 hides every key of that batch)
+//   band:   (bit 3, never with causal; Tq == Tk) W is the radius R >= 1:
+//           query i sees keys |i - j| <= R, inclusive on both sides
+//   dead:   (bit 4, with bit 2; Tq == Tk) query rows i >= min(lens[b], Tk)
+//           sit outside their sequence and see no key
 //   bias:   [bias_b, bias_h, bias_q, Tk], an extent of 1 broadcasts
 //
 // Grouped-query heads read their KV plane in place: query plane bh = b * H + h
@@ -2886,6 +2891,7 @@ kernel void ojas_attn_gen_fwd(
 
     uint hi = Tk;
     if ((flags & 4u) != 0u) hi = min(hi, lens[b]);
+    if ((flags & 16u) != 0u && i >= hi) hi = 0u;
     uint lo = 0u;
     if ((flags & 1u) != 0u) {
         const int pos = (int)i + (int)Tk - (int)Tq;
@@ -2895,6 +2901,12 @@ kernel void ojas_attn_gen_fwd(
             hi = min(hi, (uint)pos + 1u);
             if (W != 0u && (uint)pos + 1u > W) lo = (uint)pos + 1u - W;
         }
+    }
+    if ((flags & 8u) != 0u) {
+        // Positions are below 2^31 (the host refuses longer), and W <= Tk, so
+        // `i + W + 1` cannot wrap.
+        if (i > W) lo = i - W;
+        hi = min(hi, i + W + 1u);
     }
 
     float qv[AG_PER_LANE];

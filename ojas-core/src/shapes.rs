@@ -719,6 +719,41 @@ pub fn rms_qk_norm_forward_dims(
     Ok((qd, kd))
 }
 
+/// [`crate::Backend::rms_qkv_norm_forward`]: validates `q`, `k`, `v` (all F32, rank >= 1),
+/// optional `q_weight` (`[dim_q]`), optional `k_weight` (`[dim_k]`), and finite `eps`.
+pub fn rms_qkv_norm_forward_dims(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    q_weight: Option<&Tensor>,
+    k_weight: Option<&Tensor>,
+    eps: f32,
+) -> Result<(RmsDims, RmsDims, RmsDims), OjasError> {
+    const OP: &str = "rms_qkv_norm_forward";
+    let qd = match q_weight {
+        Some(qw) => rms_norm_forward_dims(q, qw, eps)?,
+        None => rms_weightless_dims(OP, q, eps)?,
+    };
+    let kd = match k_weight {
+        Some(kw) => rms_norm_forward_dims(k, kw, eps)?,
+        None => rms_weightless_dims(OP, k, eps)?,
+    };
+    let vd = rms_weightless_dims(OP, v, eps)?;
+    Ok((qd, kd, vd))
+}
+
+fn rms_weightless_dims(op: &'static str, x: &Tensor, eps: f32) -> Result<RmsDims, OjasError> {
+    if !eps.is_finite() {
+        return Err(OjasError::NonFinite { op });
+    }
+    f32_operands(op, &[x])?;
+    let (lead, dim) = split_last(op, x.shape(), "rms_norm input rank 0")?;
+    Ok(RmsDims {
+        rows: f32_product(op, lead)?,
+        dim,
+    })
+}
+
 /// [`crate::Backend::rms_qk_norm_backward`]: [`rms_norm_backward_dims`] of
 /// `(q, q_weight, grad_q)` and then of `(k, k_weight, grad_k)`. Refusals name
 /// `rms_norm_backward`.

@@ -84,21 +84,22 @@ use std::sync::Arc;
 
 use ojas_core::{
     accumulate_grad_dims, adamw_step_dims, argmax_rows_dims, attention_forward_dims,
-    attention_forward_saving_dims, broadcast_add_forward_dims, broadcast_mul_forward_dims,
-    cached_attention_dims, causal_conv1d_silu_backward_dims, causal_conv1d_silu_forward_dims,
-    causal_sdpa_backward_dims, causal_sdpa_forward_dims, channel_layer_norm_forward_dims,
-    chunked_gdn_backward_dims, chunked_gdn_forward_dims, clip_grad_norm_dims, clip_scale,
-    concat_dims, conv2d_forward_dims, conv_transpose2d_forward_dims,
-    cross_entropy_mean_backward_dims, cross_entropy_mean_forward_dims, embedding_backward_dims,
-    embedding_forward_dims, fill_dims, gated_rms_norm_backward_dims, gated_rms_norm_forward_dims,
-    gdn_log_decay_backward_dims, gdn_log_decay_forward_dims, gelu_erf_forward_dims,
-    group_norm_forward_dims, interpolate_bilinear_forward_dims, kv_cache_write_dims,
-    layer_norm_forward_dims, linear_backward_dims, linear_bias_forward_dims, linear_ce_dims,
-    linear_forward_dims, mul_backward_dims, mul_forward_dims, muon_ns5_step_dims,
-    per_head_sigmoid_gate_backward_dims, per_head_sigmoid_gate_forward_dims, permute_dims,
-    refuse_unsupported_metal_gdn, refuse_unsupported_metal_head_dim, relu_forward_dims,
-    residual_add_backward_dims, residual_add_forward_dims, rms_norm_backward_dims,
-    rms_norm_forward_dims, rms_qk_norm_backward_dims, rms_qk_norm_forward_dims,
+    attention_forward_saving_dims, attention_scale, broadcast_add_forward_dims,
+    broadcast_mul_forward_dims, cached_attention_dims, causal_conv1d_silu_backward_dims,
+    causal_conv1d_silu_forward_dims, causal_sdpa_backward_dims, causal_sdpa_forward_dims,
+    channel_layer_norm_forward_dims, chunked_gdn_backward_dims, chunked_gdn_forward_dims,
+    clip_grad_norm_dims, clip_scale, concat_dims, conv2d_forward_dims,
+    conv_transpose2d_forward_dims, cross_entropy_mean_backward_dims,
+    cross_entropy_mean_forward_dims, embedding_backward_dims, embedding_forward_dims, fill_dims,
+    gated_rms_norm_backward_dims, gated_rms_norm_forward_dims, gdn_log_decay_backward_dims,
+    gdn_log_decay_forward_dims, gelu_erf_forward_dims, group_norm_forward_dims,
+    interpolate_bilinear_forward_dims, kv_cache_write_dims, layer_norm_forward_dims,
+    linear_backward_dims, linear_bias_forward_dims, linear_ce_dims, linear_forward_dims,
+    mul_backward_dims, mul_forward_dims, muon_ns5_step_dims, per_head_sigmoid_gate_backward_dims,
+    per_head_sigmoid_gate_forward_dims, permute_dims, refuse_unsupported_metal_gdn,
+    refuse_unsupported_metal_head_dim, relu_forward_dims, residual_add_backward_dims,
+    residual_add_forward_dims, rms_norm_backward_dims, rms_norm_forward_dims,
+    rms_qk_norm_backward_dims, rms_qk_norm_forward_dims, rms_qkv_norm_forward_dims,
     rope_half_split_backward_dims, rope_half_split_forward_dims, rope_interleaved_backward_dims,
     rope_interleaved_forward_dims, rope_partial_backward_dims, rope_partial_forward_dims,
     scale_forward_dims, sigmoid_backward_dims, sigmoid_forward_dims, silu_backward_dims,
@@ -110,13 +111,13 @@ use ojas_core::{
     GdnDecayGrad, GdnDims, GdnForward, GdnGrad, GdnInputs, InterleavedRopeDims, LinearCe,
     MuonNs5Config, Ns5Precision, Numerics, OjasError, OptimizerKind, PartialRopeDims,
     PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
-    ValueResidualGrad, MAX_PERMUTE_RANK,
+    ValueResidualGrad, MAX_PERMUTE_RANK, METAL_MAX_HEAD_DIM,
 };
 
 use crate::layout::{CONV1D_BWD_ROWS, CONV1D_WIDTHS, GATED_RMS_BWD_MAX_DIM, GATED_RMS_BWD_ROWS};
 use crate::link::{
     cached_attn_origin, cached_attn_part, check_mem_cap, metal_err, norm_chunks, rms_w_chunks, Arg,
-    AttnGeom, BilinearGeom, Cmd, Conv1dGeom, ConvGeom, EmbedRows, EncAttnGeom, GdnArgs,
+    AttnExtra, AttnGeom, BilinearGeom, Cmd, Conv1dGeom, ConvGeom, EmbedRows, EncAttnGeom, GdnArgs,
     GroupNormGeom, Lane, LceGeom, Link, ReadAs, Reply, Res, RmsSide, RopeMode, SdpaGeom,
     WaitCounts, Waits, SQ_OUT_WORDS,
 };
@@ -124,6 +125,7 @@ use crate::permute;
 
 mod attn_bwd;
 mod enc_bwd_host;
+mod gemma_host;
 mod pool;
 mod spatial_bwd;
 
@@ -513,7 +515,6 @@ impl MetalBackend {
     ) -> Result<(Tensor, Tensor), OjasError> {
         const OP: &str = "attention_forward_saving";
         let dims = attention_forward_saving_dims(q, k, v, &opts)?;
-        refuse_unrouted_attention_opts(OP, &dims, &opts)?;
         let (q, k, v) = (self.widened(q)?, self.widened(k)?, self.widened(v)?);
         let bias = opts.bias.map(|b| self.widened(b)).transpose()?;
         self.attn_forward_with(
@@ -521,7 +522,7 @@ impl MetalBackend {
             &dims,
             [&q, &k, &v],
             bias.as_ref(),
-            opts.key_lens,
+            (opts.key_lens, opts.scale),
             kernel,
         )
     }
@@ -540,16 +541,23 @@ impl MetalBackend {
     ) -> Result<Tensor, OjasError> {
         const OP: &str = "attention_forward";
         let dims = attention_forward_dims(q, k, v, &opts)?;
-        refuse_unrouted_attention_opts(OP, &dims, &opts)?;
         let (q, k, v) = (self.widened(q)?, self.widened(k)?, self.widened(v)?);
         if routes_to_encoder_attn_within(&dims, self.link.has_tensorops(), f64::INFINITY) {
-            if let Some(output) = self.encoder_attn_forward(OP, &dims, [&q, &k, &v])? {
+            if let Some(output) =
+                self.encoder_attn_forward(OP, &dims, [&q, &k, &v], (opts.key_lens, opts.scale))?
+            {
                 return Ok(output);
             }
         }
         let bias = opts.bias.map(|b| self.widened(b)).transpose()?;
-        self.attn_forward(OP, &dims, [&q, &k, &v], bias.as_ref(), opts.key_lens)
-            .map(|(output, _)| output)
+        self.attn_forward(
+            OP,
+            &dims,
+            [&q, &k, &v],
+            bias.as_ref(),
+            (opts.key_lens, opts.scale),
+        )
+        .map(|(output, _)| output)
     }
 
     /// The kernel `attention_forward_saving` plans for these operands:
@@ -567,9 +575,11 @@ impl MetalBackend {
         opts: AttentionOpts<'_>,
     ) -> Result<&'static str, OjasError> {
         let dims = attention_forward_saving_dims(q, k, v, &opts)?;
-        refuse_unrouted_attention_opts("attention_forward_saving", &dims, &opts)?;
         let geom = attn_launch("attention_forward_saving", &dims)?;
-        Ok(if self.link.has_tensorops() && flash_cross_route(&geom) {
+        let extra = attn_extra("attention_forward_saving", &dims, opts.scale)?;
+        Ok(if extra.scalar_only() {
+            "scalar"
+        } else if self.link.has_tensorops() && flash_cross_route(&geom) {
             "flash"
         } else if xattn_splits(&geom).is_some() {
             "splitk"
@@ -1011,44 +1021,72 @@ impl MetalBackend {
     /// permuted (and padded) Q, K, V and the kernel's `Tk`-row output, one
     /// length per batch row, and a copy of each operand that is a view.
     ///
+    /// Grouped-query heads are read in place: K and V are permuted with
+    /// their own head count, never expanded to Q's. `masks` is the call's
+    /// `(key_lens, scale)`: a length buffer (`Tq == Tk`) masks keys at or past
+    /// a length and zeroes the query rows there, the dead-row rule; a radius
+    /// in `dims` is tessl's inclusive `window`; `scale` is
+    /// [`attention_scale`]'s.
+    ///
     /// `None` when the budget has room for the output but not for that
     /// scratch: the caller runs the general kernel, which needs only the
     /// output and the log-sum-exp. Nothing has been charged or enqueued
     /// then: a refused reservation takes no room, the output's reservation
-    /// is released as it drops, and the device has not been called.
+    /// is released as it drops, and the device has not been called. A head
+    /// dim past [`METAL_MAX_HEAD_DIM`] has no general kernel to fall to, so
+    /// the refusal for room is returned as it is.
     fn encoder_attn_forward(
         &self,
         op: &'static str,
         dims: &AttentionDims,
         [q, k, v]: [&Tensor; 3],
+        (key_lens, scale): (Option<&Tensor>, Option<f32>),
     ) -> Res<Option<Tensor>> {
         let (qa, ka, va) = (self.f32(op, q)?, self.f32(op, k)?, self.f32(op, v)?);
+        let lens = key_lens.map(|l| self.arg(op, l, DType::U32)).transpose()?;
+        let extra = attn_extra(op, dims, scale)?;
         let geom = EncAttnGeom {
             batch: u32_dim(op, dims.batch)?,
             heads: u32_dim(op, dims.heads)?,
+            kv_heads: u32_dim(op, dims.kv_heads)?,
             seq: u32_dim(op, dims.kv_len)?,
             q_len: u32_dim(op, dims.q_len)?,
             d: u32_dim(op, dims.head_dim)?,
+            radius: extra.radius,
+            scale: extra.scale,
         };
         let n = product(op, &[dims.batch, dims.heads, dims.q_len, dims.head_dim])?;
-        let n_kv = product(op, &[dims.batch, dims.heads, dims.kv_len, dims.head_dim])?;
-        u32_dim(op, n_kv)?;
+        // Q and the output are padded to `Tk` rows, K and V keep their heads.
+        let n_q_pad = product(op, &[dims.batch, dims.heads, dims.kv_len, dims.head_dim])?;
+        let n_kv = product(op, &[dims.batch, dims.kv_heads, dims.kv_len, dims.head_dim])?;
+        u32_dim(op, n_q_pad)?;
+        // The permuted Q, K, V and the kernel's output, one length per batch
+        // row (built, or the caller's when it is a view), and a copy of each
+        // operand that is a view.
+        let planes = plus(op, product(op, &[2, n_q_pad])?, product(op, &[2, n_kv])?)?;
+        let mut copies = vec![qa, ka, va];
+        copies.extend(lens);
         let scratch = plus(
             op,
-            plus(op, product(op, &[4, n_kv])?, dims.batch)?,
-            copied_elems(op, ReadAs::Whole, &[qa, ka, va])?,
+            plus(op, planes, dims.batch)?,
+            copied_elems(op, ReadAs::Whole, &copies)?,
         )?;
         let cmd = Cmd::EncoderAttn {
             op,
             q: qa,
             k: ka,
             v: va,
+            lens,
             geom,
         };
         let output = self.reserve(op, n)?;
         let _scratch = match self.reserve(op, scratch) {
             Ok(held) => held,
-            Err(OjasError::CapacityExceeded { .. }) => return Ok(None),
+            Err(OjasError::CapacityExceeded { .. })
+                if dims.head_dim <= METAL_MAX_HEAD_DIM as usize =>
+            {
+                return Ok(None)
+            }
             Err(e) => return Err(e),
         };
         let mut out = self.call_wrap(op, &[q.shape()], vec![output], cmd)?;
@@ -1068,16 +1106,18 @@ impl MetalBackend {
     /// when the budget cannot hold them it runs the scalar
     /// `ojas_attn_gen_fwd`, which is charged nothing beyond the two outputs,
     /// as is every other call. Grouped-query heads read their KV head in
-    /// place.
+    /// place. A call with a radius, or with key lengths and `Tq == Tk` (dead
+    /// query rows), runs the scalar kernel: the flash and split-K kernels
+    /// have neither rule. `masks` is the call's `(key_lens, scale)`.
     fn attn_forward(
         &self,
         op: &'static str,
         dims: &AttentionDims,
         qkv: [&Tensor; 3],
         bias: Option<&Tensor>,
-        key_lens: Option<&Tensor>,
+        masks: (Option<&Tensor>, Option<f32>),
     ) -> Res<(Tensor, Tensor)> {
-        self.attn_forward_with(op, dims, qkv, bias, key_lens, AttnKernel::Auto)
+        self.attn_forward_with(op, dims, qkv, bias, masks, AttnKernel::Auto)
     }
 
     /// [`Self::attn_forward`] with the kernel family chosen: what the
@@ -1089,13 +1129,15 @@ impl MetalBackend {
         dims: &AttentionDims,
         [q, k, v]: [&Tensor; 3],
         bias: Option<&Tensor>,
-        key_lens: Option<&Tensor>,
+        (key_lens, scale): (Option<&Tensor>, Option<f32>),
         kernel: AttnKernel,
     ) -> Res<(Tensor, Tensor)> {
         let (qa, ka, va) = (self.f32(op, q)?, self.f32(op, k)?, self.f32(op, v)?);
         let bias_arg = bias.map(|b| self.f32(op, b)).transpose()?;
         let lens_arg = key_lens.map(|l| self.arg(op, l, DType::U32)).transpose()?;
         let geom = attn_launch(op, dims)?;
+        let extra = attn_extra(op, dims, scale)?;
+        let scalar_only = extra.scalar_only();
         let shapes = [q.shape(), lse_shape(q.shape())];
         let command = |geom: AttnGeom| Cmd::Attn {
             op,
@@ -1105,14 +1147,16 @@ impl MetalBackend {
             bias: bias_arg,
             lens: lens_arg,
             geom,
+            extra,
         };
         // The TensorOps flash kernel where it covers the call: no scratch,
         // so no budget fallback.
-        let flash = match kernel {
-            AttnKernel::Auto => flash_cross_route(&geom),
-            AttnKernel::Flash => flash_cross_covers(&geom),
-            AttnKernel::SplitK | AttnKernel::Scalar => false,
-        };
+        let flash = !scalar_only
+            && match kernel {
+                AttnKernel::Auto => flash_cross_route(&geom),
+                AttnKernel::Flash => flash_cross_covers(&geom),
+                AttnKernel::SplitK | AttnKernel::Scalar => false,
+            };
         if flash && self.link.has_tensorops() {
             return self
                 .outputs(
@@ -1135,7 +1179,7 @@ impl MetalBackend {
         // The split-K tiled kernel where it covers the call, with its
         // partial results charged as scratch; a budget that holds only the
         // outputs runs the scalar kernel, which needs nothing more.
-        let tiled = (kernel != AttnKernel::Scalar)
+        let tiled = (kernel != AttnKernel::Scalar && !scalar_only)
             .then(|| xattn_splits(&geom))
             .flatten()
             .and_then(|(splits, per_split)| {
@@ -1579,9 +1623,15 @@ fn conv_geom(op: &'static str, d: &Conv2dDims) -> Res<ConvGeom> {
 /// `[1, 16, 5184, 64]` and 4.7 ms against 77 ms on `[9, 16, 576, 64]`
 /// (bench/results/2026-10-26-attention-vision). 32 is the same tiled kernel
 /// family (`ENCODER_TILED_KERNEL`, one simdgroup and 16 queries a group) with
-/// the same i32-plane and length semantics. The head dims tessl compiles
-/// beyond these (256, 512) have no measurement here.
-const ENCODER_ATTN_HEAD_DIMS: [usize; 3] = [32, 64, 256];
+/// the same i32-plane and length semantics. 256 and 512 are EmbeddingGemma 2's
+/// sliding (D 256, 2 KV heads) and full (D 512, 1 KV head) layers; tessl
+/// compiles all four tiled (`embedgemma2.rs` `encoder_attn_tiled_entry`). They
+/// have no measurement here yet. 512 is above [`METAL_MAX_HEAD_DIM`], which
+/// every other Metal attention kernel keeps: this route is the only one that
+/// runs it, and a call that cannot take it (no TensorOps, a budget without room
+/// for its scratch, `attention_forward_saving`) is refused with
+/// `UnsupportedHeadDim`, never run on a narrower kernel.
+const ENCODER_ATTN_HEAD_DIMS: [usize; 4] = [32, 64, 256, 512];
 
 /// The longest `Tk / Tq` a cross-attention is routed to `encoder_attn` at;
 /// beyond it the split-K tiled kernel (`ojas_xattn_part_dD`) runs it.
@@ -1601,59 +1651,36 @@ const ENCODER_ATTN_HEAD_DIMS: [usize; 3] = [32, 64, 256];
 const ENCODER_ATTN_MAX_PAD_RATIO: f64 = 2.25;
 
 /// Whether `attention_forward` runs on tessl's tiled `encoder_attn` rather
-/// than `ojas_attn_gen_fwd`: bidirectional attention over equal head counts
-/// with no bias, key lengths or window, at one of [`ENCODER_ATTN_HEAD_DIMS`],
-/// with `0 < Tq <= Tk <= ENCODER_ATTN_MAX_PAD_RATIO * Tq` (a shorter Q is
-/// padded; Metal refuses an empty operand before routing, so the `Tq > 0` term
-/// is defensive), on a device with TensorOps, with one head's `Tk`-row plane addressable in
-/// `i32` as tessl's matrix-unit views require and the padded tensor within
-/// the kernels' 32-bit element indexing (the permutes index it in `u32`).
-/// Everything else keeps the general kernel, which refuses what it cannot
-/// run. A budget that holds the output but not the routed path's scratch
-/// also runs the general kernel ([`MetalBackend::encoder_attn_forward`]).
+/// than `ojas_attn_gen_fwd`: bidirectional attention with no bias or causal
+/// window, at one of [`ENCODER_ATTN_HEAD_DIMS`], with any head grouping (K and
+/// V keep their own heads), with `0 < Tq <= Tk <= ENCODER_ATTN_MAX_PAD_RATIO *
+/// Tq` (a shorter Q is padded; Metal refuses an empty operand before routing,
+/// so the `Tq > 0` term is defensive), on a device with TensorOps, with one
+/// head's `Tk`-row plane addressable in `i32` as tessl's matrix-unit views
+/// require and the padded tensor within the kernels' 32-bit element indexing
+/// (the permutes index it in `u32`). Key lengths and a radius route only at
+/// `Tq == Tk`: tessl's length rule zeroes a query row past its length and its
+/// `window` is the radius band, both for equal lengths. Everything else keeps
+/// the general kernel, which refuses what it cannot run. A budget that holds
+/// the output but not the routed path's scratch also runs the general kernel
+/// ([`MetalBackend::encoder_attn_forward`]) up to [`METAL_MAX_HEAD_DIM`].
 /// `attention_forward_saving` never routes: `encoder_attn` returns no
 /// log-sum-exp.
 fn routes_to_encoder_attn(dims: &AttentionDims, tensorops: bool) -> bool {
     routes_to_encoder_attn_within(dims, tensorops, ENCODER_ATTN_MAX_PAD_RATIO)
 }
 
-/// Every Metal attention kernel scales scores by `sdpa_scale(D)` and masks by
-/// causal, window, bias and key lengths only. An `AttentionOpts::scale` or
-/// `radius` reaches none of them yet, so the call is refused, not run with
-/// the default scale or without the band. The route that will carry them
-/// (tessl `encoder_attn`) replaces this check.
-fn refuse_unrouted_attention_opts(
-    op: &'static str,
-    dims: &AttentionDims,
-    opts: &AttentionOpts<'_>,
-) -> Res<()> {
-    if opts.scale.is_some() {
-        return Err(OjasError::Unsupported {
-            op,
-            detail: "Metal attention scales scores by 1/sqrt(D) only; \
-                     AttentionOpts::scale is not routed yet"
-                .to_string(),
-        });
-    }
-    if dims.radius.is_some() {
-        return Err(OjasError::Unsupported {
-            op,
-            detail: "Metal attention has no symmetric radius band; \
-                     AttentionOpts::radius is not routed yet"
-                .to_string(),
-        });
-    }
-    Ok(())
-}
-
 /// [`routes_to_encoder_attn`] with the pad ratio bound given: the bench's
 /// pad-q arm lifts it to time the route above [`ENCODER_ATTN_MAX_PAD_RATIO`].
 fn routes_to_encoder_attn_within(dims: &AttentionDims, tensorops: bool, max_ratio: f64) -> bool {
-    let plane = dims
-        .kv_len
-        .checked_mul(dims.heads)
-        .and_then(|p| p.checked_mul(dims.head_dim))
-        .is_some_and(|p| i32::try_from(p).is_ok());
+    // tessl's matrix-unit views index one (batch, head) plane of Q and of K/V
+    // with i32 extents; the permutes index the padded Q tensor in u32.
+    let plane = [dims.heads, dims.kv_heads].into_iter().all(|heads| {
+        dims.kv_len
+            .checked_mul(heads)
+            .and_then(|p| p.checked_mul(dims.head_dim))
+            .is_some_and(|p| i32::try_from(p).is_ok())
+    });
     let elements = plane
         .then(|| dims.batch.checked_mul(dims.kv_len))
         .flatten()
@@ -1663,16 +1690,32 @@ fn routes_to_encoder_attn_within(dims: &AttentionDims, tensorops: bool, max_rati
     let padded_ok = dims.q_len > 0
         && dims.q_len <= dims.kv_len
         && dims.kv_len as f64 <= max_ratio * dims.q_len as f64;
+    // Key lengths (dead query rows) and a radius are defined for `Tq == Tk`
+    // only; a shorter Q would be padded, and a padded row is not a dead one.
+    let masks_ok = !(dims.key_lens || dims.radius.is_some()) || dims.q_len == dims.kv_len;
     tensorops
         && !dims.causal
         && dims.window.is_none()
         && dims.bias.is_none()
-        && !dims.key_lens
         && padded_ok
-        && dims.heads == dims.kv_heads
+        && masks_ok
+        && dims.kv_heads > 0
+        && dims.heads.is_multiple_of(dims.kv_heads)
         && ENCODER_ATTN_HEAD_DIMS.contains(&dims.head_dim)
         && plane
         && elements
+}
+
+/// What `AttentionOpts` adds to a launch of validated `dims`: the score
+/// scale ([`attention_scale`]: `1/sqrt(D)` when unset), the radius band and
+/// the dead-row rule (key lengths with `Tq == Tk`: the query rows past a
+/// batch row's length see no key).
+fn attn_extra(op: &'static str, dims: &AttentionDims, scale: Option<f32>) -> Res<AttnExtra> {
+    Ok(AttnExtra {
+        scale: attention_scale(u32_dim(op, dims.head_dim)?, scale)?,
+        radius: dims.radius.map_or(Ok(0), |r| u32_dim(op, r))?,
+        dead_rows: dims.key_lens && dims.q_len == dims.kv_len,
+    })
 }
 
 /// The attention kernels' geometry of validated `dims`, with Metal's
@@ -2486,6 +2529,38 @@ impl Backend for MetalBackend {
         Ok((gq, gk, gqw, gkw))
     }
 
+    fn rms_qkv_norm_forward(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        q_weight: Option<&Tensor>,
+        k_weight: Option<&Tensor>,
+        eps: f32,
+    ) -> Result<(Tensor, Tensor, Tensor), OjasError> {
+        let (qd, kd, vd) = rms_qkv_norm_forward_dims(q, k, v, q_weight, k_weight, eps)?;
+        let qn = match q_weight {
+            Some(w) => self.rms_norm_forward(q, w, eps)?,
+            None => {
+                let host_ones = Tensor::from_f32(&vec![1.0; qd.dim], &[qd.dim], self.budget())?;
+                let ones = self.upload(&host_ones)?;
+                self.rms_norm_forward(q, &ones, eps)?
+            }
+        };
+        let kn = match k_weight {
+            Some(w) => self.rms_norm_forward(k, w, eps)?,
+            None => {
+                let host_ones = Tensor::from_f32(&vec![1.0; kd.dim], &[kd.dim], self.budget())?;
+                let ones = self.upload(&host_ones)?;
+                self.rms_norm_forward(k, &ones, eps)?
+            }
+        };
+        let host_ones = Tensor::from_f32(&vec![1.0; vd.dim], &[vd.dim], self.budget())?;
+        let v_ones = self.upload(&host_ones)?;
+        let vn = self.rms_norm_forward(v, &v_ones, eps)?;
+        Ok((qn, kn, vn))
+    }
+
     fn causal_sdpa_forward(
         &self,
         q: &Tensor,
@@ -2522,11 +2597,18 @@ impl Backend for MetalBackend {
     /// a malformed call under its own name, as the CPU backend does, and a
     /// non-finite operand faults under `attention_forward`.
     ///
-    /// Not bit-identical to the saving form for unmasked attention at head
-    /// dim 32 or 64 on a TensorOps device, self- or cross-attention with
-    /// `0 < Tq <= Tk <= 2.25 Tq` (`routes_to_encoder_attn`): that call runs
-    /// tessl's tiled `encoder_attn`, 26x faster at `[1, 16, 5184, 64]` (22.8
-    /// ms against 606 ms), whose sums add in another order. The two forms
+    /// Not bit-identical to the saving form for attention with no bias and
+    /// no causal mask at head dim 32, 64, 256 or 512 on a TensorOps device,
+    /// self- or cross-attention with `0 < Tq <= Tk <= 2.25 Tq`
+    /// (`routes_to_encoder_attn`): that call runs tessl's tiled
+    /// `encoder_attn`, 26x faster at `[1, 16, 5184, 64]` (22.8 ms against 606
+    /// ms), whose sums add in another order. It takes grouped-query heads
+    /// (K and V are not expanded), `AttentionOpts::scale`, key lengths and a
+    /// `radius` (the last two at `Tq == Tk`). Head dim 512 runs only here:
+    /// it is above `METAL_MAX_HEAD_DIM`, which every other kernel keeps, so a
+    /// 512 call that cannot route (no TensorOps, no room for the route's
+    /// scratch, the saving form) is `UnsupportedHeadDim` or
+    /// `CapacityExceeded`, never a narrower kernel. The two forms
     /// agree within the forward tolerance (1.5e-7 measured at the SAM
     /// shapes). Every other call runs the same kernel as the saving form and
     /// is bit-identical to it, with one caveat: which kernel a split-K call
@@ -2546,16 +2628,23 @@ impl Backend for MetalBackend {
     ) -> Result<Tensor, OjasError> {
         const OP: &str = "attention_forward";
         let dims = attention_forward_dims(q, k, v, &opts)?;
-        refuse_unrouted_attention_opts(OP, &dims, &opts)?;
         let (q, k, v) = (self.widened(q)?, self.widened(k)?, self.widened(v)?);
         if routes_to_encoder_attn(&dims, self.link.has_tensorops()) {
-            if let Some(output) = self.encoder_attn_forward(OP, &dims, [&q, &k, &v])? {
+            if let Some(output) =
+                self.encoder_attn_forward(OP, &dims, [&q, &k, &v], (opts.key_lens, opts.scale))?
+            {
                 return Ok(output);
             }
         }
         let bias = opts.bias.map(|b| self.widened(b)).transpose()?;
-        self.attn_forward(OP, &dims, [&q, &k, &v], bias.as_ref(), opts.key_lens)
-            .map(|(output, _)| output)
+        self.attn_forward(
+            OP,
+            &dims,
+            [&q, &k, &v],
+            bias.as_ref(),
+            (opts.key_lens, opts.scale),
+        )
+        .map(|(output, _)| output)
     }
 
     /// Bidirectional and cross attention, a bias and key lengths. On a
@@ -2578,10 +2667,15 @@ impl Backend for MetalBackend {
     ) -> Result<(Tensor, Tensor), OjasError> {
         const OP: &str = "attention_forward_saving";
         let dims = attention_forward_saving_dims(q, k, v, &opts)?;
-        refuse_unrouted_attention_opts(OP, &dims, &opts)?;
         let (q, k, v) = (self.widened(q)?, self.widened(k)?, self.widened(v)?);
         let bias = opts.bias.map(|b| self.widened(b)).transpose()?;
-        self.attn_forward(OP, &dims, [&q, &k, &v], bias.as_ref(), opts.key_lens)
+        self.attn_forward(
+            OP,
+            &dims,
+            [&q, &k, &v],
+            bias.as_ref(),
+            (opts.key_lens, opts.scale),
+        )
     }
 
     /// The gradients of [`Self::attention_forward_saving`] from its output
@@ -3479,6 +3573,24 @@ impl Backend for MetalBackend {
         self.enc_gelu_erf_backward(input, grad_output)
     }
 
+    /// torch's `gelu(approximate="tanh")` as tessl's `tessl_gelu_pytorch_tanh`
+    /// (`kernels/gemma_ops.metal`), one element a thread in `f32`: a few ulps
+    /// from the CPU's `f64` evaluation, not bit-identical to it
+    /// (`backend/gemma_host.rs`).
+    fn gelu_tanh_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        self.gemma_gelu_tanh_forward(input)
+    }
+
+    /// The derivative of the forward's own bounded evaluation, one element a
+    /// thread.
+    fn gelu_tanh_backward(
+        &self,
+        input: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        self.gemma_gelu_tanh_backward(input, grad_output)
+    }
+
     /// Fused `x @ W^T + bias` on `matmul2d_tensorops_nt_bf16_f32_bias` when
     /// running on TensorOps under Bf16 lane, else sequential linear_forward and broadcast_add_forward.
     fn linear_bias_forward(
@@ -3581,6 +3693,19 @@ impl Backend for MetalBackend {
     /// From the forward's output `y`, a double-single dot per row.
     fn softmax_backward(&self, output: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
         self.enc_softmax_backward(output, grad_output)
+    }
+
+    /// The masked mean over time on tessl's `segment_mean_rows`, the row
+    /// ranges built on the device from `key_lens` (no readback). An `f32`
+    /// sequential sum: within its rounding of the CPU's `f64` result.
+    fn seq_mean_forward(&self, x: &Tensor, key_lens: &Tensor) -> Result<Tensor, OjasError> {
+        self.gemma_seq_mean_forward(x, key_lens)
+    }
+
+    /// tessl's `l2_normalize_rows`, whose epsilon is `1e-12`: any other eps
+    /// is `Unsupported`, not ignored.
+    fn l2_normalize_forward(&self, x: &Tensor, eps: f32) -> Result<Tensor, OjasError> {
+        self.gemma_l2_normalize_forward(x, eps)
     }
 
     fn cross_entropy_mean_forward(
@@ -5218,9 +5343,91 @@ mod tests {
     }
 
     #[test]
-    fn only_plain_attention_at_head_dim_32_64_or_256_with_tq_at_most_tk_routes_to_encoder_attn() {
+    fn only_plain_attention_at_a_tiled_head_dim_with_tq_at_most_tk_routes_to_encoder_attn() {
         let base = vision_dims();
         assert!(routes_to_encoder_attn(&base, true));
+        // EmbeddingGemma 2: the sliding layers (4 query heads over 2 KV heads,
+        // D 256, a radius of 512 over 2048 tokens, key lengths) and the full
+        // layers (4 over 1, D 512), self-attention. Key lengths and a radius
+        // route at Tq == Tk.
+        let sliding = AttentionDims {
+            batch: 4,
+            heads: 4,
+            kv_heads: 2,
+            q_len: 2048,
+            kv_len: 2048,
+            head_dim: 256,
+            radius: Some(512),
+            key_lens: true,
+            ..base
+        };
+        let full = AttentionDims {
+            kv_heads: 1,
+            head_dim: 512,
+            radius: None,
+            ..sliding
+        };
+        for (what, d) in [("sliding", sliding), ("full", full)] {
+            assert!(routes_to_encoder_attn(&d, true), "{what} layer routes");
+            assert!(
+                !routes_to_encoder_attn(&d, false),
+                "{what} layer needs TensorOps"
+            );
+        }
+        for (what, d) in [
+            (
+                "a radius with Tq != Tk",
+                AttentionDims {
+                    q_len: 1024,
+                    key_lens: false,
+                    ..sliding
+                },
+            ),
+            (
+                "key lengths with Tq != Tk",
+                AttentionDims {
+                    q_len: 1024,
+                    radius: None,
+                    ..sliding
+                },
+            ),
+            (
+                "a causal sliding window",
+                AttentionDims {
+                    causal: true,
+                    radius: None,
+                    window: Some(8),
+                    ..sliding
+                },
+            ),
+            (
+                "head dim 128 over grouped heads",
+                AttentionDims {
+                    head_dim: 128,
+                    ..sliding
+                },
+            ),
+            (
+                "head dim 1024",
+                AttentionDims {
+                    head_dim: 1024,
+                    ..sliding
+                },
+            ),
+            (
+                "a plane past i32 under grouped heads",
+                AttentionDims {
+                    q_len: 1 << 20,
+                    kv_len: 1 << 20,
+                    heads: 8,
+                    kv_heads: 1,
+                    head_dim: 512,
+                    ..sliding
+                },
+            ),
+        ] {
+            assert!(!routes_to_encoder_attn(&d, true), "{what} must not route");
+        }
         assert!(
             routes_to_encoder_attn(
                 &AttentionDims {
@@ -5305,9 +5512,10 @@ mod tests {
                 },
             ),
             (
-                "key lengths",
+                "key lengths with Tq != Tk",
                 AttentionDims {
                     key_lens: true,
+                    kv_len: 5200,
                     ..base
                 },
             ),
@@ -5346,13 +5554,6 @@ mod tests {
                     heads: 8,
                     kv_heads: 8,
                     kv_len: 15616,
-                    ..base
-                },
-            ),
-            (
-                "grouped heads",
-                AttentionDims {
-                    kv_heads: 8,
                     ..base
                 },
             ),
@@ -5396,6 +5597,54 @@ mod tests {
                 "{what} must keep the general kernel"
             );
         }
+    }
+
+    /// The options' scale, radius and dead-row rule reach the launch, and a
+    /// radius or a dead row keeps the call off the flash and split-K kernels,
+    /// which have neither.
+    #[test]
+    fn the_launch_extras_follow_the_options_and_pin_the_scalar_kernel() {
+        let base = AttentionDims {
+            q_len: 64,
+            kv_len: 64,
+            head_dim: 64,
+            ..vision_dims()
+        };
+        let plain = attn_extra("test", &base, None).expect("default");
+        assert_eq!(plain.scale.to_bits(), (1.0f32 / 64f32.sqrt()).to_bits());
+        assert_eq!((plain.radius, plain.dead_rows), (0, false));
+        assert!(!plain.scalar_only());
+
+        let one = attn_extra("test", &base, Some(1.0)).expect("explicit scale");
+        assert_eq!(one.scale, 1.0);
+        assert!(!one.scalar_only(), "a scale alone runs on any kernel");
+
+        let banded = attn_extra(
+            "test",
+            &AttentionDims {
+                radius: Some(512),
+                ..base
+            },
+            None,
+        )
+        .expect("radius");
+        assert_eq!(banded.radius, 512);
+        assert!(banded.scalar_only());
+
+        let lens = AttentionDims {
+            key_lens: true,
+            ..base
+        };
+        assert!(attn_extra("test", &lens, None).expect("lens").dead_rows);
+        let cross = AttentionDims { q_len: 32, ..lens };
+        let cross = attn_extra("test", &cross, None).expect("cross lens");
+        assert!(!cross.dead_rows, "a cross-attention length has no dead row");
+        assert!(!cross.scalar_only());
+
+        assert!(matches!(
+            attn_extra("test", &base, Some(f32::NAN)),
+            Err(OjasError::NonFinite { .. })
+        ));
     }
 
     /// Every key range of the split-K kernel is a whole number of tiles, none

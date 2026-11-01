@@ -132,29 +132,20 @@ fn single_key_and_single_query_extremes() {
     check(&m, &Case::new(1, 2, 2, 1, 37, 16).bias([1, 2, 1]), 12);
 }
 
-/// `AttentionOpts::scale` and `radius` reach no Metal kernel yet: every
-/// entry refuses them under its own name instead of running with the default
-/// scale or without the band. A radius that hides nothing (`>= Tk - 1`) is no
-/// radius after validation and still runs. Whoever routes them replaces this.
+/// `AttentionOpts::scale` and `radius` run on Metal and match the CPU reference.
 #[test]
-fn scale_and_radius_are_refused_not_ignored() {
-    use ojas_core::OjasError;
+fn scale_and_radius_run_on_metal_and_match_cpu() {
     let m = metal();
+    let cpu = cpu();
     let q = rand(&[1, 2, 6, 64], 1, 1.0);
     let k = rand(&[1, 2, 6, 64], 2, 1.0);
     let v = rand(&[1, 2, 6, 64], 3, 1.0);
     let (dq, dk, dv) = (up(&m, &q), up(&m, &k), up(&m, &v));
-    let refused = |what: &str, op: &str, r: Result<(), OjasError>| match r {
-        Err(OjasError::Unsupported { op: got, detail }) => {
-            assert_eq!(got, op, "{what}: {detail}");
-        }
-        other => panic!("{what}: expected Unsupported under {op}, got {other:?}"),
-    };
     for (what, opts) in [
         (
             "scale",
             AttentionOpts {
-                scale: Some(1.0),
+                scale: Some(0.25),
                 ..Default::default()
             },
         ),
@@ -165,43 +156,23 @@ fn scale_and_radius_are_refused_not_ignored() {
                 ..Default::default()
             },
         ),
+        (
+            "scale and radius",
+            AttentionOpts {
+                scale: Some(0.125),
+                radius: Some(2),
+                ..Default::default()
+            },
+        ),
     ] {
-        refused(
-            what,
-            "attention_forward",
-            m.attention_forward(&dq, &dk, &dv, opts).map(drop),
-        );
-        refused(
-            what,
-            "attention_forward_saving",
-            m.attention_forward_saving(&dq, &dk, &dv, opts).map(drop),
-        );
-        refused(
-            what,
-            "attention_forward_saving",
-            m.attention_saving_kernel(&dq, &dk, &dv, opts).map(drop),
-        );
+        let want = ok(what, cpu.attention_forward(&q, &k, &v, opts));
+        let got = ok(what, m.attention_forward(&dq, &dk, &dv, opts));
+        same_tensor(what, &got, &want, 1e-4, 1e-4);
+
+        let (want_s, _) = ok(what, cpu.attention_forward_saving(&q, &k, &v, opts));
+        let (got_s, _) = ok(what, m.attention_forward_saving(&dq, &dk, &dv, opts));
+        same_tensor(&format!("{what} saving"), &got_s, &want_s, 1e-4, 1e-4);
     }
-    let hides_nothing = AttentionOpts {
-        radius: Some(5),
-        ..Default::default()
-    };
-    let got = ok(
-        "radius 5 at Tk 6",
-        m.attention_forward(&dq, &dk, &dv, hides_nothing),
-    );
-    let want = ok(
-        "no radius",
-        m.attention_forward(&dq, &dk, &dv, AttentionOpts::default()),
-    );
-    let down_host = |t: &Tensor| host(&down(t), t.shape());
-    same_tensor(
-        "a radius that hides nothing",
-        &got,
-        &down_host(&want),
-        0.0,
-        0.0,
-    );
 }
 
 /// The sync after a faulting `attention_forward` names `attention_forward`.

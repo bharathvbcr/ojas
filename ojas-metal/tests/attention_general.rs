@@ -170,18 +170,18 @@ fn down_host(t: &Tensor) -> Tensor {
 }
 
 /// Whether `attention_forward` takes tessl's `encoder_attn` for this case:
-/// plain attention at head dim 32, 64 or 256, `Tq <= Tk <= 2.25 Tq`, on a device with
-/// TensorOps.
+/// attention with no bias and no causal mask at head dim 32, 64, 256 or 512,
+/// any head grouping, `Tq <= Tk <= 2.25 Tq`, on a device with TensorOps; key
+/// lengths route at `Tq == Tk` only.
 fn routes_to_encoder_attn(m: &MetalBackend, c: &Case) -> bool {
     m.has_tensorops()
         && !c.causal
         && c.window.is_none()
         && c.bias.is_none()
-        && c.lens.is_none()
+        && (c.lens.is_none() || c.tq == c.tk)
         && c.tq <= c.tk
         && 4 * c.tk <= 9 * c.tq
-        && c.h == c.hkv
-        && (c.d == 32 || c.d == 64 || c.d == 256)
+        && [32, 64, 256, 512].contains(&c.d)
 }
 
 #[test]

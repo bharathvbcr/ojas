@@ -8,6 +8,8 @@
 //! depend on the thread count, a query that sees no key is zeros, and every
 //! malformed call is refused.
 
+use std::ops::Range;
+
 use ojas_core::{AttentionOpts, Backend, Budget, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 
@@ -106,12 +108,16 @@ impl Case {
     fn bias_shape(&self) -> Option<[usize; 4]> {
         self.bias.map(|[b, h, q]| [b, h, q, self.tk])
     }
-    /// Key `j` is visible to query `i` of batch row `b`.
+    /// Key `j` is visible to query `i` of batch row `b`. With `Tq == Tk`, a
+    /// query at or past the key length is a padding row and sees nothing.
     fn visible(&self, b: usize, i: usize, j: usize) -> bool {
         let len = self
             .lens
             .as_ref()
             .map_or(self.tk, |l| (l[b] as usize).min(self.tk));
+        if self.tq == self.tk && i >= len {
+            return false;
+        }
         if j >= len {
             return false;
         }
@@ -355,16 +361,36 @@ fn cases() -> Vec<Case> {
             .bias([2, 2, 6])
             .lens(&[10, 6]),
         Case::new(3, 2, 2, 4, 9, 8).bias([1, 1, 4]).lens(&[2, 0, 9]),
+        // Padding rows: `Tq == Tk` with a length below `Tq` (queries at or
+        // past it are zeros), alone, empty, one over, with the masks, a bias
+        // and grouped heads.
+        Case::new(2, 3, 3, 9, 9, 8).lens(&[9, 4]),
+        Case::new(2, 2, 2, 7, 7, 8).lens(&[0, 99]),
+        Case::new(3, 4, 2, 8, 8, 8).lens(&[8, 1, 5]),
+        Case::new(2, 2, 2, 8, 8, 8).causal(None).lens(&[8, 3]),
+        Case::new(2, 2, 2, 9, 9, 8).causal(Some(3)).lens(&[9, 5]),
+        Case::new(2, 2, 2, 7, 7, 8).bias([2, 2, 7]).lens(&[7, 2]),
+        Case::new(2, 2, 2, 7, 7, 8).bias([1, 1, 1]).lens(&[3, 7]),
         // A symmetric band: alone, one wide, grouped heads, with a bias, one
-        // that hides nothing, and a single position. No case pairs a band
-        // with `key_lens` below `Tq`: what a query row past its length
-        // outputs is the padded-row rule's (a separate lane), not pinned here.
+        // that hides nothing, and a single position. Then the band with
+        // padding rows (the EmbeddingGemma 2 encoder's call: scale 1, grouped
+        // heads, a band, a ragged batch).
         Case::new(2, 3, 3, 9, 9, 8).radius(2),
         Case::new(1, 2, 2, 10, 10, 8).radius(1),
         Case::new(2, 4, 2, 12, 12, 8).radius(3),
         Case::new(2, 2, 2, 11, 11, 16).radius(4).bias([2, 2, 11]),
         Case::new(1, 2, 2, 7, 7, 8).radius(6),
         Case::new(1, 1, 1, 1, 1, 8).radius(1),
+        Case::new(2, 2, 2, 10, 10, 8).radius(2).lens(&[10, 4]),
+        Case::new(2, 4, 2, 12, 12, 16)
+            .radius(3)
+            .scale(1.0)
+            .lens(&[12, 5]),
+        Case::new(2, 4, 1, 11, 11, 32)
+            .radius(4)
+            .scale(1.0)
+            .bias([2, 4, 11])
+            .lens(&[11, 0]),
         // An explicit score scale: the usual, larger, smaller, negative, zero.
         Case::new(2, 3, 3, 9, 9, 8).scale(1.0),
         Case::new(2, 3, 3, 9, 9, 8).scale(0.3),
@@ -456,6 +482,8 @@ fn a_query_that_sees_no_key_is_zeros_with_no_gradient() {
     for c in [
         Case::new(2, 2, 2, 4, 6, 8).lens(&[6, 0]),
         Case::new(1, 2, 2, 8, 5, 8).causal(None),
+        // Padding rows: batch row 1 keeps two of its six queries.
+        Case::new(2, 2, 2, 6, 6, 8).lens(&[6, 2]),
     ] {
         let x = inputs(&c, 11);
         let t = Built::new(&c, &x);
@@ -518,6 +546,126 @@ fn a_window_over_every_key_is_no_window() {
         .attention_forward(&tw.q, &tw.k, &tw.v, tw.opts(&wide))
         .unwrap();
     assert_eq!(bits(&a), bits(&b));
+}
+
+/// Rows `rows` of every `[plane, T, D]` plane of `data`.
+fn plane_rows(data: &[f32], planes: usize, t: usize, d: usize, rows: Range<usize>) -> Vec<u32> {
+    (0..planes)
+        .flat_map(|p| data[(p * t + rows.start) * d..(p * t + rows.end) * d].iter())
+        .map(|v| v.to_bits())
+        .collect()
+}
+
+#[test]
+fn padding_rows_are_inert_and_cross_attention_is_not_padded() {
+    // Self-attention, batch row 1 has 3 of 8 rows. Whatever queries (and
+    // their output gradients) sit in rows 3.. cannot change one bit of the
+    // live rows, the key and value gradients or the bias gradient, and the
+    // padding rows themselves are zeros with a log-sum-exp of 0.
+    let be = backend(2, Numerics::Exact);
+    for c in [
+        Case::new(2, 4, 2, 8, 8, 16).lens(&[8, 3]),
+        Case::new(2, 4, 2, 8, 8, 16)
+            .radius(2)
+            .scale(1.0)
+            .lens(&[8, 3]),
+        Case::new(2, 4, 2, 8, 8, 16).causal(None).lens(&[8, 3]),
+        Case::new(2, 4, 2, 8, 8, 16).bias([2, 4, 8]).lens(&[8, 3]),
+    ] {
+        let x = inputs(&c, 61);
+        let mut moved = Inputs {
+            q: x.q.clone(),
+            k: x.k.clone(),
+            v: x.v.clone(),
+            gy: x.gy.clone(),
+            bias: x.bias.clone(),
+        };
+        // Batch row 1 is planes `h..2h` of q and gy: rewrite rows 3.. there.
+        for plane in c.h..2 * c.h {
+            for i in 3..c.tq {
+                for col in 0..c.d {
+                    let at = (plane * c.tq + i) * c.d + col;
+                    moved.q[at] = 5.0 - moved.q[at];
+                    moved.gy[at] = -2.0 * moved.gy[at] + 1.0;
+                }
+            }
+        }
+        let run = |x: &Inputs| {
+            let t = Built::new(&c, x);
+            let (y, lse) = be
+                .attention_forward_saving(&t.q, &t.k, &t.v, t.opts(&c))
+                .unwrap();
+            let g = be
+                .attention_backward(
+                    &t.q,
+                    &t.k,
+                    &t.v,
+                    &y,
+                    &lse,
+                    &t.gy,
+                    t.opts(&c),
+                    c.bias.is_some(),
+                )
+                .unwrap();
+            (y, lse, g)
+        };
+        let (y0, lse0, g0) = run(&x);
+        let (y1, lse1, g1) = run(&moved);
+        for (name, a, b) in [
+            ("y", &y0, &y1),
+            ("lse", &lse0, &lse1),
+            ("gq", &g0.q, &g1.q),
+            ("gk", &g0.k, &g1.k),
+            ("gv", &g0.v, &g1.v),
+        ] {
+            let before = a.to_f32_vec().unwrap();
+            let after = b.to_f32_vec().unwrap();
+            if name == "gk" || name == "gv" {
+                assert_eq!(before, after, "{c:?}: {name} depends on a padding row");
+            } else {
+                // Live rows are equal; padding rows are zeros in both.
+                let width = if name == "lse" { 1 } else { c.d };
+                // Batch row 0 keeps all 8 rows, so compare it whole.
+                let whole = |v: &[f32]| plane_rows(v, c.h, c.tq, width, 0..c.tq);
+                assert_eq!(whole(&before), whole(&after), "{c:?}: {name}, batch row 0");
+                let live = |v: &[f32]| plane_rows(v, c.b * c.h, c.tq, width, 0..3);
+                assert_eq!(live(&before), live(&after), "{c:?}: {name}, live rows");
+                for v in [&before, &after] {
+                    for plane in c.h..2 * c.h {
+                        let lo = (plane * c.tq + 3) * width;
+                        let hi = (plane + 1) * c.tq * width;
+                        assert!(
+                            v[lo..hi].iter().all(|&e| e == 0.0),
+                            "{c:?}: {name}: a padding row of plane {plane} is not zeros"
+                        );
+                    }
+                }
+            }
+        }
+        if let (Some(a), Some(b)) = (&g0.bias, &g1.bias) {
+            assert_eq!(
+                bits(a),
+                bits(b),
+                "{c:?}: bias gradient depends on a padding row"
+            );
+        }
+    }
+    // Cross-attention with the same lengths is not padded: every query still
+    // sees the keys below its length.
+    let c = Case::new(2, 2, 2, 8, 9, 8).lens(&[9, 3]);
+    let x = inputs(&c, 62);
+    let t = Built::new(&c, &x);
+    let y = be
+        .attention_forward(&t.q, &t.k, &t.v, t.opts(&c))
+        .unwrap()
+        .to_f32_vec()
+        .unwrap();
+    for plane in c.h..2 * c.h {
+        for i in 0..c.tq {
+            let row = &y[(plane * c.tq + i) * c.d..(plane * c.tq + i + 1) * c.d];
+            assert!(row.iter().any(|&e| e != 0.0), "plane {plane} query {i}");
+        }
+    }
 }
 
 /// Forward, saving forward and backward of `c` on `be`: the bits of

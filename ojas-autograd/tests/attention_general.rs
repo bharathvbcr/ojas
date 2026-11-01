@@ -45,9 +45,14 @@ struct Shape {
     bias: [usize; 3],
     causal: bool,
     window: Option<usize>,
+    /// `AttentionOpts::scale`; `None` is `1 / sqrt(D)`.
+    scale: Option<f32>,
+    /// `AttentionOpts::radius`: key `j` is visible to query `i` when
+    /// `|i - j| <= radius`.
+    radius: Option<usize>,
 }
 
-const CASES: [Shape; 3] = [
+const CASES: [Shape; 5] = [
     // Cross-attention, grouped heads, a bias broadcast over the batch.
     Shape {
         b: 2,
@@ -59,6 +64,8 @@ const CASES: [Shape; 3] = [
         bias: [1, 2, 3],
         causal: false,
         window: None,
+        scale: None,
+        radius: None,
     },
     // Bidirectional, a bias that broadcasts over heads and queries.
     Shape {
@@ -71,6 +78,8 @@ const CASES: [Shape; 3] = [
         bias: [2, 1, 1],
         causal: false,
         window: None,
+        scale: None,
+        radius: None,
     },
     // Causal prefill with a window.
     Shape {
@@ -83,6 +92,38 @@ const CASES: [Shape; 3] = [
         bias: [1, 1, 3],
         causal: true,
         window: Some(2),
+        scale: None,
+        radius: None,
+    },
+    // An EmbeddingGemma-like encoder call: scale 1, a symmetric band, grouped
+    // heads and a ragged batch (batch row 0 has padding queries 2.., row 1
+    // has query 4).
+    Shape {
+        b: 2,
+        h: 2,
+        hkv: 1,
+        tq: 5,
+        tk: 5,
+        d: 2,
+        bias: [1, 1, 5],
+        causal: false,
+        window: None,
+        scale: Some(1.0),
+        radius: Some(1),
+    },
+    // A scale alone, cross-attention.
+    Shape {
+        b: 1,
+        h: 2,
+        hkv: 2,
+        tq: 3,
+        tk: 4,
+        d: 2,
+        bias: [1, 2, 1],
+        causal: false,
+        window: None,
+        scale: Some(0.5),
+        radius: None,
     },
 ];
 
@@ -94,7 +135,15 @@ fn lens_for(s: &Shape) -> Vec<u32> {
 }
 
 fn visible(s: &Shape, lens: &[u32], b: usize, i: usize, j: usize) -> bool {
-    if j >= (lens[b] as usize).min(s.tk) {
+    let len = (lens[b] as usize).min(s.tk);
+    // With `Tq == Tk` a query at or past the key length is a padding row.
+    if s.tq == s.tk && i >= len {
+        return false;
+    }
+    if j >= len {
+        return false;
+    }
+    if s.radius.is_some_and(|r| i.abs_diff(j) > r) {
         return false;
     }
     if s.causal {
@@ -110,7 +159,7 @@ fn visible(s: &Shape, lens: &[u32], b: usize, i: usize, j: usize) -> bool {
 #[allow(clippy::too_many_arguments)]
 fn loss(s: &Shape, lens: &[u32], q: &[f64], k: &[f64], v: &[f64], bias: &[f64], w: &[f64]) -> f64 {
     let rep = s.h / s.hkv;
-    let scale = 1.0 / (s.d as f64).sqrt();
+    let scale = s.scale.map_or(1.0 / (s.d as f64).sqrt(), f64::from);
     let mut sum = 0.0;
     for b in 0..s.b {
         for h in 0..s.h {
@@ -193,7 +242,17 @@ fn record<B: Backend>(
     };
     let w = t.frozen_leaf(f32t(&budget, &p.w, &[s.b, s.h, s.tq, s.d]))?;
     let lens = Tensor::from_u32(&lens_for(s), &[s.b], &budget)?;
-    let y = t.attention(q, k, v, Some(bias), Some(lens), s.causal, s.window)?;
+    let y = t.attention_with(
+        q,
+        k,
+        v,
+        Some(bias),
+        Some(lens),
+        s.causal,
+        s.window,
+        s.scale,
+        s.radius,
+    )?;
     let z = t.mul(y, w)?;
     Ok(([q, k, v, bias, w], z))
 }

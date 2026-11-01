@@ -808,6 +808,20 @@ impl<B: Backend> Backend for Autocast<B> {
             .rms_qk_norm_backward(q, k, q_weight, k_weight, grad_q, grad_k, eps)
     }
 
+    fn rms_qkv_norm_forward(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        q_weight: Option<&Tensor>,
+        k_weight: Option<&Tensor>,
+        eps: f32,
+    ) -> Result<(Tensor, Tensor, Tensor), OjasError> {
+        self.pass()?;
+        self.inner
+            .rms_qkv_norm_forward(q, k, v, q_weight, k_weight, eps)
+    }
+
     /// The output is emitted like any activation. The log-sum-exp is a row
     /// statistic the backward subtracts from every score, so it stays `F32`
     /// unrounded.
@@ -2281,6 +2295,16 @@ mod tests {
                 grad_k: &Tensor,
                 eps: f32,
             ) -> (Tensor, Tensor, Tensor, Tensor)
+        );
+        unsup!(
+            rms_qkv_norm_forward(
+                q: &Tensor,
+                k: &Tensor,
+                v: &Tensor,
+                q_weight: Option<&Tensor>,
+                k_weight: Option<&Tensor>,
+                eps: f32,
+            ) -> (Tensor, Tensor, Tensor)
         );
 
         fn rope_half_split_forward(

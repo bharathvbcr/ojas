@@ -73,7 +73,7 @@ fn the_call_table_covers_every_op() {
     // polled like the rest.
     assert_eq!(
         ops.len(),
-        98,
+        99,
         "op count changed: pin the new op's admission"
     );
 }
@@ -168,8 +168,8 @@ fn a_tripped_gate_refuses_polling_ops_without_repolling_and_keeps_commit_ops_ope
     // 90 ops less the four commit ops; 79 since the three spatial backwards,
     // 86 since the seven encoder backwards, 92 since the six
     // EmbeddingGemma 2 and SAM-training ops, 94 since the two vision backwards
-    // (relu_backward, slice_backward: 98 ops less the four commit ops).
-    assert_eq!(refused, 94);
+    // (relu_backward, slice_backward: 98 ops less the four commit ops; 95 since rms_qkv_norm_forward).
+    assert_eq!(refused, 95);
     assert_eq!(
         polls.load(Ordering::SeqCst),
         1,

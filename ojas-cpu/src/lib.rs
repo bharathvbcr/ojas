@@ -70,6 +70,7 @@ mod exp;
 mod fused_ce;
 mod gdn;
 mod gemm;
+mod gemma_ops;
 mod hybrid;
 mod kv;
 mod layout;

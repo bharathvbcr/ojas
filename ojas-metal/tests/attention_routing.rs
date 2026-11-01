@@ -157,10 +157,20 @@ fn the_route_is_taken_for_plain_self_attention_and_for_nothing_else() {
     let (dq, dk, dv) = (up(&m, &q), up(&m, &k), up(&m, &v));
     let plain = dispatches_of(&m, &dq, &dk, &dv, AttentionOpts::default());
 
-    // Grouped heads (2 query heads over 1 KV head) keep the general kernel.
-    let kg = up(&m, &rand(&[1, 1, 64, 64], 2, 1.0));
-    let vg = up(&m, &rand(&[1, 1, 64, 64], 3, 1.0));
-    let general = dispatches_of(&m, &dq, &kg, &vg, AttentionOpts::default());
+    let bias = up(&m, &rand(&[1, 2, 64, 64], 4, 1.0));
+    let lens = up(&m, &host_u32(&[64], &[1]));
+
+    // Bias keeps the general kernel (encoder_attn has no bias support).
+    let general = dispatches_of(
+        &m,
+        &dq,
+        &dk,
+        &dv,
+        AttentionOpts {
+            bias: Some(&bias),
+            ..AttentionOpts::default()
+        },
+    );
 
     if m.has_tensorops() {
         // Routed: three permutes in, the kernel, one out; the general kernel
@@ -177,9 +187,17 @@ fn the_route_is_taken_for_plain_self_attention_and_for_nothing_else() {
         up(&m, &rand(&[1, 2, 64, 32], 14, 1.0)),
     );
     let routed32 = dispatches_of(&m, &q32, &k32, &v32, AttentionOpts::default());
-    let kg32 = up(&m, &rand(&[1, 1, 64, 32], 15, 1.0));
-    let vg32 = up(&m, &rand(&[1, 1, 64, 32], 16, 1.0));
-    let general32 = dispatches_of(&m, &q32, &kg32, &vg32, AttentionOpts::default());
+    let bias32 = up(&m, &rand(&[1, 2, 64, 64], 17, 1.0));
+    let general32 = dispatches_of(
+        &m,
+        &q32,
+        &k32,
+        &v32,
+        AttentionOpts {
+            bias: Some(&bias32),
+            ..AttentionOpts::default()
+        },
+    );
     if m.has_tensorops() {
         assert!(
             routed32 > general32,
@@ -189,8 +207,6 @@ fn the_route_is_taken_for_plain_self_attention_and_for_nothing_else() {
         assert_eq!(routed32, general32, "no TensorOps: nothing may route");
     }
 
-    let bias = up(&m, &rand(&[1, 2, 64, 64], 4, 1.0));
-    let lens = up(&m, &host_u32(&[64], &[1]));
     // Tq < Tk is routed up to Tk = 2.25 Tq (Q is padded); Tq > Tk and a Tk past
     // the bound are not.
     let q_short = up(&m, &rand(&[1, 2, 40, 64], 5, 1.0));
@@ -228,10 +244,10 @@ fn the_route_is_taken_for_plain_self_attention_and_for_nothing_else() {
             ),
         ),
         (
-            "key lengths",
+            "key lengths with Tq != Tk",
             dispatches_of(
                 &m,
-                &dq,
+                &q_short,
                 &dk,
                 &dv,
                 AttentionOpts {

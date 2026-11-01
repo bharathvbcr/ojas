@@ -18,6 +18,7 @@ mod backend;
 mod encoder_bwd;
 #[cfg(all(test, target_os = "macos", feature = "metal"))]
 mod gauge;
+mod gemma_ops;
 mod layout;
 mod link;
 mod memory;

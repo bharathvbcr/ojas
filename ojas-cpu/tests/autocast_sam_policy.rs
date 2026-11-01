@@ -27,12 +27,7 @@ use ojas_cpu::CpuBackend;
 /// deletes its name here and the class check below then runs it. Both halves
 /// are enforced: a name listed here must still refuse, so the list cannot
 /// outlive an implementation, and a name not listed must run.
-const REFUSED_ON_CPU_UNTIL_IMPLEMENTED: &[&str] = &[
-    "gelu_tanh_forward",
-    "gelu_tanh_backward",
-    "seq_mean_forward",
-    "l2_normalize_forward",
-];
+const REFUSED_ON_CPU_UNTIL_IMPLEMENTED: &[&str] = &[];
 
 /// Every other `Backend` method. Their policy predates the SAM ops and is
 /// not classified here.
@@ -84,6 +79,7 @@ const OUTSIDE_THE_SAM_SET: &[&str] = &[
     "rms_norm_forward",
     "rms_qk_norm_backward",
     "rms_qk_norm_forward",
+    "rms_qkv_norm_forward",
     "rope_half_split_backward",
     "rope_half_split_forward",
     "rope_partial_backward",

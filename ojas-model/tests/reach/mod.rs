@@ -126,6 +126,9 @@ pub fn call<B: Backend + ?Sized>(b: &B, name: &str) -> Option<Result<(), OjasErr
         "rms_qk_norm_backward" => b
             .rms_qk_norm_backward(&t, &t, &t, &t, &t, &t, 1.0)
             .map(|_| ()),
+        "rms_qkv_norm_forward" => b
+            .rms_qkv_norm_forward(&t, &t, &t, None, None, 1.0)
+            .map(|_| ()),
         "causal_sdpa_forward" => b.causal_sdpa_forward(&t, &t, &t, None).map(|_| ()),
         "causal_sdpa_backward" => b
             .causal_sdpa_backward(&t, &t, &t, &t, &t, &t, None)

@@ -958,6 +958,25 @@ pub trait Backend {
         eps: f32,
     ) -> Result<(Tensor, Tensor, Tensor, Tensor), OjasError>;
 
+    /// Gemma 2 attention normalization: normalizes `q` (with optional `q_weight`),
+    /// `k` (with optional `k_weight`), and `v` without weights (weightless RMSNorm)
+    /// across the last dimension.
+    ///
+    /// [`crate::rms_qkv_norm_forward_dims`] validates. The default refuses
+    /// with [`OjasError::Unsupported`].
+    fn rms_qkv_norm_forward(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        q_weight: Option<&Tensor>,
+        k_weight: Option<&Tensor>,
+        eps: f32,
+    ) -> Result<(Tensor, Tensor, Tensor), OjasError> {
+        let _ = (q, k, v, q_weight, k_weight, eps);
+        Err(unsupported_op(self.id(), "rms_qkv_norm_forward"))
+    }
+
     /// Causal SDPA. `q` is `[B, H, T, D]`; `k` and `v` are `[B, Hkv, T, D]`.
     /// `H` is a positive multiple of `Hkv`. Query head `h` reads KV head
     /// `h / (H / Hkv)`. `T` is the same on every operand. With `window`
@@ -2419,6 +2438,7 @@ macro_rules! with_backend_methods {
             op fn rope_half_split_backward(&self, grad_output: &$crate::Tensor, cos: &$crate::Tensor, sin: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn rms_qk_norm_forward(&self, q: &$crate::Tensor, k: &$crate::Tensor, q_weight: &$crate::Tensor, k_weight: &$crate::Tensor, eps: f32) -> Result<($crate::Tensor, $crate::Tensor), $crate::OjasError>;
             op fn rms_qk_norm_backward(&self, q: &$crate::Tensor, k: &$crate::Tensor, q_weight: &$crate::Tensor, k_weight: &$crate::Tensor, grad_q: &$crate::Tensor, grad_k: &$crate::Tensor, eps: f32) -> Result<($crate::Tensor, $crate::Tensor, $crate::Tensor, $crate::Tensor), $crate::OjasError>;
+            op fn rms_qkv_norm_forward(&self, q: &$crate::Tensor, k: &$crate::Tensor, v: &$crate::Tensor, q_weight: Option<&$crate::Tensor>, k_weight: Option<&$crate::Tensor>, eps: f32) -> Result<($crate::Tensor, $crate::Tensor, $crate::Tensor), $crate::OjasError>;
             op fn causal_sdpa_forward(&self, q: &$crate::Tensor, k: &$crate::Tensor, v: &$crate::Tensor, window: Option<usize>) -> Result<($crate::Tensor, $crate::Tensor), $crate::OjasError>;
             op fn causal_sdpa_backward(&self, q: &$crate::Tensor, k: &$crate::Tensor, v: &$crate::Tensor, output: &$crate::Tensor, lse: &$crate::Tensor, grad_output: &$crate::Tensor, window: Option<usize>) -> Result<($crate::Tensor, $crate::Tensor, $crate::Tensor), $crate::OjasError>;
             op fn causal_sdpa_backward_recompute(&self, q: &$crate::Tensor, k: &$crate::Tensor, v: &$crate::Tensor, grad_output: &$crate::Tensor, window: Option<usize>) -> Result<($crate::Tensor, $crate::Tensor, $crate::Tensor), $crate::OjasError>;
@@ -3264,6 +3284,7 @@ pub(crate) mod tests {
             op(backend.rope_half_split_backward(&t, &t, &t)),
             op(backend.rms_qk_norm_forward(&t, &t, &t, &t, 1e-6)),
             op(backend.rms_qk_norm_backward(&t, &t, &t, &t, &t, &t, 1e-6)),
+            op(backend.rms_qkv_norm_forward(&t, &t, &t, None, None, 1e-6)),
             op(backend.causal_sdpa_forward(&t, &t, &t, None)),
             op(backend.causal_sdpa_backward(&t, &t, &t, &t, &t, &t, None)),
             op(backend.causal_sdpa_backward_recompute(&t, &t, &t, &t, None)),
@@ -3379,6 +3400,7 @@ pub(crate) mod tests {
             "rope_half_split_backward",
             "rms_qk_norm_forward",
             "rms_qk_norm_backward",
+            "rms_qkv_norm_forward",
             "causal_sdpa_forward",
             "causal_sdpa_backward",
             "causal_sdpa_backward_recompute",
@@ -3747,6 +3769,12 @@ pub(crate) mod tests {
         refused(
             backend.l2_normalize_forward(&x, 1e-12).map(drop),
             "l2_normalize_forward",
+        );
+        refused(
+            backend
+                .rms_qkv_norm_forward(&x, &x, &x, None, None, 1e-6)
+                .map(drop),
+            "rms_qkv_norm_forward",
         );
     }
 

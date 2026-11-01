@@ -36,6 +36,7 @@
 pub mod bf16_operands;
 pub mod encoder_golden;
 pub mod gdn;
+pub mod gemma_golden;
 pub mod golden;
 pub mod parity;
 pub mod safetensors;

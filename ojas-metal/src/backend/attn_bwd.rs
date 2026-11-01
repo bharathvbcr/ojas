@@ -11,35 +11,25 @@
 //! The operand rules, the dtype rules and the refusals are the validator's
 //! ([`attention_backward_dims`]); the device limits are this backend's.
 
-use ojas_core::{attention_backward_dims, sdpa_scale, AttentionGrad};
+use ojas_core::{attention_backward_dims, attention_scale, AttentionGrad};
 
 use super::*;
 use crate::link::AttnBwdGeom;
 
 /// The launch of a validated call: the forward's geometry `attn` plus the
-/// mask features the kernels carry beyond what `AttentionOpts` names today.
-///
-/// Today the score scale is `sdpa_scale(D)`, there is no symmetric radius and
-/// no dead query rows, because `AttentionOpts` has no field for them. When
-/// `AttentionOpts::scale` / `radius` land (the core lane), this function is
-/// the one place that changes, and it takes `op`, `&dims` and `&opts` too:
-///
-/// ```text
-/// scale:     attention_scale(attn.d, opts.scale)?
-/// radius:    dims.radius.map_or(Ok(0), |r| u32_dim(op, r))?
-/// dead_rows: dims.key_lens && dims.q_len == dims.kv_len
-/// ```
-///
-/// The kernels already run all three (`device/attn_bwd_tests.rs` drives them
-/// on the device command), so the merge is these three lines, not a kernel
-/// change. Until then a call cannot ask for a scale or a radius, so none is
-/// silently dropped.
-fn bwd_geom(attn: AttnGeom, bias_grad: bool) -> Res<AttnBwdGeom> {
+/// score scale, the symmetric radius band and the dead-row rule.
+fn bwd_geom(
+    op: &'static str,
+    attn: AttnGeom,
+    dims: &AttentionDims,
+    opts: &AttentionOpts<'_>,
+    bias_grad: bool,
+) -> Res<AttnBwdGeom> {
     Ok(AttnBwdGeom {
         attn,
-        scale: sdpa_scale(attn.d)?,
-        radius: 0,
-        dead_rows: false,
+        scale: attention_scale(attn.d, opts.scale)?,
+        radius: dims.radius.map_or(Ok(0), |r| u32_dim(op, r))?,
+        dead_rows: dims.key_lens && dims.q_len == dims.kv_len,
         bias_grad,
     })
 }
@@ -94,7 +84,7 @@ impl MetalBackend {
             .key_lens
             .map(|l| self.arg(OP, l, DType::U32))
             .transpose()?;
-        let geom = bwd_geom(geom, bias_grad)?;
+        let geom = bwd_geom(OP, geom, &dims, &opts, bias_grad)?;
         let scratch = product(OP, lse_shape(q.shape()))?;
         let mut shapes: Vec<&[usize]> = vec![q.shape(), k.shape(), v.shape()];
         if let (true, Some(b)) = (bias_grad, bias.as_ref()) {

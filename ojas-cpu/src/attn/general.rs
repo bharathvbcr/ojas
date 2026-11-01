@@ -15,7 +15,9 @@
 //! The row arithmetic is the same under `Numerics::Exact` and
 //! `Numerics::Fast`: no pass here splits a reduction, so results do not
 //! depend on the thread count. A query that sees no key outputs zeros and
-//! stores a log-sum-exp of 0, and has no gradient.
+//! stores a log-sum-exp of 0, and has no gradient. That includes a padding
+//! row: with key lengths and `Tq == Tk`, query row `i >= key_lens[b]`
+//! (`Geom::keys`).
 //!
 //! The bias gradient is its own pass. A bias that broadcasts over the batch
 //! or heads sums the gradient of every `(b, h)` it serves; to keep that sum
@@ -126,9 +128,17 @@ impl Geom {
 
     /// Keys query `i` of a batch row whose key length is `len` sees. A
     /// causal query `i` sits at position `i + Tk - Tq`; with a `radius`
-    /// (never causal, `Tq == Tk`) it sees `i - radius..=i + radius`.
+    /// (never causal, `Tq == Tk`) it sees `i - radius..=i + radius`. When
+    /// `Tq == Tk` the queries sit at the keys' own positions, so a query at
+    /// or past the key length is a padding row and sees nothing (zeros, as
+    /// tessl's encoder writes it); without key lengths `len` is `Tk` and no
+    /// row is padding. Cross-attention (`Tq != Tk`) has no such
+    /// correspondence: its queries see every key below `len`.
     fn keys(&self, len: usize, i: usize) -> Range<usize> {
         let len = len.min(self.kv_len);
+        if self.q_len == self.kv_len && i >= len {
+            return 0..0;
+        }
         let (lo, hi) = if self.causal {
             // `pos + 1` keys precede and include the query; none when the
             // query sits before the first key.
