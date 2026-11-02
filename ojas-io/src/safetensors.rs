@@ -1655,13 +1655,15 @@ type Header = (BTreeMap<String, TensorInfo>, BTreeMap<String, String>);
 /// `data_offsets`. Every value in a header sits at one of those positions, so
 /// a float, boolean, `null` or negative number anywhere is refused there.
 ///
-/// Two limits are the header's own rather than the defaults:
+/// Of the two limits worth stating, one is the header's own and the other is
+/// deliberately left at the shared default:
 ///
 /// * **Depth 3, not 64.** The format nests exactly three containers: the root
 ///   object, a tensor entry, and that entry's `shape` or `data_offsets` array.
 ///   Nothing deeper is this format, so it is refused as nesting rather than
 ///   carried as far as the schema walk, where it would be reported as a
 ///   dimension that is not an integer.
+///
 /// The tree byte budget stays at the shared default of 8 bytes per input byte
 /// plus 64 KiB, deliberately. A header that is almost all shape dimensions is
 /// the worst case for amplification — `0,` is two input bytes and becomes a
