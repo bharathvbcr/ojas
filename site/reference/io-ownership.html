@@ -232,10 +232,20 @@
 <ul>
 <li>At tessl <code>main</code> (<code>07c2e23</code>) the CI workflow does not mention ojas <strong>at all</strong>, so no cargo job there can resolve tessl&#39;s manifest today, with or without this change — tessl&#39;s path dependencies need ojas on disk. That is the subject of a separate card, not of this one.
 </li>
-<li>The <code>OJAS_REF: ${{ inputs.ojas_ref || &#39;main&#39; }}</code> default lives on that card&#39;s branch (<code>fix/ci-ojas-checkout-msrv-floor</code>, <code>4f51e89</code>), mirroring ojas&#39;s own <code>TESSL_REF</code>. Once it lands, tessl&#39;s CI resolves ojas at GitHub <code>main</code>. If ojas&#39;s commits are still unpushed then, tessl&#39;s first green-looking push goes red on a missing API — a failure that would look like the sibling-checkout fix and would not be.
+<li>The <code>OJAS_REF: ${{ inputs.ojas_ref || &#39;main&#39; }}</code> default lives on that card&#39;s branch (<code>fix/ci-ojas-checkout-msrv-floor</code>, <code>4f51e89</code>:42), mirroring ojas&#39;s own <code>TESSL_REF</code>.
 </li>
 </ul>
-<p><strong>Landing order: push ojas before, or in the same operation as, tessl.</strong> Neither repository was pushed by this work.</p>
+<p>An earlier draft of this section said that branch landing is what turns tessl red, which is wrong, and the distinction matters because the wrong version reads as &#34;the CI fix must wait for an ojas push&#34;. The sequence is three steps, not two, and the middle one was measured by that card&#39;s session in paired worktrees (tessl at <code>4f51e89</code> beside ojas at <code>dac0b5b</code>, clean, own target dir) and then on the hosted runner:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>at GitHub <code>main</code></th><th>ojas it resolves</th><th>result</th></tr></thead>
+<tbody>
+<tr><td>tessl <code>main</code> today</td><td>none — the workflow does not mention ojas</td><td>no cargo job resolves the manifest at all</td></tr>
+<tr><td>that branch alone</td><td><code>dac0b5b</code></td><td>resolves and checks clean: <code>cargo +1.97 check --locked --all-targets</code> exit 0; <code>fmt</code>, Go binding and MSRV green on run 41392007235</td></tr>
+<tr><td>that branch <strong>plus this adapter</strong></td><td><code>dac0b5b</code></td><td>red on <code>from_bytes</code></td></tr>
+</tbody></table></div>
+<p>The reason the middle row is green is that the branch&#39;s base is <code>a00521f</code>, where tessl still has its own reader: <code>git grep -c ojas_io &lt;rev&gt; -- src</code> matches zero files at <code>a00521f</code> and at <code>4f51e89</code>, and one — this adapter — at <code>07c2e23</code>.</p>
+<p><strong>Landing order: push ojas before, or in the same operation as, the adapter.</strong> Not before that CI branch, which does not need it. Neither repository was pushed by this work.</p>
+<p>One thing to weigh before pushing ojas, found while checking the backlog: of the 19 commits in <code>b2dd967..main</code>, five are another session&#39;s — <code>7087da0</code> (<code>to_host</code> on a mapped buffer actually waits for the device, which is <code>SharedBuf</code> and <code>Timeline</code> territory, not a docs-only ride-along), <code>32e4642</code>, <code>c681f92</code>, <code>8a3df56</code> and <code>0300578</code>, written 22:34–22:58 and interleaved with this work&#39;s. Pushing ojas <code>main</code> publishes them too. An IO-only split is possible but is a cherry-pick of this work&#39;s fourteen commits, not a range.</p>
 <h2 id="verification">Verification <a class="anchor" href="#verification" aria-label="Link to this section">#</a></h2>
 <p>Every row below is a run with its real exit code captured, not a count read out of a pipe. The ojas-io baseline at <code>9c5e784</code> was 161 passed over 12 binaries.</p>
 <div class="table-wrap"><table>

@@ -211,14 +211,37 @@ Two details worth keeping straight, because they are easy to conflate:
   change — tessl's path dependencies need ojas on disk. That is the subject of a
   separate card, not of this one.
 - The `OJAS_REF: ${{ inputs.ojas_ref || 'main' }}` default lives on that card's
-  branch (`fix/ci-ojas-checkout-msrv-floor`, `4f51e89`), mirroring ojas's own
-  `TESSL_REF`. Once it lands, tessl's CI resolves ojas at GitHub `main`. If
-  ojas's commits are still unpushed then, tessl's first green-looking push goes
-  red on a missing API — a failure that would look like the sibling-checkout fix
-  and would not be.
+  branch (`fix/ci-ojas-checkout-msrv-floor`, `4f51e89`:42), mirroring ojas's own
+  `TESSL_REF`.
 
-**Landing order: push ojas before, or in the same operation as, tessl.** Neither
-repository was pushed by this work.
+An earlier draft of this section said that branch landing is what turns tessl
+red, which is wrong, and the distinction matters because the wrong version
+reads as "the CI fix must wait for an ojas push". The sequence is three steps,
+not two, and the middle one was measured by that card's session in paired
+worktrees (tessl at `4f51e89` beside ojas at `dac0b5b`, clean, own target dir)
+and then on the hosted runner:
+
+| at GitHub `main` | ojas it resolves | result |
+| :--- | :--- | :--- |
+| tessl `main` today | none — the workflow does not mention ojas | no cargo job resolves the manifest at all |
+| that branch alone | `dac0b5b` | resolves and checks clean: `cargo +1.97 check --locked --all-targets` exit 0; `fmt`, Go binding and MSRV green on run 41392007235 |
+| that branch **plus this adapter** | `dac0b5b` | red on `from_bytes` |
+
+The reason the middle row is green is that the branch's base is `a00521f`, where
+tessl still has its own reader: `git grep -c ojas_io <rev> -- src` matches zero
+files at `a00521f` and at `4f51e89`, and one — this adapter — at `07c2e23`.
+
+**Landing order: push ojas before, or in the same operation as, the adapter.**
+Not before that CI branch, which does not need it. Neither repository was pushed
+by this work.
+
+One thing to weigh before pushing ojas, found while checking the backlog: of the
+19 commits in `b2dd967..main`, five are another session's — `7087da0` (`to_host`
+on a mapped buffer actually waits for the device, which is `SharedBuf` and
+`Timeline` territory, not a docs-only ride-along), `32e4642`, `c681f92`,
+`8a3df56` and `0300578`, written 22:34–22:58 and interleaved with this work's.
+Pushing ojas `main` publishes them too. An IO-only split is possible but is a
+cherry-pick of this work's fourteen commits, not a range.
 
 ## Verification
 
