@@ -153,6 +153,7 @@
 <h2 id="the-decision">The decision <a class="anchor" href="#the-decision" aria-label="Link to this section">#</a></h2>
 <p><strong>ojas owns safetensors IO and checkpoints.</strong> <code>ojas_io::safetensors</code> is the canonical reader. tessl&#39;s <code>safetensors</code> module is a thin adapter over it and holds no parser. This follows the binding direction of 2026-10-31 — ojas is the training framework and owns &#34;checkpoints, IO&#34; — and it reverses, in code, the direction an earlier card had taken.</p>
 <p>Before: two parsers for one format, 2,200 lines in ojas-io and 950 in tessl, kept in step by hand. After: one parser, and an adapter that states what is tessl&#39;s.</p>
+<p><strong>The tree did not get smaller, and that is the honest number.</strong> tessl lost 368 lines of source net (295 insertions against 663 deletions over three files), and its reader went from 950 lines to a 517-line adapter. ojas-io gained 1,396 insertions against 82 deletions over eight files — <code>src/safetensors.rs</code> is 3,070 lines now and <code>src/open.rs</code> 300 — of which about 385 lines are new tests: <code>tests/tessl_rejection_corpus.rs</code> (246) holds tessl&#39;s whole rejection corpus against the reader underneath, <code>tests/header_amplification.rs</code> (101) measures where the budget refuses, and the <code>widen_in_place</code> test (38) moved here with the code it covers. The rest is the eight bounds in the next section. One duplicate parser is gone; what replaced it is the discipline the surviving reader did not have, with tests that fail without it. Trading 950 duplicated lines for a bound reader is the point, not the line count.</p>
 <h2 id="what-lives-where">What lives where <a class="anchor" href="#what-lives-where" aria-label="Link to this section">#</a></h2>
 <div class="table-wrap"><table>
 <thead><tr><th>Concern</th><th>Owner</th></tr></thead>
@@ -193,22 +194,53 @@
 <h2 id="what-became-of-ft-02256073">What became of ft-02256073 <a class="anchor" href="#what-became-of-ft-02256073" aria-label="Link to this section">#</a></h2>
 <p><strong>Re-pointed and kept, not superseded.</strong> That card routed ojas-qwen35&#39;s sharded loading through tessl&#39;s <code>CheckpointView</code> and verified it properly. Its work is merged (<code>4affd09</code> is an ancestor of <code>main</code>), and its 26-case <code>ojas-qwen35/tests/sharded_checkpoint_adversarial.rs</code> is the acceptance bar this change inherited and passes <strong>unchanged, 26/26</strong> — symlink-followed, escaping-shard-name, symlink-loop, dangling-link, oversize-header and FIFO cases included. Not one assertion was edited. What changed is only which reader sits underneath.</p>
 <p>Two runs before that did not pass, and both found real defects rather than test drift: the first hung on the FIFO case (item 8), the second failed two cases that assert a refused index names the index file, which ojas-io&#39;s <code>open_index</code> had stopped doing.</p>
+<h2 id="what-this-leaves-for-ft-b5fb19e6">What this leaves for ft-b5fb19e6 <a class="anchor" href="#what-this-leaves-for-ft-b5fb19e6" aria-label="Link to this section">#</a></h2>
+<p>That card wants more safetensors dtypes and a sharded index in ojas-io, and the decision above puts it downstream of this change rather than beside it. Of its two items:</p>
+<ul>
+<li><strong>The sharded index is there and is now bounded.</strong> <code>CheckpointView::open_index</code> already read <code>model.safetensors.index.json</code>; what this change added is the per-shard budget beside the cumulative one, the 16 MiB cap on the index text before it is read, the regular-file check on the index itself, and the index file named in its own refusals. A sharded checkpoint is read through ojas-io by ojas-qwen35 today, over the 26 adversarial cases.
+</li>
+<li><strong>The dtype list is untouched.</strong> <code>StDtype</code> still has the same 22 variants, so whatever ft-b5fb19e6 wants beyond them — and the question of whether tessl&#39;s <code>Dtype</code> should follow — is still its own work. This change deliberately did not widen either enum: it moved who owns the parser, not what the format admits.
+</li>
+</ul>
+<h2 id="ojas-oracle-keeps-its-wrapper-and-is-not-a-third-parser">ojas-oracle keeps its wrapper, and is not a third parser <a class="anchor" href="#ojas-oracle-keeps-its-wrapper-and-is-not-a-third-parser" aria-label="Link to this section">#</a></h2>
+<p>The card asked whether <code>ojas-oracle/src/safetensors.rs</code> should re-export this reader instead. It should not, and it was never the third parser the question assumed: at 115 lines it already reads the format through <code>ojas_io::SafeTensors</code> — the header grammar, schema, tiling, dtype widths and positioned reads are all this crate&#39;s — and adds only the oracle&#39;s fixture policy on top.</p>
+<p>That policy is deliberately narrower than the reader&#39;s, which is why it is not a re-export:</p>
+<ul>
+<li>a header cap of 1 MiB, where the reader&#39;s is 100 MB, because a fixture&#39;s header is a few KiB and the 124M export&#39;s is about 25 KiB;
+</li>
+<li>its own two-variant <code>StDtype</code> of <code>F32</code> and <code>I64</code> only, because that is what the generators write, so a fixture naming any other dtype is a generator bug and is refused by the type rather than read;
+</li>
+<li><code>OjasError::OutOfRange { op: &#34;oracle_fixture&#34;, .. }</code> rather than <code>IoError</code>, because the oracle&#39;s callers are ojas tests.
+</li>
+</ul>
+<p>A re-export would widen all three, and the fixture generators would lose the check that catches them writing something they did not mean to. So the disposition is <strong>keep</strong>, for the same reason tessl&#39;s adapter is kept: the policy on top is the crate&#39;s, the format underneath is not.</p>
 <h2 id="the-ojastessl-path-cycle-survives-this">The ojas/tessl path cycle survives this <a class="anchor" href="#the-ojastessl-path-cycle-survives-this" aria-label="Link to this section">#</a></h2>
-<p>Removing the safetensors strand does <strong>not</strong> break the cycle. <code>ojas-qwen35/src/config.rs</code> still uses <code>tessl::qwen35_model::Qwen35Config</code>, <code>tessl::gdn_train::{GDN_TRAIN_DK, GDN_TRAIN_BV}</code>, <code>tessl::qwen35::GDN_KEY_DIM</code> and <code>tessl::attn_train::ATTN_TRAIN_HEAD_DIM</code> to validate a config against the kernels that will run it, and <code>ojas-metal</code> depends on tessl by design. So <code>ojas-qwen35</code> still path-depends on tessl, and an ojas worktree at a second path still cannot build (tessl declares <code>links = &#34;tessl&#34;</code>, so every crate in one build must point at one tessl path; a worktree gets a lockfile collision and exits 101). What this change removes is one strand of the cycle, not the cycle.</p>
+<p>Removing the safetensors strand does <strong>not</strong> break the cycle. <code>ojas-qwen35/src/config.rs</code> still uses <code>tessl::qwen35_model::Qwen35Config</code>, <code>tessl::gdn_train::{GDN_TRAIN_DK, GDN_TRAIN_BV}</code>, <code>tessl::qwen35::GDN_KEY_DIM</code> and <code>tessl::attn_train::ATTN_TRAIN_HEAD_DIM</code> to validate a config against the kernels that will run it, and <code>ojas-metal</code> depends on tessl by design. So <code>ojas-qwen35</code> still path-depends on tessl. Those eleven call sites in <code>config.rs</code> and <code>links = &#34;tessl&#34;</code> in <code>tessl/Cargo.toml</code> were read this pass; the consequence — that an ojas worktree at a second path cannot build, because every crate in one build must point at one tessl path and a worktree gets a lockfile collision and exits 101 — is carried over from the card and from an earlier session&#39;s finding, and was <strong>not</strong> re-run here. What this change removes is one strand of the cycle, not the cycle.</p>
 <p>A note for whoever takes the MSRV decision (D2 in the plan): tessl already declared <code>ojas-io</code> as a path dependency before this change and used it nowhere, so no Cargo change and no MSRV ask was needed here. tessl declares <code>rust-version = &#34;1.82&#34;</code> while ojas&#39;s workspace floor is <code>1.97</code>, which is a standing inconsistency this change neither created nor fixed.</p>
 <h2 id="verification">Verification <a class="anchor" href="#verification" aria-label="Link to this section">#</a></h2>
-<p>Counts from running, not inferred. The ojas-io baseline at <code>9c5e784</code> was 161 passed over 12 binaries.</p>
+<p>Every row below is a run with its real exit code captured, not a count read out of a pipe. The ojas-io baseline at <code>9c5e784</code> was 161 passed over 12 binaries.</p>
 <div class="table-wrap"><table>
-<thead><tr><th>Suite</th><th>Result</th></tr></thead>
+<thead><tr><th>Check</th><th>Result</th></tr></thead>
 <tbody>
-<tr><td><code>ojas-io</code></td><td>181 passed, 0 failed, 14 binaries</td></tr>
-<tr><td><code>ojas-qwen35</code> <code>sharded_checkpoint_adversarial</code></td><td>26 passed, 0 failed</td></tr>
-<tr><td>tessl <code>--test safetensors</code></td><td>12 passed, 0 failed, 1 ignored</td></tr>
-<tr><td>tessl <code>--test reader_bounds</code></td><td>12 passed, 0 failed, no edit to the file</td></tr>
-<tr><td>tessl <code>--lib parser_mutation::</code></td><td>16 passed, 0 failed</td></tr>
+<tr><td><code>cargo test -p ojas-io --release</code></td><td><strong>181 passed, 0 failed</strong>, 0 ignored, 14 binaries</td></tr>
+<tr><td><code>cargo test -p ojas-oracle --release</code></td><td><strong>255 passed, 0 failed</strong>, 14 ignored, 21 binaries</td></tr>
+<tr><td><code>cargo test -p ojas-qwen35 --release</code></td><td><strong>54 passed, 0 failed</strong>, 9 ignored, 13 binaries</td></tr>
+<tr><td>of which <code>sharded_checkpoint_adversarial.rs</code></td><td><strong>26 passed, 0 failed</strong>, no assertion edited</td></tr>
+<tr><td><code>cargo check --workspace --all-targets</code></td><td>clean</td></tr>
+<tr><td><code>cargo clippy -p ojas-io -p ojas-qwen35 -p ojas-oracle --all-targets -- -D warnings</code></td><td>clean, no error or warning line</td></tr>
+<tr><td><code>./scripts/fmt_check.sh</code></td><td>clean</td></tr>
+<tr><td><code>go run scripts/sitegen/main.go -check</code></td><td>generated files up to date, 57 files</td></tr>
+<tr><td>tessl, <code>cargo test --release</code> (full suite, on the GPU)</td><td><strong>not re-run — see below</strong>; the last complete run was 1,435 passed, 1 failed, 36 ignored, 128 binaries, and that one failure is fixed and green</td></tr>
+<tr><td>tessl, the three binaries that failure touched</td><td><strong>30 passed, 0 failed</strong>, 1 ignored (<code>host_access_ban</code> 6, <code>safetensors</code> 12, <code>reader_bounds</code> 12)</td></tr>
+<tr><td>tessl, <code>cargo test --release --lib parser_mutation::</code></td><td><strong>16 passed, 0 failed</strong></td></tr>
+<tr><td>tessl, <code>cargo clippy --all-targets -- -D warnings</code></td><td>clean</td></tr>
+<tr><td>tessl, <code>rustfmt --check</code> on the three files this change touched</td><td>clean</td></tr>
 </tbody></table></div>
-<p><code>tessl/tests/safetensors.rs</code> kept its rejection semantics: of the 52 malformed inputs it covers, 42 keep their exact needle and 10 are the same refusal in different words, each annotated in place with the needle it had. No test was deleted or weakened. One contract was changed deliberately — the header amplification bound above — and <code>ojas-io/tests/tessl_rejection_corpus.rs</code> now holds tessl&#39;s whole rejection corpus against the reader underneath, so a future ojas-io change cannot quietly widen what a checkpoint may be.</p>
-<p>The ignored tessl test is <code>opens_the_qwen35_2b_checkpoint</code>, which needs the 4.5 GB file from the Hugging Face cache; it was ignored before this change too.</p>
+<p>Each of the eight absorbed bounds has a test that fails against the pre-change code. Three of them were found by a run rather than by reading: the FIFO hang, and the two adversarial cases that assert a refused index names the index file, which this reader&#39;s <code>open_index</code> had stopped doing.</p>
+<p><code>tessl/tests/safetensors.rs</code> kept its rejection semantics: of the 52 malformed inputs it covers, 42 keep their exact needle and 10 are the same refusal in different words, each annotated in place with the needle it had, and the sub-byte block gained two inputs rather than losing any. No test was deleted or weakened. One contract was changed deliberately — the header amplification bound — and <code>ojas-io/tests/tessl_rejection_corpus.rs</code> now holds tessl&#39;s whole rejection corpus against the reader underneath, so a future ojas-io change cannot quietly widen what a checkpoint may be.</p>
+<p>The ignored tessl test worth naming is <code>opens_the_qwen35_2b_checkpoint</code>, which needs the 4.5 GB file from the Hugging Face cache; it was ignored before this change too.</p>
+<p><strong>tessl&#39;s full suite could not be re-run, and is not reported as passing.</strong> It ran complete once on this work at 1,435 passed / 1 failed / 36 ignored over 128 binaries. The one failure was <code>host_access_ban::library_code_never_calls_a_panicking_host_accessor</code>, which caught the adapter calling <code>.read_u32(</code> in method form — a real defect the guard exists to catch, fixed and now green on its own (6 passed, 0 failed), along with <code>safetensors</code> (12) and <code>reader_bounds</code> (12). Two attempts to re-run the whole suite after that fix did not produce a result: the first was <code>SIGKILL</code>ed mid-compile with the machine at load 38, and the second failed to build in six seconds with no test run, because another session holds this checkout and has <code>src/config_json.rs</code> and <code>src/qwen35_adamw.rs</code> part-way through a <code>Json</code> → <code>JsonValue</code> rename that does not compile yet. Neither file belongs to this work and neither was touched. So the outstanding check is one clean end-to-end run of tessl&#39;s suite once that refactor lands.</p>
+<p><strong>What is not verified here, and is not claimed to be.</strong> <code>cargo fmt --all --check</code> in tessl fails on ten files this change never touched — all wrapped at 100 columns where that repo&#39;s <code>rustfmt.toml</code> says 120 — so tessl&#39;s <code>fmt</code> CI job is red on <code>main</code> independently of this work. <code>README.md</code>&#39;s per-crate test counts come from <code>docs/data/test-runs.json</code>, a single recorded run at <code>51825fd</code>, so <code>ojas-io</code> still reads 76 passed there; refreshing that means re-running the whole workspace with the command that file records, which this change did not do. An ojas worktree at a second path still cannot build, for the reason in the section above.</p>
       </article>
       <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/io-ownership.md" rel="noopener"><code>docs/io-ownership.md</code></a>. If this page and the repository disagree, the repository wins.</p>
       <nav class="ref-pager" aria-label="Previous and next">
@@ -221,6 +253,8 @@
 <li><a href="#what-lives-where">What lives where</a></li>
 <li><a href="#what-ojas-io-absorbed-first-and-why-the-order-mattered">What ojas-io absorbed first, and why the order mattered</a></li>
 <li><a href="#what-became-of-ft-02256073">What became of ft-02256073</a></li>
+<li><a href="#what-this-leaves-for-ft-b5fb19e6">What this leaves for ft-b5fb19e6</a></li>
+<li><a href="#ojas-oracle-keeps-its-wrapper-and-is-not-a-third-parser">ojas-oracle keeps its wrapper, and is not a third parser</a></li>
 <li><a href="#the-ojastessl-path-cycle-survives-this">The ojas/tessl path cycle survives this</a></li>
 <li><a href="#verification">Verification</a></li>
 </ol></nav>
