@@ -133,11 +133,8 @@ const ATTN: [Attn; 5] = [
 fn digests(numerics: Numerics) -> Vec<(String, u64)> {
     let cpu = backend(numerics);
     let mut out = Vec::new();
-    for (i, &dim) in [1usize, 2, 3, 7, 8, 9, 16, 17, 31, 64, 100, 1000, 4099]
-        .iter()
-        .enumerate()
-    {
-        for (j, amp) in [1.0f32, 40.0, 3.0e5].into_iter().enumerate() {
+    for (i, &dim) in SOFTMAX_DIMS.iter().enumerate() {
+        for (j, amp) in SOFTMAX_AMPS.into_iter().enumerate() {
             let data = softmax_rows(dim, amp, 7000 + (i * 3 + j) as u64);
             let y = cpu.softmax_forward(&f32t(&cpu, &data, &[6, dim])).unwrap();
             out.push((format!("softmax dim={dim} amp={amp}"), fnv(&[&y])));
@@ -256,6 +253,21 @@ const EXACT: &[(&str, u64)] = &[
     ("cached_attention case 1", 0x95f322394cd2abbb),
     ("cached_attention case 2", 0xf1032bc2b967d861),
 ];
+/// `Fast` digests as recorded on Apple silicon.
+///
+/// Per-architecture by necessity, not by preference. `Numerics::Fast` is
+/// documented to "fuse multiply-adds, use SIMD intrinsics or a vendor BLAS, and
+/// reorder within a reduction", with its agreement to `Exact` stated as "a
+/// tolerance rather than bitwise" (`ojas-core/src/backend.rs:32-36`), so these
+/// bits are a property of one SIMD path and cannot hold everywhere. Measured:
+/// the x86-64 path lands within one f32 ulp of `Exact` -- correct, and a
+/// different bit pattern.
+///
+/// What the contract does require is checked on every architecture:
+/// `fast_softmax_matches_exact_within_tolerance` here, and
+/// `softmax_bits_do_not_depend_on_the_thread_count` in `encoder_ops.rs` for the
+/// thread-count half.
+#[cfg(target_arch = "aarch64")]
 const FAST: &[(&str, u64)] = &[
     ("softmax dim=1 amp=1", 0x616b7bfc18e4b415),
     ("softmax dim=1 amp=40", 0x616b7bfc18e4b415),
@@ -307,6 +319,72 @@ const FAST: &[(&str, u64)] = &[
     ("cached_attention case 2", 0xf1032bc2b967d861),
 ];
 
+/// The row dimensions and amplitudes the softmax fixtures sweep.
+///
+/// One owner, read by both the bit-pin in [`digests`] and the tolerance check
+/// in `fast_softmax_matches_exact_within_tolerance`, so the two cannot come to
+/// cover different fixtures without anyone noticing.
+const SOFTMAX_DIMS: [usize; 13] = [1, 2, 3, 7, 8, 9, 16, 17, 31, 64, 100, 1000, 4099];
+const SOFTMAX_AMPS: [f32; 3] = [1.0, 40.0, 3.0e5];
+
+/// Bound on the absolute difference between the `Fast` and `Exact` softmax
+/// rows over every fixture.
+///
+/// Measured rather than guessed, and measured on both architectures: the worst
+/// difference is `8.940696716308594e-8` at `softmax dim=100 amp=40`, the same
+/// value on `aarch64-apple-darwin` and on `x86_64-apple-darwin`. That is about
+/// 1.5 x 2^-24 -- roughly one f32 ulp, and softmax outputs are at most 1.0. The
+/// bound keeps ~2.2x headroom over the measurement so a different rounding of
+/// the last bit does not fail it, while anything structurally wrong with the
+/// Fast path (a changed maximum, exponential, sum order or division) moves the
+/// rows far more than this and still fails.
+const FAST_SOFTMAX_ABS_TOL: f64 = 2.0e-7;
+
+/// `Numerics::Fast` is documented to agree with `Exact` "at a stated tolerance
+/// rather than bitwise" (`ojas-core/src/backend.rs:32-36`), because it may use
+/// SIMD intrinsics and reorder within a reduction. This states that tolerance
+/// for the softmax row kernel.
+///
+/// It exists because the `Fast` *bit* pin is necessarily per-architecture -- the
+/// digests were recorded on Apple silicon and the x86-64 SIMD path rounds
+/// differently -- so without this, narrowing that pin would leave the Fast
+/// softmax path with no cross-platform correctness check at all. A check that
+/// stopped running must not read like a check that passed.
+#[test]
+fn fast_softmax_matches_exact_within_tolerance() {
+    let exact = backend(Numerics::Exact);
+    let fast = backend(Numerics::Fast);
+    let mut worst = 0.0f64;
+    let mut worst_at = String::new();
+
+    for (i, &dim) in SOFTMAX_DIMS.iter().enumerate() {
+        for (j, amp) in SOFTMAX_AMPS.into_iter().enumerate() {
+            let data = softmax_rows(dim, amp, 7000 + (i * 3 + j) as u64);
+            let ye = exact
+                .softmax_forward(&f32t(&exact, &data, &[6, dim]))
+                .unwrap();
+            let yf = fast
+                .softmax_forward(&f32t(&fast, &data, &[6, dim]))
+                .unwrap();
+            let (a, b) = (ye.f32_slice().unwrap(), yf.f32_slice().unwrap());
+            assert_eq!(a.len(), b.len(), "softmax dim={dim} amp={amp} length");
+            for (x, y) in a.iter().zip(b) {
+                let d = (f64::from(*x) - f64::from(*y)).abs();
+                if d > worst {
+                    worst = d;
+                    worst_at = format!("softmax dim={dim} amp={amp}");
+                }
+            }
+        }
+    }
+
+    assert!(
+        worst <= FAST_SOFTMAX_ABS_TOL,
+        "Fast softmax left Exact by {worst:e} at {worst_at}, above the stated \
+         tolerance {FAST_SOFTMAX_ABS_TOL:e}"
+    );
+}
+
 fn check(numerics: Numerics, want: &[(&str, u64)]) {
     let got = digests(numerics);
     let table: String = got
@@ -328,6 +406,10 @@ fn exact_softmax_and_attention_bits_are_pinned() {
     check(Numerics::Exact, EXACT);
 }
 
+/// A drift guard for the recorded SIMD path. See [`FAST`] for why it is
+/// `aarch64`-only; the cross-platform guarantees are checked by
+/// `fast_softmax_matches_exact_within_tolerance`.
+#[cfg(target_arch = "aarch64")]
 #[test]
 fn fast_softmax_and_attention_bits_are_pinned() {
     check(Numerics::Fast, FAST);
