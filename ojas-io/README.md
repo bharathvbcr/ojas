@@ -2,7 +2,7 @@
 
 `ojas-io` provides serialization and deserialization routines for **safetensors** model files and binary **Checkpoint v1** containers, hardened against malicious payloads, corrupted headers, and integer overflow attacks.
 
-It also holds the workspace's other small format code, so no crate carries a copy: the strict JSON reader's compact writer (`JsonValue::render`, `JsonObj`, `quote`; a non-finite float is written as the string `"NaN"`, `"inf"` or `"-inf"`, never as a number) and the `.npy` golden reader (`npy`: little-endian `<f4`, `<f8`, `<i8`, C order, versions 1.0 to 3.0; anything else is refused by name).
+It also holds the workspace's and `tessl`'s shared format code (`tessl` re-exports `ojas_io::{npy, safetensors}` and consumes `ojas_io::json`, so neither repository carries a duplicate parser): the strict JSON reader (`JsonValue`, `JsonLimits` with max depth 64 and structural node budget `8 * len + 64 KiB`) and compact writer (`JsonValue::render`, `JsonObj`, `quote`; a non-finite float is written as the string `"NaN"`, `"inf"` or `"-inf"`, never as a number) and the `.npy` reader and writer (`npy`: little-endian `<f4`, `<f8`, `<i4`, `<u4`, `<i8`, C order, versions 1.0 to 3.0, plus `read_f32`, `read_i32`, `read_u32`, `write_f32`, `write_u32`, `from_bytes`, and `read_*_with_limit` budget enforcement; anything else is refused by name).
 
 ---
 

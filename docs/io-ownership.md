@@ -8,15 +8,23 @@ and it is the first phase of that plan to land.
 
 ## The decision
 
-**ojas owns safetensors IO and checkpoints.** `ojas_io::safetensors` is the
-canonical reader. tessl's `safetensors` module is a thin adapter over it and
-holds no parser. This follows the binding direction of 2026-10-31 — ojas is the
-training framework and owns "checkpoints, IO" — and it reverses, in code, the
-direction an earlier card had taken.
+**ojas owns safetensors, JSON, and NPY IO and checkpoints.** `ojas_io::safetensors`,
+`ojas_io::json`, and `ojas_io::npy` are the canonical implementations. After phase P8's
+initial adapter step and the Milestone M2 completion (2026-11-02), tessl holds **zero**
+duplicate parsers (`src/safetensors.rs`, `src/json.rs`, `src/npy.rs`, and `src/plain.rs`
+were deleted in full, removing 1,645 LOC) and re-exports `pub use ojas_io::{npy, safetensors};`
+directly from `tessl/src/lib.rs`, while `tessl/src/config_json.rs` consumes
+`ojas_io::json::{JsonValue, JsonLimits}`. This follows the binding direction of
+2026-10-31 — ojas is the training framework and owns "checkpoints, IO" — and it
+reverses, in code, the direction an earlier card had taken.
 
-Before: two parsers for one format, 2,200 lines in ojas-io and 950 in tessl,
-kept in step by hand. After: one parser, and an adapter that states what is
-tessl's.
+In the initial P8 step (recorded below for provenance): two safetensors parsers
+(2,200 lines in ojas-io and 950 in tessl) were converged into one parser plus a
+517-line adapter in tessl. In Milestone M2 (2026-11-02), `ojas-io` absorbed the
+remaining adapter surface (`header_bytes`, `HeaderEntry`/`TensorEntry` accessors,
+`.npy` v1.0/v2.0 reader/writer, and physical-memory default helpers) so that
+tessl's 517-line adapter and its duplicate `json.rs`, `npy.rs`, and `plain.rs`
+modules were deleted outright.
 
 **The tree did not get smaller, and that is the honest number.** tessl lost 368
 lines of source net (295 insertions against 663 deletions over three files),
@@ -321,3 +329,19 @@ counts come from `docs/data/test-runs.json`, a single recorded run at
 re-running the whole workspace with the command that file records, which this
 change did not do. An ojas worktree at a second path still cannot build, for
 the reason in the section above.
+
+---
+
+## Follow-up (2026-11-02, Milestone M2): Complete Retirement of tessl's Adapter and Duplicate Parsers
+
+In Milestone M2, the remaining 517-line `tessl/src/safetensors.rs` adapter and tessl's standalone `src/json.rs` (482 lines), `src/npy.rs` (599 lines), and `src/plain.rs` (47 lines) modules were **deleted in full** (-1,645 lines in `tessl/src/`):
+
+1. **`ojas-io` absorbed `.npy` v1.0/v2.0 and the remaining safetensors surface:**
+   - `ojas-io/src/npy.rs` now owns `.npy` v1.0 and v2.0 reading and writing (`read_f32`, `read_i32`, `read_u32`, `write_f32`, `write_u32`, `from_bytes`, and `read_*_with_limit` budget enforcement).
+   - `ojas-io/src/safetensors.rs` exposes `SafeTensors::header_bytes`, `HeaderEntry` / `TensorEntry` accessors, `Dtype` / `StDtype` aliases, and `open_with_limit` / `from_bytes_named`.
+2. **Direct re-export in `tessl`:**
+   - `tessl/src/lib.rs` re-exports `pub use ojas_io::{npy, safetensors};`.
+   - `tessl/src/config_json.rs` parses model configuration files via `ojas_io::json::{JsonValue, JsonLimits}` (enforcing max depth 64 and structural node budget `8 * len + 64 KiB`).
+   - `ojas-qwen35` imports `ojas_io::safetensors::CheckpointView` directly with zero `tessl::safetensors` references.
+3. **AdamW scalar deduplication:**
+   - `tessl/src/qwen35_adamw.rs` delegates step bias-correction and decoupled weight-decay scalar computation directly to `ojas_core::AdamWScalars::new`, eliminating the duplicate f64 scalar formula.

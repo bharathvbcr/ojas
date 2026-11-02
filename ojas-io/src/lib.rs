@@ -52,8 +52,8 @@ pub use open::{open_nofollow, open_regular_file};
 pub use replace::{recover_replaced_dir, replace_dir_with, replace_dir_with_if};
 pub use safetensors::{
     encode_f32_as, encode_safetensors, safetensors_file_len, write_safetensors, CheckpointView,
-    SafeTensors, SafeTensorsWriter, StDtype, TensorInfo, TensorOut, TensorSource, TensorSpec,
-    INDEX_FILE_NAME, MAX_HEADER_BYTES,
+    Dtype, SafeTensors, SafeTensorsWriter, StDtype, TensorInfo, TensorOut, TensorSource,
+    TensorSpec, INDEX_FILE_NAME, MAX_HEADER_BYTES,
 };
 
 pub use slab::{OwnedSlab, SlabEntry, SlabSink, TensorSink, MAX_SLAB_ALIGN};

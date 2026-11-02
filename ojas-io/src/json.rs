@@ -544,6 +544,14 @@ impl JsonValue {
         exact.ok_or_else(|| IoError::new("JSON: integer is not exactly representable as f64"))
     }
 
+    /// Member `key` of this object, or `None` if absent or not an object.
+    pub fn get(&self, key: &str) -> Option<&JsonValue> {
+        match self {
+            JsonValue::Object(fields) => fields.iter().find(|(k, _)| k == key).map(|(_, v)| v),
+            _ => None,
+        }
+    }
+
     /// Member `key` of this object, or `None` if the object lacks it. Refuses
     /// a value that is not an object.
     pub fn field_opt(&self, key: &str) -> Result<Option<&JsonValue>, IoError> {

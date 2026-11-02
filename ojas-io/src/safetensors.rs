@@ -65,6 +65,8 @@ pub enum StDtype {
     U64,
 }
 
+pub type Dtype = StDtype;
+
 impl StDtype {
     /// Bits per element: 4 and 6 for the sub-byte floats, otherwise 8 times
     /// [`Self::size`].
@@ -385,6 +387,11 @@ impl<'a> SafeTensors<'a> {
         })
     }
 
+    /// Parse `bytes`, naming the caller's label in errors or logging if applicable.
+    pub fn from_bytes_named(what: &str, bytes: Vec<u8>) -> Result<SafeTensors<'static>, IoError> {
+        Self::from_bytes(bytes).map_err(|e| IoError::new(format!("{what}: {}", e.detail())))
+    }
+
     /// Open `path` and validate its header. Tensor bytes stay on disk.
     pub fn open(path: &Path) -> Result<SafeTensors<'static>, IoError> {
         Self::open_with_limit(path, None)
@@ -589,6 +596,13 @@ impl<'a> SafeTensors<'a> {
         dst.resize(len, 0);
         self.read_into(name, 0, &mut dst)?;
         Ok(dst)
+    }
+
+    /// Read the raw byte slice for a tensor by name and its header info.
+    pub fn read_raw(&self, name: &str) -> Result<(TensorInfo, Vec<u8>), IoError> {
+        let info = self.info(name)?.clone();
+        let bytes = self.read_bytes(name)?;
+        Ok((info, bytes))
     }
 
     pub fn read_f32(&self, name: &str) -> Result<(Vec<u64>, Vec<f32>), IoError> {
@@ -1206,7 +1220,7 @@ fn check_payload_budget(what: &str, declared: u64, limit: Option<u64>) -> Result
     if let Some(lim) = limit {
         if declared > lim {
             return Err(IoError::new(format!(
-                "{what}: payload budget exceeded: declared {declared} > limit {lim}"
+                "{what}: payload budget exceeded: the file declares {declared} tensor bytes, above the caller's limit of {lim}"
             )));
         }
     }

@@ -49,56 +49,164 @@ impl NpyArray {
     }
 }
 
+pub const MAX_NPY_HEADER_BYTES: usize = 1 << 20;
+
 pub fn read_npy(path: &Path) -> Result<NpyArray, String> {
     read_npy_with_limit(path, None)
 }
 
 pub fn read_npy_with_limit(path: &Path, limit: Option<u64>) -> Result<NpyArray, String> {
-    let npy = read(path)?;
-    let (data_f32, data_f64, data_i64) = match npy.data {
-        Data::F32(v) => {
-            if let Some(lim) = limit {
-                let nbytes = (v.len() * 4) as u64;
-                if nbytes > lim {
-                    return Err(format!(
-                        "{}: payload {nbytes} > limit {lim}",
-                        path.display()
-                    ));
-                }
-            }
-            (Some(v), None, None)
+    use std::io::{BufReader, Read};
+
+    let what = path.display();
+    let (f, file_len) = crate::open::open_regular_file(path).map_err(|e| format!("{what}: {e}"))?;
+    let mut f = BufReader::new(f);
+
+    let mut magic_ver = [0u8; 8];
+    f.read_exact(&mut magic_ver)
+        .map_err(|e| format!("{what}: read header: {e}"))?;
+    const MAGIC: &[u8] = b"\x93NUMPY";
+    if &magic_ver[..6] != MAGIC {
+        return Err(format!("{what}: not an .npy file (bad magic)"));
+    }
+    let ver_major = magic_ver[6];
+    let ver_minor = magic_ver[7];
+    let (header_len, prefix) = match ver_major {
+        1 => {
+            let mut hl = [0u8; 2];
+            f.read_exact(&mut hl)
+                .map_err(|e| format!("{what}: read header length: {e}"))?;
+            (usize::from(u16::from_le_bytes(hl)), 10u64)
         }
-        Data::F64(v) => {
-            if let Some(lim) = limit {
-                let nbytes = (v.len() * 8) as u64;
-                if nbytes > lim {
-                    return Err(format!(
-                        "{}: payload {nbytes} > limit {lim}",
-                        path.display()
-                    ));
-                }
-            }
-            (None, Some(v), None)
+        2 | 3 => {
+            let mut hl = [0u8; 4];
+            f.read_exact(&mut hl)
+                .map_err(|e| format!("{what}: read header length: {e}"))?;
+            (u32::from_le_bytes(hl) as usize, 12u64)
         }
-        Data::I64(v) => {
-            if let Some(lim) = limit {
-                let nbytes = (v.len() * 8) as u64;
-                if nbytes > lim {
-                    return Err(format!(
-                        "{}: payload {nbytes} > limit {lim}",
-                        path.display()
-                    ));
-                }
-            }
-            (None, None, Some(v))
+        v => {
+            return Err(format!(
+                "{what}: unsupported npy format version {v}.{ver_minor}"
+            ))
         }
     };
-    Ok(NpyArray {
-        shape: npy.shape,
-        data_f32,
-        data_i64,
-        data_f64,
-    })
+    if header_len > MAX_NPY_HEADER_BYTES || header_len as u64 > file_len.saturating_sub(prefix) {
+        return Err(format!(
+            "{what}: header length {header_len} exceeds the cap {MAX_NPY_HEADER_BYTES} or the file"
+        ));
+    }
+    let mut header_bytes = vec![0u8; header_len];
+    f.read_exact(&mut header_bytes)
+        .map_err(|e| format!("{what}: read header: {e}"))?;
+    let header = std::str::from_utf8(&header_bytes)
+        .map_err(|e| format!("{what}: header is not UTF-8: {e}"))?;
+
+    let total = prefix + header_len as u64;
+    if !total.is_multiple_of(16) {
+        return Err(format!(
+            "{what}: header is not padded to a multiple of 16 bytes ({total} bytes before the data)"
+        ));
+    }
+    let Some(body) = header.strip_suffix('\n') else {
+        return Err(format!("{what}: header does not end with a newline"));
+    };
+    if !body.trim_end_matches(' ').ends_with('}') {
+        return Err(format!(
+            "{what}: header dict is not closed by '}}' followed only by space padding and a newline"
+        ));
+    }
+    if ver_major != 3 && !header.is_ascii() {
+        return Err(format!(
+            "{what}: a version {ver_major} header must be ASCII"
+        ));
+    }
+
+    let descr = dict_value(header, "descr").map_err(|e| format!("{what}: {e}"))?;
+    let fortran = dict_value(header, "fortran_order").map_err(|e| format!("{what}: {e}"))?;
+    let shape_src = dict_value(header, "shape").map_err(|e| format!("{what}: {e}"))?;
+    if fortran == "False" {
+        // C order accepted
+    } else if fortran == "True" {
+        return Err(format!("{what}: fortran-order npy not supported"));
+    } else {
+        return Err(format!(
+            "{what}: fortran_order is neither True nor False: {fortran}"
+        ));
+    }
+    let shape = parse_shape(shape_src).map_err(|e| format!("{what}: {e}"))?;
+    let numel = shape
+        .iter()
+        .try_fold(1usize, |acc, &d| acc.checked_mul(d))
+        .ok_or_else(|| format!("{what}: shape overflows usize"))?;
+    let item_size = match descr {
+        "'<f4'" | "'|f4'" => 4usize,
+        "'<f8'" | "'|f8'" | "'<i8'" | "'|i8'" => 8usize,
+        other => return Err(format!("{what}: unsupported dtype {other}")),
+    };
+    let want = (numel as u64)
+        .checked_mul(item_size as u64)
+        .ok_or_else(|| format!("{what}: payload size overflows"))?;
+    let rest = file_len - prefix - header_len as u64;
+    if want != rest {
+        return Err(format!(
+            "{what}: shape {shape:?} needs {want} bytes, but {rest} follow the header"
+        ));
+    }
+    if let Some(lim) = limit {
+        if want > lim {
+            return Err(format!(
+                "{what}: payload budget exceeded: the file declares {want} tensor bytes, above the caller's limit of {lim}"
+            ));
+        }
+    }
+    match descr {
+        "'<f4'" | "'|f4'" => {
+            let mut data = vec![0.0f32; numel];
+            let mut chunk = [0u8; 4];
+            for x in &mut data {
+                f.read_exact(&mut chunk)
+                    .map_err(|e| format!("{what}: read payload: {e}"))?;
+                *x = f32::from_le_bytes(chunk);
+            }
+            Ok(NpyArray {
+                shape,
+                data_f32: Some(data),
+                data_i64: None,
+                data_f64: None,
+            })
+        }
+        "'<f8'" | "'|f8'" => {
+            let mut data = vec![0.0f64; numel];
+            let mut chunk = [0u8; 8];
+            for x in &mut data {
+                f.read_exact(&mut chunk)
+                    .map_err(|e| format!("{what}: read payload: {e}"))?;
+                *x = f64::from_le_bytes(chunk);
+            }
+            Ok(NpyArray {
+                shape,
+                data_f32: None,
+                data_i64: None,
+                data_f64: Some(data),
+            })
+        }
+        "'<i8'" | "'|i8'" => {
+            let mut data = vec![0i64; numel];
+            let mut chunk = [0u8; 8];
+            for x in &mut data {
+                f.read_exact(&mut chunk)
+                    .map_err(|e| format!("{what}: read payload: {e}"))?;
+                *x = i64::from_le_bytes(chunk);
+            }
+            Ok(NpyArray {
+                shape,
+                data_f32: None,
+                data_i64: Some(data),
+                data_f64: None,
+            })
+        }
+        _ => unreachable!(),
+    }
 }
 
 /// Transpose last two dims of a row-major array. `shape` is updated in place.
@@ -255,8 +363,20 @@ fn dtype_name(d: &Data) -> &'static str {
 
 /// Reads and parses one file. The error names the path.
 pub fn read(path: &Path) -> Result<Npy, String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    parse(&bytes).map_err(|e| format!("{}: {e}", path.display()))
+    let arr = read_npy_with_limit(path, None)?;
+    let data = if let Some(v) = arr.data_f32 {
+        Data::F32(v)
+    } else if let Some(v) = arr.data_f64 {
+        Data::F64(v)
+    } else if let Some(v) = arr.data_i64 {
+        Data::I64(v)
+    } else {
+        unreachable!()
+    };
+    Ok(Npy {
+        shape: arr.shape,
+        data,
+    })
 }
 
 /// Parses an in-memory `.npy` image.
@@ -280,20 +400,50 @@ pub fn parse(bytes: &[u8]) -> Result<Npy, String> {
                 12usize,
             )
         }
-        v => return Err(format!("unsupported .npy major version {v}")),
+        v => {
+            let minor = if bytes.len() > 7 { bytes[7] } else { 0 };
+            return Err(format!("unsupported npy format version {v}.{minor}"));
+        }
     };
+    if header_len > MAX_NPY_HEADER_BYTES || header_len > bytes.len().saturating_sub(start) {
+        return Err(format!(
+            "header length {header_len} exceeds the cap {MAX_NPY_HEADER_BYTES} or the file"
+        ));
+    }
     let end = start
         .checked_add(header_len)
         .filter(|&e| e <= bytes.len())
         .ok_or("header runs past the end of the file")?;
     let header =
-        std::str::from_utf8(&bytes[start..end]).map_err(|e| format!("header is not utf-8: {e}"))?;
+        std::str::from_utf8(&bytes[start..end]).map_err(|e| format!("header is not UTF-8: {e}"))?;
+    let total = start as u64 + header_len as u64;
+    if !total.is_multiple_of(16) {
+        return Err(format!(
+            "header is not padded to a multiple of 16 bytes ({total} bytes before the data)"
+        ));
+    }
+    let Some(body) = header.strip_suffix('\n') else {
+        return Err("header does not end with a newline".to_string());
+    };
+    if !body.trim_end_matches(' ').ends_with('}') {
+        return Err(
+            "header dict is not closed by '}' followed only by space padding and a newline"
+                .to_string(),
+        );
+    }
+    if bytes[6] != 3 && !header.is_ascii() {
+        return Err(format!("a version {} header must be ASCII", bytes[6]));
+    }
     let descr = dict_value(header, "descr")?;
     let fortran = dict_value(header, "fortran_order")?;
     let shape_src = dict_value(header, "shape")?;
-    if fortran != "False" {
+    if fortran == "False" {
+        // C order accepted
+    } else if fortran == "True" {
+        return Err("fortran-order npy not supported".into());
+    } else {
         return Err(format!(
-            "fortran_order {fortran} refused; goldens are C order"
+            "fortran_order is neither True nor False: {fortran}"
         ));
     }
     let shape = parse_shape(shape_src)?;
@@ -313,7 +463,7 @@ pub fn parse(bytes: &[u8]) -> Result<Npy, String> {
         .ok_or("payload size overflows usize")?;
     if payload.len() != want {
         return Err(format!(
-            "payload is {} bytes, the header's shape {shape:?} needs {want}",
+            "shape {shape:?} needs {want} bytes, but {} follow the header",
             payload.len()
         ));
     }
@@ -353,7 +503,7 @@ fn dict_value<'a>(header: &'a str, key: &str) -> Result<&'a str, String> {
     let needle = format!("'{key}':");
     let at = header
         .find(&needle)
-        .ok_or_else(|| format!("header has no '{key}'"))?;
+        .ok_or_else(|| format!("missing {key}"))?;
     let rest = header[at + needle.len()..].trim_start();
     let end = if rest.starts_with('(') {
         rest.find(')').map(|i| i + 1)

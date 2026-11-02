@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-use tessl::npy::read_npy;
+use ojas_io::npy::read_npy;
 
 /// The canonical tessl checkout beside ojas, through which its fixtures and
 /// `target/qwen35_train_ref` are read.
