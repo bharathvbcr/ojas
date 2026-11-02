@@ -5,11 +5,11 @@ use ojas_core::{
     broadcast_mul_forward_dims, broadcast_shapes, channel_layer_norm_backward_dims,
     channel_layer_norm_forward_dims, concat_dims, fill_dims, gelu_erf_backward_dims,
     gelu_erf_forward_dims, gelu_tanh_backward_dims, gelu_tanh_forward_dims,
-    group_norm_forward_dims, l2_normalize_forward_dims, layer_norm_backward_dims,
-    layer_norm_forward_dims, linear_bias_backward_dims, linear_bias_forward_dims,
-    relu_backward_dims, relu_forward_dims, scale_forward_dims, seq_mean_forward_dims,
-    slice_backward_dims, slice_dims, softmax_backward_dims, softmax_forward_dims, AffineGrad,
-    LinearDims,
+    group_norm_forward_dims, l2_normalize_backward_dims, l2_normalize_forward_dims,
+    layer_norm_backward_dims, layer_norm_forward_dims, linear_bias_backward_dims,
+    linear_bias_forward_dims, relu_backward_dims, relu_forward_dims, scale_forward_dims,
+    seq_mean_backward_dims, seq_mean_forward_dims, slice_backward_dims, slice_dims,
+    softmax_backward_dims, softmax_forward_dims, AffineGrad, LinearDims,
 };
 use ojas_core::{
     causal_conv1d_silu_backward_dims, causal_conv1d_silu_forward_dims, clip_scale,
@@ -1921,10 +1921,46 @@ impl Backend for CpuBackend {
         gemma_ops::seq_mean_forward(OP, &self.budget, self.exec(), values, lens, dims)
     }
 
+    /// The backward reads the gradient and the lengths, never `x`'s values,
+    /// so only the gradient is scanned for a non-finite value.
+    fn seq_mean_backward(
+        &self,
+        x: &Tensor,
+        key_lens: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "seq_mean_backward";
+        let dims = seq_mean_backward_dims(x, key_lens, grad_output)?;
+        let [grad] = f32_operands(OP, self.exec(), [grad_output])?;
+        let lens = u32_values(OP, key_lens)?;
+        gemma_ops::seq_mean_backward(OP, &self.budget, self.exec(), grad, lens, dims, x.shape())
+    }
+
     fn l2_normalize_forward(&self, x: &Tensor, eps: f32) -> Result<Tensor, OjasError> {
         const OP: &str = "l2_normalize_forward";
         let dims = l2_normalize_forward_dims(x, eps)?;
         let [values] = f32_operands(OP, self.exec(), [x])?;
         gemma_ops::l2_normalize_forward(OP, &self.budget, self.exec(), values, dims, eps, x.shape())
+    }
+
+    fn l2_normalize_backward(
+        &self,
+        x: &Tensor,
+        grad_output: &Tensor,
+        eps: f32,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "l2_normalize_backward";
+        let dims = l2_normalize_backward_dims(x, grad_output, eps)?;
+        let [values, grad] = f32_operands(OP, self.exec(), [x, grad_output])?;
+        gemma_ops::l2_normalize_backward(
+            OP,
+            &self.budget,
+            self.exec(),
+            values,
+            grad,
+            dims,
+            eps,
+            x.shape(),
+        )
     }
 }

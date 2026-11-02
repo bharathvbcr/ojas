@@ -188,13 +188,17 @@ fn arguments(op: &str) -> Vec<Tensor> {
         | "l2_normalize_forward" => vec![tensor(&[3, 8], 16, 2.0)],
         // `try_call` supplies the lengths `[5, 3]`: `U32` cannot be rounded.
         "seq_mean_forward" => vec![tensor(&[2, 5, 8], 46, 2.0)],
+        // The pooled input and the `[2, 8]` gradient of its mean.
+        "seq_mean_backward" => vec![tensor(&[2, 5, 8], 46, 2.0), tensor(&[2, 8], 48, 1.0)],
         "group_norm_backward" => vec![
             tensor(&[2, 4, 3, 3], 13, 2.0),
             positive(&[4], 14),
             tensor(&[4], 15, 0.5),
             tensor(&[2, 4, 3, 3], 47, 1.0),
         ],
-        "gelu_tanh_backward" => vec![tensor(&[3, 8], 16, 2.0), tensor(&[3, 8], 41, 1.0)],
+        "gelu_tanh_backward" | "l2_normalize_backward" => {
+            vec![tensor(&[3, 8], 16, 2.0), tensor(&[3, 8], 41, 1.0)]
+        }
         "interpolate_bilinear_backward" => vec![
             tensor(&[1, 2, 4, 4], 29, 2.0),
             tensor(&[1, 2, 6, 6], 48, 2.0),
@@ -347,7 +351,9 @@ fn try_call<B: Backend>(op: &str, backend: &B, a: &[Tensor]) -> Result<Vec<Tenso
         "gelu_tanh_forward" => one(backend.gelu_tanh_forward(&a[0])),
         "gelu_tanh_backward" => one(backend.gelu_tanh_backward(&a[0], &a[1])),
         "seq_mean_forward" => one(backend.seq_mean_forward(&a[0], &seq_lens)),
+        "seq_mean_backward" => one(backend.seq_mean_backward(&a[0], &seq_lens, &a[1])),
         "l2_normalize_forward" => one(backend.l2_normalize_forward(&a[0], 1e-12)),
+        "l2_normalize_backward" => one(backend.l2_normalize_backward(&a[0], &a[1], 1e-12)),
         "softmax_backward" => one(backend.softmax_backward(&a[0], &a[1])),
         "broadcast_add_backward" => backend
             .broadcast_add_backward(&a[0], &a[1], &a[2])

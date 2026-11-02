@@ -1955,12 +1955,34 @@ pub trait Backend {
     /// clamps the count to `1e-9`, and `0 / 1e-9 = 0`). Rows at or past the
     /// length are never read. Returns `[B, D]`.
     ///
-    /// There is no backward this batch: nothing in the embedding goal trains
-    /// through the pooling. [`crate::seq_mean_forward_dims`] validates. The
-    /// default refuses with [`OjasError::Unsupported`].
+    /// [`Self::seq_mean_backward`] is its gradient.
+    /// [`crate::seq_mean_forward_dims`] validates. The default refuses with
+    /// [`OjasError::Unsupported`].
     fn seq_mean_forward(&self, x: &Tensor, key_lens: &Tensor) -> Result<Tensor, OjasError> {
         let _ = (x, key_lens);
         Err(unsupported_op(self.id(), "seq_mean_forward"))
+    }
+
+    /// The gradient of [`Self::seq_mean_forward`]: with `n = min(key_lens[b],
+    /// T)`, `grad_x[b, t, d]` is `grad_output[b, d] / n` for `t < n` and `+0.0`
+    /// at or past `n`, because the forward never read those rows. A sequence
+    /// of `n = 0` takes a row of zeros, matching a forward that returned
+    /// zeros. Every output element reads one gradient element, so nothing is
+    /// summed and the bits do not depend on the thread count.
+    ///
+    /// `x` is the forward's input, taken for its shape and to pair with
+    /// `key_lens`; none of its values are read, so a non-finite value in it
+    /// does not refuse this call. Returns `[B, T, D]`.
+    /// [`crate::seq_mean_backward_dims`] validates. The default refuses with
+    /// [`OjasError::Unsupported`].
+    fn seq_mean_backward(
+        &self,
+        x: &Tensor,
+        key_lens: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        let _ = (x, key_lens, grad_output);
+        Err(unsupported_op(self.id(), "seq_mean_backward"))
     }
 
     /// `x / max(||x||_2, eps)` over the last axis of `x` `[rows, dim]`,
@@ -1971,12 +1993,40 @@ pub trait Backend {
     /// Matryoshka prefix is [`Self::slice`] first, then this: there is no
     /// leading-dimension parameter.
     ///
-    /// There is no backward this batch (not in the embedding goal).
+    /// [`Self::l2_normalize_backward`] is its gradient.
     /// [`crate::l2_normalize_forward_dims`] validates. The default refuses
     /// with [`OjasError::Unsupported`].
     fn l2_normalize_forward(&self, x: &Tensor, eps: f32) -> Result<Tensor, OjasError> {
         let _ = (x, eps);
         Err(unsupported_op(self.id(), "l2_normalize_forward"))
+    }
+
+    /// The gradient of [`Self::l2_normalize_forward`], with `n = ||x||_2`
+    /// over the row and `y = x / n`:
+    ///
+    /// - `n > eps`: `grad_x = (grad_output - y (y . grad_output)) / n`, the
+    ///   gradient of `x / ||x||`.
+    /// - `n <= eps`: `grad_x = grad_output / eps`. Below the clamp the
+    ///   forward divided by the constant `eps`, so it is linear there and
+    ///   its Jacobian is `I / eps`: no projection is subtracted. A zero row
+    ///   takes `grad_output / eps`, not zero, and the tie `n == eps` is this
+    ///   branch, as `max(n, eps)` returning `eps` is.
+    ///
+    /// The squared norm and the dot product are `f64` sums that ascend from
+    /// index 0 and belong to one row, as the forward's norm does, so the
+    /// bits do not depend on the thread count. The forward's output is not
+    /// an operand: `n` is recomputed from `x`, so the branch is decided from
+    /// the same values the forward decided it from.
+    /// [`crate::l2_normalize_backward_dims`] validates. The default refuses
+    /// with [`OjasError::Unsupported`].
+    fn l2_normalize_backward(
+        &self,
+        x: &Tensor,
+        grad_output: &Tensor,
+        eps: f32,
+    ) -> Result<Tensor, OjasError> {
+        let _ = (x, grad_output, eps);
+        Err(unsupported_op(self.id(), "l2_normalize_backward"))
     }
 
     /// Scalar mean cross-entropy. Targets are `U32`.
@@ -2505,7 +2555,9 @@ macro_rules! with_backend_methods {
             op fn softmax_forward(&self, input: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn softmax_backward(&self, output: &$crate::Tensor, grad_output: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn seq_mean_forward(&self, x: &$crate::Tensor, key_lens: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn seq_mean_backward(&self, x: &$crate::Tensor, key_lens: &$crate::Tensor, grad_output: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn l2_normalize_forward(&self, x: &$crate::Tensor, eps: f32) -> Result<$crate::Tensor, $crate::OjasError>;
+            op fn l2_normalize_backward(&self, x: &$crate::Tensor, grad_output: &$crate::Tensor, eps: f32) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn cross_entropy_mean_forward(&self, logits: &$crate::Tensor, targets: &$crate::Tensor, ignore_index: Option<u32>) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn cross_entropy_mean_backward(&self, logits: &$crate::Tensor, targets: &$crate::Tensor, ignore_index: Option<u32>) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn clip_grad_norm(&self, grads: &mut [$crate::Tensor], max_norm: f32) -> Result<f32, $crate::OjasError>;
@@ -3365,7 +3417,9 @@ pub(crate) mod tests {
             op(backend.softmax_forward(&t)),
             op(backend.softmax_backward(&t, &t)),
             op(backend.seq_mean_forward(&t, &t)),
+            op(backend.seq_mean_backward(&t, &t, &t)),
             op(backend.l2_normalize_forward(&t, 1e-12)),
+            op(backend.l2_normalize_backward(&t, &t, 1e-12)),
             op(backend.cross_entropy_mean_forward(&t, &t, None)),
             op(backend.cross_entropy_mean_backward(&t, &t, None)),
             op(backend.clip_grad_norm(std::slice::from_mut(&mut m), 1.0)),
@@ -3467,7 +3521,9 @@ pub(crate) mod tests {
             "softmax_forward",
             "softmax_backward",
             "seq_mean_forward",
+            "seq_mean_backward",
             "l2_normalize_forward",
+            "l2_normalize_backward",
             "cross_entropy_mean_forward",
             "cross_entropy_mean_backward",
             "clip_grad_norm",
@@ -3761,6 +3817,10 @@ pub(crate) mod tests {
             backend.seq_mean_forward(&x, &ids).map(drop),
             "seq_mean_forward",
         );
+        refused(
+            backend.seq_mean_backward(&x, &ids, &x).map(drop),
+            "seq_mean_backward",
+        );
         refused(backend.relu_backward(&x, &x).map(drop), "relu_backward");
         refused(
             backend.slice_backward(&x, &[1], 0, 0).map(drop),
@@ -3769,6 +3829,10 @@ pub(crate) mod tests {
         refused(
             backend.l2_normalize_forward(&x, 1e-12).map(drop),
             "l2_normalize_forward",
+        );
+        refused(
+            backend.l2_normalize_backward(&x, &x, 1e-12).map(drop),
+            "l2_normalize_backward",
         );
         refused(
             backend

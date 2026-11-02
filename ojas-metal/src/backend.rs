@@ -3739,10 +3739,32 @@ impl Backend for MetalBackend {
         self.gemma_seq_mean_forward(x, key_lens)
     }
 
+    /// ojas's own `ojas_seq_mean_bwd`: tessl has no backward for
+    /// `segment_mean_rows`.
+    fn seq_mean_backward(
+        &self,
+        x: &Tensor,
+        key_lens: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        self.gemma_seq_mean_backward(x, key_lens, grad_output)
+    }
+
     /// tessl's `l2_normalize_rows`, whose epsilon is `1e-12`: any other eps
     /// is `Unsupported`, not ignored.
     fn l2_normalize_forward(&self, x: &Tensor, eps: f32) -> Result<Tensor, OjasError> {
         self.gemma_l2_normalize_forward(x, eps)
+    }
+
+    /// ojas's own `ojas_l2_normalize_bwd`, for the forward's `1e-12` only:
+    /// tessl has no backward for `l2_normalize_rows`.
+    fn l2_normalize_backward(
+        &self,
+        x: &Tensor,
+        grad_output: &Tensor,
+        eps: f32,
+    ) -> Result<Tensor, OjasError> {
+        self.gemma_l2_normalize_backward(x, grad_output, eps)
     }
 
     fn cross_entropy_mean_forward(

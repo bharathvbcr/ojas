@@ -1910,7 +1910,15 @@ impl Worker {
             Cmd::GeluTanh { x } => self.gelu_tanh(x, None),
             Cmd::GeluTanhBwd { x, gy } => self.gelu_tanh(x, Some(gy)),
             Cmd::SeqMean { x, lens, geom } => self.seq_mean(x, lens, geom),
+            Cmd::SeqMeanBwd { grad, lens, geom } => self.seq_mean_bwd(grad, lens, geom),
             Cmd::L2Normalize { x, rows, dim } => self.l2_normalize(x, rows, dim),
+            Cmd::L2NormalizeBwd {
+                x,
+                grad,
+                rows,
+                dim,
+                eps,
+            } => self.l2_normalize_bwd(x, grad, rows, dim, eps),
         }
     }
 

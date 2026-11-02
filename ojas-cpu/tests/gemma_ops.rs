@@ -1,6 +1,7 @@
 //! The EmbeddingGemma 2 encoder ops on the CPU: `gelu_tanh_forward` and
 //! `gelu_tanh_backward`, `seq_mean_forward` (the masked mean pool of a
-//! sentence embedding model) and `l2_normalize_forward`.
+//! sentence embedding model) with `seq_mean_backward`, and
+//! `l2_normalize_forward`.
 //!
 //! Each op is held to an independent `f64` reference written here (libm
 //! `tanh` and `exp` for the GELU, plain loops for the two reductions), at the
@@ -380,6 +381,140 @@ fn seq_mean_refuses_what_it_cannot_pool_under_its_own_name() {
     );
 }
 
+/// `grad[b, d] / min(len[b], T)` on the rows the mean read, `+0.0` past
+/// them: the gradient of [`mean_ref`], written independently of it.
+fn mean_grad_ref(grad: &[f32], lens: &[u32], t: usize, d: usize) -> Vec<f32> {
+    let mut out = vec![0.0f32; lens.len() * t * d];
+    for (b, &len) in lens.iter().enumerate() {
+        let rows = (len as usize).min(t);
+        if rows == 0 {
+            continue;
+        }
+        for row in 0..rows {
+            for col in 0..d {
+                out[(b * t + row) * d + col] = (f64::from(grad[b * d + col]) / rows as f64) as f32;
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn seq_mean_backward_divides_by_the_rows_the_mean_read() {
+    // The same lengths the forward test uses: full, short, zero, one row,
+    // and one over T.
+    let (b, t, d) = (5usize, 9usize, 37usize);
+    let cpu = backend(2, Numerics::Exact);
+    let mut rng = SplitMix64(31);
+    let x = rng.vec(b * t * d, 4.0);
+    let grad = rng.vec(b * d, 2.0);
+    let lens = [9u32, 4, 0, 1, 99];
+    let got = cpu
+        .seq_mean_backward(
+            &f32t(&cpu, &x, &[b, t, d]),
+            &u32t(&cpu, &lens, &[b]),
+            &f32t(&cpu, &grad, &[b, d]),
+        )
+        .unwrap();
+    assert_eq!(got.shape(), [b, t, d]);
+    assert_eq!(got.dtype(), DType::F32);
+    let got = v(&got);
+    assert_eq!(bits(&got), bits(&mean_grad_ref(&grad, &lens, t, d)));
+    // Sequence 4 asks for 99 of 9 rows: every row takes grad / 9, not
+    // grad / 99, and none is left out.
+    for row in 0..t {
+        for col in 0..d {
+            let want = (f64::from(grad[4 * d + col]) / 9.0) as f32;
+            assert_eq!(got[(4 * t + row) * d + col].to_bits(), want.to_bits());
+        }
+    }
+    // Sequence 2 has length 0: the whole block is +0.0.
+    assert!(got[(2 * t) * d..(3 * t) * d]
+        .iter()
+        .all(|e| e.to_bits() == 0));
+    // Sequence 1 has length 4 of 9: rows 4.. are +0.0.
+    assert!(got[(t + 4) * d..(t + 9) * d]
+        .iter()
+        .all(|e| e.to_bits() == 0));
+}
+
+#[test]
+fn seq_mean_backward_is_bit_identical_across_threads_and_numerics() {
+    let (b, t, d) = (67usize, 33usize, 49usize);
+    let mut rng = SplitMix64(32);
+    let x = rng.vec(b * t * d, 6.0);
+    let grad = rng.vec(b * d, 3.0);
+    let lens: Vec<u32> = (0..b).map(|_| rng.below(t + 3) as u32).collect();
+    let mut first: Option<Vec<u32>> = None;
+    for cpu in tiers() {
+        let got = bits(&v(&cpu
+            .seq_mean_backward(
+                &f32t(&cpu, &x, &[b, t, d]),
+                &u32t(&cpu, &lens, &[b]),
+                &f32t(&cpu, &grad, &[b, d]),
+            )
+            .unwrap()));
+        assert_eq!(got, bits(&mean_grad_ref(&grad, &lens, t, d)));
+        match &first {
+            None => first = Some(got),
+            Some(want) => assert_eq!(&got, want),
+        }
+    }
+}
+
+#[test]
+fn seq_mean_backward_refuses_what_it_cannot_spread_under_its_own_name() {
+    let cpu = backend(1, Numerics::Exact);
+    let (b, t, d) = (2usize, 3usize, 4usize);
+    let x = f32t(&cpu, &vec![0.5; b * t * d], &[b, t, d]);
+    let lens = u32t(&cpu, &[3, 1], &[b]);
+    let grad = f32t(&cpu, &vec![0.25; b * d], &[b, d]);
+    cpu.seq_mean_backward(&x, &lens, &grad).unwrap();
+    let named = |r: Result<Tensor, OjasError>| match r {
+        Err(OjasError::NonFinite { op })
+        | Err(OjasError::Shape { op, .. })
+        | Err(OjasError::Dtype { op, .. }) => assert_eq!(op, "seq_mean_backward"),
+        other => panic!("expected a refusal, got {other:?}"),
+    };
+    // A float tensor for the lengths.
+    named(cpu.seq_mean_backward(&x, &f32t(&cpu, &[3.0, 1.0], &[b]), &grad));
+    // One length per sequence.
+    let three = u32t(&cpu, &[3, 1, 2], &[3]);
+    assert_shape(cpu.seq_mean_backward(&x, &three, &grad));
+    named(cpu.seq_mean_backward(&x, &three, &grad));
+    // x is rank 3.
+    let flat = f32t(&cpu, &vec![0.5; t * d], &[t, d]);
+    assert_shape(cpu.seq_mean_backward(&flat, &lens, &grad));
+    // The gradient is the forward's [B, D] output.
+    let wide = f32t(&cpu, &vec![0.25; b * t * d], &[b, t, d]);
+    assert_shape(cpu.seq_mean_backward(&x, &lens, &wide));
+    named(cpu.seq_mean_backward(&x, &lens, &wide));
+    // A NaN or infinity in the gradient is refused.
+    for bad in [f32::NAN, f32::INFINITY] {
+        let mut data = vec![0.25; b * d];
+        data[d] = bad;
+        assert_nonfinite(cpu.seq_mean_backward(&x, &lens, &f32t(&cpu, &data, &[b, d])));
+    }
+    // The backward reads none of x's values, so a non-finite one in x --
+    // which the forward refuses -- does not refuse here.
+    let mut poisoned = vec![0.5; b * t * d];
+    poisoned[(t + 2) * d] = f32::NAN;
+    cpu.seq_mean_backward(&f32t(&cpu, &poisoned, &[b, t, d]), &lens, &grad)
+        .expect("x is read for its shape only");
+    // A budget with 16 bytes left for the 96-byte [B, T, D] gradient
+    // refuses, it does not clamp.
+    let tight = CpuBackend::new(Budget::new((b * t * d * 4 + b * 4 + b * d * 4 + 16) as u64));
+    let r = tight.seq_mean_backward(
+        &f32t(&tight, &vec![0.5; b * t * d], &[b, t, d]),
+        &u32t(&tight, &[3, 1], &[b]),
+        &f32t(&tight, &vec![0.25; b * d], &[b, d]),
+    );
+    assert!(
+        matches!(r, Err(OjasError::CapacityExceeded { .. })),
+        "{r:?}"
+    );
+}
+
 // ---- L2 normalization ----
 
 /// `x / max(||x||, eps)` row by row in `f64`, rounded once.
@@ -515,6 +650,153 @@ fn l2_normalize_refuses_what_it_cannot_normalize_under_its_own_name() {
             Err(OjasError::NonFinite { op }) => assert_eq!(op, "l2_normalize_forward"),
             other => panic!("expected NonFinite, got {other:?}"),
         }
+    }
+}
+
+/// The gradient of [`normalize_ref`], written independently of it: above the
+/// clamp `(g - y (y . g)) / n` with `y = x / n`, at or below it `g / eps`.
+fn normalize_grad_ref(x: &[f32], g: &[f32], rows: usize, dim: usize, eps: f32) -> Vec<f32> {
+    let eps = f64::from(eps);
+    let mut out = Vec::new();
+    for r in 0..rows {
+        let row = &x[r * dim..(r + 1) * dim];
+        let gr = &g[r * dim..(r + 1) * dim];
+        let norm = row
+            .iter()
+            .map(|&e| f64::from(e) * f64::from(e))
+            .sum::<f64>()
+            .sqrt();
+        if norm <= eps {
+            out.extend(gr.iter().map(|&e| (f64::from(e) / eps) as f32));
+            continue;
+        }
+        let dot: f64 = row
+            .iter()
+            .zip(gr)
+            .map(|(&v, &gv)| (f64::from(v) / norm) * f64::from(gv))
+            .sum();
+        out.extend(
+            row.iter()
+                .zip(gr)
+                .map(|(&v, &gv)| ((f64::from(gv) - (f64::from(v) / norm) * dot) / norm) as f32),
+        );
+    }
+    out
+}
+
+#[test]
+fn l2_normalize_backward_projects_above_eps_and_divides_by_eps_below() {
+    let dim = 31usize;
+    let mut rng = SplitMix64(41);
+    let mut data = rng.vec(8 * dim, 3.0);
+    // Rows: random x4, zero, negative zeros, tiny, large -- the forward
+    // test's rows, so both branches and both zero signs are covered.
+    data[4 * dim..5 * dim].fill(0.0);
+    data[5 * dim..6 * dim].fill(-0.0);
+    data[6 * dim..7 * dim].fill(1e-20);
+    data[7 * dim..8 * dim].iter_mut().for_each(|e| *e *= 1e30);
+    let grad = rng.vec(8 * dim, 2.0);
+    let cpu = backend(2, Numerics::Exact);
+    let eps = 1e-12f32;
+    let got = cpu
+        .l2_normalize_backward(
+            &f32t(&cpu, &data, &[8, dim]),
+            &f32t(&cpu, &grad, &[8, dim]),
+            eps,
+        )
+        .unwrap();
+    assert_eq!(got.shape(), [8, dim]);
+    assert_eq!(got.dtype(), DType::F32);
+    let got = v(&got);
+    assert_eq!(
+        bits(&got),
+        bits(&normalize_grad_ref(&data, &grad, 8, dim, eps))
+    );
+    // The zero rows (norm 0 <= eps) take grad / eps, not zero: the forward
+    // divided them by the constant eps, so the gradient flows.
+    for r in [4usize, 5] {
+        for col in 0..dim {
+            let want = (f64::from(grad[r * dim + col]) / f64::from(eps)) as f32;
+            assert_eq!(got[r * dim + col].to_bits(), want.to_bits(), "row {r}");
+        }
+    }
+    // A row above the clamp is orthogonal to itself after the projection:
+    // <x, dx> is 0 to rounding, which the clamp branch would not give.
+    for r in [0usize, 1, 2, 3] {
+        let dot: f64 = (0..dim)
+            .map(|c| f64::from(data[r * dim + c]) * f64::from(got[r * dim + c]))
+            .sum();
+        let scale: f64 = (0..dim)
+            .map(|c| f64::from(data[r * dim + c]).abs() * f64::from(got[r * dim + c]).abs())
+            .sum();
+        assert!(
+            dot.abs() <= 1e-6 * scale.max(1.0),
+            "row {r}: <x, dx> = {dot}"
+        );
+    }
+}
+
+#[test]
+fn l2_normalize_backward_is_bit_identical_across_threads_and_numerics() {
+    let (rows, dim) = (1013usize, 77usize);
+    let mut rng = SplitMix64(43);
+    let data = rng.vec(rows * dim, 5.0);
+    let grad = rng.vec(rows * dim, 2.0);
+    let eps = 1e-12f32;
+    let want = normalize_grad_ref(&data, &grad, rows, dim, eps);
+    let mut first: Option<Vec<u32>> = None;
+    for cpu in tiers() {
+        let got = bits(&v(&cpu
+            .l2_normalize_backward(
+                &f32t(&cpu, &data, &[rows, dim]),
+                &f32t(&cpu, &grad, &[rows, dim]),
+                eps,
+            )
+            .unwrap()));
+        assert_eq!(got, bits(&want));
+        match &first {
+            None => first = Some(got),
+            Some(want) => assert_eq!(&got, want),
+        }
+    }
+}
+
+#[test]
+fn l2_normalize_backward_refuses_what_it_cannot_differentiate_under_its_own_name() {
+    let cpu = backend(1, Numerics::Exact);
+    let x = f32t(&cpu, &[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+    let g = f32t(&cpu, &[0.5, 0.25, -0.5, 1.0], &[2, 2]);
+    cpu.l2_normalize_backward(&x, &g, 1e-12).unwrap();
+    // eps must be finite and above 0, as the forward requires.
+    assert_nonfinite(cpu.l2_normalize_backward(&x, &g, f32::NAN));
+    assert_range(cpu.l2_normalize_backward(&x, &g, 0.0));
+    assert_range(cpu.l2_normalize_backward(&x, &g, -1e-12));
+    // The operand is [rows, dim] and the gradient is its shape.
+    assert_shape(cpu.l2_normalize_backward(
+        &f32t(&cpu, &[1.0, 2.0], &[2]),
+        &f32t(&cpu, &[1.0, 2.0], &[2]),
+        1e-12,
+    ));
+    assert_shape(cpu.l2_normalize_backward(&x, &f32t(&cpu, &[1.0; 6], &[3, 2]), 1e-12));
+    assert_shape(cpu.l2_normalize_backward(&x, &f32t(&cpu, &[1.0; 4], &[4, 1]), 1e-12));
+    let ids = u32t(&cpu, &[1, 2, 3, 4], &[2, 2]);
+    for (bad_x, bad_g) in [(&ids, &g), (&x, &ids)] {
+        assert!(matches!(
+            cpu.l2_normalize_backward(bad_x, bad_g, 1e-12),
+            Err(OjasError::Dtype {
+                op: "l2_normalize_backward",
+                ..
+            })
+        ));
+    }
+    // A non-finite value in either operand is refused: both are read.
+    for bad in [f32::NAN, f32::INFINITY] {
+        let poisoned = f32t(&cpu, &[1.0, bad, 1.0, 1.0], &[2, 2]);
+        match cpu.l2_normalize_backward(&poisoned, &g, 1e-12) {
+            Err(OjasError::NonFinite { op }) => assert_eq!(op, "l2_normalize_backward"),
+            other => panic!("expected NonFinite, got {other:?}"),
+        }
+        assert_nonfinite(cpu.l2_normalize_backward(&x, &poisoned, 1e-12));
     }
 }
 

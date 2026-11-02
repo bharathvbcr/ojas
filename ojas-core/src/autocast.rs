@@ -298,7 +298,9 @@ pub const SAM_AUTOCAST_POLICY: &[(&str, AutocastClass)] = &[
     ("softmax_forward", AutocastClass::Reduction),
     ("softmax_backward", AutocastClass::Reduction),
     ("seq_mean_forward", AutocastClass::Reduction),
+    ("seq_mean_backward", AutocastClass::Reduction),
     ("l2_normalize_forward", AutocastClass::Reduction),
+    ("l2_normalize_backward", AutocastClass::Reduction),
     ("concat", AutocastClass::Move),
     ("slice", AutocastClass::Move),
     ("slice_backward", AutocastClass::Move),
@@ -1701,11 +1703,38 @@ impl<B: Backend> Backend for Autocast<B> {
         Ok(self.keep_f32(out))
     }
 
+    /// The gradient of a reduction: one division of the incoming gradient,
+    /// kept `f32` as the forward's output is. `x` is read for its shape and
+    /// `key_lens` is an integer tensor, so neither is rounded.
+    fn seq_mean_backward(
+        &self,
+        x: &Tensor,
+        key_lens: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self.inner.seq_mean_backward(x, key_lens, grad_output)?;
+        Ok(self.keep_f32(out))
+    }
+
     /// A reduction: the norm stays `f32` and the output is not rounded to
     /// the compute dtype.
     fn l2_normalize_forward(&self, x: &Tensor, eps: f32) -> Result<Tensor, OjasError> {
         self.pass()?;
         let out = self.inner.l2_normalize_forward(x, eps)?;
+        Ok(self.keep_f32(out))
+    }
+
+    /// The gradient of a reduction: the norm and the dot product stay `f32`
+    /// and the gradient is not rounded to the compute dtype.
+    fn l2_normalize_backward(
+        &self,
+        x: &Tensor,
+        grad_output: &Tensor,
+        eps: f32,
+    ) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self.inner.l2_normalize_backward(x, grad_output, eps)?;
         Ok(self.keep_f32(out))
     }
 

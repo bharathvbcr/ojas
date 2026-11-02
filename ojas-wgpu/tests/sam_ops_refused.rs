@@ -206,8 +206,22 @@ fn every_sam_op_is_the_refusing_default_on_wgpu() {
                 .map(drop),
         ),
         refusal(
+            "seq_mean_backward",
+            g.seq_mean_backward(
+                &dev(34, &[2, 3, 8]),
+                &up(&host_u32(&[3, 2], &[2])),
+                &dev(35, &[2, 8]),
+            )
+            .map(drop),
+        ),
+        refusal(
             "l2_normalize_forward",
             g.l2_normalize_forward(&x, 1e-12).map(drop),
+        ),
+        refusal(
+            "l2_normalize_backward",
+            g.l2_normalize_backward(&x, &dev(36, &[2, 8]), 1e-12)
+                .map(drop),
         ),
         refusal("concat", g.concat(&[&x, &x], 0).map(drop)),
         refusal("slice", g.slice(&x, 0, 0, 1).map(drop)),
@@ -241,4 +255,31 @@ fn every_sam_op_is_the_refusing_default_on_wgpu() {
         .linear_forward(&dev(19, &[3, 4]), &dev(20, &[5, 4]))
         .expect("linear_forward is implemented on wgpu");
     assert_eq!(y.shape(), &[3, 5]);
+}
+
+/// EmbeddingGemma 2's per-head Q/K/V RMSNorm is classified outside
+/// `SAM_AUTOCAST_POLICY` (it is `OUTSIDE_THE_SAM_SET` in
+/// `ojas-cpu/tests/autocast_sam_policy.rs`), so the exact-match assertion
+/// above cannot carry it. It is still the refusing default here, with and
+/// without the optional Q/K weights, and this pins that: a wgpu device that
+/// starts answering it, or answers it under another op's name, fails here.
+/// Its gradient is `Tape::rms_qkv_norm`'s three `rms_norm` records, so there
+/// is no `rms_qkv_norm_backward` to pin.
+#[test]
+fn the_per_head_qkv_rms_norm_is_the_refusing_default_on_wgpu() {
+    let g = gpu();
+    let q = dev(40, &[1, 2, 3, 8]);
+    let kv = dev(41, &[1, 1, 3, 8]);
+    let w = dev(42, &[8]);
+    for weights in [false, true] {
+        let (qw, kw) = if weights {
+            (Some(&w), Some(&w))
+        } else {
+            (None, None)
+        };
+        refusal(
+            "rms_qkv_norm_forward",
+            g.rms_qkv_norm_forward(&q, &kv, &kv, qw, kw, 1e-6).map(drop),
+        );
+    }
 }

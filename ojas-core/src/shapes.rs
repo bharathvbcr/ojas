@@ -78,7 +78,9 @@ const GELU_ERF_BACKWARD: &str = "gelu_erf_backward";
 const GELU_TANH_FORWARD: &str = "gelu_tanh_forward";
 const GELU_TANH_BACKWARD: &str = "gelu_tanh_backward";
 const SEQ_MEAN_FORWARD: &str = "seq_mean_forward";
+const SEQ_MEAN_BACKWARD: &str = "seq_mean_backward";
 const L2_NORMALIZE_FORWARD: &str = "l2_normalize_forward";
+const L2_NORMALIZE_BACKWARD: &str = "l2_normalize_backward";
 const RELU_FORWARD: &str = "relu_forward";
 const RELU_BACKWARD: &str = "relu_backward";
 const CONCAT: &str = "concat";
@@ -1688,50 +1690,110 @@ pub struct SeqMeanDims {
     pub dim: usize,
 }
 
-/// [`crate::Backend::seq_mean_forward`]: `x` `[B, T, D]` `F32` and
-/// `key_lens` `U32` `[B]`, checked in that order (dtype, then no zero
-/// extent, then size) and then the rank of `x` and the shape of `key_lens`.
-/// A length above `T` is `T`, so no length is out of range.
-pub fn seq_mean_forward_dims(x: &Tensor, key_lens: &Tensor) -> Result<SeqMeanDims, OjasError> {
-    const OP: &str = SEQ_MEAN_FORWARD;
-    f32_operand(OP, x)?;
-    operand(OP, key_lens, DType::U32)?;
+/// The operands [`seq_mean_forward_dims`] and [`seq_mean_backward_dims`]
+/// share: `x` `[B, T, D]` `F32` and `key_lens` `U32` `[B]`, checked in that
+/// order (dtype, then no zero extent, then size) and then the rank of `x`
+/// and the shape of `key_lens`. A length above `T` is `T`, so no length is
+/// out of range. Refusals name `op`, so each op names itself.
+fn seq_mean_dims(
+    op: &'static str,
+    x: &Tensor,
+    key_lens: &Tensor,
+) -> Result<SeqMeanDims, OjasError> {
+    f32_operand(op, x)?;
+    operand(op, key_lens, DType::U32)?;
     let &[batch, seq, dim] = x.shape() else {
         return Err(refuse(
-            OP,
+            op,
             format!("seq_mean x rank {} != 3 [B, T, D]", x.shape().len()),
         ));
     };
     if key_lens.shape() != [batch] {
         return Err(refuse(
-            OP,
+            op,
             format!("seq_mean key_lens {:?} != [{batch}]", key_lens.shape()),
         ));
     }
-    f32_product(OP, &[batch, dim])?;
     Ok(SeqMeanDims { batch, seq, dim })
 }
 
-/// [`crate::Backend::l2_normalize_forward`]: `x` `[rows, dim]` `F32`, then
-/// `eps`: non-finite is [`OjasError::NonFinite`] and one that is not above 0
-/// is [`OjasError::OutOfRange`] (a zero row's divisor is `eps`, so `eps` is
-/// what keeps it finite).
-pub fn l2_normalize_forward_dims(x: &Tensor, eps: f32) -> Result<RmsDims, OjasError> {
-    const OP: &str = L2_NORMALIZE_FORWARD;
-    f32_operand(OP, x)?;
-    let &[rows, dim] = x.shape() else {
+/// [`crate::Backend::seq_mean_forward`]: [`seq_mean_dims`] and then the
+/// `[B, D]` output's size.
+pub fn seq_mean_forward_dims(x: &Tensor, key_lens: &Tensor) -> Result<SeqMeanDims, OjasError> {
+    const OP: &str = SEQ_MEAN_FORWARD;
+    let dims = seq_mean_dims(OP, x, key_lens)?;
+    f32_product(OP, &[dims.batch, dims.dim])?;
+    Ok(dims)
+}
+
+/// [`crate::Backend::seq_mean_backward`]: [`seq_mean_dims`] on the forward's
+/// `x` and `key_lens`, then `grad_output` `F32` `[B, D]` (the forward's
+/// output shape), then the `[B, T, D]` gradient's size. `x` is taken for its
+/// shape and its `key_lens` pairing; the backward reads none of its values.
+pub fn seq_mean_backward_dims(
+    x: &Tensor,
+    key_lens: &Tensor,
+    grad_output: &Tensor,
+) -> Result<SeqMeanDims, OjasError> {
+    const OP: &str = SEQ_MEAN_BACKWARD;
+    let dims = seq_mean_dims(OP, x, key_lens)?;
+    f32_operand(OP, grad_output)?;
+    if grad_output.shape() != [dims.batch, dims.dim] {
         return Err(refuse(
             OP,
+            format!(
+                "seq_mean grad_output {:?} != [{}, {}]",
+                grad_output.shape(),
+                dims.batch,
+                dims.dim
+            ),
+        ));
+    }
+    f32_product(OP, &[dims.batch, dims.seq, dims.dim])?;
+    Ok(dims)
+}
+
+/// The operand and `eps` [`l2_normalize_forward_dims`] and
+/// [`l2_normalize_backward_dims`] share: `x` `[rows, dim]` `F32`, then
+/// `eps`: non-finite is [`OjasError::NonFinite`] and one that is not above 0
+/// is [`OjasError::OutOfRange`] (a zero row's divisor is `eps`, so `eps` is
+/// what keeps it finite). Refusals name `op`, so each op names itself.
+fn l2_normalize_dims(op: &'static str, x: &Tensor, eps: f32) -> Result<RmsDims, OjasError> {
+    f32_operand(op, x)?;
+    let &[rows, dim] = x.shape() else {
+        return Err(refuse(
+            op,
             format!("l2_normalize x rank {} != 2 [rows, dim]", x.shape().len()),
         ));
     };
     if !eps.is_finite() {
-        return Err(OjasError::NonFinite { op: OP });
+        return Err(OjasError::NonFinite { op });
     }
     if eps <= 0.0 {
-        return Err(too_large(OP, format!("eps {eps} is not above 0")));
+        return Err(too_large(op, format!("eps {eps} is not above 0")));
     }
     Ok(RmsDims { rows, dim })
+}
+
+/// [`crate::Backend::l2_normalize_forward`]: [`l2_normalize_dims`].
+pub fn l2_normalize_forward_dims(x: &Tensor, eps: f32) -> Result<RmsDims, OjasError> {
+    l2_normalize_dims(L2_NORMALIZE_FORWARD, x, eps)
+}
+
+/// [`crate::Backend::l2_normalize_backward`]: [`l2_normalize_dims`] on the
+/// forward's `x` and `eps`, then `grad_output`, which is `F32` of `x`'s
+/// shape. The gradient is formed from `x` (the norm is recomputed), so the
+/// forward's output is not an operand.
+pub fn l2_normalize_backward_dims(
+    x: &Tensor,
+    grad_output: &Tensor,
+    eps: f32,
+) -> Result<RmsDims, OjasError> {
+    const OP: &str = L2_NORMALIZE_BACKWARD;
+    let dims = l2_normalize_dims(OP, x, eps)?;
+    f32_operand(OP, grad_output)?;
+    same(OP, x.shape(), grad_output.shape())?;
+    Ok(dims)
 }
 
 /// [`crate::Backend::relu_forward`]: one `F32` tensor of any rank. Returns
@@ -5218,6 +5280,47 @@ mod tests {
     }
 
     #[test]
+    fn seq_mean_backward_dims_rules() {
+        let op = "seq_mean_backward";
+        let (x, lens, g) = (f(&[3, 5, 8]), u(&[3]), f(&[3, 8]));
+        let d = seq_mean_backward_dims(&x, &lens, &g).unwrap();
+        assert_eq!((d.batch, d.seq, d.dim), (3, 5, 8));
+        // The operands `seq_mean_forward_dims` checks, refused under this
+        // op's own name.
+        dtype_err(
+            seq_mean_backward_dims(&u(&[3, 5, 8]), &lens, &g),
+            op,
+            DType::F32,
+            DType::U32,
+        );
+        dtype_err(
+            seq_mean_backward_dims(&x, &f(&[3]), &g),
+            op,
+            DType::U32,
+            DType::F32,
+        );
+        shape_err(seq_mean_backward_dims(&x, &u(&[2]), &g), op, "key_lens");
+        for shape in [&[5, 8][..], &[2, 3, 5, 8]] {
+            shape_err(seq_mean_backward_dims(&f(shape), &lens, &g), op, "rank");
+        }
+        // The gradient is the forward's [B, D] output, nothing else.
+        dtype_err(
+            seq_mean_backward_dims(&x, &lens, &u(&[3, 8])),
+            op,
+            DType::F32,
+            DType::U32,
+        );
+        for shape in [&[3, 5, 8][..], &[3, 7], &[2, 8], &[8], &[3, 8, 1]] {
+            shape_err(
+                seq_mean_backward_dims(&x, &lens, &f(shape)),
+                op,
+                "grad_output",
+            );
+        }
+        shape_err(seq_mean_backward_dims(&x, &lens, &f(&[3, 0])), op, "empty");
+    }
+
+    #[test]
     fn l2_normalize_dims_rules() {
         let op = "l2_normalize_forward";
         let d = l2_normalize_forward_dims(&f(&[4, 9]), 1e-12).unwrap();
@@ -5249,6 +5352,53 @@ mod tests {
         }
         // The smallest positive eps is legal.
         assert!(l2_normalize_forward_dims(&f(&[1, 1]), f32::MIN_POSITIVE).is_ok());
+    }
+
+    #[test]
+    fn l2_normalize_backward_dims_rules() {
+        let op = "l2_normalize_backward";
+        let (x, g) = (f(&[4, 9]), f(&[4, 9]));
+        let d = l2_normalize_backward_dims(&x, &g, 1e-12).unwrap();
+        assert_eq!((d.rows, d.dim), (4, 9));
+        // Everything the forward's validator refuses, under this op's name.
+        dtype_err(
+            l2_normalize_backward_dims(&u(&[4, 9]), &g, 1e-12),
+            op,
+            DType::F32,
+            DType::U32,
+        );
+        for shape in [&[9][..], &[2, 4, 9]] {
+            shape_err(
+                l2_normalize_backward_dims(&f(shape), &f(shape), 1e-12),
+                op,
+                "rank",
+            );
+        }
+        for eps in [f32::NAN, f32::INFINITY] {
+            assert!(matches!(
+                l2_normalize_backward_dims(&x, &g, eps),
+                Err(OjasError::NonFinite {
+                    op: "l2_normalize_backward"
+                })
+            ));
+        }
+        for eps in [0.0, -1e-12] {
+            range_err(l2_normalize_backward_dims(&x, &g, eps), op, "eps");
+        }
+        // The gradient is the input's shape, and `F32`.
+        dtype_err(
+            l2_normalize_backward_dims(&x, &u(&[4, 9]), 1e-12),
+            op,
+            DType::F32,
+            DType::U32,
+        );
+        for shape in [&[4, 8][..], &[3, 9], &[36]] {
+            shape_err(
+                l2_normalize_backward_dims(&x, &f(shape), 1e-12),
+                op,
+                "does not match",
+            );
+        }
     }
 
     #[test]

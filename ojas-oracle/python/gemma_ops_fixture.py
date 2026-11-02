@@ -176,6 +176,26 @@ def gen_seq_mean_cases(gen: torch.Generator) -> list[str]:
     lines.append(tline("y_64", y_64_prec))
     lines.append("end")
 
+    # A length past the end of the sequence: row 0 asks for 6 of 4 tokens, so
+    # the divisor is the token count actually summed, min(6, 4) = 4, and the
+    # mean of a row of ones is 1.0. Row 1 keeps junk past its length to pin
+    # that padding is read by neither the divisor nor the sum. Written out
+    # rather than drawn, so the cases above keep their draws from `gen`.
+    x_over = torch.zeros(2, 4, 4, dtype=torch.float32)
+    x_over[0] = 1.0
+    x_over[1, :2] = 2.0
+    x_over[1, 2:] = 7.0
+    key_lens_over = torch.tensor([6, 2], dtype=torch.int32)
+    y_64_over = seq_mean_f64(x_over.to(torch.float64), key_lens_over)
+    y_over = y_64_over.to(torch.float32)
+
+    lines.append("case seq_mean over_len -")
+    lines.append(tline("x", x_over))
+    lines.append(tline("key_lens", key_lens_over))
+    lines.append(tline("y", y_over))
+    lines.append(tline("y_64", y_64_over))
+    lines.append("end")
+
     return lines
 
 

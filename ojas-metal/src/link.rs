@@ -1253,12 +1253,28 @@ pub(crate) enum Cmd {
         lens: Arg,
         geom: crate::gemma_ops::SeqMeanGeom,
     },
+    /// `seq_mean_backward`: `grad` `[batch, dim]` spread back over the rows
+    /// the mean read, `[batch, seq, dim]`, on `ojas_seq_mean_bwd`.
+    SeqMeanBwd {
+        grad: Arg,
+        lens: Arg,
+        geom: crate::gemma_ops::SeqMeanGeom,
+    },
     /// `l2_normalize_forward` at eps `1e-12`, the only one tessl's
     /// `l2_normalize_rows` has: a copy of `x` normalized in place.
     L2Normalize {
         x: Arg,
         rows: u32,
         dim: u32,
+    },
+    /// `l2_normalize_backward` at the forward's eps, on
+    /// `ojas_l2_normalize_bwd`.
+    L2NormalizeBwd {
+        x: Arg,
+        grad: Arg,
+        rows: u32,
+        dim: u32,
+        eps: f32,
     },
 }
 

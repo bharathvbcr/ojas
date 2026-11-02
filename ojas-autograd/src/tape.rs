@@ -291,6 +291,28 @@ enum Rec {
     GeluTanh {
         x: usize,
     },
+    /// The masked mean over time of a batch of sequences
+    /// ([`Backend::seq_mean_forward`]). `key_lens` is a `U32` constant, as
+    /// `Rec::Embed`'s ids are: it takes no gradient.
+    SeqMean {
+        x: usize,
+        key_lens: Tensor,
+    },
+    /// `x / max(||x||, eps)` over the last axis
+    /// ([`Backend::l2_normalize_forward`]).
+    L2Norm {
+        x: usize,
+        eps: f32,
+    },
+    /// Weightless RMSNorm: [`Rec::Rms`] with a ones weight the record holds
+    /// rather than a variable, as `Rec::Rope` holds its tables. The weight
+    /// gradient `rms_norm_backward` returns for it is dropped, so no caller
+    /// has to place a vector it will not train.
+    RmsOnes {
+        x: usize,
+        ones: Tensor,
+        eps: f32,
+    },
 }
 
 impl Rec {
@@ -525,6 +547,9 @@ impl Rec {
             },
             Rec::Relu { x } => Rec::Relu { x: m(x) },
             Rec::GeluTanh { x } => Rec::GeluTanh { x: m(x) },
+            Rec::SeqMean { x, key_lens } => Rec::SeqMean { x: m(x), key_lens },
+            Rec::L2Norm { x, eps } => Rec::L2Norm { x: m(x), eps },
+            Rec::RmsOnes { x, ones, eps } => Rec::RmsOnes { x: m(x), ones, eps },
         }
     }
 
@@ -719,6 +744,64 @@ impl<B: Backend> Tape<B> {
         let qn = self.rms_norm(q, q_weight, eps)?;
         let kn = self.rms_norm(k, k_weight, eps)?;
         Ok((qn, kn))
+    }
+
+    /// RMSNorm with no learned weight: [`Tape::rms_norm`] against a ones
+    /// vector the record holds, so the caller places nothing and no weight
+    /// gradient is formed. `x`'s last axis is the normalized one.
+    pub fn rms_norm_weightless(&mut self, x: Var, eps: f32) -> Result<Var, OjasError> {
+        const OP: &str = "Tape::rms_norm_weightless";
+        let xi = self.index(x, OP)?;
+        let ones = self.ones_for(OP, xi)?;
+        self.record(Rec::RmsOnes { x: xi, ones, eps })
+    }
+
+    /// A ones vector over the last axis of node `xi`, on the backend.
+    fn ones_for(&self, op: &'static str, xi: usize) -> Result<Tensor, OjasError> {
+        let Some(&dim) = self.values[xi].shape().last() else {
+            return Err(OjasError::OutOfRange {
+                op,
+                detail: "a scalar has no axis to normalize".to_string(),
+            });
+        };
+        self.fill(&[dim], 1.0)
+    }
+
+    /// EmbeddingGemma 2's per-head Q/K/V RMSNorm
+    /// ([`Backend::rms_qkv_norm_forward`]) as three [`Tape::rms_norm`]
+    /// records: Q and K against their weights when they have one and
+    /// weightless when they do not, and V always weightless. The gradients
+    /// are [`Backend::rms_norm_backward`]'s, so this needs no backward of
+    /// its own on any backend and no second RMSNorm gradient anywhere.
+    ///
+    /// Every variable is checked before any record is made, so a refusal
+    /// leaves nothing on the tape.
+    pub fn rms_qkv_norm(
+        &mut self,
+        q: Var,
+        k: Var,
+        v: Var,
+        q_weight: Option<Var>,
+        k_weight: Option<Var>,
+        eps: f32,
+    ) -> Result<(Var, Var, Var), OjasError> {
+        const OP: &str = "Tape::rms_qkv_norm";
+        for var in [Some(q), Some(k), Some(v), q_weight, k_weight]
+            .into_iter()
+            .flatten()
+        {
+            self.index(var, OP)?;
+        }
+        let qn = match q_weight {
+            Some(w) => self.rms_norm(q, w, eps)?,
+            None => self.rms_norm_weightless(q, eps)?,
+        };
+        let kn = match k_weight {
+            Some(w) => self.rms_norm(k, w, eps)?,
+            None => self.rms_norm_weightless(k, eps)?,
+        };
+        let vn = self.rms_norm_weightless(v, eps)?;
+        Ok((qn, kn, vn))
     }
 
     pub fn rope(&mut self, x: Var, cos: Tensor, sin: Tensor) -> Result<Var, OjasError> {
@@ -1071,6 +1154,29 @@ impl<B: Backend> Tape<B> {
             len,
             in_shape,
         })
+    }
+
+    /// The masked mean over time ([`Backend::seq_mean_forward`]): `x`
+    /// `[B, T, D]` and `U32` `key_lens` `[B]`, giving `[B, D]`. The lengths
+    /// are a constant, placed on the backend like [`Tape::rope`]'s tables,
+    /// and the gradient reaching `x` is
+    /// `grad[b, d] / min(key_lens[b], T)` on the rows the mean read and zero
+    /// past them ([`Backend::seq_mean_backward`]).
+    pub fn seq_mean(&mut self, x: Var, key_lens: Tensor) -> Result<Var, OjasError> {
+        let x = self.index(x, "Tape::seq_mean")?;
+        let key_lens = self.place(key_lens)?;
+        self.record(Rec::SeqMean { x, key_lens })
+    }
+
+    /// `x / max(||x||, eps)` over the last axis of `x` `[rows, dim]`
+    /// ([`Backend::l2_normalize_forward`]). A Matryoshka prefix is
+    /// [`Tape::slice`] first and then this, so both halves of the embedding
+    /// head take a gradient. Below the clamp the gradient is
+    /// `grad / eps`, the Jacobian of the linear `x / eps` the forward
+    /// computed there ([`Backend::l2_normalize_backward`]).
+    pub fn l2_normalize(&mut self, x: Var, eps: f32) -> Result<Var, OjasError> {
+        let x = self.index(x, "Tape::l2_normalize")?;
+        self.record(Rec::L2Norm { x, eps })
     }
 
     /// The exact ReLU (`max(x, 0)`) ([`Backend::relu_forward`]).
@@ -1555,6 +1661,15 @@ impl<B: Backend> Tape<B> {
             Rec::Relu { x } => (be.relu_forward(&v[x])?, rec),
             Rec::Gelu { x } => (be.gelu_erf_forward(&v[x])?, rec),
             Rec::GeluTanh { x } => (be.gelu_tanh_forward(&v[x])?, rec),
+            Rec::SeqMean { x, key_lens } => {
+                let y = be.seq_mean_forward(&v[x], &key_lens)?;
+                (y, Rec::SeqMean { x, key_lens })
+            }
+            Rec::L2Norm { x, eps } => (be.l2_normalize_forward(&v[x], eps)?, rec),
+            Rec::RmsOnes { x, ones, eps } => {
+                let y = be.rms_norm_forward(&v[x], &ones, eps)?;
+                (y, Rec::RmsOnes { x, ones, eps })
+            }
             Rec::LinearBias { x, w, b } => (be.linear_bias_forward(&v[x], &v[w], &v[b])?, rec),
             Rec::BroadcastAdd { a, b } => (be.broadcast_add_forward(&v[a], &v[b])?, rec),
             Rec::BroadcastMul { a, b } => (be.broadcast_mul_forward(&v[a], &v[b])?, rec),
@@ -2166,6 +2281,23 @@ impl<B: Backend> Tape<B> {
             Rec::GeluTanh { x } => {
                 let xv = self.values[x].clone();
                 let gx = self.backend.gelu_tanh_backward(&xv, grad)?;
+                self.acc(x, gx)
+            }
+            Rec::SeqMean { x, key_lens } => {
+                let xv = self.values[x].clone();
+                let gx = self.backend.seq_mean_backward(&xv, &key_lens, grad)?;
+                self.acc(x, gx)
+            }
+            Rec::L2Norm { x, eps } => {
+                let xv = self.values[x].clone();
+                let gx = self.backend.l2_normalize_backward(&xv, grad, eps)?;
+                self.acc(x, gx)
+            }
+            // The ones weight is the record's own, so its gradient is
+            // dropped here: nothing on the tape reads it.
+            Rec::RmsOnes { x, ones, eps } => {
+                let xv = self.values[x].clone();
+                let (gx, _) = self.backend.rms_norm_backward(&xv, &ones, grad, eps)?;
                 self.acc(x, gx)
             }
             // A frozen weight: no weight gradient is formed, as for

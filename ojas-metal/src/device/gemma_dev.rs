@@ -6,7 +6,7 @@
 //! tessl-backed ops are scanned here, so a fault is reported at the next sync
 //! point like every other op's.
 
-use tessl::dispatch::set_u32;
+use tessl::dispatch::{set_f32, set_u32};
 use tessl::embedgemma2::{l2_normalize_rows, segment_mean_rows};
 
 use super::{bind, bind_st, u32_of, Worker, ST_IN, ST_OUT};
@@ -92,6 +92,82 @@ impl Worker {
         segment_mean_rows(&self.rt, &xv.buf, &seg.buf, &out.buf, g.batch, rows, g.dim)
             .map_err(metal_err)?;
         self.check(&st, &out, ST_OUT)?;
+        Ok(self.keep(vec![out]))
+    }
+
+    /// `seq_mean_backward`: `ojas_seq_mean_bwd`, one output element a thread.
+    /// The whole gradient is scanned here before the kernel runs, as the CPU
+    /// scans it, so a non-finite gradient is a fault and never a quiet zero;
+    /// the kernel flags only its output.
+    pub(super) fn seq_mean_bwd(&mut self, grad: Arg, lens: Arg, g: SeqMeanGeom) -> Res<Reply> {
+        const OP: &str = "seq_mean_backward";
+        let gv = self.view(grad)?;
+        let lv = self.view(lens)?;
+        // `in_elems` is `None` when [B, T, D] does not fit the u32 index the
+        // kernel bounds its threads with, the rows themselves included.
+        let out_n = g.in_elems().map(|n| n as usize);
+        if g.batch == 0
+            || g.seq == 0
+            || g.dim == 0
+            || g.out_elems() != Some(gv.n)
+            || out_n.is_none()
+            || lv.n != g.batch as usize
+        {
+            return Err(metal_err(format!(
+                "{OP}: buffers do not hold grad [{}, {}] and {} lengths, \
+                 or [{}, {}, {}] overflows the kernel's index",
+                g.batch, g.dim, g.batch, g.batch, g.seq, g.dim
+            )));
+        }
+        let n = out_n.unwrap_or(0);
+        let out = self.fresh(n)?;
+        let st = self.status(OP)?;
+        self.check(&st, &gv, ST_IN)?;
+        self.k1("ojas_seq_mean_bwd", n, |b| {
+            bind(b, &gv, 0);
+            bind(b, &lv, 1);
+            bind(b, &out, 2);
+            set_u32(b, g.batch, 3);
+            set_u32(b, g.seq, 4);
+            set_u32(b, g.dim, 5);
+            bind_st(b, &st, 6);
+        })?;
+        Ok(self.keep(vec![out]))
+    }
+
+    /// `l2_normalize_backward`: `ojas_l2_normalize_bwd`, one row a thread.
+    /// Both operands are scanned here, as the CPU scans both; the kernel
+    /// flags its own output, as the GELU kernels do.
+    pub(super) fn l2_normalize_bwd(
+        &mut self,
+        x: Arg,
+        grad: Arg,
+        rows: u32,
+        dim: u32,
+        eps: f32,
+    ) -> Res<Reply> {
+        const OP: &str = "l2_normalize_backward";
+        let xv = self.view(x)?;
+        let gv = self.view(grad)?;
+        let want = (rows as usize).checked_mul(dim as usize);
+        if rows == 0 || dim == 0 || want != Some(xv.n) || gv.n != xv.n {
+            return Err(metal_err(format!(
+                "{OP}: buffers do not hold {rows} rows of {dim} and their gradient"
+            )));
+        }
+        let out = self.fresh(xv.n)?;
+        let st = self.status(OP)?;
+        self.check(&st, &xv, ST_IN)?;
+        self.check(&st, &gv, ST_IN)?;
+        self.k1("ojas_l2_normalize_bwd", rows as usize, |b| {
+            bind(b, &xv, 0);
+            bind(b, &gv, 1);
+            bind(b, &out, 2);
+            set_u32(b, rows, 3);
+            set_u32(b, dim, 4);
+            set_f32(b, eps, 5);
+            bind_st(b, &st, 6);
+        })?;
         Ok(self.keep(vec![out]))
     }
 

@@ -3,6 +3,8 @@
 //   ojas_gelu_tanh_fwd       y = gelu_tanh(x)             one element a thread
 //   ojas_gelu_tanh_bwd       dx = dy * gelu_tanh'(x)      one element a thread
 //   ojas_segments_from_lens  seg[b] = (b T, b T + min(len[b], T))
+//   ojas_seq_mean_bwd        dx[b,t,d] = dy[b,d] / min(len[b], T), t < that
+//   ojas_l2_normalize_bwd    dx = (dy - y (y . dy)) / n, or dy / eps clamped
 //
 // Why these exist: tessl's GELU is the fused `mlp_gelu_tanh` (gelu(gate) * up,
 // no status words), it has no GELU derivative, and its `segment_mean_rows`
@@ -91,4 +93,87 @@ kernel void ojas_segments_from_lens(
     const uint start = b * T;
     seg[2u * b] = start;
     seg[2u * b + 1u] = start + min(lens[b], T);
+}
+
+// The gradient of the masked mean, one output element a thread: a gather, so
+// no two threads write one value and nothing is summed. With n = min(len[b],
+// T), element (b, t, d) is dy[b, d] / n for t < n and +0.0 at or past n,
+// because the forward never read those rows. n = 0 leaves the whole block
+// +0.0. The host checks the whole gradient for non-finite values before this
+// runs (ojas_check_finite, GEMMA_ST_IN), so this flags only its output.
+//
+// tessl has no backward for `segment_mean_rows`; this is the only kernel that
+// spreads a pooled gradient back over the rows it came from.
+kernel void ojas_seq_mean_bwd(
+    device const float *g [[buffer(0)]],
+    device const uint *lens [[buffer(1)]],
+    device float *out [[buffer(2)]],
+    constant uint &B [[buffer(3)]],
+    constant uint &T [[buffer(4)]],
+    constant uint &D [[buffer(5)]],
+    device atomic_uint *st [[buffer(6)]],
+    uint i [[thread_position_in_grid]])
+{
+    if (i >= B * T * D) return;
+    const uint d = i % D;
+    const uint row = i / D;
+    const uint b = row / T;
+    const uint t = row - b * T;
+    const uint n = min(lens[b], T);
+    float r = 0.0f;
+    if (t < n) r = g[b * D + d] / (float)n;
+    out[i] = r;
+    if (!isfinite(r)) gemma_flag(st, GEMMA_ST_OUT);
+}
+
+// The gradient of the row-wise L2 normalize, one row a thread: two serial
+// passes over the row in f32 (the squared norm, then the dot product), so
+// there is no threadgroup reduction and no barrier to get wrong. With
+// n = ||x|| and y = x / n:
+//
+//   n >  eps : dx = (dy - y (y . dy)) / n     the gradient of x / ||x||
+//   n <= eps : dx = dy / eps                  the forward was linear there
+//
+// The clamp branch has no projection term: below eps the forward divided by
+// the constant eps, so its Jacobian is I / eps. `!(n > eps)` takes the tie
+// and a NaN norm into the clamp branch, matching the CPU's `n <= eps`.
+//
+// The parallelism is the row count, not the width. Rows are the batch of an
+// embedding call, so this is small by design; performance is not what this
+// kernel is for, and a threadgroup reduction is the obvious change if a
+// profile ever asks for one. The host scans both operands, so this flags
+// only its output.
+kernel void ojas_l2_normalize_bwd(
+    device const float *x [[buffer(0)]],
+    device const float *g [[buffer(1)]],
+    device float *out [[buffer(2)]],
+    constant uint &rows [[buffer(3)]],
+    constant uint &dim [[buffer(4)]],
+    constant float &eps [[buffer(5)]],
+    device atomic_uint *st [[buffer(6)]],
+    uint r [[thread_position_in_grid]])
+{
+    if (r >= rows) return;
+    const uint at = r * dim;
+    float sum_sq = 0.0f;
+    for (uint c = 0u; c < dim; ++c) {
+        const float v = x[at + c];
+        sum_sq += v * v;
+    }
+    const float norm = precise::sqrt(sum_sq);
+    if (!(norm > eps)) {
+        for (uint c = 0u; c < dim; ++c) {
+            const float d = g[at + c] / eps;
+            out[at + c] = d;
+            if (!isfinite(d)) gemma_flag(st, GEMMA_ST_OUT);
+        }
+        return;
+    }
+    float dot = 0.0f;
+    for (uint c = 0u; c < dim; ++c) dot += (x[at + c] / norm) * g[at + c];
+    for (uint c = 0u; c < dim; ++c) {
+        const float d = (g[at + c] - (x[at + c] / norm) * dot) / norm;
+        out[at + c] = d;
+        if (!isfinite(d)) gemma_flag(st, GEMMA_ST_OUT);
+    }
 }
