@@ -79,6 +79,7 @@ mod norm;
 mod optim;
 mod pointwise;
 mod pool;
+pub mod quant_sparse;
 mod schedule;
 mod spatial;
 mod train;
@@ -86,6 +87,11 @@ mod validate;
 
 pub use backend::CpuBackend;
 pub use gemm::FAST_WHOLE_CALL_MACS;
+pub use quant_sparse::{
+    causal_sdpa_backward_gauge_projected, check_i8_accumulator_bound,
+    cross_entropy_mean_backward_exact_margin, QuantizedWeightI8, Sparse24Weight,
+    I8_ACCUMULATOR_MAX_K,
+};
 pub use schedule::{
     scaled_lr, CosineSchedule, LrSchedule, WsdSchedule, COSINE_FLOOR_FRAC, WSD_DECAY_FRAC,
 };
