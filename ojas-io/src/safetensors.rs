@@ -746,11 +746,13 @@ impl CheckpointView {
         self.shards.len()
     }
 
-    fn open_single(path: &Path, _limit: Option<u64>) -> Result<Self, IoError> {
+    fn open_single(path: &Path, limit: Option<u64>) -> Result<Self, IoError> {
         let st = SafeTensors::open(path)?;
+        let what = path.display().to_string();
+        check_payload_budget(&what, declared_bytes(&st), limit)?;
         let owner = st.names().map(|n| (n.to_string(), 0)).collect();
         Ok(Self {
-            what: path.display().to_string(),
+            what,
             shards: vec![st],
             owner,
         })
@@ -776,19 +778,8 @@ impl CheckpointView {
         let mut declared = 0u64;
         for (i, ((file, path), names)) in paths.iter().zip(by_file.values()).enumerate() {
             let st = SafeTensors::open(path)?;
-            let shard_data_len: u64 = st
-                .tensors
-                .values()
-                .map(|t| t.end.saturating_sub(t.begin))
-                .sum();
-            declared = declared.saturating_add(shard_data_len);
-            if let Some(lim) = limit {
-                if declared > lim {
-                    return Err(IoError::new(format!(
-                        "{what}: payload budget exceeded: declared {declared} > limit {lim}"
-                    )));
-                }
-            }
+            declared = declared.saturating_add(declared_bytes(&st));
+            check_payload_budget(&what, declared, limit)?;
             for n in names {
                 if st.info(n).is_err() {
                     return Err(IoError::new(format!(
@@ -892,6 +883,40 @@ fn parse_index(text: &str) -> Result<BTreeMap<String, Vec<String>>, IoError> {
         names.sort_unstable();
     }
     Ok(by_file)
+}
+
+/// Tensor bytes one shard's header declares.
+fn declared_bytes(st: &SafeTensors<'static>) -> u64 {
+    st.tensors
+        .values()
+        .map(|t| t.end.saturating_sub(t.begin))
+        .sum()
+}
+
+/// The payload budget, stated once for both ways into a checkpoint.
+///
+/// `open_single` used to take the limit as `_limit` and drop it while
+/// `open_index` enforced it inline, so one public call —
+/// `open_with_limit(path, Some(n))` — either checked the budget or did not
+/// depending on whether the path happened to be sharded, and said nothing
+/// either way. A bound that silently does not apply is worse than no bound,
+/// because the caller believes it has one. Both paths now go through here.
+///
+/// `None` is unbounded, and that is deliberate rather than an oversight:
+/// `SafeTensors::open` validates a header without loading the file and reads
+/// tensor bytes positioned from disk, so opening a checkpoint larger than
+/// memory is a legitimate thing to do, and the read path bounds its own
+/// allocations fallibly with `try_reserve_exact`. `limit` is for a caller that
+/// wants an oversized checkpoint refused up front instead.
+fn check_payload_budget(what: &str, declared: u64, limit: Option<u64>) -> Result<(), IoError> {
+    if let Some(lim) = limit {
+        if declared > lim {
+            return Err(IoError::new(format!(
+                "{what}: payload budget exceeded: declared {declared} > limit {lim}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn shard_path(dir: &Path, file: &str, tensor: &str) -> Result<std::path::PathBuf, IoError> {
@@ -1741,6 +1766,41 @@ mod tests {
             .filter(|(k, _)| keys.insert(k.clone()))
             .collect();
         (out, meta)
+    }
+
+    /// `open_with_limit` holds a single-file checkpoint to the budget, not
+    /// only a sharded one.
+    ///
+    /// `open_single` took the limit as `_limit` and dropped it, so the same
+    /// public call enforced the budget on a sharded checkpoint and ignored it
+    /// on a single file, with nothing to tell the caller which had happened.
+    /// The sharded half had the check inline; this half had neither the check
+    /// nor a test, which is how it survived. `CheckpointView` has no caller
+    /// inside ojas — `ojas-qwen35` goes through tessl's reader — so nothing
+    /// exercised it either.
+    #[test]
+    fn a_single_file_checkpoint_is_held_to_the_payload_budget() {
+        let path = tmp("budget_single");
+        let t = [Owned {
+            name: "w".into(),
+            dtype: StDtype::F32,
+            shape: vec![2, 3],
+            data: vec![0u8; 24],
+        }];
+        write_safetensors(&path.0, &items(&t), &[]).unwrap();
+
+        // Six f32s: 24 declared bytes. One byte under the declaration refuses.
+        let err = CheckpointView::open_with_limit(&path.0, Some(23)).unwrap_err();
+        assert!(
+            err.detail().contains("payload budget exceeded"),
+            "expected a budget refusal, got: {}",
+            err.detail()
+        );
+        // Exactly the budget is allowed: the predicate is `declared > limit`.
+        CheckpointView::open_with_limit(&path.0, Some(24)).unwrap();
+        // And no limit opens it, which is what a reader that leaves the bytes
+        // on disk should do.
+        CheckpointView::open(&path.0).unwrap();
     }
 
     fn items(t: &[Owned]) -> Vec<TensorOut<'_>> {
