@@ -314,6 +314,13 @@ enum Source<'a> {
     Memory {
         data: &'a [u8],
     },
+    /// The whole serialization, header included, owned by the reader. Used by
+    /// [`SafeTensors::from_bytes`] for a checkpoint built on the host, which
+    /// has no file to borrow from and no caller buffer to outlive.
+    Owned {
+        data: Vec<u8>,
+        data_start: u64,
+    },
 }
 
 /// A validated safetensors header, plus a handle for positioned data reads.
@@ -348,6 +355,35 @@ impl<'a> SafeTensors<'a> {
             .ok_or_else(|| IoError::new("truncated file"))?;
         Ok(Self {
             source: Source::Memory { data },
+            limit,
+            tensors,
+            metadata,
+        })
+    }
+
+    /// Validate `bytes`, a whole serialization the caller hands over, exactly
+    /// as [`Self::open`] validates a file. For checkpoints built on the host
+    /// (tests, conversions) that never touch the file system; unlike
+    /// [`Self::parse`] the reader owns the buffer, so the result is `'static`.
+    pub fn from_bytes(bytes: Vec<u8>) -> Result<SafeTensors<'static>, IoError> {
+        Self::from_bytes_with_limit(bytes, None)
+    }
+
+    /// [`Self::from_bytes`] under the payload budget
+    /// [`Self::open_with_limit`] describes.
+    pub fn from_bytes_with_limit(
+        bytes: Vec<u8>,
+        limit: Option<u64>,
+    ) -> Result<SafeTensors<'static>, IoError> {
+        let total = bytes.len() as u64;
+        let (header, data_start, data_len) = split_header(&bytes, total)?;
+        let (tensors, metadata) = parse_header(&header, data_len)?;
+        check_payload_budget("declared tensor bytes", data_len, limit)?;
+        Ok(SafeTensors {
+            source: Source::Owned {
+                data: bytes,
+                data_start,
+            },
             limit,
             tensors,
             metadata,
@@ -488,6 +524,23 @@ impl<'a> SafeTensors<'a> {
                 dst.copy_from_slice(src);
                 Ok(())
             }
+            // The owned buffer holds the header too, so the data offset is
+            // taken from where the header ended.
+            Source::Owned { data, data_start } => {
+                let abs = data_start
+                    .checked_add(at)
+                    .ok_or_else(|| IoError::new(format!("{name}: data offset overflows")))?;
+                let start = usize::try_from(abs)
+                    .map_err(|_| IoError::new(format!("{name}: offset exceeds usize")))?;
+                let stop = start
+                    .checked_add(dst.len())
+                    .ok_or_else(|| IoError::new(format!("{name}: read end overflows")))?;
+                let src = data
+                    .get(start..stop)
+                    .ok_or_else(|| IoError::new(format!("{name}: truncated tensor data")))?;
+                dst.copy_from_slice(src);
+                Ok(())
+            }
             Source::File {
                 file,
                 data_start,
@@ -560,6 +613,26 @@ impl<'a> SafeTensors<'a> {
 
     pub fn read_u16(&self, name: &str) -> Result<(Vec<u64>, Vec<u16>), IoError> {
         self.read_typed(name, StDtype::U16, 2, |c| u16::from_le_bytes([c[0], c[1]]))
+    }
+
+    /// A U8 tensor and its shape. Any other storage is refused.
+    pub fn read_u8(&self, name: &str) -> Result<(Vec<u64>, Vec<u8>), IoError> {
+        self.read_typed(name, StDtype::U8, 1, |c| c[0])
+    }
+
+    /// An I8 tensor (int8 weights) and its shape. Any other storage is
+    /// refused: reinterpreting another dtype's bytes is the caller's decision,
+    /// not the loader's.
+    pub fn read_i8(&self, name: &str) -> Result<(Vec<u64>, Vec<i8>), IoError> {
+        self.read_typed(name, StDtype::I8, 1, |c| c[0] as i8)
+    }
+
+    /// A U32 tensor and its shape (MLX packs eight 4-bit weights per
+    /// element). Any other storage is refused.
+    pub fn read_u32(&self, name: &str) -> Result<(Vec<u64>, Vec<u32>), IoError> {
+        self.read_typed(name, StDtype::U32, 4, |c| {
+            u32::from_le_bytes([c[0], c[1], c[2], c[3]])
+        })
     }
 
     /// `name` decoded `READ_CHUNK_BYTES` at a time into one fallibly reserved
@@ -890,8 +963,7 @@ impl CheckpointView {
             Some(d) if !d.as_os_str().is_empty() => d,
             _ => Path::new("."),
         };
-        let text = std::fs::read_to_string(index_path)
-            .map_err(|e| IoError::new(format!("{what}: {e}")))?;
+        let text = read_index_text(index_path, &what)?;
         let by_file = parse_index(&text)?;
 
         let mut paths: Vec<(&String, std::path::PathBuf)> = Vec::with_capacity(by_file.len());
@@ -976,6 +1048,53 @@ impl TensorSource for CheckpointView {
     fn read_u32_into(&self, name: &str, shape: &[usize], dst: &mut [u32]) -> Result<(), IoError> {
         self.shard(name)?.read_u32_into(name, shape, dst)
     }
+}
+
+/// Largest index accepted: a 9B checkpoint's is about 100 KB.
+const MAX_INDEX_BYTES: u64 = 16 << 20;
+
+/// Read a checkpoint index, bounded before it is allocated.
+///
+/// This used to be `std::fs::read_to_string`, which sizes its allocation from
+/// whatever the file turns out to be: a checkpoint directory could hand the
+/// loader an arbitrarily large `model.safetensors.index.json` and have it read
+/// in full before a single byte was parsed, and a FIFO at that path blocked
+/// instead of being refused. The length is checked first and the read is
+/// capped, so neither depends on the file's cooperation.
+///
+/// Symlinks are followed on purpose: a Hugging Face cache snapshot links its
+/// index and shards into `../../blobs`, and refusing that would refuse every
+/// real snapshot. What is refused is anything that is not a regular file.
+fn read_index_text(index_path: &Path, what: &str) -> Result<String, IoError> {
+    use std::io::Read;
+    // Opening a FIFO for reading blocks until a writer appears, so the path is
+    // judged by `stat` (which follows links) before it is opened, and the
+    // handle is judged again below. This is the order `sha256::open_sha256_hex`
+    // already uses for the same reason.
+    let md = std::fs::metadata(index_path).map_err(|e| IoError::new(format!("{what}: {e}")))?;
+    if !md.is_file() {
+        return Err(IoError::new(format!("{what}: not a regular file")));
+    }
+    if md.len() > MAX_INDEX_BYTES {
+        return Err(IoError::new(format!(
+            "{what}: {} bytes, above the {MAX_INDEX_BYTES}-byte index cap",
+            md.len()
+        )));
+    }
+    let f = File::open(index_path).map_err(|e| IoError::new(format!("{what}: {e}")))?;
+    let md = f
+        .metadata()
+        .map_err(|e| IoError::new(format!("{what}: {e}")))?;
+    if !md.is_file() {
+        return Err(IoError::new(format!("{what}: not a regular file")));
+    }
+    let mut text = String::new();
+    // Capped again at the read, so a file that grew between the `fstat` and
+    // here cannot get past the bound either.
+    f.take(MAX_INDEX_BYTES)
+        .read_to_string(&mut text)
+        .map_err(|e| IoError::new(format!("{what}: {e}")))?;
+    Ok(text)
 }
 
 fn parse_index(text: &str) -> Result<BTreeMap<String, Vec<String>>, IoError> {
@@ -2111,6 +2230,173 @@ mod tests {
         std::fs::rename(&second, &first).unwrap();
 
         assert_eq!(st.read_f32("w").unwrap().1, vec![3.0]);
+    }
+
+    /// A checkpoint built on the host reads back exactly as the same bytes on
+    /// disk do, through a reader that owns its buffer.
+    ///
+    /// `parse` borrows the caller's slice, so it cannot outlive it; a loader
+    /// that builds a checkpoint in memory and hands it over needs a reader
+    /// that owns the bytes. This is the `from_bytes(Vec<u8>)` the tessl
+    /// adapter needs, and it lives here rather than in the adapter so both
+    /// sides get one validated route.
+    #[test]
+    fn from_bytes_owns_its_buffer_and_reads_what_open_reads() {
+        let path = tmp("owned");
+        let t = [
+            Owned {
+                name: "f".into(),
+                dtype: StDtype::F32,
+                shape: vec![2],
+                data: 1.5f32
+                    .to_le_bytes()
+                    .iter()
+                    .chain((-2.25f32).to_le_bytes().iter())
+                    .copied()
+                    .collect(),
+            },
+            Owned {
+                name: "q".into(),
+                dtype: StDtype::U32,
+                shape: vec![2],
+                data: 0x7654_3210u32
+                    .to_le_bytes()
+                    .iter()
+                    .chain(0xfedc_ba98u32.to_le_bytes().iter())
+                    .copied()
+                    .collect(),
+            },
+        ];
+        write_safetensors(&path.0, &items(&t), &[("format", "pt")]).unwrap();
+        let bytes = std::fs::read(&path.0).unwrap();
+
+        let opened = SafeTensors::open(&path.0).unwrap();
+        // The owned reader outlives the buffer it was built from: `bytes` is
+        // moved in, and nothing borrows it afterwards.
+        let held = SafeTensors::from_bytes(bytes).unwrap();
+        assert_eq!(
+            held.names().collect::<Vec<_>>(),
+            opened.names().collect::<Vec<_>>()
+        );
+        assert_eq!(held.metadata()["format"], "pt");
+        assert_eq!(held.read_f32("f").unwrap(), opened.read_f32("f").unwrap());
+        assert_eq!(held.read_u32("q").unwrap(), opened.read_u32("q").unwrap());
+        assert_eq!(held.read_bytes("f").unwrap(), opened.read_bytes("f").unwrap());
+
+        // The same validation and the same budget as the file route.
+        let bad = std::fs::read(&path.0).unwrap()[..6].to_vec();
+        assert!(SafeTensors::from_bytes(bad).is_err());
+        let bytes = std::fs::read(&path.0).unwrap();
+        assert!(SafeTensors::from_bytes_with_limit(bytes, Some(1))
+            .unwrap_err()
+            .detail()
+            .contains("payload budget exceeded"));
+    }
+
+    /// `read_u8`, `read_i8` and `read_u32` read their own dtype and refuse
+    /// every other, so no reader reinterprets another dtype's bytes.
+    #[test]
+    fn the_integer_readers_refuse_every_other_dtype() {
+        let path = tmp("ints");
+        let t = [
+            Owned {
+                name: "i8".into(),
+                dtype: StDtype::I8,
+                shape: vec![3],
+                data: vec![0x80, 0xff, 0x7f], // -128, -1, 127
+            },
+            Owned {
+                name: "u8".into(),
+                dtype: StDtype::U8,
+                shape: vec![2, 2],
+                data: vec![0, 1, 0x7f, 0xff],
+            },
+            Owned {
+                name: "u32".into(),
+                dtype: StDtype::U32,
+                shape: vec![2],
+                data: 0u32
+                    .to_le_bytes()
+                    .iter()
+                    .chain(u32::MAX.to_le_bytes().iter())
+                    .copied()
+                    .collect(),
+            },
+        ];
+        write_safetensors(&path.0, &items(&t), &[]).unwrap();
+        let st = SafeTensors::open(&path.0).unwrap();
+
+        assert_eq!(st.read_i8("i8").unwrap(), (vec![3], vec![-128, -1, 127]));
+        assert_eq!(
+            st.read_u8("u8").unwrap(),
+            (vec![2, 2], vec![0, 1, 0x7f, 0xff])
+        );
+        assert_eq!(st.read_u32("u32").unwrap(), (vec![2], vec![0, u32::MAX]));
+
+        assert!(st
+            .read_u8("i8")
+            .unwrap_err()
+            .detail()
+            .contains("expected U8, found I8"));
+        assert!(st
+            .read_i8("u8")
+            .unwrap_err()
+            .detail()
+            .contains("expected I8, found U8"));
+        assert!(st
+            .read_u32("u8")
+            .unwrap_err()
+            .detail()
+            .contains("expected U32, found U8"));
+        // And they are not floats.
+        assert!(st.read_f32_widened("u32").is_err());
+    }
+
+    /// The index is bounded before it is allocated, and a FIFO at its path is
+    /// refused instead of blocking the loader.
+    ///
+    /// `open_index` read the index with `std::fs::read_to_string`, which sizes
+    /// its allocation from whatever the file turns out to be and blocks on a
+    /// FIFO. A checkpoint directory is caller-supplied input, so neither can
+    /// be left to the file's cooperation.
+    #[test]
+    fn an_index_is_bounded_before_it_is_read() {
+        let dir = tmp_dir("index_cap");
+        let index = dir.0.join(INDEX_FILE_NAME);
+        // Sparse, so the cap is tested without writing 16 MiB.
+        let f = std::fs::File::create(&index).unwrap();
+        f.set_len(MAX_INDEX_BYTES + 1).unwrap();
+        drop(f);
+        let err = CheckpointView::open(&index).unwrap_err();
+        assert!(
+            err.detail().contains("above the") && err.detail().contains("index cap"),
+            "expected the index cap to refuse, got: {}",
+            err.detail()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_index_is_refused_without_blocking() {
+        let dir = tmp_dir("index_fifo");
+        let index = dir.0.join(INDEX_FILE_NAME);
+        let made = std::process::Command::new("mkfifo").arg(&index).status();
+        if !made.is_ok_and(|s| s.success()) {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let p = index.clone();
+        let worker = std::thread::spawn(move || {
+            tx.send(CheckpointView::open(&p).map(|_| ())).unwrap();
+        });
+        let got = rx.recv_timeout(std::time::Duration::from_secs(5));
+        if got.is_err() {
+            // Release the blocked open so the thread can end.
+            let _ = std::fs::OpenOptions::new().write(true).open(&index);
+        }
+        worker.join().unwrap();
+        let err = got.expect("open of a FIFO index blocked").unwrap_err();
+        assert!(err.detail().contains("not a regular file"), "{err}");
     }
 
     fn items(t: &[Owned]) -> Vec<TensorOut<'_>> {
