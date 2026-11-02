@@ -59,8 +59,13 @@ oversight:
   not bit-exact. tessl declines them, because every path below its reader is
   written in whole bytes. The refusal is `TryFrom<StDtype> for Dtype`, so it is
   enforced by the type at open rather than documented. `pub type Dtype =
-  StDtype` was rejected: it would put three variants in tessl's namespace and
-  break four exhaustive matches in `tessl/src/qwen35.rs`.
+  StDtype` was rejected, because the alias would put those three variants in
+  tessl's namespace with no gate, so a checkpoint naming one would be opened
+  there instead of refused. (The card also says the alias would break four
+  exhaustive matches in `tessl/src/qwen35.rs`. Checked on 2026-11-02: it
+  would not — those four match `DType`, ojas-core's compute dtype, with
+  catch-all arms, and that file never names `safetensors::Dtype`. The reason to
+  reject the alias is the dropped refusal, not a compile error.)
 - **Header amplification.** ojas-io budgets the JSON tree as it builds it
   (`8 * input + 64 KiB`) and refuses a header that would exceed it; tessl's
   reader had no such bound. ojas-io is the stricter of the two and stays that
