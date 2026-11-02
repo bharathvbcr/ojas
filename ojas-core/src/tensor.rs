@@ -1171,10 +1171,17 @@ impl Tensor {
         let buf = match &self.storage.payload {
             Payload::Host(_) => return Ok(self.clone()),
             Payload::Mapped(mbuf) => {
-                let timeline = mbuf.timeline();
-                timeline
-                    .wait_for(timeline.current_value(), None)
-                    .map_err(OjasError::from)?;
+                // Take the read lease the HAL defines for exactly this: a
+                // borrow valid only after the device finished its last write.
+                // Waiting on `Timeline::current_value()` could not provide
+                // that -- it is the value already *completed*, and
+                // `Timeline::wait` returns without blocking on a value already
+                // reached, so the wait was a no-op and a host read could
+                // observe memory the GPU was still writing. The lease is
+                // dropped here because it is the synchronisation that is
+                // wanted, not a lasting borrow; keeping it alive for the
+                // returned tensor is the zero-copy work in `ft-4a8f33de`.
+                drop(mbuf.host_read().map_err(|e| e.into_ojas(mbuf.backend()))?);
                 return Ok(self.clone());
             }
             Payload::Device(buf) => buf,
@@ -2991,6 +2998,106 @@ mod tests {
             }))
         }
     }
+
+    /// A timeline with a committed write still in flight: `submitted` is 9,
+    /// `completed` is 5. `wait` advances completion the way a real one does,
+    /// never past what was submitted, so what the caller waited *on* decides
+    /// whether the pending write is drained.
+    #[derive(Debug)]
+    struct PendingWrite {
+        completed: std::sync::atomic::AtomicU64,
+        submitted: u64,
+    }
+
+    impl Timeline for PendingWrite {
+        fn submitted(&self) -> Result<u64, FenceError> {
+            Ok(self.submitted)
+        }
+        fn completed(&self) -> Result<u64, FenceError> {
+            Ok(self.completed.load(Ordering::Relaxed))
+        }
+        fn wait(&self, value: u64) -> Result<(), FenceError> {
+            let target = value.min(self.submitted);
+            self.completed.fetch_max(target, Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    #[derive(Debug)]
+    struct PendingMapped {
+        bytes: Vec<u8>,
+        timeline: PendingWrite,
+    }
+
+    impl DeviceBuffer for PendingMapped {
+        fn backend(&self) -> BackendId {
+            BackendId::Metal
+        }
+        fn byte_len(&self) -> usize {
+            self.bytes.len()
+        }
+        fn read_bytes(&self, offset: usize, len: usize) -> Result<Vec<u8>, OjasError> {
+            Ok(self.bytes[offset..offset + len].to_vec())
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+
+    impl MappedBuffer for PendingMapped {
+        fn timeline(&self) -> &dyn Timeline {
+            &self.timeline
+        }
+        /// A read lease is defined as a borrow taken *after the device
+        /// finished its last write*, so taking one drains the timeline.
+        fn host_read(&self) -> Result<Box<dyn HostLease>, FenceError> {
+            self.timeline.wait(self.timeline.submitted)?;
+            Ok(Box::new(HostSliceLease {
+                bytes: self.bytes.clone(),
+                f32s: None,
+                u32s: None,
+            }))
+        }
+    }
+
+    /// `to_host` on a mapped buffer must not return while a committed device
+    /// write is still outstanding.
+    ///
+    /// It waited on `Timeline::current_value()`, which is
+    /// `completed().unwrap_or(0)` -- the value the device has already
+    /// *finished*. `Timeline::wait`'s own contract says "a `value` already
+    /// completed returns without blocking", so that wait could never block on
+    /// anything: a host read could observe memory the GPU was still writing.
+    /// The fix takes the read lease the trait already defines for exactly this,
+    /// as `Tensor::host_view` does.
+    #[test]
+    fn to_host_on_a_mapped_buffer_waits_for_the_last_device_write() {
+        let budget = Budget::new(1 << 20);
+        let mapped = Arc::new(PendingMapped {
+            bytes: 1.0f32.to_ne_bytes().repeat(4),
+            timeline: PendingWrite {
+                completed: std::sync::atomic::AtomicU64::new(5),
+                submitted: 9,
+            },
+        });
+        let t = Tensor::from_mapped(mapped.clone(), &[4], DType::F32, &budget)
+            .expect("mapped tensor");
+
+        // Precondition: a write committed at 9, only 5 completed.
+        assert_eq!(mapped.timeline.completed().unwrap(), 5);
+        assert_eq!(mapped.timeline.submitted().unwrap(), 9);
+
+        t.to_host(&budget).expect("to_host");
+
+        assert_eq!(
+            mapped.timeline.completed().unwrap(),
+            9,
+            "to_host returned with a committed device write still in flight \
+             (completed {}, submitted 9): a host read can race the GPU",
+            mapped.timeline.completed().unwrap()
+        );
+    }
+
 
     #[test]
     fn mapped_tensor_supports_zero_copy_to_host_and_enforces_fail_closed_placement() {
