@@ -70,10 +70,15 @@ fn the_call_table_covers_every_op() {
     // (gelu_tanh_forward, gelu_tanh_backward, group_norm_backward,
     // interpolate_bilinear_backward, seq_mean_forward, l2_normalize_forward);
     // 98 since the two vision backwards (relu_backward, slice_backward),
-    // polled like the rest.
+    // polled like the rest; 101 since `seq_mean_backward` and
+    // `l2_normalize_backward` (6baaf85) -- compute ops, named nowhere in this
+    // file, so they fall to the default polled path, and the `refused` count
+    // below rising by exactly two is what checks that rather than assumes it.
+    // (That commit's message also claims an `rms_qkv_norm` backward; no such
+    // method is on the Backend surface, so only two ops arrived.)
     assert_eq!(
         ops.len(),
-        99,
+        101,
         "op count changed: pin the new op's admission"
     );
 }
@@ -168,8 +173,12 @@ fn a_tripped_gate_refuses_polling_ops_without_repolling_and_keeps_commit_ops_ope
     // 90 ops less the four commit ops; 79 since the three spatial backwards,
     // 86 since the seven encoder backwards, 92 since the six
     // EmbeddingGemma 2 and SAM-training ops, 94 since the two vision backwards
-    // (relu_backward, slice_backward: 98 ops less the four commit ops; 95 since rms_qkv_norm_forward).
-    assert_eq!(refused, 95);
+    // (relu_backward, slice_backward: 98 ops less the four commit ops; 95 since rms_qkv_norm_forward);
+    // 97 since seq_mean_backward and l2_normalize_backward (101 ops less the
+    // same four commit ops in OLD_NEVER_POLLED). Both new ops being refused is
+    // the assertion that they are gated as compute ops: a commit op would have
+    // left this at 95.
+    assert_eq!(refused, 97);
     assert_eq!(
         polls.load(Ordering::SeqCst),
         1,
