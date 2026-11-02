@@ -715,3 +715,7 @@ No chart: the folder holds only scripts, logs or text that is not a measurement 
 ## 2026-10-30-gemm-class
 
 No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
+## 2026-11-02-nanolab-config-ab
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.
