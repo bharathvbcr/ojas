@@ -131,7 +131,8 @@ struct Device {
 impl Device {
     fn new() -> Self {
         Device {
-            w: Worker::open(Arc::new(Waits::default()), 8 << 30).expect("Metal device"),
+            w: Worker::open(Arc::new(Waits::default()), ojas_core::Budget::new(8 << 30))
+                .expect("Metal device"),
         }
     }
 

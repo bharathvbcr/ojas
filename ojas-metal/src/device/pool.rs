@@ -91,6 +91,7 @@ impl Worker {
         self.check(&st, &xv, ST_IN)?;
         self.check(&st, &dv, ST_IN)?;
         let total = u32_of(in_n)?;
+        let bf16 = u32::from(self.bf16_accum());
         self.k1("ojas_max_pool2d_bwd", in_n, |b| {
             bind(b, &xv, 0);
             bind(b, &dv, 1);
@@ -105,6 +106,7 @@ impl Worker {
             set_u32(b, g.stride[0], 10);
             set_u32(b, g.stride[1], 11);
             bind_st(b, &st, 12);
+            set_u32(b, bf16, 13);
         })?;
         Ok(self.keep(vec![dx]))
     }

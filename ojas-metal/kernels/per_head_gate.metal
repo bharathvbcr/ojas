@@ -10,18 +10,27 @@
 #include <metal_stdlib>
 using namespace metal;
 
-// The backward kernels check what they read and write, into the op's status
-// slot, with the words `ST_IN` and `ST_OUT` of `ojas-metal/src/device.rs` (and
-// `ojas_backend.metal`): ST_IN when an input element a thread read is
-// non-finite, ST_OUT when a value it wrote, or the `pre` the GEMM wrote, is.
-// That is what the standalone `ojas_check_finite` passes over those buffers
-// reported, without the extra reads (`metal_bench gate`).
+// The forward and backward kernels check what they read and write, into the
+// op's status slot, with the words `ST_IN` and `ST_OUT` of
+// `ojas-metal/src/device.rs` (and `ojas_backend.metal`): ST_IN when an input
+// element a thread read is non-finite, ST_OUT when a value it wrote, or the
+// `pre` the GEMM wrote, is. That is what the standalone `ojas_check_finite`
+// passes over those buffers reported, without the extra reads (`metal_bench gate`).
 #define GATE_ST_IN 0u
 #define GATE_ST_OUT 1u
 
 inline void ojas_gate_flag(device atomic_uint *st, uint word)
 {
     atomic_store_explicit(&st[word], 1u, memory_order_relaxed);
+}
+
+inline float ojas_gate_bf16(float v)
+{
+    const uint b = as_type<uint>(v);
+    if ((b & 0x7fffffffu) > 0x7f800000u) {
+        return as_type<float>((b | 0x00400000u) & 0xffff0000u);
+    }
+    return as_type<float>((b + (0x7fffu + ((b >> 16) & 1u))) & 0xffff0000u);
 }
 
 inline float ojas_sigmoid(float x)
@@ -34,6 +43,7 @@ inline float ojas_sigmoid(float x)
 /// out[r, h, d] = attn[r, h, d] * sigmoid(pre[r, h] + bias[h])
 /// Grid: x = head dim, y = row * n_head + head.
 /// Lengths are element counts. A lying length makes the thread return.
+/// Checks: `attn` and `bias` (ST_IN); `pre` and `out` (ST_OUT).
 kernel void ojas_per_head_gate_fwd(
     device const float *attn [[buffer(0)]],
     device const float *pre [[buffer(1)]],
@@ -46,6 +56,7 @@ kernel void ojas_per_head_gate_fwd(
     constant uint &pre_len [[buffer(8)]],
     constant uint &bias_len [[buffer(9)]],
     constant uint &out_len [[buffer(10)]],
+    device atomic_uint *st [[buffer(11)]],
     uint2 gid [[thread_position_in_grid]])
 {
     const uint d = gid.x;
@@ -57,9 +68,15 @@ kernel void ojas_per_head_gate_fwd(
     const ulong pre_i = (ulong)r * n_head + h;
     const ulong i = pre_i * head_dim + d;
     if (i >= attn_len || i >= out_len || pre_i >= pre_len || h >= bias_len) return;
-    const float z = pre[pre_i] + bias[h];
+    const float p = pre[pre_i];
+    const float b = bias[h];
+    const float av = attn[i];
+    const float z = p + b;
     const float g = ojas_sigmoid(z);
-    out[i] = attn[i] * g;
+    const float y = av * g;
+    out[i] = y;
+    if (!isfinite(av) || !isfinite(b)) ojas_gate_flag(st, GATE_ST_IN);
+    if (!isfinite(p) || !isfinite(y)) ojas_gate_flag(st, GATE_ST_OUT);
 }
 
 /// d_attn = dy * g
@@ -76,7 +93,7 @@ kernel void ojas_per_head_gate_bwd(
     device float *d_attn [[buffer(4)]],
     device float *d_pre [[buffer(5)]],
     constant uint &rows [[buffer(6)]],
-    constant uint &n_head [[buffer(7)]],
+    constant uint &n_head_raw [[buffer(7)]],
     constant uint &head_dim [[buffer(8)]],
     constant uint &plane_len [[buffer(9)]],
     constant uint &pre_len [[buffer(10)]],
@@ -84,6 +101,8 @@ kernel void ojas_per_head_gate_bwd(
     device atomic_uint *st [[buffer(12)]],
     uint rh [[thread_position_in_grid]])
 {
+    const bool bf16_acc = (n_head_raw & 0x80000000u) != 0u;
+    const uint n_head = n_head_raw & 0x7fffffffu;
     const uint units = rows * n_head;
     if (rh >= units || n_head == 0u) return;
     const uint h = rh % n_head;
@@ -102,10 +121,14 @@ kernel void ojas_per_head_gate_bwd(
     for (uint d = 0; d < head_dim; d++) {
         const float dv = dy[base + d];
         const float av = attn[base + d];
-        const float term = dv * av;
         const float da = dv * g;
         d_attn[base + d] = da;
-        acc += term;
+        if (bf16_acc) {
+            acc = ojas_gate_bf16(acc + ojas_gate_bf16(ojas_gate_bf16(dv) * ojas_gate_bf16(av)));
+        } else {
+            const float term = dv * av;
+            acc += term;
+        }
         bad_in = bad_in || !isfinite(dv) || !isfinite(av);
         bad_out = bad_out || !isfinite(da);
     }
@@ -147,13 +170,15 @@ kernel void ojas_per_head_gate_bwd_saved(
     device float *d_attn [[buffer(3)]],
     device float *d_pre [[buffer(4)]],
     constant uint &rows [[buffer(5)]],
-    constant uint &n_head [[buffer(6)]],
+    constant uint &n_head_raw [[buffer(6)]],
     constant uint &head_dim [[buffer(7)]],
     constant uint &plane_len [[buffer(8)]],
     constant uint &scale_len [[buffer(9)]],
     device atomic_uint *st [[buffer(10)]],
     uint rh [[thread_position_in_grid]])
 {
+    const bool bf16_acc = (n_head_raw & 0x80000000u) != 0u;
+    const uint n_head = n_head_raw & 0x7fffffffu;
     const uint units = rows * n_head;
     if (rh >= units || n_head == 0u || rh >= scale_len) return;
     const float g = scale[rh];
@@ -165,10 +190,14 @@ kernel void ojas_per_head_gate_bwd_saved(
     for (uint d = 0; d < head_dim; d++) {
         const float dv = dy[base + d];
         const float av = attn[base + d];
-        const float term = dv * av;
         const float da = dv * g;
         d_attn[base + d] = da;
-        acc += term;
+        if (bf16_acc) {
+            acc = ojas_gate_bf16(acc + ojas_gate_bf16(ojas_gate_bf16(dv) * ojas_gate_bf16(av)));
+        } else {
+            const float term = dv * av;
+            acc += term;
+        }
         bad_in = bad_in || !isfinite(dv) || !isfinite(av);
         bad_out = bad_out || !isfinite(da);
     }
@@ -197,7 +226,7 @@ kernel void ojas_per_head_gate_dbias(
     device const float *d_pre [[buffer(0)]],
     device float *d_bias [[buffer(1)]],
     constant uint &rows [[buffer(2)]],
-    constant uint &n_head [[buffer(3)]],
+    constant uint &n_head_raw [[buffer(3)]],
     constant uint &pre_len [[buffer(4)]],
     constant uint &bias_len [[buffer(5)]],
     device atomic_uint *st [[buffer(6)]],
@@ -207,6 +236,8 @@ kernel void ojas_per_head_gate_dbias(
     uint lane [[thread_index_in_simdgroup]],
     uint sw [[threads_per_simdgroup]])
 {
+    const bool bf16_acc = (n_head_raw & 0x80000000u) != 0u;
+    const uint n_head = n_head_raw & 0x7fffffffu;
     const uint h = tg * sgs + sg;
     if (h >= n_head || h >= bias_len) return;
     // A length too short for the last row's index leaves d_bias unwritten,
@@ -224,16 +255,22 @@ kernel void ojas_per_head_gate_dbias(
         }
         simdgroup_barrier(mem_flags::mem_threadgroup);
         if (lane == 0u) {
-            // Eight loads ahead of their adds; the adds stay in row order.
-            uint j = 0;
-            for (; j + 8u <= live; j += 8u) {
-                const float a0 = slot[j], a1 = slot[j + 1u], a2 = slot[j + 2u], a3 = slot[j + 3u];
-                const float a4 = slot[j + 4u], a5 = slot[j + 5u], a6 = slot[j + 6u], a7 = slot[j + 7u];
-                s += a0; s += a1; s += a2; s += a3;
-                s += a4; s += a5; s += a6; s += a7;
-            }
-            for (; j < live; j++) {
-                s += slot[j];
+            if (bf16_acc) {
+                for (uint j = 0u; j < live; ++j) {
+                    s = ojas_gate_bf16(s + ojas_gate_bf16(slot[j]));
+                }
+            } else {
+                // Eight loads ahead of their adds; the adds stay in row order.
+                uint j = 0;
+                for (; j + 8u <= live; j += 8u) {
+                    const float a0 = slot[j], a1 = slot[j + 1u], a2 = slot[j + 2u], a3 = slot[j + 3u];
+                    const float a4 = slot[j + 4u], a5 = slot[j + 5u], a6 = slot[j + 6u], a7 = slot[j + 7u];
+                    s += a0; s += a1; s += a2; s += a3;
+                    s += a4; s += a5; s += a6; s += a7;
+                }
+                for (; j < live; j++) {
+                    s += slot[j];
+                }
             }
         }
         // Lane 0 has read the block before any lane overwrites it.

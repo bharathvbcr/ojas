@@ -68,6 +68,19 @@ using namespace mpp::tensor_ops;
 #define AGB_BIAS 2u
 #define AGB_LENS 4u
 #define AGB_DEAD_ROWS 8u
+#define AGB_BF16_ACCUM 16u
+
+#ifndef OJAS_BF16_DEFINED
+#define OJAS_BF16_DEFINED
+inline float ojas_bf16(float v)
+{
+    const uint b = as_type<uint>(v);
+    if ((b & 0x7fffffffu) > 0x7f800000u) {
+        return as_type<float>((b | 0x00400000u) & 0xffff0000u);
+    }
+    return as_type<float>((b + (0x7fffu + ((b >> 16) & 1u))) & 0xffff0000u);
+}
+#endif
 
 /// The mask of one launch: query and key lengths, the causal window, the
 /// radius (0: none) and the flags above.
@@ -201,8 +214,73 @@ inline void agb_dq_body(
     const ulong kv_base = (ulong)(bh / rep) * m.Tk * D;
     const uint len = agb_len(m, lens, b);
     const bool biased = (m.flags & AGB_BIAS) != 0u;
+    const bool bf16_acc = (m.flags & AGB_BF16_ACCUM) != 0u;
     uint k_lo, k_hi;
     agb_block_keys(m, len, q0, nq, k_lo, k_hi);
+
+    if (tid < (uint)ATT_BQ) {
+        const bool live = tid < nq;
+        lse_row[tid] = live ? lse[(ulong)bh * m.Tq + q0 + tid] : 0.0f;
+        d_row[tid] = live ? dvec[(ulong)bh * m.Tq + q0 + tid] : 0.0f;
+    }
+    constexpr uint DQ_PER = (uint)(ATT_BQ * ATT_BK) / (uint)ATT_THREADS;
+    uint lo_reg[DQ_PER];
+    uint hi_reg[DQ_PER];
+#pragma clang loop unroll(full)
+    for (uint e = 0u; e < DQ_PER; ++e) {
+        const uint rr = (tid + e * (uint)ATT_THREADS) / (uint)ATT_BK;
+        uint lo = 0u, hi = 0u;
+        if (rr < nq) { agb_range(m, len, q0 + rr, lo, hi); }
+        lo_reg[e] = lo;
+        hi_reg[e] = hi;
+    }
+
+    if (bf16_acc) {
+        for (uint idx = tid; idx < nq * D; idx += (uint)ATT_THREADS) {
+            dQ[base + (ulong)q0 * D + idx] = 0.0f;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint kb = (k_lo / (uint)ATT_BK) * (uint)ATT_BK; kb < k_hi; kb += (uint)ATT_BK) {
+            const uint nk = min((uint)ATT_BK, m.Tk - kb);
+            for (uint e = 0u; e < DQ_PER; ++e) {
+                const uint i = tid + e * (uint)ATT_THREADS;
+                const uint rr = i / (uint)ATT_BK, c = i % (uint)ATT_BK;
+                float ds = 0.0f;
+                if (rr < nq && c < nk) {
+                    const uint lo = lo_reg[e], hi = hi_reg[e];
+                    const uint kj = kb + c;
+                    if (kj >= lo && kj < hi) {
+                        const ulong q_at = base + (ulong)(q0 + rr) * D;
+                        const ulong k_at = kv_base + (ulong)kj * D;
+                        float dot_s = 0.0f;
+                        float dot_dp = 0.0f;
+                        for (uint d = 0u; d < D; ++d) {
+                            dot_s = ojas_bf16(dot_s + ojas_bf16(ojas_bf16(Q[q_at + d]) * ojas_bf16(K[k_at + d])));
+                            dot_dp = ojas_bf16(dot_dp + ojas_bf16(ojas_bf16(dO[q_at + d]) * ojas_bf16(V[k_at + d])));
+                        }
+                        float s = ojas_bf16(dot_s * ojas_bf16(scale));
+                        if (biased) {
+                            s = ojas_bf16(s + ojas_bf16(bias[agb_bias_row(m, bd, b, h, q0 + rr) + kj]));
+                        }
+                        const float p = ojas_bf16(precise::exp(s - lse_row[rr]));
+                        ds = ojas_bf16(ojas_bf16(scale) * ojas_bf16(p * ojas_bf16(dot_dp - ojas_bf16(d_row[rr]))));
+                    }
+                }
+                S[i] = ds;
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+            for (uint idx = tid; idx < nq * D; idx += (uint)ATT_THREADS) {
+                const uint rr = idx / D, dc = idx % D;
+                float acc = dQ[base + (ulong)(q0 + rr) * D + dc];
+                for (uint c = 0u; c < nk; ++c) {
+                    acc = ojas_bf16(acc + ojas_bf16(S[rr * (uint)ATT_BK + c] * ojas_bf16(K[kv_base + (ulong)(kb + c) * D + dc])));
+                }
+                dQ[base + (ulong)(q0 + rr) * D + dc] = acc;
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+        return;
+    }
 
     constexpr auto s_desc = matmul2d_descriptor(
         ATT_BQ, ATT_BK, DM, false, true, false, matmul2d_descriptor::mode::multiply);
@@ -225,12 +303,6 @@ inline void agb_dq_body(
 #pragma clang loop unroll(full)
     for (uint16_t i = 0; i < dq.get_capacity(); ++i) { dq[i] = 0.0f; }
 
-    if (tid < (uint)ATT_BQ) {
-        const bool live = tid < nq;
-        lse_row[tid] = live ? lse[(ulong)bh * m.Tq + q0 + tid] : 0.0f;
-        d_row[tid] = live ? dvec[(ulong)bh * m.Tq + q0 + tid] : 0.0f;
-    }
-
     for (uint kb = (k_lo / (uint)ATT_BK) * (uint)ATT_BK; kb < k_hi; kb += (uint)ATT_BK) {
         auto tK = mK.slice(0, (int)kb);
         auto tV = mV.slice(0, (int)kb);
@@ -243,12 +315,13 @@ inline void agb_dq_body(
         s_op.run(tdO, tV, pT);
         pT.store(tdP);
         threadgroup_barrier(mem_flags::mem_threadgroup);
-        for (uint i = tid; i < (uint)(ATT_BQ * ATT_BK); i += ATT_THREADS) {
+#pragma clang loop unroll(full)
+        for (uint e = 0u; e < DQ_PER; ++e) {
+            const uint i = tid + e * (uint)ATT_THREADS;
             const uint rr = i / (uint)ATT_BK, c = i % (uint)ATT_BK;
             float ds = 0.0f;
             if (rr < nq) {
-                uint lo, hi;
-                agb_range(m, len, q0 + rr, lo, hi);
+                const uint lo = lo_reg[e], hi = hi_reg[e];
                 const uint kj = kb + c;
                 if (kj >= lo && kj < hi) {
                     float s = S[i] * scale;
@@ -290,8 +363,74 @@ inline void agb_dkv_body(
     const uint b = (g * rep) / H;
     const uint len = agb_len(m, lens, b);
     const bool biased = (m.flags & AGB_BIAS) != 0u;
+    const bool bf16_acc = (m.flags & AGB_BF16_ACCUM) != 0u;
     uint q_lo, q_hi;
     agb_block_queries(m, len, k0, nk, q_lo, q_hi);
+    const uint rr_lane = tid % (uint)ATT_BQ;
+
+    if (bf16_acc) {
+        for (uint idx = tid; idx < nk * D; idx += (uint)ATT_THREADS) {
+            dK[kv_base + (ulong)k0 * D + idx] = 0.0f;
+            dV[kv_base + (ulong)k0 * D + idx] = 0.0f;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint r = 0u; r < rep; ++r) {
+            const uint bh = g * rep + r;
+            const uint h = bh - b * H;
+            const ulong base = (ulong)bh * m.Tq * D;
+            for (uint qb = (q_lo / (uint)ATT_BQ) * (uint)ATT_BQ; qb < q_hi; qb += (uint)ATT_BQ) {
+                const uint nq = min((uint)ATT_BQ, m.Tq - qb);
+                if (tid < (uint)ATT_BQ) {
+                    const bool live = tid < nq;
+                    lse_col[tid] = live ? lse[(ulong)bh * m.Tq + qb + tid] : 0.0f;
+                    d_col[tid] = live ? dvec[(ulong)bh * m.Tq + qb + tid] : 0.0f;
+                }
+                uint lo = 0u, hi = 0u;
+                if (rr_lane < nq) { agb_range(m, len, qb + rr_lane, lo, hi); }
+                threadgroup_barrier(mem_flags::mem_threadgroup);
+                for (uint i = tid; i < (uint)(ATT_BK * ATT_BQ); i += (uint)ATT_THREADS) {
+                    const uint c = i / (uint)ATT_BQ, rr = rr_lane;
+                    float p = 0.0f;
+                    float ds = 0.0f;
+                    if (c < nk && rr < nq) {
+                        const uint kj = k0 + c;
+                        if (kj >= lo && kj < hi) {
+                            const ulong q_at = base + (ulong)(qb + rr) * D;
+                            const ulong k_at = kv_base + (ulong)kj * D;
+                            float dot_s = 0.0f;
+                            float dot_dp = 0.0f;
+                            for (uint d = 0u; d < D; ++d) {
+                                dot_s = ojas_bf16(dot_s + ojas_bf16(ojas_bf16(Q[q_at + d]) * ojas_bf16(K[k_at + d])));
+                                dot_dp = ojas_bf16(dot_dp + ojas_bf16(ojas_bf16(dO[q_at + d]) * ojas_bf16(V[k_at + d])));
+                            }
+                            float s = ojas_bf16(dot_s * ojas_bf16(scale));
+                            if (biased) {
+                                s = ojas_bf16(s + ojas_bf16(bias[agb_bias_row(m, bd, b, h, qb + rr) + kj]));
+                            }
+                            p = ojas_bf16(precise::exp(s - lse_col[rr]));
+                            ds = ojas_bf16(ojas_bf16(scale) * ojas_bf16(p * ojas_bf16(dot_dp - ojas_bf16(d_col[rr]))));
+                        }
+                    }
+                    Pt[i] = p;
+                    dSt[i] = ds;
+                }
+                threadgroup_barrier(mem_flags::mem_threadgroup);
+                for (uint idx = tid; idx < nk * D; idx += (uint)ATT_THREADS) {
+                    const uint c = idx / D, dc = idx % D;
+                    float acc_v = dV[kv_base + (ulong)(k0 + c) * D + dc];
+                    float acc_k = dK[kv_base + (ulong)(k0 + c) * D + dc];
+                    for (uint rr = 0u; rr < nq; ++rr) {
+                        acc_v = ojas_bf16(acc_v + ojas_bf16(Pt[c * (uint)ATT_BQ + rr] * ojas_bf16(dO[base + (ulong)(qb + rr) * D + dc])));
+                        acc_k = ojas_bf16(acc_k + ojas_bf16(dSt[c * (uint)ATT_BQ + rr] * ojas_bf16(Q[base + (ulong)(qb + rr) * D + dc])));
+                    }
+                    dV[kv_base + (ulong)(k0 + c) * D + dc] = acc_v;
+                    dK[kv_base + (ulong)(k0 + c) * D + dc] = acc_k;
+                }
+                threadgroup_barrier(mem_flags::mem_threadgroup);
+            }
+        }
+        return;
+    }
 
     constexpr auto s_desc = matmul2d_descriptor(
         ATT_BK, ATT_BQ, DM, false, true, false, matmul2d_descriptor::mode::multiply);
@@ -327,6 +466,9 @@ inline void agb_dkv_body(
                 lse_col[tid] = live ? lse[(ulong)bh * m.Tq + qb + tid] : 0.0f;
                 d_col[tid] = live ? dvec[(ulong)bh * m.Tq + qb + tid] : 0.0f;
             }
+            uint lo = 0u, hi = 0u;
+            if (rr_lane < nq) { agb_range(m, len, qb + rr_lane, lo, hi); }
+            const ulong bias_row = (biased && rr_lane < nq) ? agb_bias_row(m, bd, b, h, qb + rr_lane) : 0ul;
             auto tQ = mQ.slice(0, (int)qb);
             auto tdO = mdO.slice(0, (int)qb);
             auto sT = s_op.template get_destination_cooperative_tensor<
@@ -338,19 +480,19 @@ inline void agb_dkv_body(
             s_op.run(tV, tdO, pT);
             pT.store(tdSt);
             threadgroup_barrier(mem_flags::mem_threadgroup);
+            const float lse_r = lse_col[rr_lane];
+            const float d_r = d_col[rr_lane];
             for (uint i = tid; i < (uint)(ATT_BK * ATT_BQ); i += ATT_THREADS) {
-                const uint c = i / (uint)ATT_BQ, rr = i % (uint)ATT_BQ;
+                const uint c = i / (uint)ATT_BQ;
                 float p = 0.0f;
                 float ds = 0.0f;
-                if (c < nk && rr < nq) {
-                    uint lo, hi;
-                    agb_range(m, len, qb + rr, lo, hi);
+                if (c < nk && rr_lane < nq) {
                     const uint kj = k0 + c;
                     if (kj >= lo && kj < hi) {
                         float s = Pt[i] * scale;
-                        if (biased) { s += bias[agb_bias_row(m, bd, b, h, qb + rr) + kj]; }
-                        p = precise::exp(s - lse_col[rr]);
-                        ds = scale * (p * (dSt[i] - d_col[rr]));
+                        if (biased) { s += bias[bias_row + kj]; }
+                        p = precise::exp(s - lse_r);
+                        ds = scale * (p * (dSt[i] - d_r));
                     }
                 }
                 Pt[i] = p;
@@ -391,6 +533,7 @@ inline void agb_dbias_body(
     if (k0 >= m.Tk) { return; }
     const uint nk = min((uint)ATT_BK, m.Tk - k0);
     const bool one_row = (bd.q == 1u);
+    const bool bf16_acc = (m.flags & AGB_BF16_ACCUM) != 0u;
     const uint q_blocks = (m.Tq + (uint)ATT_BQ - 1u) / (uint)ATT_BQ;
     const uint plane = one_row ? tgpig.y : tgpig.y / q_blocks;
     const uint tile_q0 = one_row ? 0u : (tgpig.y % q_blocks) * (uint)ATT_BQ;
@@ -438,17 +581,37 @@ inline void agb_dbias_body(
                     lse_row[tid] = live ? lse[(ulong)bh * m.Tq + qb + tid] : 0.0f;
                     d_row[tid] = live ? dvec[(ulong)bh * m.Tq + qb + tid] : 0.0f;
                 }
-                auto tQ = mQ.slice(0, (int)qb);
-                auto tdO = mdO.slice(0, (int)qb);
-                auto sT = s_op.template get_destination_cooperative_tensor<
-                    decltype(tQ), decltype(tK), float>();
-                s_op.run(tQ, tK, sT);
-                sT.store(tS);
-                auto pT = s_op.template get_destination_cooperative_tensor<
-                    decltype(tdO), decltype(tV), float>();
-                s_op.run(tdO, tV, pT);
-                pT.store(tdP);
-                threadgroup_barrier(mem_flags::mem_threadgroup);
+                if (bf16_acc) {
+                    threadgroup_barrier(mem_flags::mem_threadgroup);
+                    for (uint i = tid; i < (uint)(ATT_BQ * ATT_BK); i += (uint)ATT_THREADS) {
+                        const uint rr = i / (uint)ATT_BK, c = i % (uint)ATT_BK;
+                        float dot_s = 0.0f;
+                        float dot_dp = 0.0f;
+                        if (rr < nq && c < nk) {
+                            const ulong q_at = base + (ulong)(qb + rr) * D;
+                            const ulong k_at = kv_base + (ulong)(k0 + c) * D;
+                            for (uint d = 0u; d < D; ++d) {
+                                dot_s = ojas_bf16(dot_s + ojas_bf16(ojas_bf16(Q[q_at + d]) * ojas_bf16(K[k_at + d])));
+                                dot_dp = ojas_bf16(dot_dp + ojas_bf16(ojas_bf16(dO[q_at + d]) * ojas_bf16(V[k_at + d])));
+                            }
+                        }
+                        S[i] = dot_s;
+                        dP[i] = dot_dp;
+                    }
+                    threadgroup_barrier(mem_flags::mem_threadgroup);
+                } else {
+                    auto tQ = mQ.slice(0, (int)qb);
+                    auto tdO = mdO.slice(0, (int)qb);
+                    auto sT = s_op.template get_destination_cooperative_tensor<
+                        decltype(tQ), decltype(tK), float>();
+                    s_op.run(tQ, tK, sT);
+                    sT.store(tS);
+                    auto pT = s_op.template get_destination_cooperative_tensor<
+                        decltype(tdO), decltype(tV), float>();
+                    s_op.run(tdO, tV, pT);
+                    pT.store(tdP);
+                    threadgroup_barrier(mem_flags::mem_threadgroup);
+                }
 #pragma clang loop unroll(full)
                 for (uint e = 0u; e < PER; ++e) {
                     const uint i = tid + e * (uint)ATT_THREADS;
@@ -459,22 +622,30 @@ inline void agb_dbias_body(
                         agb_range(m, len, qb + rr, lo, hi);
                         const uint kj = k0 + c;
                         if (kj >= lo && kj < hi) {
-                            float s = S[i] * scale;
-                            s += bias[agb_bias_row(m, bd, b, h, qb + rr) + kj];
-                            const float p = precise::exp(s - lse_row[rr]);
-                            g = p * (dP[i] - d_row[rr]);
+                            if (bf16_acc) {
+                                float s = ojas_bf16(S[i] * ojas_bf16(scale));
+                                s = ojas_bf16(s + ojas_bf16(bias[agb_bias_row(m, bd, b, h, qb + rr) + kj]));
+                                const float p = ojas_bf16(precise::exp(s - lse_row[rr]));
+                                g = ojas_bf16(p * ojas_bf16(dP[i] - ojas_bf16(d_row[rr])));
+                            } else {
+                                float s = S[i] * scale;
+                                s += bias[agb_bias_row(m, bd, b, h, qb + rr) + kj];
+                                const float p = precise::exp(s - lse_row[rr]);
+                                g = p * (dP[i] - d_row[rr]);
+                            }
                         }
                     }
                     if (one_row) {
                         S[i] = g;
                     } else {
-                        acc[e] += g;
+                        acc[e] = bf16_acc ? ojas_bf16(acc[e] + g) : (acc[e] + g);
                     }
                 }
                 threadgroup_barrier(mem_flags::mem_threadgroup);
                 if (one_row && tid < nk) {
                     for (uint rr = 0u; rr < nq; ++rr) {
-                        column += S[rr * (uint)ATT_BK + tid];
+                        const float v = S[rr * (uint)ATT_BK + tid];
+                        column = bf16_acc ? ojas_bf16(column + v) : (column + v);
                     }
                 }
                 threadgroup_barrier(mem_flags::mem_threadgroup);

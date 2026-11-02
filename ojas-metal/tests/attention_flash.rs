@@ -656,8 +656,11 @@ fn the_calls_the_route_does_not_cover_are_planned_and_run_elsewhere() {
         bias: Some(&bias),
         ..opts()
     };
-    assert_eq!(kernel(&dev, with_bias), "splitk");
-    assert_eq!(observed(&dev, with_bias), Ran::SPLITK);
+    assert_eq!(
+        kernel(&dev, with_bias),
+        if m.has_tensorops() { "flash" } else { "splitk" }
+    );
+    assert_eq!(observed(&dev, with_bias), expected(m.has_tensorops()));
     let with_lens = AttentionOpts {
         key_lens: Some(&lens),
         ..opts()
@@ -684,4 +687,368 @@ fn the_calls_the_route_does_not_cover_are_planned_and_run_elsewhere() {
     };
     assert_eq!(kernel(&d48, opts()), "scalar");
     assert_eq!(observed(&d48, opts()), Ran::SCALAR, "head dim 48: observed");
+}
+
+#[test]
+fn flash_cross_attention_with_additive_bias_matches_cpu() {
+    let (m, c) = (metal(), cpu());
+    let shapes = [
+        // SpikeTrack DETR cross-attention shape:
+        (1, 8, 201, 5184, 32, [1, 8, 201, 5184]),
+        // Broadcast heads bias:
+        (1, 8, 201, 5184, 32, [1, 1, 201, 5184]),
+        // Batched cross-attention:
+        (2, 4, 64, 128, 32, [2, 4, 64, 128]),
+        // Head dim 64:
+        (1, 4, 128, 256, 64, [1, 4, 128, 256]),
+    ];
+    for (i, (b, h, tq, tk, d, b_shape)) in shapes.into_iter().enumerate() {
+        let seed = 1200 + 10 * i as u64;
+        let q = rand(&[b, h, tq, d], seed, 1.0);
+        let k = rand(&[b, h, tk, d], seed + 1, 1.0);
+        let v = rand(&[b, h, tk, d], seed + 2, 1.0);
+        let bias = rand(&b_shape, seed + 3, 0.5);
+
+        let want = ok(
+            "cpu",
+            c.attention_forward(
+                &q,
+                &k,
+                &v,
+                AttentionOpts {
+                    bias: Some(&bias),
+                    ..Default::default()
+                },
+            ),
+        );
+        let (dq, dk, dv, dbias) = (up(&m, &q), up(&m, &k), up(&m, &v), up(&m, &bias));
+        ok("sync", m.sync());
+        let before_flash = m.kernel_dispatches(FLASH);
+        let before_scalar = m.kernel_dispatches(SCALAR);
+        let got = ok(
+            "metal",
+            m.attention_forward(
+                &dq,
+                &dk,
+                &dv,
+                AttentionOpts {
+                    bias: Some(&dbias),
+                    ..Default::default()
+                },
+            ),
+        );
+        ok("sync", m.sync());
+        if m.has_tensorops() && (tq.div_ceil(32) * h * b) >= 56 {
+            assert!(
+                m.kernel_dispatches(FLASH) > before_flash,
+                "expected flash kernel to run for [{b},{h},{tq}x{tk},{d}] with bias"
+            );
+            assert_eq!(
+                m.kernel_dispatches(SCALAR),
+                before_scalar,
+                "scalar kernel must not run when flash covers bias"
+            );
+        }
+        same_tensor(
+            &format!("[{b},{h},{tq}x{tk},{d}] + bias"),
+            &got,
+            &want,
+            tol(tk),
+            1e-4,
+        );
+    }
+}
+
+#[test]
+fn flash_cross_attention_adversarial_additive_bias_stress() {
+    let (m, c) = (metal(), cpu());
+    let (b, h, tq, tk, d) = (1, 8, 201, 5184, 32);
+
+    // 1. Extreme negative logit biases (-10000.0) simulating padding mask:
+    let q = rand(&[b, h, tq, d], 4200, 1.0);
+    let k = rand(&[b, h, tk, d], 4201, 1.0);
+    let v = rand(&[b, h, tk, d], 4202, 1.0);
+
+    let mut bias_data = vec![0.0f32; b * h * tq * tk];
+    for qi in 0..tq {
+        for kj in 2592..tk {
+            bias_data[qi * tk + kj] = -10000.0;
+        }
+    }
+    for head in 1..h {
+        bias_data.copy_within(0..tq * tk, head * tq * tk);
+    }
+    let bias_masked = host(&bias_data, &[b, h, tq, tk]);
+
+    let want_masked = ok(
+        "cpu masked",
+        c.attention_forward(
+            &q,
+            &k,
+            &v,
+            AttentionOpts {
+                bias: Some(&bias_masked),
+                ..Default::default()
+            },
+        ),
+    );
+    let (dq, dk, dv, dbias_masked) = (up(&m, &q), up(&m, &k), up(&m, &v), up(&m, &bias_masked));
+    let before_flash = m.kernel_dispatches(FLASH);
+    let got_masked = ok(
+        "metal masked",
+        m.attention_forward(
+            &dq,
+            &dk,
+            &dv,
+            AttentionOpts {
+                bias: Some(&dbias_masked),
+                ..Default::default()
+            },
+        ),
+    );
+    assert!(
+        m.kernel_dispatches(FLASH) > before_flash,
+        "flash kernel must run for extreme negative bias"
+    );
+    same_tensor(
+        "extreme negative bias (-10000.0) parity",
+        &got_masked,
+        &want_masked,
+        tol(tk),
+        1e-4,
+    );
+
+    // 2. Zero bias vs None identity:
+    let zero_bias = host(&vec![0.0f32; b * h * tq * tk], &[b, h, tq, tk]);
+    let dzero_bias = up(&m, &zero_bias);
+    let out_none = ok(
+        "metal none",
+        m.attention_forward(&dq, &dk, &dv, AttentionOpts::default()),
+    );
+    let out_zero = ok(
+        "metal zero",
+        m.attention_forward(
+            &dq,
+            &dk,
+            &dv,
+            AttentionOpts {
+                bias: Some(&dzero_bias),
+                ..Default::default()
+            },
+        ),
+    );
+    close(
+        "zero bias vs bias=None",
+        &down(&out_zero),
+        &down(&out_none),
+        1e-6,
+        1e-6,
+    );
+
+    // 3. Head broadcast (Hb = 1, H = 8):
+    let hb_bias = rand(&[1, 1, tq, tk], 4203, 0.5);
+    let dhb_bias = up(&m, &hb_bias);
+    let want_hb = ok(
+        "cpu hb",
+        c.attention_forward(
+            &q,
+            &k,
+            &v,
+            AttentionOpts {
+                bias: Some(&hb_bias),
+                ..Default::default()
+            },
+        ),
+    );
+    let got_hb = ok(
+        "metal hb",
+        m.attention_forward(
+            &dq,
+            &dk,
+            &dv,
+            AttentionOpts {
+                bias: Some(&dhb_bias),
+                ..Default::default()
+            },
+        ),
+    );
+    same_tensor("head broadcast bias", &got_hb, &want_hb, tol(tk), 1e-4);
+
+    // 4. Batch broadcast (Bb = 1, B = 2):
+    let (b2, h8, tq_s, tk_s) = (2, 8, 201, 5184);
+    let q2 = rand(&[b2, h8, tq_s, d], 4204, 1.0);
+    let k2 = rand(&[b2, h8, tk_s, d], 4205, 1.0);
+    let v2 = rand(&[b2, h8, tk_s, d], 4206, 1.0);
+    let bb_bias = rand(&[1, h8, tq_s, tk_s], 4207, 0.5);
+    let (dq2, dk2, dv2, dbb_bias) = (up(&m, &q2), up(&m, &k2), up(&m, &v2), up(&m, &bb_bias));
+    let want_bb = ok(
+        "cpu bb",
+        c.attention_forward(
+            &q2,
+            &k2,
+            &v2,
+            AttentionOpts {
+                bias: Some(&bb_bias),
+                ..Default::default()
+            },
+        ),
+    );
+    let got_bb = ok(
+        "metal bb",
+        m.attention_forward(
+            &dq2,
+            &dk2,
+            &dv2,
+            AttentionOpts {
+                bias: Some(&dbb_bias),
+                ..Default::default()
+            },
+        ),
+    );
+    same_tensor("batch broadcast bias", &got_bb, &want_bb, tol(tk_s), 1e-4);
+
+    // 5. Batch AND head broadcast (Bb = 1, Hb = 1, B = 2, H = 8):
+    let bh_bias = rand(&[1, 1, tq_s, tk_s], 4208, 0.5);
+    let dbh_bias = up(&m, &bh_bias);
+    let want_bh = ok(
+        "cpu bh",
+        c.attention_forward(
+            &q2,
+            &k2,
+            &v2,
+            AttentionOpts {
+                bias: Some(&bh_bias),
+                ..Default::default()
+            },
+        ),
+    );
+    let got_bh = ok(
+        "metal bh",
+        m.attention_forward(
+            &dq2,
+            &dk2,
+            &dv2,
+            AttentionOpts {
+                bias: Some(&dbh_bias),
+                ..Default::default()
+            },
+        ),
+    );
+    same_tensor(
+        "batch and head broadcast bias",
+        &got_bh,
+        &want_bh,
+        tol(tk_s),
+        1e-4,
+    );
+
+    // 6. Query broadcast (Tqb = 1, Tq = 201):
+    let q_bias = rand(&[1, 8, 1, tk], 4209, 0.5);
+    let dq_bias = up(&m, &q_bias);
+    let want_qb = ok(
+        "cpu qb",
+        c.attention_forward(
+            &q,
+            &k,
+            &v,
+            AttentionOpts {
+                bias: Some(&q_bias),
+                ..Default::default()
+            },
+        ),
+    );
+    let got_qb = ok(
+        "metal qb",
+        m.attention_forward(
+            &dq,
+            &dk,
+            &dv,
+            AttentionOpts {
+                bias: Some(&dq_bias),
+                ..Default::default()
+            },
+        ),
+    );
+    same_tensor("query broadcast bias", &got_qb, &want_qb, tol(tk), 1e-4);
+
+    // 7. Non-finite bias (-inf) must be refused:
+    let mut inf_data = vec![0.0f32; tk];
+    inf_data[0] = f32::NEG_INFINITY;
+    let inf_bias_matched = host(&inf_data, &[1, 1, 1, tk]);
+    let dinf_bias = up(&m, &inf_bias_matched);
+    let cpu_err = c
+        .attention_forward(
+            &q,
+            &k,
+            &v,
+            AttentionOpts {
+                bias: Some(&inf_bias_matched),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+    assert!(matches!(cpu_err, ojas_core::OjasError::NonFinite { .. }));
+
+    // Metal encodes asynchronously; syncing reports the deferred NonFinite fault:
+    let _ = m.attention_forward(
+        &dq,
+        &dk,
+        &dv,
+        AttentionOpts {
+            bias: Some(&dinf_bias),
+            ..Default::default()
+        },
+    );
+    let metal_err = m.sync().unwrap_err();
+    assert!(
+        matches!(
+            metal_err,
+            ojas_core::OjasError::NonFinite {
+                op: "attention_forward"
+            }
+        ),
+        "expected NonFinite for attention_forward on sync, got {metal_err:?}"
+    );
+
+    // 8. Extreme positive bias (+100.0) stability:
+    let mut pos_data = vec![0.0f32; b * h * tq * tk];
+    for qi in 0..tq {
+        pos_data[qi * tk + 42] = 100.0;
+    }
+    for head in 1..h {
+        pos_data.copy_within(0..tq * tk, head * tq * tk);
+    }
+    let bias_pos = host(&pos_data, &[b, h, tq, tk]);
+    let want_pos = ok(
+        "cpu pos",
+        c.attention_forward(
+            &q,
+            &k,
+            &v,
+            AttentionOpts {
+                bias: Some(&bias_pos),
+                ..Default::default()
+            },
+        ),
+    );
+    let dbias_pos = up(&m, &bias_pos);
+    let got_pos = ok(
+        "metal pos",
+        m.attention_forward(
+            &dq,
+            &dk,
+            &dv,
+            AttentionOpts {
+                bias: Some(&dbias_pos),
+                ..Default::default()
+            },
+        ),
+    );
+    same_tensor(
+        "extreme positive bias (+100.0) parity",
+        &got_pos,
+        &want_pos,
+        tol(tk),
+        1e-4,
+    );
 }

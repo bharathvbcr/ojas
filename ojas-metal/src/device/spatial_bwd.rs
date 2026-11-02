@@ -125,20 +125,26 @@ impl Worker {
             &[g.o * pixels_u, 1, pixels_u],
             &st,
         )?;
-        let gemm = self.gemm_lane(Lane::ExactF32);
-        let gy_t = self.tt(&gyp, &[rows, out_c])?;
-        gemm.nn(
-            &gy_t,
-            &self.mat(&wv, out_c, width)?,
-            &self.tt(&dcols, &[rows, width])?,
-        )
-        .map_err(metal_err)?;
-        gemm.tn(
-            &gy_t,
-            &self.tt(&cols, &[rows, width])?,
-            &self.tt(&gw, &[out_c, width])?,
-        )
-        .map_err(metal_err)?;
+        if self.bf16_accum() {
+            self.gemm_nn(Lane::Bf16Accum, &gyp, &wv, &dcols, rows, out_c, width)?;
+            self.gemm_tn(Lane::Bf16Accum, &gyp, &cols, &gw, out_c, rows, width)?;
+        } else {
+            let gemm = self.gemm_lane(Lane::ExactF32);
+            let gy_t = self.tt(&gyp, &[rows, out_c])?;
+            gemm.nn(
+                &gy_t,
+                &self.mat(&wv, out_c, width)?,
+                &self.tt(&dcols, &[rows, width])?,
+            )
+            .map_err(metal_err)?;
+            gemm.tn(
+                &gy_t,
+                &self.tt(&cols, &[rows, width])?,
+                &self.tt(&gw, &[out_c, width])?,
+            )
+            .map_err(metal_err)?;
+        }
+        let bf16_acc = u32::from(self.bf16_accum());
         self.k1("ojas_col2im", in_n, |b| {
             bind(b, &dcols, 0);
             bind(b, &gx, 1);
@@ -146,6 +152,7 @@ impl Worker {
             for (i, v) in words.into_iter().enumerate() {
                 set_u32(b, v, 3 + i);
             }
+            set_u32(b, bf16_acc, 14);
         })?;
         self.bias_grad(&gv, gb.as_ref(), g.batch, g.o, pixels_u)?;
         self.keep_grads(&st, gx, gw, gb)
@@ -194,6 +201,7 @@ impl Worker {
             self.check_operand(&st, a, b, ST_IN)?;
         }
         let words = window_words(&g);
+        let bf16_acc = u32::from(self.bf16_accum());
         self.k1("ojas_dwconv_bwd_x", in_n, |b| {
             bind(b, &gv, 0);
             bind(b, &wv, 1);
@@ -202,6 +210,7 @@ impl Worker {
             for (i, v) in words.into_iter().enumerate() {
                 set_u32(b, v, 4 + i);
             }
+            set_u32(b, bf16_acc, 15);
         })?;
         self.k1("ojas_dwconv_bwd_w", w_n, |b| {
             bind(b, &xv, 0);
@@ -212,6 +221,7 @@ impl Worker {
             for (i, v) in words.into_iter().enumerate() {
                 set_u32(b, v, 5 + i);
             }
+            set_u32(b, bf16_acc, 16);
         })?;
         self.bias_grad(&gv, gb.as_ref(), g.batch, g.o, pixels_u)?;
         self.keep_grads(&st, gx, gw, gb)
@@ -309,20 +319,25 @@ impl Worker {
             &[ch * h * wd, wd, 1, h * wd],
             &st,
         )?;
-        let gemm = self.gemm_lane(Lane::ExactF32);
-        let cols_t = self.tt(&dcols, &[rows, okk])?;
-        gemm.nt(
-            &cols_t,
-            &self.mat(&wv, c, okk)?,
-            &self.tt(&dxp, &[rows, c])?,
-        )
-        .map_err(metal_err)?;
-        gemm.tn(
-            &self.tt(&xp, &[rows, c])?,
-            &cols_t,
-            &self.tt(&gw, &[c, okk])?,
-        )
-        .map_err(metal_err)?;
+        if self.bf16_accum() {
+            self.gemm_nt(Lane::Bf16Accum, &dcols, &wv, &dxp, rows, okk, c)?;
+            self.gemm_tn(Lane::Bf16Accum, &xp, &dcols, &gw, c, rows, okk)?;
+        } else {
+            let gemm = self.gemm_lane(Lane::ExactF32);
+            let cols_t = self.tt(&dcols, &[rows, okk])?;
+            gemm.nt(
+                &cols_t,
+                &self.mat(&wv, c, okk)?,
+                &self.tt(&dxp, &[rows, c])?,
+            )
+            .map_err(metal_err)?;
+            gemm.tn(
+                &self.tt(&xp, &[rows, c])?,
+                &cols_t,
+                &self.tt(&gw, &[c, okk])?,
+            )
+            .map_err(metal_err)?;
+        }
         // [n, h, w, c] back to NCHW.
         self.permute_into(
             &dxp,
@@ -349,12 +364,14 @@ impl Worker {
         let Some(db) = db else {
             return Ok(());
         };
+        let bf16_acc = u32::from(self.bf16_accum());
         self.k1("ojas_chan_sum", channels as usize, |b| {
             bind(b, gy, 0);
             bind(b, db, 1);
             set_u32(b, channels, 2);
             set_u32(b, batch, 3);
             set_u32(b, pixels, 4);
+            set_u32(b, bf16_acc, 5);
         })
     }
 

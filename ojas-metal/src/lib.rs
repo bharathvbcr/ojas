@@ -2,10 +2,14 @@
 //!
 //! [`MetalBackend`] runs every `ojas_core::Backend` op on device-resident
 //! tensors at any shape the kernels index, with head dimension at most
-//! `METAL_MAX_HEAD_DIM`. Its kernels are in `kernels/ojas_backend.metal` (including `permute` and
-//! the tiled causal attention backward) and `kernels/per_head_gate.metal`.
-//! Training goes through `MetalBackend` and the autograd `Tape`; there is no
-//! separate Metal training step.
+//! `METAL_MAX_HEAD_DIM`. By default every op accumulates in `f32`; callers can
+//! opt into step-by-step IEEE-754 RNE `bf16` accumulation across all GPU
+//! reductions and dot products via [`MetalBackend::with_bf16_accumulation`] or
+//! [`MetalBackend::set_bf16_accumulation`]. Its kernels live in
+//! `kernels/ojas_backend.metal`, `kernels/encoder_bwd.metal`,
+//! `kernels/gemma_ops.metal`, `kernels/max_pool.metal`, and
+//! `kernels/per_head_gate.metal`. Training goes through `MetalBackend` and the
+//! autograd `Tape`; there is no separate Metal training step.
 
 #![forbid(unsafe_code)]
 // Without a device thread nothing reads the command protocol.
@@ -42,7 +46,10 @@ mod device {
     const NO_METAL: &str =
         "ojas-metal was built without Metal (needs macOS and the `metal` feature)";
 
-    pub(crate) fn spawn(_waits: Arc<Waits>, _cap: u64) -> Res<(mpsc::Sender<Msg>, DeviceInfo)> {
+    pub(crate) fn spawn(
+        _waits: Arc<Waits>,
+        _budget: ojas_core::Budget,
+    ) -> Res<(mpsc::Sender<Msg>, DeviceInfo)> {
         Err(OjasError::Unsupported {
             op: "MetalBackend::new",
             detail: NO_METAL.to_string(),

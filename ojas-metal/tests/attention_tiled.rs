@@ -134,16 +134,19 @@ impl Operands {
     }
 }
 
-/// Whether the dispatcher runs the flash kernel for `c`: head dim 32, no bias
-/// or key lengths, on a TensorOps device, with at least `flash_min_groups`
-/// threadgroups of 32 query rows.
+/// Whether the dispatcher runs the flash kernel for `c`: head dim 32, no
+/// key lengths, on a TensorOps device, with at least `flash_min_groups`
+/// threadgroups of 32 query rows (or at least 56 threadgroups for bias).
 fn flash_dispatched(m: &MetalBackend, c: &Case) -> bool {
     let groups = (c.tq.div_ceil(32) * c.b * c.h) as u64;
     m.has_tensorops()
         && c.d == 32
-        && c.bias.is_none()
         && c.lens.is_none()
-        && groups >= MetalBackend::flash_min_groups()
+        && (if c.bias.is_some() {
+            groups >= 56
+        } else {
+            groups >= MetalBackend::flash_min_groups()
+        })
 }
 
 /// Dispatches one `attention_forward_saving` call encodes, and how many of

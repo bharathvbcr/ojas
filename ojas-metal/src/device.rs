@@ -19,7 +19,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{mpsc, Arc};
 use std::thread;
 
-use ojas_core::{sdpa_scale, OjasError, MUON_NS5_A, MUON_NS5_B, MUON_NS5_C, MUON_NS_EPS};
+use crate::pool_ledger::BudgetLedger;
+use ojas_core::{sdpa_scale, Budget, OjasError, MUON_NS5_A, MUON_NS5_B, MUON_NS5_C, MUON_NS_EPS};
 use tessl::dispatch::{self, set_f32, set_gpu_buf_offset, set_u32, Binder};
 use tessl::embedgemma2::{encoder_attn, EncoderAttnDims};
 use tessl::gdn_train::{
@@ -36,6 +37,7 @@ use tessl::sq_norm::{decode_sq_norm, SqNormPlan, SqWindow};
 use tessl::tensor::{gpu_copy, GpuBuffer, Tensor as TT};
 use tessl::DType;
 
+use crate::layout::{CONV1D_BWD_ROWS, GATED_RMS_BWD_ROWS};
 use crate::link::{
     cached_attn_origin, cached_attn_part, cached_attn_splits, copied_at, device_lost, metal_err,
     norm_chunks, reduce_groups, rms_w_chunks, Arg, AttnExtra, AttnGeom, BilinearGeom, Cmd,
@@ -268,6 +270,13 @@ const KERNELS: &[&str] = &[
     "ojas_attn_gen_bwd_dbias_d64",
     "ojas_attn_gen_bwd_dbias_d128",
     "ojas_attn_gen_bwd_dbias_d256",
+    "ojas_gemm_bf16_accum",
+    "ojas_ln_fwd",
+    "ojas_gated_rms_fwd",
+    "ojas_gated_rms_bwd_part",
+    "ojas_conv1d_silu_fwd",
+    "ojas_conv1d_silu_bwd_dx",
+    "ojas_conv1d_silu_bwd_dw",
 ];
 
 /// tessl's dims for a dense GDN call (one key head per value head).
@@ -310,8 +319,8 @@ pub(crate) fn gdn_forward_transient_elems(
 }
 
 /// Start the device thread and wait until its runtime is up.
-pub(crate) fn spawn(waits: Arc<Waits>, budget_cap: u64) -> Res<(mpsc::Sender<Msg>, DeviceInfo)> {
-    spawn_with(move || Worker::open(waits, budget_cap))
+pub(crate) fn spawn(waits: Arc<Waits>, budget: Budget) -> Res<(mpsc::Sender<Msg>, DeviceInfo)> {
+    spawn_with(move || Worker::open(waits, budget))
 }
 
 /// As [`spawn`], with the opener the tests can fail. A failed or panicked
@@ -510,6 +519,7 @@ struct Book {
     overlap: usize,
     mem_cap: u64,
     ws_limit: u64,
+    bf16_accum: bool,
     #[cfg(test)]
     /// Allocations to let through, then allocations to fail.
     fail_allocs: (u32, u32),
@@ -577,6 +587,8 @@ fn classify_alloc(e: &str) -> AllocFailure {
 
 struct Worker {
     rt: Arc<GpuRuntime>,
+    #[allow(dead_code)]
+    ledger: Arc<BudgetLedger>,
     bufs: HashMap<u64, GpuBuffer>,
     next_id: u64,
     poisoned: bool,
@@ -595,13 +607,20 @@ struct Worker {
 }
 
 impl Worker {
-    fn open(waits: Arc<Waits>, budget_cap: u64) -> Res<Self> {
+    fn open(waits: Arc<Waits>, budget: Budget) -> Res<Self> {
         #[cfg(test)]
         let lease = crate::gauge::lease();
         let rt = GpuRuntime::new().map_err(metal_err)?;
-        // Before the first allocation, so no buffer is ever cached past it.
-        let pool_cap = usize::try_from(pool_cache_cap(budget_cap)).unwrap_or(usize::MAX);
-        rt.set_pool_cache_cap_bytes(pool_cap);
+        let pool_cap = pool_cache_cap(budget.cap_bytes());
+        let pool_cap_usize = usize::try_from(pool_cap).unwrap_or(usize::MAX);
+        rt.set_pool_cache_cap_bytes(pool_cap_usize);
+
+        let ws = rt.memory_info().recommended_working_set;
+        let device_budget = Budget::new(ws);
+        let ledger = BudgetLedger::new(&device_budget, pool_cap);
+        rt.set_pool_ledger(Some(ledger.as_pool_ledger()))
+            .map_err(metal_err)?;
+
         rt.set_async_encode(true).map_err(metal_err)?;
         let lib = include_bytes!(concat!(env!("OUT_DIR"), "/ojas_per_head_gate.metallib"));
         if lib.is_empty() {
@@ -618,9 +637,13 @@ impl Worker {
         for name in spatial_bwd::KERNELS {
             rt.pipeline(name).map_err(metal_err)?;
         }
-        let slab = rt.alloc_buffer(SLAB_SLOTS * ST_BYTES).map_err(metal_err)?;
+        let slab = rt
+            .alloc_internal_buffer(SLAB_SLOTS * ST_BYTES)
+            .map_err(metal_err)?;
         slab.try_contents_u32().map_err(metal_err)?.fill(0);
-        let spare = rt.alloc_buffer(NORM_SLOTS * 4).map_err(metal_err)?;
+        let spare = rt
+            .alloc_internal_buffer(NORM_SLOTS * 4)
+            .map_err(metal_err)?;
         let ws = rt.memory_info().recommended_working_set;
         let book = Book {
             used: 0,
@@ -635,8 +658,9 @@ impl Worker {
             inline_uploads: true,
             clean: HashMap::new(),
             overlap: OVERLAP_DISPATCHES,
-            mem_cap: MEM_CAP_CEILING.min(budget_cap / 4),
+            mem_cap: MEM_CAP_CEILING.min(budget.cap_bytes() / 4),
             ws_limit: ws / WS_DEN * WS_NUM,
+            bf16_accum: false,
             #[cfg(test)]
             fail_allocs: (0, 0),
             #[cfg(test)]
@@ -644,6 +668,7 @@ impl Worker {
         };
         Ok(Self {
             rt,
+            ledger,
             bufs: HashMap::new(),
             next_id: 1,
             poisoned: false,
@@ -693,6 +718,7 @@ impl Worker {
                     "the tessl runtime is poisoned by an earlier failed or timed-out command buffer",
                 ))
             } else {
+                self.book.borrow_mut().bf16_accum = msg.bf16_accum;
                 match catch_unwind(AssertUnwindSafe(|| self.command(msg.cmd))) {
                     Ok(out) => out.map_err(|err| self.lost_if_poisoned(err)),
                     Err(_) => {
@@ -1031,6 +1057,18 @@ impl Worker {
             Err(e) => e,
         };
         for step in 0..2 {
+            if let Some(err) = BudgetLedger::capacity_error(&failed) {
+                if step == 0 {
+                    self.recycle()?;
+                    failed = match run() {
+                        Ok(v) => return Ok(v),
+                        Err(e) => e,
+                    };
+                    continue;
+                } else {
+                    return Err(err);
+                }
+            }
             match classify_alloc(&failed) {
                 AllocFailure::Other => return Err(metal_err(failed)),
                 AllocFailure::Limit => break,
@@ -1045,6 +1083,9 @@ impl Worker {
                 Ok(v) => return Ok(v),
                 Err(e) => e,
             };
+        }
+        if let Some(err) = BudgetLedger::capacity_error(&failed) {
+            return Err(err);
         }
         if classify_alloc(&failed) == AllocFailure::Other {
             return Err(metal_err(failed));
@@ -1398,12 +1439,16 @@ impl Worker {
 
     fn copy_if_clean(&self, st: &St, src: &V, dst: &V) -> Res<()> {
         let n = u32_of(dst.n)?;
-        self.k1("ojas_copy_if_clean", dst.n, |b| {
-            bind(b, src, 0);
-            bind(b, dst, 1);
-            bind_st(b, st, 2);
-            set_u32(b, n, 3);
-        })
+        self.k1(
+            "ojas_copy_if_clean",
+            dst.n.div_ceil(CHECK_PER_THREAD),
+            |b| {
+                bind(b, src, 0);
+                bind(b, dst, 1);
+                bind_st(b, st, 2);
+                set_u32(b, n, 3);
+            },
+        )
     }
 
     /// `out = alpha x + beta y` through one of the three Muon combination
@@ -1449,12 +1494,13 @@ impl Worker {
         let n = u32_of(src.n)?;
         let chunk_u = u32_of(chunk)?;
         let groups_u = u32_of(groups)?;
+        let mode_raw = mode | if self.bf16_accum() { 0x8000_0000 } else { 0 };
         self.ktg("ojas_reduce_partial", groups, 1, 256, |b| {
             bind(b, src, 0);
             bind(b, &part, 1);
             set_u32(b, n, 2);
             set_u32(b, chunk_u, 3);
-            set_u32(b, mode, 4);
+            set_u32(b, mode_raw, 4);
             match scale {
                 Some((buf, off)) => set_gpu_buf_offset(b, buf, off, 5),
                 None => set_gpu_buf_offset(b, out, 0, 5),
@@ -1464,7 +1510,7 @@ impl Worker {
             bind(b, &part, 0);
             set_gpu_buf_offset(b, out, 0, 1);
             set_u32(b, groups_u, 2);
-            set_u32(b, mode, 3);
+            set_u32(b, mode_raw, 3);
             set_u32(b, slot, 4);
         })
     }
@@ -1944,6 +1990,25 @@ impl Worker {
             .num_elements()?
             .checked_mul(src.dtype().size())
             .ok_or_else(|| metal_err("upload size overflows"))?;
+        if let Some(mbuf) = src.mapped_buffer() {
+            if mbuf.backend() != ojas_core::BackendId::Metal {
+                return Err(ojas_core::OjasError::Placement {
+                    op: "Worker::upload",
+                    expected: Some(ojas_core::BackendId::Metal),
+                    found: Some(mbuf.backend()),
+                });
+            }
+            #[cfg(feature = "metal")]
+            if let Some(shared) = mbuf.as_any().downcast_ref::<tessl::shared_buf::SharedBuf>() {
+                let gpu = shared.to_gpu_buffer().ok_or_else(|| {
+                    metal_err("Worker::upload: SharedBuf is not backed by a pooled buffer")
+                })?;
+                return Ok(self.adopt(gpu, len));
+            }
+            return Err(metal_err(
+                "Worker::upload: mapped buffer is not a tessl SharedBuf",
+            ));
+        }
         self.note_dispatches();
         let behind = {
             let book = self.book.borrow();
@@ -2254,17 +2319,22 @@ impl Worker {
             self.check(&st, &self.view(table)?, ST_IN)?;
         }
         self.check(&st, &g, ST_IN)?;
+        let vocab_flag = vocab | if self.bf16_accum() { 0x8000_0000 } else { 0 };
         self.k2("ojas_embed_gather", dim as usize, v, |b| {
             bind(b, &g, 0);
             bind(b, &starts, 1);
             bind(b, &counts, 2);
             bind(b, &pos, 3);
             bind(b, &out, 4);
-            set_u32(b, vocab, 5);
+            set_u32(b, vocab_flag, 5);
             set_u32(b, dim, 6);
         })?;
         self.check(&st, &out, ST_OUT)?;
         Ok(self.keep(vec![out]))
+    }
+
+    pub(super) fn bf16_accum(&self) -> bool {
+        self.book.borrow().bf16_accum
     }
 
     /// tessl's operands for `lane` on this device: [`Lane::Bf16`] needs
@@ -2274,8 +2344,110 @@ impl Worker {
     fn gemm_lane(&self, lane: Lane) -> GemmOperands {
         match lane {
             Lane::Bf16 if self.rt.has_tensorops() => GemmOperands::Bf16,
-            Lane::Bf16 | Lane::ExactF32 => GemmOperands::ExactF32,
+            Lane::Bf16 | Lane::ExactF32 | Lane::Bf16Accum => GemmOperands::ExactF32,
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn gemm_bf16_accum(
+        &self,
+        a: &V,
+        b: &V,
+        bias: Option<&V>,
+        c: &V,
+        m: usize,
+        n: usize,
+        k: usize,
+        mode: u32,
+    ) -> Res<()> {
+        if m == 0 || n == 0 {
+            return Ok(());
+        }
+        let (m_u, n_u, k_u) = (u32_of(m)?, u32_of(n)?, u32_of(k)?);
+        let mode_flags = mode | if bias.is_some() { 4 } else { 0 };
+        let bias_buf = bias.unwrap_or(c);
+        self.k2("ojas_gemm_bf16_accum", n, m, |bd| {
+            bind(bd, a, 0);
+            bind(bd, b, 1);
+            bind(bd, bias_buf, 2);
+            bind(bd, c, 3);
+            set_u32(bd, m_u, 4);
+            set_u32(bd, n_u, 5);
+            set_u32(bd, k_u, 6);
+            set_u32(bd, mode_flags, 7);
+        })
+    }
+
+    /// `C [m, n] = A [m, k] @ B [n, k]^T`.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn gemm_nt(
+        &self,
+        lane: Lane,
+        a: &V,
+        b: &V,
+        c: &V,
+        m: usize,
+        k: usize,
+        n: usize,
+    ) -> Res<()> {
+        if lane == Lane::Bf16Accum || self.bf16_accum() {
+            return self.gemm_bf16_accum(a, b, None, c, m, n, k, 2);
+        }
+        self.gemm_lane(lane)
+            .nt(
+                &self.mat(a, m, k)?,
+                &self.mat(b, n, k)?,
+                &self.tt(c, &[m, n])?,
+            )
+            .map_err(metal_err)
+    }
+
+    /// `C [m, n] = A [m, k] @ B [k, n]`.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn gemm_nn(
+        &self,
+        lane: Lane,
+        a: &V,
+        b: &V,
+        c: &V,
+        m: usize,
+        k: usize,
+        n: usize,
+    ) -> Res<()> {
+        if lane == Lane::Bf16Accum || self.bf16_accum() {
+            return self.gemm_bf16_accum(a, b, None, c, m, n, k, 0);
+        }
+        self.gemm_lane(lane)
+            .nn(
+                &self.mat(a, m, k)?,
+                &self.mat(b, k, n)?,
+                &self.tt(c, &[m, n])?,
+            )
+            .map_err(metal_err)
+    }
+
+    /// `C [m, n] = A [k, m]^T @ B [k, n]`.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn gemm_tn(
+        &self,
+        lane: Lane,
+        a: &V,
+        b: &V,
+        c: &V,
+        m: usize,
+        k: usize,
+        n: usize,
+    ) -> Res<()> {
+        if lane == Lane::Bf16Accum || self.bf16_accum() {
+            return self.gemm_bf16_accum(a, b, None, c, m, n, k, 1);
+        }
+        self.gemm_lane(lane)
+            .tn(
+                &self.mat(a, k, m)?,
+                &self.mat(b, k, n)?,
+                &self.tt(c, &[m, n])?,
+            )
+            .map_err(metal_err)
     }
 
     fn linear(
@@ -2294,13 +2466,7 @@ impl Worker {
         let st = self.status(OP)?;
         self.check(&st, &xv, ST_IN)?;
         self.check_operand(&st, w, &wv, ST_IN)?;
-        self.gemm_lane(lane)
-            .nt(
-                &self.mat(&xv, rows, kin)?,
-                &self.mat(&wv, nout, kin)?,
-                &self.tt(&y, &[rows, nout])?,
-            )
-            .map_err(metal_err)?;
+        self.gemm_nt(lane, &xv, &wv, &y, rows, kin, nout)?;
         self.check(&st, &y, ST_OUT)?;
         Ok(self.keep(vec![y]))
     }
@@ -2325,7 +2491,9 @@ impl Worker {
         self.check(&st, &xv, ST_IN)?;
         self.check_operand(&st, w, &wv, ST_IN)?;
         self.check_operand(&st, bias, &bv, ST_IN)?;
-        if lane == Lane::Bf16 && self.rt.has_tensorops() {
+        if lane == Lane::Bf16Accum || self.bf16_accum() {
+            self.gemm_bf16_accum(&xv, &wv, Some(&bv), &y, rows, nout, kin, 2)?;
+        } else if lane == Lane::Bf16 && self.rt.has_tensorops() {
             let a = self.mat(&xv, rows, kin)?;
             let b = self.mat(&wv, nout, kin)?;
             let c = self.tt(&y, &[rows, nout])?;
@@ -2359,15 +2527,20 @@ impl Worker {
         self.check(&st, &xv, ST_IN)?;
         self.check_operand(&st, w, &wv, ST_IN)?;
         self.check(&st, &gv, ST_IN)?;
-        let x_t = self.mat(&xv, rows, kin)?;
-        let w_t = self.mat(&wv, nout, kin)?;
-        let g_t = self.mat(&gv, rows, nout)?;
-        self.gemm_lane(gx_lane)
-            .nn(&g_t, &w_t, &self.tt(&gx, &[rows, kin])?)
-            .map_err(metal_err)?;
-        self.gemm_lane(gw_lane)
-            .tn(&g_t, &x_t, &self.tt(&gw, &[nout, kin])?)
-            .map_err(metal_err)?;
+        if gx_lane == Lane::Bf16Accum || gw_lane == Lane::Bf16Accum || self.bf16_accum() {
+            self.gemm_nn(gx_lane, &gv, &wv, &gx, rows, nout, kin)?;
+            self.gemm_tn(gw_lane, &gv, &xv, &gw, nout, rows, kin)?;
+        } else {
+            let x_t = self.mat(&xv, rows, kin)?;
+            let w_t = self.mat(&wv, nout, kin)?;
+            let g_t = self.mat(&gv, rows, nout)?;
+            self.gemm_lane(gx_lane)
+                .nn(&g_t, &w_t, &self.tt(&gx, &[rows, kin])?)
+                .map_err(metal_err)?;
+            self.gemm_lane(gw_lane)
+                .tn(&g_t, &x_t, &self.tt(&gw, &[nout, kin])?)
+                .map_err(metal_err)?;
+        }
         self.check(&st, &gx, ST_OUT)?;
         self.check(&st, &gw, ST_OUT)?;
         Ok(self.keep(vec![gx, gw]))
@@ -2396,13 +2569,7 @@ impl Worker {
         self.check(&st, &xv, ST_IN)?;
         self.check_operand(&st, w, &wv, ST_IN)?;
         self.check(&st, &gv, ST_IN)?;
-        self.gemm_lane(lane)
-            .nn(
-                &self.mat(&gv, rows, nout)?,
-                &self.mat(&wv, nout, kin)?,
-                &self.tt(&gx, &[rows, kin])?,
-            )
-            .map_err(metal_err)?;
+        self.gemm_nn(lane, &gv, &wv, &gx, rows, nout, kin)?;
         self.check(&st, &gx, ST_OUT)?;
         Ok(self.keep(vec![gx]))
     }
@@ -2413,8 +2580,11 @@ impl Worker {
         let wv = self.view(side.w)?;
         let (rows, dim) = (side.rows, side.dim);
         let y = self.fresh(xv.n)?;
-        self.check(st, &xv, ST_IN)?;
-        self.check(st, &wv, ST_IN)?;
+        if rows == 0 || dim == 0 {
+            self.check(st, &xv, ST_IN)?;
+            self.check(st, &wv, ST_IN)?;
+        }
+        let bf16 = u32::from(self.bf16_accum());
         self.ktg("ojas_rms_fwd", rms_groups(rows), 1, RMS_THREADS, |b| {
             bind(b, &xv, 0);
             bind(b, &wv, 1);
@@ -2423,8 +2593,8 @@ impl Worker {
             set_u32(b, rows, 4);
             set_u32(b, dim, 5);
             set_f32(b, eps, 6);
+            set_u32(b, bf16, 7);
         })?;
-        self.check(st, &y, ST_OUT)?;
         Ok(y)
     }
 
@@ -2443,9 +2613,12 @@ impl Worker {
         let rstd = self.fresh(rows as usize)?;
         let chunks = rms_w_chunks(rows);
         let part = self.fresh(chunks as usize * dim as usize)?;
-        for v in [&xv, &wv, &gv] {
-            self.check(st, v, ST_IN)?;
+        if rows == 0 || dim == 0 {
+            for v in [&xv, &wv, &gv] {
+                self.check(st, v, ST_IN)?;
+            }
         }
+        let bf16 = u32::from(self.bf16_accum());
         self.ktg("ojas_rms_bwd_rows", rms_groups(rows), 1, RMS_THREADS, |b| {
             bind(b, &xv, 0);
             bind(b, &wv, 1);
@@ -2456,6 +2629,7 @@ impl Worker {
             set_u32(b, rows, 6);
             set_u32(b, dim, 7);
             set_f32(b, eps, 8);
+            set_u32(b, bf16, 9);
         })?;
         self.k2("ojas_rms_bwd_w_part", dim as usize, chunks as usize, |b| {
             bind(b, &xv, 0);
@@ -2464,15 +2638,16 @@ impl Worker {
             bind(b, &part, 3);
             set_u32(b, rows, 4);
             set_u32(b, dim, 5);
+            set_u32(b, bf16, 6);
         })?;
         self.k1("ojas_rms_bwd_w_sum", dim as usize, |b| {
             bind(b, &part, 0);
             bind(b, &gw, 1);
             set_u32(b, chunks, 2);
             set_u32(b, dim, 3);
+            bind_st(b, st, 4);
+            set_u32(b, bf16, 5);
         })?;
-        self.check(st, &gx, ST_OUT)?;
-        self.check(st, &gw, ST_OUT)?;
         Ok((gx, gw))
     }
 
@@ -2523,8 +2698,16 @@ impl Worker {
             RopeMode::Interleaved { time, heads } => (2, time, heads),
         };
         let st = self.status(op)?;
-        for v in [&xv, &cv, &sv] {
-            self.check(&st, v, ST_IN)?;
+        let covers_all = rows > 0
+            && dim > 0
+            && heads > 0
+            && time > 0
+            && (mode_u == 0 || (rows / heads) >= time)
+            && (mode_u == 1 || rotary == dim);
+        if !covers_all {
+            for v in [&xv, &cv, &sv] {
+                self.check(&st, v, ST_IN)?;
+            }
         }
         // Units: one per rotated pair, then one per copied column.
         let units = (rotary / 2 + (dim - rotary)) as usize;
@@ -2540,8 +2723,8 @@ impl Worker {
             set_u32(b, heads, 8);
             set_u32(b, u32::from(backward), 9);
             set_u32(b, rotary, 10);
+            bind_st(b, &st, 11);
         })?;
-        self.check(&st, &y, ST_OUT)?;
         Ok(self.keep(vec![y]))
     }
 
@@ -2605,12 +2788,13 @@ impl Worker {
         let o = self.fresh(qv.n)?;
         let lse = self.fresh(g.bh as usize * g.t as usize)?;
         let st = self.status(OP)?;
-        // No separate pass over Q, K or V. A non-finite Q or K makes a live
-        // score non-finite, which the kernel reports; a non-finite V shows
-        // up in O, which the output check reports.
+        // No separate pass over Q, K, V, O or LSE: `ojas_attn_fwd_d*` checks
+        // live scores, O and LSE in-kernel and sets ST_OUT when any is
+        // non-finite.
         if qv.n > 0 {
             let name = format!("ojas_attn_fwd_d{width}");
             let groups = (g.t as usize).div_ceil(ATTN_ROWS);
+            let bias_flags = if self.bf16_accum() { 32u32 } else { 0u32 };
             self.ktg(&name, groups, g.bh as usize, ATTN_THREADS, |b| {
                 bind(b, &qv, 0);
                 bind(b, &kv, 1);
@@ -2625,10 +2809,14 @@ impl Worker {
                 set_f32(b, scale, 10);
                 set_u32(b, g.t, 11);
                 set_u32(b, 0, 12);
+                bind(b, &qv, 13);
+                set_u32(b, bias_flags, 14);
+                set_u32(b, 1, 15);
+                set_u32(b, 1, 16);
+                set_u32(b, 1, 17);
+                set_u32(b, 1, 18);
             })?;
         }
-        self.check(&st, &o, ST_OUT)?;
-        self.check(&st, &lse, ST_OUT)?;
         Ok(self.keep(vec![o, lse]))
     }
 
@@ -2716,12 +2904,11 @@ impl Worker {
                 || g.window != 0
                 || extra.scalar_only()
                 || !matches!(g.d, 32 | 64 | 128 | 256)
-                || g.bias.is_some()
                 || g.has_lens
                 || g.kv_len == 0
             {
                 return Err(metal_err(format!(
-                    "{op}: the flash kernel runs non-causal head dims 32, 64, 128, 256 with no window, bias or key lengths, not causal {} window {} d {} bias {} lens {} splits {}",
+                    "{op}: the flash kernel runs non-causal head dims 32, 64, 128, 256 with no window or key lengths, not causal {} window {} d {} bias {} lens {} splits {}",
                     g.causal,
                     g.window,
                     g.d,
@@ -2753,12 +2940,16 @@ impl Worker {
         if let (Some(a), Some(b)) = (bias, bv.as_ref()) {
             self.check_operand(&st, a, b, ST_IN)?;
         }
+        let bf16_flag = if self.bf16_accum() { 32u32 } else { 0u32 };
         if g.flash {
             if qv.n > 0 {
                 // One threadgroup per 32 query rows of a plane, four
                 // simdgroups, no partials: `ojas_attn_fwd_d{width}` with `cross`.
                 let width = Self::attn_width(g.d)?;
                 let name = format!("ojas_attn_fwd_d{width}");
+                let [bias_b, bias_h, bias_q] = g.bias.unwrap_or([1, 1, 1]);
+                let bias_flags = (u32::from(g.bias.is_some()) << 1) | bf16_flag;
+                let bias_buf = bv.as_ref().unwrap_or(&qv);
                 self.ktg(
                     &name,
                     q_len.div_ceil(ATTN_ROWS),
@@ -2778,11 +2969,18 @@ impl Worker {
                         set_f32(b, scale, 10);
                         set_u32(b, g.kv_len, 11);
                         set_u32(b, 1, 12);
+                        bind(b, bias_buf, 13);
+                        set_u32(b, bias_flags, 14);
+                        set_u32(b, bias_b, 15);
+                        set_u32(b, bias_h, 16);
+                        set_u32(b, bias_q, 17);
+                        set_u32(b, g.heads, 18);
                     },
                 )?;
             }
         } else if let (true, Some(part)) = (qv.n > 0, part.as_ref()) {
-            let flags = (u32::from(g.bias.is_some()) << 1) | (u32::from(g.has_lens) << 2);
+            let flags =
+                (u32::from(g.bias.is_some()) << 1) | (u32::from(g.has_lens) << 2) | bf16_flag;
             let [bias_b, bias_h, bias_q] = g.bias.unwrap_or([1, 1, 1]);
             let (bias_buf, lens_buf) = (bv.as_ref().unwrap_or(&qv), lv.as_ref().unwrap_or(&qv));
             let rows = u32_of(planes * q_len)?;
@@ -2813,6 +3011,7 @@ impl Worker {
                     set_f32(b, scale, 18);
                 },
             )?;
+            let splits_flag = g.splits | if self.bf16_accum() { 0x8000_0000 } else { 0 };
             self.k1(
                 &format!("ojas_xattn_combine_d{}", g.d),
                 rows as usize,
@@ -2821,7 +3020,7 @@ impl Worker {
                     bind(b, &o, 1);
                     bind(b, &lse, 2);
                     set_u32(b, rows, 3);
-                    set_u32(b, g.splits, 4);
+                    set_u32(b, splits_flag, 4);
                 },
             )?;
         } else if qv.n > 0 {
@@ -2829,7 +3028,8 @@ impl Worker {
                 | (u32::from(g.bias.is_some()) << 1)
                 | (u32::from(g.has_lens) << 2)
                 | (u32::from(banded) << 3)
-                | (u32::from(extra.dead_rows) << 4);
+                | (u32::from(extra.dead_rows) << 4)
+                | bf16_flag;
             // `W` is the causal window, or the radius of the symmetric band
             // (the two never meet: the validator refuses a radius with a window).
             let window = if banded { extra.radius } else { g.window };
@@ -2943,16 +3143,11 @@ impl Worker {
                 set_u32(b, v, 3 + i);
             }
         })?;
-        self.gemm_lane(lane)
-            .nt(
-                &self.tt(&cols, &[rows, width])?,
-                &self.mat(&wv, out_c, width)?,
-                &self.tt(&prod, &[rows, out_c])?,
-            )
-            .map_err(metal_err)?;
+        self.gemm_nt(lane, &cols, &wv, &prod, rows, width, out_c)?;
         // Bound even when the kernel does not read it: every declared
         // argument is set.
         let bias_buf = bv.as_ref().unwrap_or(&xv);
+        let has_bias = u32::from(bv.is_some()) | if self.bf16_accum() { 2 } else { 0 };
         self.k1("ojas_conv_nchw", out_n, |b| {
             bind(b, &prod, 0);
             bind(b, bias_buf, 1);
@@ -2960,7 +3155,7 @@ impl Worker {
             set_u32(b, out_u, 3);
             set_u32(b, g.o, 4);
             set_u32(b, pixels_u, 5);
-            set_u32(b, u32::from(bv.is_some()), 6);
+            set_u32(b, has_bias, 6);
         })?;
         self.check(&st, &y, ST_OUT)?;
         Ok(self.keep(vec![y]))
@@ -3009,25 +3204,41 @@ impl Worker {
         if let (Some(a), Some(b)) = (bias, bv.as_ref()) {
             self.check_operand(&st, a, b, ST_IN)?;
         }
-        let gemm = self.gemm_lane(lane);
-        let weight = self.mat(&wv, o, c)?;
-        for image in 0..batch {
-            let input = V {
-                buf: xv.buf.clone(),
-                off: xv.off + image * c * pixels * 4,
-                n: c * pixels,
-            };
-            let output = V {
-                buf: y.buf.clone(),
-                off: image * o * pixels * 4,
-                n: o * pixels,
-            };
-            gemm.nn(
-                &weight,
-                &self.tt(&input, &[c, pixels])?,
-                &self.tt(&output, &[o, pixels])?,
-            )
-            .map_err(metal_err)?;
+        if lane == Lane::Bf16Accum || self.bf16_accum() {
+            for image in 0..batch {
+                let input = V {
+                    buf: xv.buf.clone(),
+                    off: xv.off + image * c * pixels * 4,
+                    n: c * pixels,
+                };
+                let output = V {
+                    buf: y.buf.clone(),
+                    off: image * o * pixels * 4,
+                    n: o * pixels,
+                };
+                self.gemm_nn(lane, &wv, &input, &output, o, c, pixels)?;
+            }
+        } else {
+            let gemm = self.gemm_lane(lane);
+            let weight = self.mat(&wv, o, c)?;
+            for image in 0..batch {
+                let input = V {
+                    buf: xv.buf.clone(),
+                    off: xv.off + image * c * pixels * 4,
+                    n: c * pixels,
+                };
+                let output = V {
+                    buf: y.buf.clone(),
+                    off: image * o * pixels * 4,
+                    n: o * pixels,
+                };
+                gemm.nn(
+                    &weight,
+                    &self.tt(&input, &[c, pixels])?,
+                    &self.tt(&output, &[o, pixels])?,
+                )
+                .map_err(metal_err)?;
+            }
         }
         if let Some(b) = bv.as_ref() {
             // y [batch, o, pixels] + bias [1, o, 1]; each thread reads and
@@ -3040,13 +3251,14 @@ impl Worker {
                 words([image, u32_of(pixels)?, 1]),
                 words([0, 1, 0]),
             );
+            let is_mul = if self.bf16_accum() { 2u32 } else { 0u32 };
             self.k1("ojas_bcast_binary", out_n, |k| {
                 bind(k, &y, 0);
                 bind(k, b, 1);
                 bind(k, &y, 2);
                 set_u32(k, out_u, 3);
                 set_u32(k, 3, 4);
-                set_u32(k, 0, 5);
+                set_u32(k, is_mul, 5);
                 k.bind_bytes(&shape, 6);
                 k.bind_bytes(&y_stride, 7);
                 k.bind_bytes(&bias_stride, 8);
@@ -3098,6 +3310,7 @@ impl Worker {
         // Bound even when the kernel does not read it: every declared
         // argument is set.
         let bias_buf = bv.as_ref().unwrap_or(&xv);
+        let has_bias = u32::from(bv.is_some()) | if self.bf16_accum() { 2 } else { 0 };
         self.k1("ojas_dwconv", out_n, |b| {
             bind(b, &xv, 0);
             bind(b, &wv, 1);
@@ -3116,7 +3329,7 @@ impl Worker {
                 g.padding[1],
                 g.oh,
                 g.ow,
-                u32::from(bv.is_some()),
+                has_bias,
             ]
             .into_iter()
             .enumerate()
@@ -3165,6 +3378,7 @@ impl Worker {
         self.check_operand(&st, w, &wv, ST_IN)?;
         self.check_operand(&st, b, &bv, ST_IN)?;
         let (width, chunks, chunk_len) = (g.width, g.chunks, g.chunk_len);
+        let bf16 = u32::from(self.bf16_accum());
         self.ktg(
             "ojas_gn_sum",
             chunks as usize,
@@ -3176,6 +3390,7 @@ impl Worker {
                 set_u32(bd, width, 2);
                 set_u32(bd, chunks, 3);
                 set_u32(bd, chunk_len, 4);
+                set_u32(bd, bf16, 5);
             },
         )?;
         self.ktg(
@@ -3191,6 +3406,7 @@ impl Worker {
                 set_u32(bd, width, 4);
                 set_u32(bd, chunks, 5);
                 set_u32(bd, chunk_len, 6);
+                set_u32(bd, bf16, 7);
             },
         )?;
         self.ktg(
@@ -3214,6 +3430,7 @@ impl Worker {
                 set_u32(bd, g.per_group, 12);
                 set_u32(bd, g.groups, 13);
                 set_f32(bd, eps, 14);
+                set_u32(bd, bf16, 15);
             },
         )?;
         // `ojas_gn_apply` flags a non-finite output and a non-finite mean or
@@ -3364,6 +3581,7 @@ impl Worker {
         let y = self.fresh(out_n)?;
         let st = self.status(OP)?;
         self.check(&st, &xv, ST_IN)?;
+        let align_flags = u32::from(g.align_corners) | if self.bf16_accum() { 2 } else { 0 };
         self.k1("ojas_bilinear", out_n, |b| {
             bind(b, &xv, 0);
             bind(b, &y, 1);
@@ -3374,7 +3592,7 @@ impl Worker {
             set_u32(b, g.ow, 6);
             set_f32(b, g.scale_y, 7);
             set_f32(b, g.scale_x, 8);
-            set_u32(b, u32::from(g.align_corners), 9);
+            set_u32(b, align_flags, 9);
             bind_st(b, &st, 10);
         })?;
         Ok(self.keep(vec![y]))
@@ -3437,25 +3655,17 @@ impl Worker {
             &[c * h * wd, wd, 1, h * wd],
             &st,
         )?;
-        self.gemm_lane(Lane::ExactF32)
-            .nn(
-                &self.tt(&xp, &[rows, g.c as usize])?,
-                &self.mat(&wv, g.c as usize, okk)?,
-                &self.tt(&prod, &[rows, okk])?,
-            )
-            .map_err(metal_err)?;
+        self.gemm_nn(Lane::ExactF32, &xp, &wv, &prod, rows, g.c as usize, okk)?;
         // Bound even when the kernel does not read it: every declared
         // argument is set.
         let bias_buf = bv.as_ref().unwrap_or(&xv);
+        let has_bias = u32::from(bv.is_some()) | if self.bf16_accum() { 2 } else { 0 };
         self.k1("ojas_convt_nchw", out_n, |b| {
             bind(b, &prod, 0);
             bind(b, bias_buf, 1);
             bind(b, &y, 2);
             set_u32(b, out_u, 3);
-            for (i, v) in [g.o, g.h, g.w, kh, kw, u32::from(bv.is_some())]
-                .into_iter()
-                .enumerate()
-            {
+            for (i, v) in [g.o, g.h, g.w, kh, kw, has_bias].into_iter().enumerate() {
                 set_u32(b, v, 4 + i);
             }
         })?;
@@ -3595,11 +3805,17 @@ impl Worker {
         let dk = self.fresh(kv.n)?;
         let dv = self.fresh(vv.n)?;
         let st = self.status(OP)?;
-        for x in [&qv, &kv, &vv, &ov, &lv, &gv] {
+        for x in [&qv, &kv, &vv] {
             self.check(&st, x, ST_IN)?;
+        }
+        if qv.n == 0 {
+            for x in [&ov, &lv, &gv] {
+                self.check(&st, x, ST_IN)?;
+            }
         }
         if qv.n > 0 {
             let rows_u32 = u32_of(rows)?;
+            let d_flag = g.d | if self.bf16_accum() { 0x8000_0000 } else { 0 };
             self.ktg(
                 "ojas_attn_bwd_dr",
                 rows.div_ceil(ATTN_THREADS / 32),
@@ -3610,7 +3826,9 @@ impl Worker {
                     bind(b, &ov, 1);
                     bind(b, &dvec, 2);
                     set_u32(b, rows_u32, 3);
-                    set_u32(b, g.d, 4);
+                    set_u32(b, d_flag, 4);
+                    bind(b, &lv, 5);
+                    bind_st(b, &st, 6);
                 },
             )?;
             let groups = (g.t as usize).div_ceil(ATTN_ROWS);
@@ -3631,7 +3849,7 @@ impl Worker {
                     inputs(b);
                     bind(b, &dq, 6);
                     set_u32(b, g.t, 7);
-                    set_u32(b, g.d, 8);
+                    set_u32(b, d_flag, 8);
                     set_u32(b, g.rep, 9);
                     set_u32(b, g.window, 10);
                     set_f32(b, scale, 11);
@@ -3647,7 +3865,7 @@ impl Worker {
                     bind(b, &dk, 6);
                     bind(b, &dv, 7);
                     set_u32(b, g.t, 8);
-                    set_u32(b, g.d, 9);
+                    set_u32(b, d_flag, 9);
                     set_u32(b, g.rep, 10);
                     set_u32(b, g.window, 11);
                     set_f32(b, scale, 12);
@@ -3703,35 +3921,37 @@ impl Worker {
         let plane = u32_of(av.n)?;
         let st = self.status(op)?;
         // `x` and `w` are read only by tessl GEMMs, so they keep standalone
-        // checks in both directions. The backward kernels check `bias`,
-        // `attn`, `gy`, `pre` (or the saved scale), `d_attn` and `d_bias`
-        // themselves (every row reads every head's bias, and an empty
-        // operand was refused).
+        // checks in both directions. The forward and backward kernels check
+        // `bias`, `attn`, `gy`, `pre` (or the saved scale), `out`, `d_attn`
+        // and `d_bias` themselves (every row reads every head's bias, and an
+        // empty operand was refused).
         self.check(&st, &xv, ST_IN)?;
         self.check(&st, &wv, ST_IN)?;
-        if gv.is_none() {
-            self.check(&st, &bv, ST_IN)?;
-            self.check(&st, &av, ST_IN)?;
-        }
         // The saved backward never reads `bias`, but a non-finite bias is
         // the same refusal it is for the recomputing one and the CPU.
         if sv.is_some() {
             self.check(&st, &bv, ST_IN)?;
         }
-        let x_t = self.mat(&xv, r, di)?;
-        let w_t = self.mat(&wv, h, di)?;
+        let x_w_t = if self.bf16_accum() {
+            None
+        } else {
+            Some((self.mat(&xv, r, di)?, self.mat(&wv, h, di)?))
+        };
         let pre = if sv.is_some() {
             None
         } else {
             let pre = self.fresh(r * h)?;
-            GemmOperands::ExactF32
-                .nt(&x_t, &w_t, &self.tt(&pre, &[r, h])?)
-                .map_err(metal_err)?;
+            if let Some((x_t, w_t)) = &x_w_t {
+                self.gemm_lane(Lane::ExactF32)
+                    .nt(x_t, w_t, &self.tt(&pre, &[r, h])?)
+                    .map_err(metal_err)?;
+            } else {
+                self.gemm_nt(Lane::Bf16Accum, &xv, &wv, &pre, r, di, h)?;
+            }
             Some(pre)
         };
         let Some(g) = gv else {
             let pre = pre.ok_or_else(|| metal_err(format!("{op}: forward without logits")))?;
-            self.check(&st, &pre, ST_OUT)?;
             let out = self.fresh(av.n)?;
             self.k2("ojas_per_head_gate_fwd", dh as usize, r * h, |b| {
                 bind(b, &av, 0);
@@ -3745,8 +3965,8 @@ impl Worker {
                 set_u32(b, units, 8);
                 set_u32(b, heads, 9);
                 set_u32(b, plane, 10);
+                bind_st(b, &st, 11);
             })?;
-            self.check(&st, &out, ST_OUT)?;
             if !matches!(mode, GateMode::ForwardSaving) {
                 return Ok(self.keep(vec![out]));
             }
@@ -3767,6 +3987,7 @@ impl Worker {
         let d_bias = self.fresh(h)?;
         let gx = self.fresh(r * di)?;
         let gw = self.fresh(h * di)?;
+        let heads_flag = heads | if self.bf16_accum() { 0x8000_0000 } else { 0 };
         match (&pre, &sv) {
             (_, Some(scale)) => self.k1("ojas_per_head_gate_bwd_saved", r * h, |b| {
                 bind(b, &av, 0);
@@ -3775,7 +3996,7 @@ impl Worker {
                 bind(b, &d_attn, 3);
                 bind(b, &d_pre, 4);
                 set_u32(b, rows, 5);
-                set_u32(b, heads, 6);
+                set_u32(b, heads_flag, 6);
                 set_u32(b, dh, 7);
                 set_u32(b, plane, 8);
                 set_u32(b, units, 9);
@@ -3789,7 +4010,7 @@ impl Worker {
                 bind(b, &d_attn, 4);
                 bind(b, &d_pre, 5);
                 set_u32(b, rows, 6);
-                set_u32(b, heads, 7);
+                set_u32(b, heads_flag, 7);
                 set_u32(b, dh, 8);
                 set_u32(b, plane, 9);
                 set_u32(b, units, 10);
@@ -3802,18 +4023,23 @@ impl Worker {
             bind(b, &d_pre, 0);
             bind(b, &d_bias, 1);
             set_u32(b, rows, 2);
-            set_u32(b, heads, 3);
+            set_u32(b, heads_flag, 3);
             set_u32(b, units, 4);
             set_u32(b, heads, 5);
             bind_st(b, &st, 6);
         })?;
-        let dp_t = self.tt(&d_pre, &[r, h])?;
-        GemmOperands::ExactF32
-            .nn(&dp_t, &w_t, &self.tt(&gx, &[r, di])?)
-            .map_err(metal_err)?;
-        GemmOperands::ExactF32
-            .tn(&dp_t, &x_t, &self.tt(&gw, &[h, di])?)
-            .map_err(metal_err)?;
+        if let Some((x_t, w_t)) = &x_w_t {
+            let dp_t = self.tt(&d_pre, &[r, h])?;
+            GemmOperands::ExactF32
+                .nn(&dp_t, w_t, &self.tt(&gx, &[r, di])?)
+                .map_err(metal_err)?;
+            GemmOperands::ExactF32
+                .tn(&dp_t, x_t, &self.tt(&gw, &[h, di])?)
+                .map_err(metal_err)?;
+        } else {
+            self.gemm_nn(Lane::Bf16Accum, &d_pre, &wv, &gx, r, h, di)?;
+            self.gemm_tn(Lane::Bf16Accum, &d_pre, &xv, &gw, h, r, di)?;
+        }
         self.check(&st, &gx, ST_OUT)?;
         self.check(&st, &gw, ST_OUT)?;
         Ok(self.keep(vec![gx, gw, d_bias, d_attn]))
@@ -4041,19 +4267,31 @@ impl Worker {
         for v in [&xv, &wv] {
             self.check(&st, v, ST_IN)?;
         }
-        conv1d_silu(
-            &self.rt,
-            Cols::dense(&xv.buf, g.channels),
-            &wv.buf,
-            g.width,
-            StateIn::Zero,
-            &y.buf,
-            None,
-            g.batch,
-            g.seq,
-            g.channels,
-        )
-        .map_err(metal_err)?;
+        if self.bf16_accum() {
+            self.k1("ojas_conv1d_silu_fwd", xv.n, |b| {
+                bind(b, &xv, 0);
+                bind(b, &wv, 1);
+                bind(b, &y, 2);
+                set_u32(b, g.batch, 3);
+                set_u32(b, g.seq, 4);
+                set_u32(b, g.channels, 5);
+                set_u32(b, g.width, 6);
+            })?;
+        } else {
+            conv1d_silu(
+                &self.rt,
+                Cols::dense(&xv.buf, g.channels),
+                &wv.buf,
+                g.width,
+                StateIn::Zero,
+                &y.buf,
+                None,
+                g.batch,
+                g.seq,
+                g.channels,
+            )
+            .map_err(metal_err)?;
+        }
         self.check(&st, &y, ST_OUT)?;
         Ok(self.keep(vec![y]))
     }
@@ -4068,20 +4306,58 @@ impl Worker {
         for v in [&xv, &wv, &gv] {
             self.check(&st, v, ST_IN)?;
         }
-        conv1d_silu_bwd(
-            &self.rt,
-            Cols::dense(&xv.buf, g.channels),
-            &wv.buf,
-            g.width,
-            Cols::dense(&gv.buf, g.channels),
-            Cols::dense(&dx.buf, g.channels),
-            &dw.buf,
-            &scratch.buf,
-            g.batch,
-            g.seq,
-            g.channels,
-        )
-        .map_err(metal_err)?;
+        if self.bf16_accum() {
+            let chunks = (g.batch * g.seq).div_ceil(CONV1D_BWD_ROWS as u32);
+            let dk = g.channels * g.width;
+            self.k1("ojas_conv1d_silu_bwd_dx", xv.n, |b| {
+                bind(b, &xv, 0);
+                bind(b, &wv, 1);
+                bind(b, &gv, 2);
+                bind(b, &dx, 3);
+                set_u32(b, g.batch, 4);
+                set_u32(b, g.seq, 5);
+                set_u32(b, g.channels, 6);
+                set_u32(b, g.width, 7);
+            })?;
+            self.k2(
+                "ojas_conv1d_silu_bwd_dw",
+                dk as usize,
+                chunks as usize,
+                |b| {
+                    bind(b, &xv, 0);
+                    bind(b, &wv, 1);
+                    bind(b, &gv, 2);
+                    bind(b, &scratch, 3);
+                    set_u32(b, g.batch, 4);
+                    set_u32(b, g.seq, 5);
+                    set_u32(b, g.channels, 6);
+                    set_u32(b, g.width, 7);
+                },
+            )?;
+            self.k1("ojas_rms_bwd_w_sum", dk as usize, |b| {
+                bind(b, &scratch, 0);
+                bind(b, &dw, 1);
+                set_u32(b, chunks, 2);
+                set_u32(b, dk, 3);
+                bind_st(b, &st, 4);
+                set_u32(b, 1, 5);
+            })?;
+        } else {
+            conv1d_silu_bwd(
+                &self.rt,
+                Cols::dense(&xv.buf, g.channels),
+                &wv.buf,
+                g.width,
+                Cols::dense(&gv.buf, g.channels),
+                Cols::dense(&dx.buf, g.channels),
+                &dw.buf,
+                &scratch.buf,
+                g.batch,
+                g.seq,
+                g.channels,
+            )
+            .map_err(metal_err)?;
+        }
         for v in [&dx, &dw] {
             self.check(&st, v, ST_OUT)?;
         }
@@ -4098,22 +4374,34 @@ impl Worker {
         for v in [&xv, &zv, &wv] {
             self.check(&st, v, ST_IN)?;
         }
-        let out = OutCols {
-            cols: Cols::dense(&y.buf, dim),
-            dtype: DType::F32,
-        };
-        gated_rms_norm(
-            &self.rt,
-            Cols::dense(&xv.buf, dim),
-            Cols::dense(&zv.buf, dim),
-            &wv.buf,
-            out,
-            rows,
-            1,
-            dim,
-            eps,
-        )
-        .map_err(metal_err)?;
+        if self.bf16_accum() {
+            self.k1("ojas_gated_rms_fwd", rows as usize, |b| {
+                bind(b, &xv, 0);
+                bind(b, &zv, 1);
+                bind(b, &wv, 2);
+                bind(b, &y, 3);
+                set_u32(b, rows, 4);
+                set_u32(b, dim, 5);
+                set_f32(b, eps, 6);
+            })?;
+        } else {
+            let out = OutCols {
+                cols: Cols::dense(&y.buf, dim),
+                dtype: DType::F32,
+            };
+            gated_rms_norm(
+                &self.rt,
+                Cols::dense(&xv.buf, dim),
+                Cols::dense(&zv.buf, dim),
+                &wv.buf,
+                out,
+                rows,
+                1,
+                dim,
+                eps,
+            )
+            .map_err(metal_err)?;
+        }
         self.check(&st, &y, ST_OUT)?;
         Ok(self.keep(vec![y]))
     }
@@ -4133,22 +4421,46 @@ impl Worker {
         for v in [&xv, &zv, &wv, &gv] {
             self.check(&st, v, ST_IN)?;
         }
-        gated_rms_norm_bwd(
-            &self.rt,
-            Cols::dense(&xv.buf, dim),
-            Cols::dense(&zv.buf, dim),
-            &wv.buf,
-            Cols::dense(&gv.buf, dim),
-            Cols::dense(&dx.buf, dim),
-            Cols::dense(&dz.buf, dim),
-            &dw.buf,
-            &scratch.buf,
-            rows,
-            1,
-            dim,
-            eps,
-        )
-        .map_err(metal_err)?;
+        if self.bf16_accum() {
+            let chunks = rows.div_ceil(GATED_RMS_BWD_ROWS as u32);
+            self.ktg("ojas_gated_rms_bwd_part", chunks as usize, 1, 256, |b| {
+                bind(b, &xv, 0);
+                bind(b, &zv, 1);
+                bind(b, &wv, 2);
+                bind(b, &gv, 3);
+                bind(b, &dx, 4);
+                bind(b, &dz, 5);
+                bind(b, &scratch, 6);
+                set_u32(b, rows, 7);
+                set_u32(b, dim, 8);
+                set_f32(b, eps, 9);
+            })?;
+            self.k1("ojas_rms_bwd_w_sum", dim as usize, |b| {
+                bind(b, &scratch, 0);
+                bind(b, &dw, 1);
+                set_u32(b, chunks, 2);
+                set_u32(b, dim, 3);
+                bind_st(b, &st, 4);
+                set_u32(b, 1, 5);
+            })?;
+        } else {
+            gated_rms_norm_bwd(
+                &self.rt,
+                Cols::dense(&xv.buf, dim),
+                Cols::dense(&zv.buf, dim),
+                &wv.buf,
+                Cols::dense(&gv.buf, dim),
+                Cols::dense(&dx.buf, dim),
+                Cols::dense(&dz.buf, dim),
+                &dw.buf,
+                &scratch.buf,
+                rows,
+                1,
+                dim,
+                eps,
+            )
+            .map_err(metal_err)?;
+        }
         for v in [&dx, &dz, &dw] {
             self.check(&st, v, ST_OUT)?;
         }
@@ -4334,6 +4646,7 @@ impl Worker {
             set_u32(b, heads, 6);
             bind_st(b, &st, 7);
         })?;
+        let bf16 = u32::from(self.bf16_accum());
         self.k1("ojas_gdn_decay_bwd_sum", heads as usize, |b| {
             bind(b, &av, 0);
             bind(b, &lv, 1);
@@ -4345,6 +4658,7 @@ impl Worker {
             set_u32(b, rows, 7);
             set_u32(b, heads, 8);
             bind_st(b, &st, 9);
+            set_u32(b, bf16, 10);
         })?;
         Ok(self.keep(vec![da, dlog, ddt]))
     }
@@ -4392,12 +4706,14 @@ impl Worker {
         let n = u32_of(xv.n)?;
         let out = self.fresh(xv.n)?;
         let st = self.status(OP)?;
+        let bf16 = u32::from(self.bf16_accum());
         self.k1("ojas_add_fwd", xv.n, |b| {
             bind(b, &xv, 0);
             bind(b, &yv, 1);
             bind(b, &out, 2);
             set_u32(b, n, 3);
             bind_st(b, &st, 4);
+            set_u32(b, bf16, 5);
         })?;
         Ok(self.keep(vec![out]))
     }
@@ -4412,8 +4728,20 @@ impl Worker {
         for v in [&xv, &wv, &bv] {
             self.check(&st, v, ST_IN)?;
         }
-        tessl::bert::layer_norm(&self.rt, &xv.buf, &wv.buf, &bv.buf, &y.buf, rows, dim, eps)
-            .map_err(metal_err)?;
+        if self.bf16_accum() {
+            self.k1("ojas_ln_fwd", rows as usize, |b| {
+                bind(b, &xv, 0);
+                bind(b, &wv, 1);
+                bind(b, &bv, 2);
+                bind(b, &y, 3);
+                set_u32(b, rows, 4);
+                set_u32(b, dim, 5);
+                set_f32(b, eps, 6);
+            })?;
+        } else {
+            tessl::bert::layer_norm(&self.rt, &xv.buf, &wv.buf, &bv.buf, &y.buf, rows, dim, eps)
+                .map_err(metal_err)?;
+        }
         self.check(&st, &y, ST_OUT)?;
         Ok(self.keep(vec![y]))
     }
@@ -4462,13 +4790,14 @@ impl Worker {
         let words = |v: &[u32]| -> Vec<u8> { v.iter().flat_map(|w| w.to_ne_bytes()).collect() };
         let (shape_bytes, x_bytes, y_bytes) = (words(oshape), words(xstride), words(ystride));
         let st = self.status(op)?;
+        let mode = u32::from(mul) | if self.bf16_accum() { 2 } else { 0 };
         self.k1("ojas_bcast_binary", out_n, |b| {
             bind(b, &xv, 0);
             bind(b, &yv, 1);
             bind(b, &out, 2);
             set_u32(b, n, 3);
             set_u32(b, rank, 4);
-            set_u32(b, u32::from(mul), 5);
+            set_u32(b, mode, 5);
             b.bind_bytes(&shape_bytes, 6);
             b.bind_bytes(&x_bytes, 7);
             b.bind_bytes(&y_bytes, 8);
@@ -4501,12 +4830,14 @@ impl Worker {
         let xv = self.view(x)?;
         let y = self.fresh(xv.n)?;
         let st = self.status(OP)?;
+        let bf16 = u32::from(self.bf16_accum());
         self.k1("ojas_softmax_rows", rows as usize, |b| {
             bind(b, &xv, 0);
             bind(b, &y, 1);
             set_u32(b, rows, 2);
             set_u32(b, dim, 3);
             bind_st(b, &st, 4);
+            set_u32(b, bf16, 5);
         })?;
         Ok(self.keep(vec![y]))
     }
@@ -4553,6 +4884,7 @@ impl Worker {
         let loss_rows = self.fresh(rows as usize)?;
         let gout = if grad { Some(self.fresh(lv.n)?) } else { None };
         let st = self.status(op)?;
+        let bf16 = u32::from(self.bf16_accum());
         // The logits' finite check and the gradient's are inside
         // `ojas_ce_fused` (every element of both is still checked). The
         // targets were range-checked and counted on the host.
@@ -4568,6 +4900,7 @@ impl Worker {
             set_u32(b, ignore.unwrap_or(0), 8);
             set_u32(b, u32::from(grad), 9);
             set_u32(b, valid, 10);
+            set_u32(b, bf16, 11);
         })?;
         if let Some(g) = gout {
             return Ok(self.keep(vec![g]));
@@ -4689,11 +5022,12 @@ impl Worker {
 
     fn add_into(&self, src: &V, dst: &V, assign: bool) -> Res<()> {
         let n = u32_of(dst.n)?;
+        let mode = u32::from(assign) | if self.bf16_accum() { 2 } else { 0 };
         self.k1("ojas_add_into", dst.n, |b| {
             bind(b, src, 0);
             bind(b, dst, 1);
             set_u32(b, n, 2);
-            set_u32(b, u32::from(assign), 3);
+            set_u32(b, mode, 3);
         })
     }
 
@@ -4764,15 +5098,17 @@ impl Worker {
             let rr = g.rt.min(n - row0);
             let rr_u = u32_of(rr)?;
             let x_t = self.rows_operand(&xv, row0, rr, d, stage_x.as_ref())?;
+            let x_v = sub(&xv, row0 * d, rr * d);
             let t_rows = sub(&tv, row0, rr);
             for pass in 0..if g.grads.any() { 2 } else { 1 } {
                 for (ci, col0) in (0..v).step_by(g.ct).enumerate() {
                     let cc = g.ct.min(v - col0);
                     let (cc_u, col0_u) = (u32_of(cc)?, u32_of(col0)?);
-                    let w_t = match &wv {
-                        LceWeight::F32(wv) => {
-                            self.rows_operand(wv, col0, cc, d, stage_w.as_ref())?
-                        }
+                    let (w_t, w_v) = match &wv {
+                        LceWeight::F32(wv) => (
+                            self.rows_operand(wv, col0, cc, d, stage_w.as_ref())?,
+                            sub(wv, col0 * d, cc * d),
+                        ),
                         // Nothing else writes the stage, so with one
                         // vocabulary tile the first widening serves every
                         // row tile and both passes.
@@ -4784,19 +5120,25 @@ impl Worker {
                             if !one_col_tile || (pass == 0 && row0 == 0) {
                                 self.widen_into(wh, col0 * d, &dst)?;
                             }
-                            self.tt(&dst, &[cc, d])?
+                            (self.tt(&dst, &[cc, d])?, dst)
                         }
                     };
                     let tile_t = self.tt(&tile, &[rr, cc])?;
+                    let tile_v = sub(&tile, 0, rr * cc);
                     // With one vocabulary tile, pass 1 left this row tile's
                     // logits in `tile` (the stats kernel only reads it), so
                     // pass 2 starts from them instead of a second GEMM.
                     if pass == 0 || !one_col_tile {
-                        GemmOperands::ExactF32
-                            .nt(&x_t, &w_t, &tile_t)
-                            .map_err(metal_err)?;
+                        if self.bf16_accum() {
+                            self.gemm_nt(Lane::Bf16Accum, &x_v, &w_v, &tile_v, rr, d, cc)?;
+                        } else {
+                            GemmOperands::ExactF32
+                                .nt(&x_t, &w_t, &tile_t)
+                                .map_err(metal_err)?;
+                        }
                     }
                     if pass == 0 {
+                        let bf16 = u32::from(self.bf16_accum());
                         self.ktg("ojas_lce_stats", rr, 1, 256, |b| {
                             bind(b, &tile, 0);
                             bind(b, &t_rows, 1);
@@ -4806,6 +5148,7 @@ impl Worker {
                             set_u32(b, cc_u, 5);
                             set_u32(b, col0_u, 6);
                             set_u32(b, u32::from(ci == 0), 7);
+                            set_u32(b, bf16, 8);
                         })?;
                         continue;
                     }
@@ -4824,16 +5167,24 @@ impl Worker {
                     })?;
                     if let (Some(gx), Some(gx_tmp)) = (&gx, &gx_tmp) {
                         let gx_rows = sub(gx_tmp, 0, rr * d);
-                        GemmOperands::ExactF32
-                            .nn(&tile_t, &w_t, &self.tt(&gx_rows, &[rr, d])?)
-                            .map_err(metal_err)?;
+                        if self.bf16_accum() {
+                            self.gemm_nn(Lane::Bf16Accum, &tile_v, &w_v, &gx_rows, rr, cc, d)?;
+                        } else {
+                            GemmOperands::ExactF32
+                                .nn(&tile_t, &w_t, &self.tt(&gx_rows, &[rr, d])?)
+                                .map_err(metal_err)?;
+                        }
                         self.add_into(&gx_rows, &sub(gx, row0 * d, rr * d), ci == 0)?;
                     }
                     if let (Some(gw), Some(gw_tmp)) = (&gw, &gw_tmp) {
                         let gw_rows = sub(gw_tmp, 0, cc * d);
-                        GemmOperands::ExactF32
-                            .tn(&tile_t, &x_t, &self.tt(&gw_rows, &[cc, d])?)
-                            .map_err(metal_err)?;
+                        if self.bf16_accum() {
+                            self.gemm_tn(Lane::Bf16Accum, &tile_v, &x_v, &gw_rows, cc, rr, d)?;
+                        } else {
+                            GemmOperands::ExactF32
+                                .tn(&tile_t, &x_t, &self.tt(&gw_rows, &[cc, d])?)
+                                .map_err(metal_err)?;
+                        }
                         self.add_into(&gw_rows, &sub(gw, col0 * d, cc * d), row0 == 0)?;
                     }
                 }
@@ -4903,6 +5254,7 @@ impl Worker {
             out.clone()
         };
         let splits = u32_of(splits)?;
+        let splits_flag = splits | if self.bf16_accum() { 0x8000_0000 } else { 0 };
         self.ktg(
             "ojas_cached_attn",
             groups * splits as usize,
@@ -4921,7 +5273,7 @@ impl Worker {
                 set_u32(b, cap, 9);
                 set_u32(b, kv_len, 10);
                 set_f32(b, scale, 11);
-                set_u32(b, splits, 12);
+                set_u32(b, splits_flag, 12);
                 set_u32(b, chunk, 13);
                 bind(b, &part, 14);
                 set_u32(b, window, 15);
@@ -4939,7 +5291,7 @@ impl Worker {
                     bind(b, &out, 1);
                     bind_st(b, &st, 2);
                     set_u32(b, d, 3);
-                    set_u32(b, splits, 4);
+                    set_u32(b, splits_flag, 4);
                 },
             )?;
         }
@@ -5001,6 +5353,7 @@ impl Worker {
         }
         let (av, gv) = (self.view(acc)?, self.view(g)?);
         let n = u32_of(av.n)?;
+        let n_flag = n | if self.bf16_accum() { 0x8000_0000 } else { 0 };
         let target = if in_place {
             av
         } else {
@@ -5010,11 +5363,11 @@ impl Worker {
         };
         let st = self.status(OP)?;
         for name in ["ojas_acc_check", "ojas_acc_apply"] {
-            self.k1(name, target.n, |b| {
+            self.k1(name, target.n.div_ceil(CHECK_PER_THREAD), |b| {
                 bind(b, &target, 0);
                 bind(b, &gv, 1);
                 bind_st(b, &st, 2);
-                set_u32(b, n, 3);
+                set_u32(b, n_flag, 3);
             })?;
         }
         Ok(if in_place {
@@ -5158,12 +5511,24 @@ impl Worker {
             "ojas_axpby"
         };
         for _ in 0..5 {
-            lane.nt(&x_t, &x_t, &a_t).map_err(metal_err)?;
+            if self.bf16_accum() {
+                self.gemm_nt(Lane::Bf16Accum, &x, &x, &a, r, c, r)?;
+            } else {
+                lane.nt(&x_t, &x_t, &a_t).map_err(metal_err)?;
+            }
             round(&a)?;
-            lane.nn(&a_t, &a_t, &a2_t).map_err(metal_err)?;
+            if self.bf16_accum() {
+                self.gemm_nn(Lane::Bf16Accum, &a, &a, &a2, r, r, r)?;
+            } else {
+                lane.nn(&a_t, &a_t, &a2_t).map_err(metal_err)?;
+            }
             round(&a2)?;
             self.axpby(comb, &a, &a2, &bm, MUON_NS5_B as f32, MUON_NS5_C as f32)?;
-            lane.nn(&bm_t, &x_t, &bx_t).map_err(metal_err)?;
+            if self.bf16_accum() {
+                self.gemm_nn(Lane::Bf16Accum, &bm, &x, &bx, r, r, c)?;
+            } else {
+                lane.nn(&bm_t, &x_t, &bx_t).map_err(metal_err)?;
+            }
             round(&bx)?;
             self.axpby(comb, &x, &bx, &x, MUON_NS5_A as f32, 1.0)?;
             self.check(&st, &x, ST_OUT)?;
@@ -5221,7 +5586,7 @@ mod tests {
     /// can, and nothing is resident when tessl refuses it.
     fn oversize_worker() -> (Worker, Arc<Waits>) {
         let waits = Arc::new(Waits::default());
-        let w = Worker::open(Arc::clone(&waits), 1 << 44).expect("Metal device");
+        let w = Worker::open(Arc::clone(&waits), Budget::new(1 << 44)).expect("Metal device");
         (w, waits)
     }
 
@@ -5541,7 +5906,8 @@ mod tests {
     /// parity tests' tolerance. One past the compiled width is refused.
     #[test]
     fn tiled_backward_matches_cpu_at_head_dims_up_to_256() {
-        let mut w = Worker::open(Arc::new(Waits::default()), 8 << 30).expect("Metal device");
+        let mut w =
+            Worker::open(Arc::new(Waits::default()), Budget::new(8 << 30)).expect("Metal device");
         let cpu = ojas_cpu::CpuBackend::new(Budget::new(8 << 30))
             .with_numerics(ojas_core::Numerics::Exact);
         for (bh, t, d) in [
@@ -5642,7 +6008,8 @@ mod tests {
     /// the parity tests' tolerance.
     #[test]
     fn forward_matches_cpu_at_head_dims_up_to_256() {
-        let mut w = Worker::open(Arc::new(Waits::default()), 8 << 30).expect("Metal device");
+        let mut w =
+            Worker::open(Arc::new(Waits::default()), Budget::new(8 << 30)).expect("Metal device");
         let cpu = ojas_cpu::CpuBackend::new(Budget::new(8 << 30))
             .with_numerics(ojas_core::Numerics::Exact);
         for (bh, t, d) in [

@@ -45,6 +45,7 @@ impl Worker {
         let st = self.status(OP)?;
         self.check_operand(&st, b, &bv, ST_IN)?;
         let threads = row_threads(g.dim) as usize;
+        let bf16 = u32::from(self.bf16_accum());
         self.ktg("ojas_ln_bwd_rows", rows, 1, threads, |bd| {
             bind(bd, &xv, 0);
             bind(bd, &wv, 1);
@@ -55,6 +56,7 @@ impl Worker {
             set_u32(bd, g.rows, 6);
             set_u32(bd, g.dim, 7);
             set_f32(bd, eps, 8);
+            set_u32(bd, bf16, 9);
         })?;
         self.k2("ojas_ln_bwd_cols_part", dim, g.splits as usize, |bd| {
             bind(bd, &xv, 0);
@@ -64,6 +66,7 @@ impl Worker {
             set_u32(bd, g.rows, 4);
             set_u32(bd, g.dim, 5);
             set_u32(bd, g.chunk, 6);
+            set_u32(bd, bf16, 7);
         })?;
         self.k1("ojas_cols_fin4", dim, |bd| {
             bind(bd, &part, 0);
@@ -72,6 +75,7 @@ impl Worker {
             bind_st(bd, &st, 3);
             set_u32(bd, g.dim, 4);
             set_u32(bd, g.splits, 5);
+            set_u32(bd, bf16, 6);
         })?;
         Ok(self.keep(vec![gx, gw, gb]))
     }
@@ -115,6 +119,7 @@ impl Worker {
         let part = self.fresh(g.splits as usize * channels * 4)?;
         let st = self.status(OP)?;
         self.check_operand(&st, b, &bv, ST_IN)?;
+        let bf16 = u32::from(self.bf16_accum());
         self.k1("ojas_cln_bwd_pos", positions, |bd| {
             bind(bd, &xv, 0);
             bind(bd, &wv, 1);
@@ -126,6 +131,7 @@ impl Worker {
             set_u32(bd, g.channels, 7);
             set_u32(bd, g.spatial, 8);
             set_f32(bd, eps, 9);
+            set_u32(bd, bf16, 10);
         })?;
         self.ktg(
             "ojas_cln_bwd_ch_part",
@@ -141,6 +147,7 @@ impl Worker {
                 set_u32(bd, g.channels, 5);
                 set_u32(bd, g.spatial, 6);
                 set_u32(bd, g.chunk, 7);
+                set_u32(bd, bf16, 8);
             },
         )?;
         self.k1("ojas_cols_fin4", channels, |bd| {
@@ -150,6 +157,7 @@ impl Worker {
             bind_st(bd, &st, 3);
             set_u32(bd, g.channels, 4);
             set_u32(bd, g.splits, 5);
+            set_u32(bd, bf16, 6);
         })?;
         Ok(self.keep(vec![gx, gw, gb]))
     }
@@ -189,6 +197,7 @@ impl Worker {
         }
         let out = self.fresh(n)?;
         let st = self.status(OP)?;
+        let bf16 = u32::from(self.bf16_accum());
         self.ktg(
             "ojas_softmax_bwd_rows",
             rows as usize,
@@ -201,6 +210,7 @@ impl Worker {
                 bind_st(bd, &st, 3);
                 set_u32(bd, rows, 4);
                 set_u32(bd, dim, 5);
+                set_u32(bd, bf16, 6);
             },
         )?;
         Ok(self.keep(vec![out]))
@@ -241,7 +251,11 @@ impl Worker {
             let v = self.view(*a)?;
             self.check(&st, &v, ST_IN)?;
         }
-        let words = geom.bytes();
+        let mut geom_words = geom.words;
+        if self.bf16_accum() {
+            geom_words[7] = 1;
+        }
+        let words: Vec<u8> = geom_words.iter().flat_map(|w| w.to_ne_bytes()).collect();
         self.k2("ojas_bcast_grad_part", elems, geom.splits as usize, |bd| {
             bind(bd, &gv, 0);
             bind(bd, ov.as_ref().unwrap_or(&gv), 1);
@@ -250,12 +264,13 @@ impl Worker {
             bd.bind_bytes(&words, 4);
         })?;
         if let Some(part) = &part {
+            let splits_flag = geom.splits | if self.bf16_accum() { 0x8000_0000 } else { 0 };
             self.k1("ojas_bcast_grad_fin", elems, |bd| {
                 bind(bd, part, 0);
                 bind(bd, &out, 1);
                 bind_st(bd, &st, 2);
                 set_u32(bd, geom.elems, 3);
-                set_u32(bd, geom.splits, 4);
+                set_u32(bd, splits_flag, 4);
             })?;
         }
         Ok(self.keep(vec![out]))

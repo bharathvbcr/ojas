@@ -547,8 +547,8 @@ fn routed_cross_attention_matches_cpu() {
 
 /// The memory encoder's cross-attention at its real shapes, 8 heads of 32,
 /// against the general kernel (`attention_forward_saving` never routes), and
-/// the route taken: more dispatches than the general kernel, which fails if
-/// the predicate rejects D32 cross-attention.
+/// the route taken: native flash cross-attention executes in a single dispatch
+/// with zero pad-q permutes.
 #[test]
 fn routed_cross_attention_matches_the_general_kernel_at_the_memory_shapes() {
     let m = metal();
@@ -566,16 +566,22 @@ fn routed_cross_attention_matches_the_general_kernel_at_the_memory_shapes() {
         ok("sync", m.sync());
         let general = m.dispatches() - before;
         let before = m.dispatches();
+        let flash_before = m.kernel_dispatches("ojas_attn_fwd_d32");
         let got = ok(
             "routed",
             m.attention_forward(&dq, &dk, &dv, AttentionOpts::default()),
         );
         ok("sync", m.sync());
         let routed = m.dispatches() - before;
+        let flash_count = m.kernel_dispatches("ojas_attn_fwd_d32") - flash_before;
         if m.has_tensorops() {
-            assert!(
-                routed > general,
-                "5184x{tk}: the D32 cross-attention route was not taken ({routed} vs {general})"
+            assert_eq!(
+                routed, general,
+                "5184x{tk}: attention_forward routes to native flash cross-attention ({routed} vs {general})"
+            );
+            assert_eq!(
+                flash_count, 1,
+                "5184x{tk}: ojas_attn_fwd_d32 executed in single pass with zero pad-q permutes"
             );
         }
         let want_host = ok("down", want.to_host(&ojas_core::Budget::new(8 * GIB)));

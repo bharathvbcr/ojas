@@ -411,11 +411,15 @@ mod bench {
                 ..Default::default()
             };
 
-            // The rows the flash route covers (head dim 32, no bias), and
+            // The rows the flash route covers (head dim 32, with or without bias), and
             // whether the dispatcher takes them (threadgroup floor).
-            let flash_row = !r.bias && d == 32;
+            let flash_row = d == 32;
             let groups = flash_groups(b, h, tq);
-            let dispatcher_flash = flash_row && groups >= MetalBackend::flash_min_groups();
+            let dispatcher_flash = if r.bias {
+                d == 32 && groups >= 56
+            } else {
+                d == 32 && groups >= MetalBackend::flash_min_groups()
+            };
             // Correctness and dispatch counts before any timing.
             let (s2, s2_lse) = metal
                 .attention_forward_saving(&q, &k, &v, opts())
@@ -793,11 +797,9 @@ mod bench {
             }
             let (s2m, skm) = (stats[0], stats[1]);
             if let Some(si) = scalar_arm {
-                // Each arm ran `2 * (warmups + runs)` calls: the dispatcher
-                // and split-K are both split-K on a bias row, the scalar arm
-                // is the scalar kernel, so over the rounds the scalar kernel
-                // was encoded once per scalar call, split-K's partials and
-                // combine twice per call pair, and flash never.
+                // Each arm ran `2 * (warmups + runs)` calls: the scalar arm
+                // is the scalar kernel; split-K runs split-K's partials and
+                // combine; the dispatcher runs flash when covered or split-K otherwise.
                 let calls = (2 * (warmups + runs)) as u64;
                 let observed = Ran {
                     flash: encoded.flash - encoded_before.flash,
@@ -805,11 +807,20 @@ mod bench {
                     part: encoded.part - encoded_before.part,
                     combine: encoded.combine - encoded_before.combine,
                 };
-                let want = Ran {
-                    flash: 0,
-                    scalar: calls,
-                    part: 2 * calls,
-                    combine: 2 * calls,
+                let want = if dispatcher_flash {
+                    Ran {
+                        flash: calls,
+                        scalar: calls,
+                        part: calls,
+                        combine: calls,
+                    }
+                } else {
+                    Ran {
+                        flash: 0,
+                        scalar: calls,
+                        part: 2 * calls,
+                        combine: 2 * calls,
+                    }
                 };
                 println!(
                     "# kernels {} | timed rounds encoded {observed:?}, expected {want:?} ({calls} calls per arm)",

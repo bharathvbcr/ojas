@@ -89,8 +89,19 @@ impl Worker {
             set_u32(b, g.batch, 2);
             set_u32(b, g.seq, 3);
         })?;
-        segment_mean_rows(&self.rt, &xv.buf, &seg.buf, &out.buf, g.batch, rows, g.dim)
-            .map_err(metal_err)?;
+        if self.bf16_accum() {
+            self.k1("ojas_seq_mean_fwd", out_n.unwrap_or(0), |b| {
+                bind(b, &xv, 0);
+                bind(b, &seg, 1);
+                bind(b, &out, 2);
+                set_u32(b, g.batch, 3);
+                set_u32(b, rows, 4);
+                set_u32(b, g.dim, 5);
+            })?;
+        } else {
+            segment_mean_rows(&self.rt, &xv.buf, &seg.buf, &out.buf, g.batch, rows, g.dim)
+                .map_err(metal_err)?;
+        }
         self.check(&st, &out, ST_OUT)?;
         Ok(self.keep(vec![out]))
     }
@@ -159,6 +170,7 @@ impl Worker {
         let st = self.status(OP)?;
         self.check(&st, &xv, ST_IN)?;
         self.check(&st, &gv, ST_IN)?;
+        let bf16 = u32::from(self.bf16_accum());
         self.k1("ojas_l2_normalize_bwd", rows as usize, |b| {
             bind(b, &xv, 0);
             bind(b, &gv, 1);
@@ -167,6 +179,7 @@ impl Worker {
             set_u32(b, dim, 4);
             set_f32(b, eps, 5);
             bind_st(b, &st, 6);
+            set_u32(b, bf16, 7);
         })?;
         Ok(self.keep(vec![out]))
     }
@@ -187,8 +200,18 @@ impl Worker {
         let y = self.fresh(xv.n)?;
         let st = self.status(OP)?;
         self.check(&st, &xv, ST_IN)?;
-        self.copy(&xv, &y)?;
-        l2_normalize_rows(&self.rt, &y.buf, rows, dim, dim).map_err(metal_err)?;
+        if self.bf16_accum() {
+            self.k1("ojas_l2_normalize_fwd", rows as usize, |b| {
+                bind(b, &xv, 0);
+                bind(b, &y, 1);
+                set_u32(b, rows, 2);
+                set_u32(b, dim, 3);
+                set_f32(b, crate::gemma_ops::L2_EPS, 4);
+            })?;
+        } else {
+            self.copy(&xv, &y)?;
+            l2_normalize_rows(&self.rt, &y.buf, rows, dim, dim).map_err(metal_err)?;
+        }
         self.check(&st, &y, ST_OUT)?;
         Ok(self.keep(vec![y]))
     }

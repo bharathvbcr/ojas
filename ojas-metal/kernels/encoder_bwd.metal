@@ -42,6 +42,15 @@ static inline void eb_flag(device atomic_uint *st, uint word)
     atomic_store_explicit(&st[word], 1u, memory_order_relaxed);
 }
 
+static inline float eb_bf16(float v)
+{
+    const uint b = as_type<uint>(v);
+    if ((b & 0x7fffffffu) > 0x7f800000u) {
+        return as_type<float>((b | 0x00400000u) & 0xffff0000u);
+    }
+    return as_type<float>((b + (0x7fffu + ((b >> 16) & 1u))) & 0xffff0000u);
+}
+
 // ------------------------------------------------- double-single arithmetic ---
 
 static inline float2 eb_two_sum(float a, float b)
@@ -130,6 +139,7 @@ kernel void ojas_ln_bwd_rows(
     constant uint &rows [[buffer(6)]],
     constant uint &dim [[buffer(7)]],
     constant float &eps [[buffer(8)]],
+    constant uint &bf16_acc [[buffer(9)]],
     uint r [[threadgroup_position_in_grid]],
     uint t [[thread_position_in_threadgroup]],
     uint T [[threads_per_threadgroup]])
@@ -146,40 +156,91 @@ kernel void ojas_ln_bwd_rows(
         bad_in = bad_in || !isfinite(v);
         s = eb_add_f(s, v);
     }
-    const float2 mean = eb_div_f(eb_tg_sum2(float4(s, 0.0f, 0.0f), sh, t, T).xy, fd);
-
-    float2 q = float2(0.0f);
-    for (uint j = t; j < dim; j += T) {
-        const float d = (x[base + j] - mean.x) - mean.y;
-        const float2 p = eb_two_prod(d, d);
-        q = eb_add_f(eb_add_f(q, p.x), p.y);
-    }
-    const float2 var = eb_div_f(eb_tg_sum2(float4(q, 0.0f, 0.0f), sh, t, T).xy, fd);
-    const float v = eb_add_f(var, eps).x;
+    float2 mean;
     float rstd = 0.0f;
-    bool ok = isfinite(v) && v > 0.0f;
-    if (ok) {
-        rstd = precise::divide(1.0f, precise::sqrt(v));
-        ok = isfinite(rstd);
-        if (!ok) rstd = 0.0f;
-    }
-    if (!ok && t == 0u) eb_flag(st, EB_ST_OUT);
+    float2 mean_g;
+    float2 mean_gx;
+    if (bf16_acc != 0u) {
+        for (uint j = t; j < dim; j += T) {
+            const float g = gy[base + j];
+            const float wj = w[j];
+            bad_in = bad_in || !isfinite(g) || !isfinite(wj);
+        }
+        if (t == 0u) {
+            float s_bf16 = 0.0f;
+            for (uint j = 0u; j < dim; ++j) {
+                s_bf16 = eb_bf16(s_bf16 + eb_bf16(x[base + j]));
+            }
+            const float mean_bf16 = precise::divide(s_bf16, fd);
+            float q_bf16 = 0.0f;
+            for (uint j = 0u; j < dim; ++j) {
+                const float d = eb_bf16(eb_bf16(x[base + j]) - eb_bf16(mean_bf16));
+                q_bf16 = eb_bf16(q_bf16 + eb_bf16(d * d));
+            }
+            const float var_bf16 = precise::divide(q_bf16, fd);
+            const float v_bf16 = var_bf16 + eps;
+            float rstd_bf16 = 0.0f;
+            bool ok_bf16 = isfinite(v_bf16) && v_bf16 > 0.0f;
+            if (ok_bf16) {
+                rstd_bf16 = precise::divide(1.0f, precise::sqrt(v_bf16));
+                ok_bf16 = isfinite(rstd_bf16);
+                if (!ok_bf16) rstd_bf16 = 0.0f;
+            }
+            if (!ok_bf16) eb_flag(st, EB_ST_OUT);
+            float sg_bf16 = 0.0f;
+            float sgx_bf16 = 0.0f;
+            for (uint j = 0u; j < dim; ++j) {
+                const float dx = eb_bf16(eb_bf16(gy[base + j]) * eb_bf16(w[j]));
+                const float xhat = eb_bf16((x[base + j] - mean_bf16) * rstd_bf16);
+                sg_bf16 = eb_bf16(sg_bf16 + dx);
+                sgx_bf16 = eb_bf16(sgx_bf16 + eb_bf16(dx * xhat));
+            }
+            sh[0] = float4(
+                mean_bf16,
+                rstd_bf16,
+                precise::divide(sg_bf16, fd),
+                precise::divide(sgx_bf16, fd));
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        mean = float2(sh[0].x, 0.0f);
+        rstd = sh[0].y;
+        mean_g = float2(sh[0].z, 0.0f);
+        mean_gx = float2(sh[0].w, 0.0f);
+    } else {
+        mean = eb_div_f(eb_tg_sum2(float4(s, 0.0f, 0.0f), sh, t, T).xy, fd);
 
-    float2 sg = float2(0.0f);
-    float2 sgx = float2(0.0f);
-    for (uint j = t; j < dim; j += T) {
-        const float g = gy[base + j];
-        const float wj = w[j];
-        bad_in = bad_in || !isfinite(g) || !isfinite(wj);
-        const float xhat = ((x[base + j] - mean.x) - mean.y) * rstd;
-        const float2 dx = eb_two_prod(g, wj);
-        sg = eb_add_f(eb_add_f(sg, dx.x), dx.y);
-        const float2 pp = eb_two_prod(dx.x, xhat);
-        sgx = eb_add_f(eb_add_f(eb_add_f(sgx, pp.x), pp.y), dx.y * xhat);
+        float2 q = float2(0.0f);
+        for (uint j = t; j < dim; j += T) {
+            const float d = (x[base + j] - mean.x) - mean.y;
+            const float2 p = eb_two_prod(d, d);
+            q = eb_add_f(eb_add_f(q, p.x), p.y);
+        }
+        const float2 var = eb_div_f(eb_tg_sum2(float4(q, 0.0f, 0.0f), sh, t, T).xy, fd);
+        const float v = eb_add_f(var, eps).x;
+        bool ok = isfinite(v) && v > 0.0f;
+        if (ok) {
+            rstd = precise::divide(1.0f, precise::sqrt(v));
+            ok = isfinite(rstd);
+            if (!ok) rstd = 0.0f;
+        }
+        if (!ok && t == 0u) eb_flag(st, EB_ST_OUT);
+
+        float2 sg = float2(0.0f);
+        float2 sgx = float2(0.0f);
+        for (uint j = t; j < dim; j += T) {
+            const float g = gy[base + j];
+            const float wj = w[j];
+            bad_in = bad_in || !isfinite(g) || !isfinite(wj);
+            const float xhat = ((x[base + j] - mean.x) - mean.y) * rstd;
+            const float2 dx = eb_two_prod(g, wj);
+            sg = eb_add_f(eb_add_f(sg, dx.x), dx.y);
+            const float2 pp = eb_two_prod(dx.x, xhat);
+            sgx = eb_add_f(eb_add_f(eb_add_f(sgx, pp.x), pp.y), dx.y * xhat);
+        }
+        const float4 tot = eb_tg_sum2(float4(sg, sgx), sh, t, T);
+        mean_g = eb_div_f(tot.xy, fd);
+        mean_gx = eb_div_f(tot.zw, fd);
     }
-    const float4 tot = eb_tg_sum2(float4(sg, sgx), sh, t, T);
-    const float2 mean_g = eb_div_f(tot.xy, fd);
-    const float2 mean_gx = eb_div_f(tot.zw, fd);
 
     bool bad_out = false;
     for (uint j = t; j < dim; j += T) {
@@ -211,6 +272,7 @@ kernel void ojas_ln_bwd_cols_part(
     constant uint &rows [[buffer(4)]],
     constant uint &dim [[buffer(5)]],
     constant uint &chunk [[buffer(6)]],
+    constant uint &bf16_acc [[buffer(7)]],
     uint2 gid [[thread_position_in_grid]])
 {
     const uint c = gid.x;
@@ -227,9 +289,14 @@ kernel void ojas_ln_bwd_cols_part(
         const float rstd = stats[r * 4u + 2u];
         const float g = gy[i];
         const float xhat = ((x[i] - mh) - ml) * rstd;
-        const float2 p = eb_two_prod(g, xhat);
-        a = eb_add_f(eb_add_f(a, p.x), p.y);
-        b = eb_add_f(b, g);
+        if (bf16_acc != 0u) {
+            a.x = eb_bf16(a.x + eb_bf16(eb_bf16(g) * eb_bf16(xhat)));
+            b.x = eb_bf16(b.x + eb_bf16(g));
+        } else {
+            const float2 p = eb_two_prod(g, xhat);
+            a = eb_add_f(eb_add_f(a, p.x), p.y);
+            b = eb_add_f(b, g);
+        }
     }
     const ulong o = ((ulong)k * dim + c) * 4u;
     part[o + 0u] = a.x;
@@ -247,6 +314,7 @@ kernel void ojas_cols_fin4(
     device atomic_uint *st [[buffer(3)]],
     constant uint &n [[buffer(4)]],
     constant uint &splits [[buffer(5)]],
+    constant uint &bf16_acc [[buffer(6)]],
     uint c [[thread_position_in_grid]])
 {
     if (c >= n) return;
@@ -254,8 +322,13 @@ kernel void ojas_cols_fin4(
     float2 b = float2(0.0f);
     for (uint k = 0u; k < splits; ++k) {
         const ulong o = ((ulong)k * n + c) * 4u;
-        a = eb_add(a, float2(part[o + 0u], part[o + 1u]));
-        b = eb_add(b, float2(part[o + 2u], part[o + 3u]));
+        if (bf16_acc != 0u) {
+            a.x = eb_bf16(a.x + eb_bf16(part[o + 0u]));
+            b.x = eb_bf16(b.x + eb_bf16(part[o + 2u]));
+        } else {
+            a = eb_add(a, float2(part[o + 0u], part[o + 1u]));
+            b = eb_add(b, float2(part[o + 2u], part[o + 3u]));
+        }
     }
     out_a[c] = a.x;
     out_b[c] = b.x;
@@ -279,6 +352,7 @@ kernel void ojas_cln_bwd_pos(
     constant uint &channels [[buffer(7)]],
     constant uint &spatial [[buffer(8)]],
     constant float &eps [[buffer(9)]],
+    constant uint &bf16_acc [[buffer(10)]],
     uint p [[thread_position_in_grid]])
 {
     if (p >= positions) return;
@@ -289,44 +363,89 @@ kernel void ojas_cln_bwd_pos(
     const float fc = (float)channels;
     bool bad_in = false;
 
-    float2 sum = float2(0.0f);
-    for (uint c = 0u; c < channels; ++c) {
-        const float v = x[base + c * step];
-        bad_in = bad_in || !isfinite(v);
-        sum = eb_add_f(sum, v);
-    }
-    const float2 mean = eb_div_f(sum, fc);
-    float2 q = float2(0.0f);
-    for (uint c = 0u; c < channels; ++c) {
-        const float d = (x[base + c * step] - mean.x) - mean.y;
-        const float2 pr = eb_two_prod(d, d);
-        q = eb_add_f(eb_add_f(q, pr.x), pr.y);
-    }
-    const float2 var = eb_div_f(q, fc);
-    const float v = eb_add_f(var, eps).x;
+    float2 mean;
     float rstd = 0.0f;
-    bool ok = isfinite(v) && v > 0.0f;
-    if (ok) {
-        rstd = precise::divide(1.0f, precise::sqrt(v));
-        ok = isfinite(rstd);
-        if (!ok) rstd = 0.0f;
-    }
-    bool bad_out = !ok;
+    bool bad_out = false;
+    float2 mean_g;
+    float2 mean_gx;
 
-    float2 sg = float2(0.0f);
-    float2 sgx = float2(0.0f);
-    for (uint c = 0u; c < channels; ++c) {
-        const float g = gy[base + c * step];
-        const float wc = w[c];
-        bad_in = bad_in || !isfinite(g) || !isfinite(wc);
-        const float xhat = ((x[base + c * step] - mean.x) - mean.y) * rstd;
-        const float2 dx = eb_two_prod(g, wc);
-        sg = eb_add_f(eb_add_f(sg, dx.x), dx.y);
-        const float2 pp = eb_two_prod(dx.x, xhat);
-        sgx = eb_add_f(eb_add_f(eb_add_f(sgx, pp.x), pp.y), dx.y * xhat);
+    if (bf16_acc != 0u) {
+        float sum_bf16 = 0.0f;
+        for (uint c = 0u; c < channels; ++c) {
+            const float v = x[base + c * step];
+            bad_in = bad_in || !isfinite(v);
+            sum_bf16 = eb_bf16(sum_bf16 + eb_bf16(v));
+        }
+        const float mean_bf16 = precise::divide(sum_bf16, fc);
+        float q_bf16 = 0.0f;
+        for (uint c = 0u; c < channels; ++c) {
+            const float d = eb_bf16(eb_bf16(x[base + c * step]) - eb_bf16(mean_bf16));
+            q_bf16 = eb_bf16(q_bf16 + eb_bf16(d * d));
+        }
+        const float var_bf16 = precise::divide(q_bf16, fc);
+        const float v_bf16 = var_bf16 + eps;
+        bool ok = isfinite(v_bf16) && v_bf16 > 0.0f;
+        if (ok) {
+            rstd = precise::divide(1.0f, precise::sqrt(v_bf16));
+            ok = isfinite(rstd);
+            if (!ok) rstd = 0.0f;
+        }
+        bad_out = !ok;
+
+        float sg_bf16 = 0.0f;
+        float sgx_bf16 = 0.0f;
+        for (uint c = 0u; c < channels; ++c) {
+            const float g = gy[base + c * step];
+            const float wc = w[c];
+            bad_in = bad_in || !isfinite(g) || !isfinite(wc);
+            const float xhat = eb_bf16((x[base + c * step] - mean_bf16) * rstd);
+            const float dx = eb_bf16(eb_bf16(g) * eb_bf16(wc));
+            sg_bf16 = eb_bf16(sg_bf16 + dx);
+            sgx_bf16 = eb_bf16(sgx_bf16 + eb_bf16(dx * xhat));
+        }
+        mean = float2(mean_bf16, 0.0f);
+        mean_g = float2(precise::divide(sg_bf16, fc), 0.0f);
+        mean_gx = float2(precise::divide(sgx_bf16, fc), 0.0f);
+    } else {
+        float2 sum = float2(0.0f);
+        for (uint c = 0u; c < channels; ++c) {
+            const float v = x[base + c * step];
+            bad_in = bad_in || !isfinite(v);
+            sum = eb_add_f(sum, v);
+        }
+        mean = eb_div_f(sum, fc);
+        float2 q = float2(0.0f);
+        for (uint c = 0u; c < channels; ++c) {
+            const float d = (x[base + c * step] - mean.x) - mean.y;
+            const float2 pr = eb_two_prod(d, d);
+            q = eb_add_f(eb_add_f(q, pr.x), pr.y);
+        }
+        const float2 var = eb_div_f(q, fc);
+        const float v = eb_add_f(var, eps).x;
+        bool ok = isfinite(v) && v > 0.0f;
+        if (ok) {
+            rstd = precise::divide(1.0f, precise::sqrt(v));
+            ok = isfinite(rstd);
+            if (!ok) rstd = 0.0f;
+        }
+        bad_out = !ok;
+
+        float2 sg = float2(0.0f);
+        float2 sgx = float2(0.0f);
+        for (uint c = 0u; c < channels; ++c) {
+            const float g = gy[base + c * step];
+            const float wc = w[c];
+            bad_in = bad_in || !isfinite(g) || !isfinite(wc);
+            const float xhat = ((x[base + c * step] - mean.x) - mean.y) * rstd;
+            const float2 dx = eb_two_prod(g, wc);
+            sg = eb_add_f(eb_add_f(sg, dx.x), dx.y);
+            const float2 pp = eb_two_prod(dx.x, xhat);
+            sgx = eb_add_f(eb_add_f(eb_add_f(sgx, pp.x), pp.y), dx.y * xhat);
+        }
+        mean_g = eb_div_f(sg, fc);
+        mean_gx = eb_div_f(sgx, fc);
     }
-    const float2 mean_g = eb_div_f(sg, fc);
-    const float2 mean_gx = eb_div_f(sgx, fc);
+
     for (uint c = 0u; c < channels; ++c) {
         const ulong i = base + c * step;
         const float2 dx = eb_two_prod(gy[i], w[c]);
@@ -357,6 +476,7 @@ kernel void ojas_cln_bwd_ch_part(
     constant uint &channels [[buffer(5)]],
     constant uint &spatial [[buffer(6)]],
     constant uint &chunk [[buffer(7)]],
+    constant uint &bf16_acc [[buffer(8)]],
     uint2 tg [[threadgroup_position_in_grid]],
     uint2 tid [[thread_position_in_threadgroup]],
     uint2 tsz [[threads_per_threadgroup]])
@@ -369,6 +489,30 @@ kernel void ojas_cln_bwd_ch_part(
     if (c >= channels) return;
     const ulong p0 = (ulong)k * chunk;
     const ulong p1 = min(p0 + chunk, (ulong)positions);
+    if (bf16_acc != 0u) {
+        if (t == 0u) {
+            float sa = 0.0f;
+            float sb = 0.0f;
+            for (ulong p = p0; p < p1; ++p) {
+                const ulong bi = p / spatial;
+                const ulong s = p - bi * spatial;
+                const ulong i = (bi * channels + c) * spatial + s;
+                const float mh = stats[p * 4u + 0u];
+                const float ml = stats[p * 4u + 1u];
+                const float rstd = stats[p * 4u + 2u];
+                const float g = gy[i];
+                const float xhat = ((x[i] - mh) - ml) * rstd;
+                sa = eb_bf16(sa + eb_bf16(eb_bf16(g) * eb_bf16(xhat)));
+                sb = eb_bf16(sb + eb_bf16(g));
+            }
+            const ulong o = ((ulong)k * channels + c) * 4u;
+            part[o + 0u] = sa;
+            part[o + 1u] = 0.0f;
+            part[o + 2u] = sb;
+            part[o + 3u] = 0.0f;
+        }
+        return;
+    }
     float2 a = float2(0.0f);
     float2 b = float2(0.0f);
     for (ulong p = p0 + t; p < p1; p += T) {
@@ -456,6 +600,7 @@ kernel void ojas_softmax_bwd_rows(
     device atomic_uint *st [[buffer(3)]],
     constant uint &rows [[buffer(4)]],
     constant uint &dim [[buffer(5)]],
+    constant uint &bf16_acc [[buffer(6)]],
     uint r [[threadgroup_position_in_grid]],
     uint t [[thread_position_in_threadgroup]],
     uint T [[threads_per_threadgroup]])
@@ -469,10 +614,25 @@ kernel void ojas_softmax_bwd_rows(
         const float yv = y[base + j];
         const float gv = gy[base + j];
         bad_in = bad_in || !isfinite(yv) || !isfinite(gv);
-        const float2 p = eb_two_prod(yv, gv);
-        dot = eb_add_f(eb_add_f(dot, p.x), p.y);
+        if (bf16_acc == 0u) {
+            const float2 p = eb_two_prod(yv, gv);
+            dot = eb_add_f(eb_add_f(dot, p.x), p.y);
+        }
     }
-    const float2 d = eb_tg_sum2(float4(dot, 0.0f, 0.0f), sh, t, T).xy;
+    float2 d;
+    if (bf16_acc != 0u) {
+        if (t == 0u) {
+            float s = 0.0f;
+            for (uint j = 0u; j < dim; ++j) {
+                s = eb_bf16(s + eb_bf16(eb_bf16(y[base + j]) * eb_bf16(gy[base + j])));
+            }
+            sh[0].x = s;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        d = float2(sh[0].x, 0.0f);
+    } else {
+        d = eb_tg_sum2(float4(dot, 0.0f, 0.0f), sh, t, T).xy;
+    }
     bool bad_out = false;
     for (uint j = t; j < dim; j += T) {
         const float yv = y[base + j];
@@ -524,6 +684,7 @@ kernel void ojas_bcast_grad_part(
     const uint kept = geom[4];
     const uint reduced = geom[5];
     const bool mul = geom[6] != 0u;
+    const bool bf16_acc = geom[7] != 0u;
     const uint e = gid.x;
     const uint k = gid.y;
     if (e >= elems || k >= splits) return;
@@ -555,7 +716,15 @@ kernel void ojas_bcast_grad_part(
     for (uint r = r0; r < r1; ++r) {
         const float gv = g[o];
         bad = bad || !isfinite(gv);
-        if (mul) {
+        if (bf16_acc) {
+            if (mul) {
+                const float ov = other[p];
+                bad = bad || !isfinite(ov);
+                acc.x = eb_bf16(acc.x + eb_bf16(eb_bf16(gv) * eb_bf16(ov)));
+            } else {
+                acc.x = eb_bf16(acc.x + eb_bf16(gv));
+            }
+        } else if (mul) {
             const float ov = other[p];
             bad = bad || !isfinite(ov);
             const float2 pr = eb_two_prod(gv, ov);
@@ -591,14 +760,20 @@ kernel void ojas_bcast_grad_fin(
     device float *out [[buffer(1)]],
     device atomic_uint *st [[buffer(2)]],
     constant uint &elems [[buffer(3)]],
-    constant uint &splits [[buffer(4)]],
+    constant uint &splits_raw [[buffer(4)]],
     uint e [[thread_position_in_grid]])
 {
     if (e >= elems) return;
+    const bool bf16_acc = (splits_raw & 0x80000000u) != 0u;
+    const uint splits = splits_raw & 0x7fffffffu;
     float2 acc = float2(0.0f);
     for (uint k = 0u; k < splits; ++k) {
         const ulong at = ((ulong)k * elems + e) * 2u;
-        acc = eb_add(acc, float2(part[at + 0u], part[at + 1u]));
+        if (bf16_acc) {
+            acc.x = eb_bf16(acc.x + eb_bf16(part[at + 0u]));
+        } else {
+            acc = eb_add(acc, float2(part[at + 0u], part[at + 1u]));
+        }
     }
     out[e] = acc.x;
     if (!isfinite(acc.x)) eb_flag(st, EB_ST_OUT);

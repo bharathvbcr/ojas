@@ -231,10 +231,6 @@ impl BcastGradGeom {
             .checked_mul(2)
     }
 
-    pub(crate) fn bytes(&self) -> Vec<u8> {
-        self.words.iter().flat_map(|w| w.to_ne_bytes()).collect()
-    }
-
     /// Whether every index the kernel forms stays inside `g_len` output
     /// gradient elements and (for a multiply) `other_len` elements of the
     /// other operand: the device thread's own check of what the host planned,

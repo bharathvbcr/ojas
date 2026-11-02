@@ -55,8 +55,8 @@ flowchart TD
 
 ### 1. Per-Head Attention Gate (`kernels/per_head_gate.metal`)
 Nanolab default GPT applies a linear gate with bias followed by sigmoid modulation to scale attention heads. `ojas-metal` implements dedicated Metal shaders:
-* **Forward Kernel:** Computes $g = \sigma(x W_g + b_g)$ and evaluates $y = \text{attn} \odot g$.
-* **Backward Kernel:** Computes analytic adjoint gradients $\frac{\partial \mathcal{L}}{\partial \text{attn}}$ and $\frac{\partial \mathcal{L}}{\partial W_g}$ on the device.
+* **Forward Kernel:** Computes $g = \sigma(x W_g + b_g)$ and evaluates $y = \text{attn} \odot g$, folding input (`ST_IN` on `attn` and `bias`) and output (`ST_OUT` on `pre` and `out`) finiteness checks in-kernel.
+* **Backward Kernel:** Computes analytic adjoint gradients $\frac{\partial \mathcal{L}}{\partial \text{attn}}$ and $\frac{\partial \mathcal{L}}{\partial W_g}$ on the device with in-kernel `ST_IN`/`ST_OUT` finiteness checks.
 
 ### 2. Backend Extension Shaders (`kernels/ojas_backend.metal`)
 Implements elementwise operations, vector arithmetic, and reduction passes required by `ojas_core::Backend`, plus:
@@ -64,12 +64,13 @@ Implements elementwise operations, vector arithmetic, and reduction passes requi
   * `ojas_permute_runs` runs row copies when the innermost contiguous run is a multiple of 16 floats (e.g. attention head swaps, window split/merge when `window * C` is a multiple of 16, identity floor).
   * `ojas_permute_tile` uses a 32x32 shared-memory tile for 2-D transposes and NCHW/NHWC moves. Both kernels fuse the finite check into memory reads.
   * `ojas_permute` serves as the general fallback.
-* **General attention** (`attention_forward`, `attention_forward_saving`):
-  * Plain unmasked attention at D=32 and D=64 routes to `tessl encoder_attn` between permutes (e.g. 22.8 vs 606 ms at `[1, 16, 5184, 64]`).
-  * Head dim 32 cross-attention with no bias or key lengths and at least `flash_min_groups()` threadgroups runs the TensorOps flash kernel `ojas_attn_fwd_d32` in one dispatch, 28.7× to 40.5× faster than the forced scalar kernel (`bench/results/2026-10-27-attention-mpp`).
-  * For $T_q < T_k$, the pad-q route zero-pads $Q$ to $T_k$ rows when $T_k \le 2.25 T_q$ at D=32/64 and slices the output.
-  * Head dims 16 and 32 with bias run split-K tiled kernels (`ojas_xattn_part_dD`, `ojas_xattn_combine_dD`), splitting key ranges across threadgroups to saturate the GPU for short queries.
+* **General attention** (`attention_forward`, `attention_forward_saving`, `attention_backward`):
+  * Plain unmasked self-attention ($T_q = T_k$) at D=32 and D=64 routes to `tessl encoder_attn` between permutes (e.g. 22.8 vs 606 ms at `[1, 16, 5184, 64]`), unless `bf16_accumulation()` is enabled (in which case it runs on `ojas-metal`'s `bf16`-accumulating attention kernels).
+  * Decoupled cross-attention ($T_q \ne T_k$) at D=32 and D=64 with at least `flash_min_groups()` threadgroups runs the native TensorOps flash kernels (`ojas_attn_fwd_d32` and `ojas_attn_fwd_d64`) in one dispatch without $O(m^2)$ pad-q zero-padding ($34.5\times$ speedup over scalar on $5184 \times 5200$ memory cross-attention: `6.06 ms` vs `209.28 ms`).
+  * Additive logit bias (`boxRPB`) at D=32 and D=64 is accumulated directly into tile score registers (`buffers 13..18`, bit 2 of `window_and_flags`) before online softmax when launching at least `flash_min_groups()` threadgroups ($14.1\times$ speedup on DETR cross-attention: `0.85 ms` vs `11.98 ms`).
+  * Short queries (fewer than `flash_min_groups()` threadgroups) and head dim 16 run split-K tiled kernels (`ojas_xattn_part_dD`, `ojas_xattn_combine_dD`), splitting key ranges across threadgroups to saturate the GPU.
   * General shapes, windowing, and causal cross-attention fall back to scalar `ojas_attn_gen_fwd` (one simdgroup per row, D ≤ 256).
+  * Backward (`ojas_attn_gen_bwd_{dq,dkv,dbias}_d*` and `ojas_attn_bwd_dr`) computes `dQ`, `dK`, `dV`, and optional broadcast `dBias` on the device.
 * **Spatial operators**:
   * `conv2d_forward` & `conv2d_backward`: arbitrary stride and padding using `ojas_im2col` scratch followed by tessl NT GEMM and `ojas_conv_nchw`; depthwise convolution (`groups == in == out`) runs the direct single-pass kernel `ojas_dwconv`.
   * **1x1 Stride-1 Unpadded Route:** When `kernel == 1`, `stride == 1`, `padding == 0`, `dilation == 1`, and `groups == 1`, `conv2d_forward` skips `im2col` scratch generation entirely and routes directly to tessl NN GEMM per image with no intermediate layout pass ($2.03\times$ speedup on f32, $2.1\times$ on bf16-exact at $[1, 256, 288, 288]$).
@@ -80,23 +81,27 @@ Implements elementwise operations, vector arithmetic, and reduction passes requi
   * `rope_interleaved_forward` / `_backward`: adjacent-pair rotation on `ojas_rope` mode 2, matching CPU axial 2D tables.
 * **Gemma embedding operators (`kernels/gemma_ops.metal`)**:
   * `gelu_tanh_forward` & `gelu_tanh_backward`: `ojas_gelu_tanh_fwd` and `ojas_gelu_tanh_bwd` evaluating exact tanh GELU via analytical sigmoid in `f64` with hardware status word trapping (`GEMMA_ST_IN`, `GEMMA_ST_OUT`).
-  * `seq_mean_forward`: ragged sequence mean pooling using `ojas_segments_from_lens` on GPU.
-  * `l2_normalize_forward`: L2 vector normalization with epsilon stabilization and Matryoshka dimension prefix slicing.
+  * `seq_mean_forward`: ragged sequence mean pooling using `ojas_segments_from_lens` on GPU (and `ojas_seq_mean_fwd` under `bf16_accumulation`).
+  * `l2_normalize_forward` & `l2_normalize_backward`: L2 vector normalization with epsilon stabilization, Matryoshka dimension prefix slicing, and analytical backward (`ojas_l2_normalize_fwd` / `ojas_l2_normalize_bwd`).
   * `rms_qkv_norm_forward`: weightless per-head RMSNorm across Q, K, and V heads.
   * Non-causal sliding window attention ($|i - j| \le W$) with dual routing (tiled SIMD vs scalar) across head dimensions $D \in \{32, 64, 256, 512\}$.
-* **Vision & encoder operators**:
-  * `group_norm_forward`: three passes (`ojas_gn_mean_var`, `ojas_gn_reduce`, `ojas_gn_apply`) splitting rows into up to 512 threadgroups per row; uses large-mean residual correction for numerical precision.
-  * `layer_norm_forward` & `channel_layer_norm_forward`: routed to tessl BERT layer norm (channel norm composed with permutes).
-  * `gelu_erf_forward`: routed to tessl BERT `bias_gelu_erf`.
+* **Vision & encoder operators (`kernels/ojas_backend.metal`, `kernels/encoder_bwd.metal`)**:
+  * `group_norm_forward`: three passes (`ojas_gn_sum`, `ojas_gn_sq`, `ojas_gn_apply`) splitting rows into up to 512 threadgroups per row; uses large-mean residual correction for numerical precision.
+  * `layer_norm_forward` & `layer_norm_backward`, `channel_layer_norm_forward` & `channel_layer_norm_backward`: forward routed to tessl BERT layer norm (or `ojas_ln_fwd` under `bf16_accumulation`; channel norm composed with permutes); backward on `ojas_ln_bwd_rows`, `ojas_ln_bwd_cols_part`, `ojas_cln_bwd_pos`, `ojas_cln_bwd_ch_part`, and `ojas_cols_fin4`.
+  * `gelu_erf_forward` & `gelu_erf_backward`: forward routed to tessl BERT `bias_gelu_erf`; backward on `ojas_gelu_erf_bwd`.
   * `relu_forward`: `ojas_relu_fwd` (bit-identical to CPU).
   * `concat`, `slice` & `fill`: device-resident memory assembly (`ojas_concat_part`, `ojas_slice` with full-input finite scan, `ojas_fill_words`). Filled U32 tensors carry `Ids::Below(value + 1)` bounds.
-  * `linear_bias_forward`: GEMM followed by broadcast bias addition.
+  * `linear_bias_forward` & `linear_bias_backward`, `broadcast_add_backward` & `broadcast_mul_backward`, `softmax_forward` & `softmax_backward`: GEMM + broadcast add/mul and `ojas_bcast_grad_{part,fin}` reductions; `ojas_softmax_rows` and `ojas_softmax_bwd_rows`.
 * **AdamW** (`ojas_adamw_check`, `ojas_adamw_apply`): torch's single-tensor step in tessl's f32 arithmetic, with scalars from `ojas_core::check_adamw`. The step is in place and needs no scratch.
   * The check kernel decides the whole step: inputs and every new p, m and v must be finite.
   * The apply kernel, in the same command buffer, writes only if this call's status words are clear. A refused step leaves all three tensors bit-identical and is reported at the next sync point.
   * No wait, and no copies.
 * **RMSNorm** (`ojas_rms_fwd`, `ojas_rms_bwd_rows`, `ojas_rms_bwd_w_{part,sum}`): one simdgroup per row.
   * The weight gradient is a two-stage, fixed-order reduction (64-row partials, then a sum per column), so it is deterministic.
+  * Input (`ST_IN`) and output (`ST_OUT`) finiteness checks are folded directly into the compute kernels for non-empty shapes (`rows > 0 && dim > 0`), with degenerate shapes falling back to explicit `Worker::check` passes.
+* **In-kernel finiteness folding & vectorized `float4` fault/accumulate kernels**:
+  * In addition to RMSNorm, Per-Head Gate, and Cross-Entropy, input/output finiteness checks (`ST_IN`/`ST_OUT` with `ST_IN` precedence preserved) are folded into LayerNorm (`ojas_ln_fwd`, `ojas_ln_bwd_rows`, `ojas_ln_bwd_wb_sum`), RoPE (`ojas_rope_fwd`, `ojas_rope_bwd`, with explicit fallback when `(rows / heads) < time` or `rotary < dim` on full-width tables), and FlashAttention (`attn_fwd_tiled_body` output/LSE checks, `ojas_attn_bwd_dr` full `dout`/`o`/`lse` input scans).
+  * Standalone finiteness scans (`Worker::check`) and in-place gradient additions (`Worker::accum`) dispatch vectorized `float4` kernels (`ojas_check_finite_v4`, `ojas_add_inplace_v4`) when buffer offsets and element counts are 4-float aligned.
 * **Cross-entropy** (`ojas_ce_fused`): two passes per row (an online max/sum, then the gradient) instead of five.
   * The input and output finiteness checks are folded into those passes. Every element is still checked, including rows whose target is ignored.
   * Collapsed rows where $p_t - 1$ rounds to 0 take the target-excluded cross-entropy form; standard rows pay zero extra passes via a uniform branch.
@@ -122,13 +127,22 @@ Implements elementwise operations, vector arithmetic, and reduction passes requi
   * Every output row is written once with no atomics, so results repeat bit for bit.
   * A `[T, D]` plane must fit i32 extents.
 * **Qwen3.5 hybrid-layer ops** (`tests/hybrid.rs`, against the CPU within 1e-5 of each tensor's peak):
-  * `causal_conv1d_silu_*` runs tessl's `qwen35::conv1d_silu` from a zero state and `qwen35_bwd::conv1d_silu_bwd`, whose weight gradient is a fixed-order sum of 256-row partials. Widths other than 2 to 8 are `Unsupported`.
-  * `gated_rms_norm_*` runs tessl's `qwen35::gated_rms_norm` and `gated_rms_norm_bwd` with one head per row. The backward takes rows of at most 512 values; a wider row is `Unsupported`.
+  * `causal_conv1d_silu_*` runs tessl's `qwen35::conv1d_silu` from a zero state and `qwen35_bwd::conv1d_silu_bwd` (or `ojas_conv1d_silu_{fwd,bwd_dx,bwd_dw}` + `ojas_rms_bwd_w_sum` under `bf16_accumulation`), whose weight gradient is a fixed-order sum of 256-row partials (`CONV1D_BWD_ROWS = 256`). Widths other than 2 to 8 are `Unsupported`.
+  * `gated_rms_norm_*` runs tessl's `qwen35::gated_rms_norm` and `gated_rms_norm_bwd` (or `ojas_gated_rms_{fwd,bwd_rows,bwd_part}` + `ojas_rms_bwd_w_sum` with `GATED_RMS_BWD_ROWS = 64` under `bf16_accumulation`) with one head per row. The backward takes rows of at most 512 values; a wider row is `Unsupported`.
   * `rope_partial_*` runs `ojas_rope` with a rotary width: the leading `R` values of each head turn and the rest are copied bit for bit. At `R = D` it is `rope_half_split`, bit for bit.
   * tessl's kernels take a buffer and a column window, not a byte offset, so an operand that does not start its buffer is copied first. Every operand and output is checked for non-finite values, and a fault is deferred as for the other ops.
   * `MetalBackend::freeze_checked` (opt-in, Metal-only) scans a frozen parameter once and marks its buffer, so matmuls, gathers and the fused head skip their per-use finite scan; in-place writers refuse a marked buffer. See `docs/metal-deferred-faults.md` §3.1.
   * `sigmoid_*` (`ojas_sigmoid_fwd/bwd`) and `gdn_log_decay_*` (`ojas_gdn_decay_fwd`, `ojas_gdn_decay_bwd`, `ojas_gdn_decay_bwd_sum`) are ojas's own elementwise kernels; the softplus is tessl's `qwen35_softplus`, copied (a series below -3, where `log(1 + e^x)` loses most of the value). The `A_log` and `dt_bias` gradients are one thread per head summing the rows in ascending order. They bind operands at any byte offset, check their own operands and outputs, and defer a fault as the other elementwise kernels do.
   * `chunked_gdn_*` runs tessl's `gdn_train` (`tests/gdn.rs`). With the gates above these make up a linear-attention layer on the tape (`ojas-model/tests/metal_hybrid_tape.rs`), and the whole Qwen3.5 tower runs natively on Metal (`ojas-model/tests/qwen35_metal_tape.rs` on tessl's fixture against transformers; `ojas-qwen35/tests/gpu_tape_2b.rs` on the real 2B).
+
+### 3. Opt-In Step-by-Step `bf16` Accumulation (`with_bf16_accumulation`)
+By default, `MetalBackend` sums and accumulates in `f32`. Callers can opt into step-by-step IEEE-754 round-to-nearest-even `bf16` accumulation (`ojas_bf16`) via `MetalBackend::with_bf16_accumulation(true)` or `MetalBackend::set_bf16_accumulation(true)` (inspected via `bf16_accumulation()` and preserved across `with_budget`):
+* **GEMM & Linear:** `ojas_gemm_bf16_accum` (`linear_forward`, `linear_backward`, `linear_backward_input`, `linear_bias_forward`, `linear_bias_backward`, `bmm`, `muon_ns5_step`, `linear_cross_entropy_mean`, `per_head_sigmoid_gate_*`, and `conv2d` im2col/pointwise and `conv_transpose2d` GEMM stages).
+* **Convolutions:** `ojas_dwconv`, `ojas_conv_nchw`, `ojas_convt_nchw`, `ojas_col2im`, `ojas_dwconv_bwd_x`, `ojas_dwconv_bwd_w`, `ojas_chan_sum`, and `ojas_conv1d_silu_{fwd,bwd_dx,bwd_dw}`.
+* **Attention & Per-Head Gate:** `ojas_attn_fwd_d{16,32,64,128,256}`, `ojas_attn_bwd_dr`, `ojas_attn_bwd_{dq,dkv}_d*`, `ojas_attn_gen_fwd`, `ojas_attn_gen_bwd_{dq,dkv,dbias}_d*`, `ojas_xattn_part_d{16,32}`, `ojas_xattn_combine_d{16,32}`, `ojas_cached_attn`, `ojas_cached_attn_merge`, `ojas_per_head_gate_bwd`, `ojas_per_head_gate_bwd_saved`, and `ojas_per_head_gate_dbias`.
+* **Norms (Forward & Backward):** `ojas_rms_fwd`, `ojas_rms_bwd_rows`, `ojas_rms_bwd_w_part`, `ojas_rms_bwd_w_sum`, `ojas_ln_fwd`, `ojas_ln_bwd_rows`, `ojas_ln_bwd_cols_part`, `ojas_cln_bwd_pos`, `ojas_cln_bwd_ch_part`, `ojas_cols_fin4`, `ojas_gn_sum`, `ojas_gn_sq`, `ojas_gn_apply`, `ojas_gated_rms_fwd`, `ojas_gated_rms_bwd_rows`, and `ojas_gated_rms_bwd_part`.
+* **Reductions, Softmax, Cross-Entropy, Pooling, Interpolate & Elementwise Sums:** `ojas_reduce_partial` and `ojas_reduce_final` (`value_residual_blend_backward`, `cross_entropy_mean_forward`, `linear_cross_entropy_mean`, `muon_ns5_step`), `ojas_seq_mean_fwd`, `ojas_l2_normalize_fwd`, `ojas_l2_normalize_bwd`, `ojas_softmax_rows`, `ojas_softmax_bwd_rows`, `ojas_ce_fused`, `ojas_lce_stats`, `ojas_max_pool2d_bwd`, `ojas_bilinear`, `ojas_embed_gather`, `ojas_bcast_grad_part`, `ojas_bcast_grad_fin`, `ojas_bcast_binary`, `ojas_add_fwd`, `ojas_add_into`, `ojas_acc_check`, `ojas_acc_apply`, and `ojas_gdn_decay_bwd_sum`.
+* Verified in `tests/bf16_accumulation.rs` (12 suites covering every op, `Bf16` storage operands, `AutocastMode::Bf16`, multi-chunk reductions, and deferred `OjasError::NonFinite` faults).
 
 ---
 
@@ -176,9 +190,9 @@ flowchart TD
     MappedPayload --> HAL
 ```
 
-* **Zero-Copy Host/GPU Sharing (`Payload::Mapped`):** `tessl::SharedBuf` implements `ojas_core::MappedBuffer`. Tensors wrap shared Metal allocations directly with no memory copying across CPU and Apple Silicon GPU.
+* **Zero-Copy Host/GPU Sharing (`Payload::Mapped`):** `tessl::SharedBuf` implements `ojas_core::MappedBuffer`. Tensors wrap shared Metal allocations directly with no memory copying across CPU and Apple Silicon GPU. On `Backend::upload`, `Worker::upload` downcasts `Payload::Mapped` (`SharedBuf`) and calls `SharedBuf::to_gpu_buffer()` to adopt the unified memory buffer directly into the device buffer table with zero byte copies (`mem_after == mem_before`).
 * **Lease Fencing & Mutex Protection:** Host reads (`host_read`) and writes (`host_write`) obtain fenced leases that synchronize with GPU timeline stamps (`last_use`, `last_write`), rejecting concurrent GPU execution while host leases are live.
-* **`BudgetTrimHandler` Cache Eviction:** `ojas-metal` connects `ojas_core::Budget` to `tessl`'s buffer pool. Under allocation pressure, the budget triggers freelist cache trimming across the unified pool.
+* **`BudgetTrimHandler` Cache Eviction & Pool Ledger Refusal:** `ojas-metal` connects `ojas_core::Budget` to `tessl`'s buffer pool (`BudgetLedger` in `Worker::open`). Under allocation pressure, the budget triggers freelist cache trimming across the unified pool, and pool capacity refusals map directly to `OjasError::CapacityExceeded`.
 * **Structural Dead Code Elimination:** 3,735 lines of redundant, unverified `gpu.rs` code were retired from `ojas-metal`. All device memory allocations, command buffers, and kernel pipelines are managed via `tessl` under the authoritative root `Budget`.
 
 ---

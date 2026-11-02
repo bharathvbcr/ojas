@@ -210,7 +210,8 @@ fn random_text_never_panics_and_only_known_shapes_match() {
 
 fn worker() -> (Worker, Arc<Waits>) {
     let waits = Arc::new(Waits::default());
-    let w = Worker::open(Arc::clone(&waits), 1 << 44).expect("Metal device");
+    let w =
+        Worker::open(Arc::clone(&waits), ojas_core::Budget::new(1 << 44)).expect("Metal device");
     (w, waits)
 }
 

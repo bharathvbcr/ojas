@@ -18,6 +18,15 @@
 #include <metal_stdlib>
 using namespace metal;
 
+inline float ojas_bf16(float v)
+{
+    const uint b = as_type<uint>(v);
+    if ((b & 0x7fffffffu) > 0x7f800000u) {
+        return as_type<float>((b | 0x00400000u) & 0xffff0000u);
+    }
+    return as_type<float>((b + (0x7fffu + ((b >> 16) & 1u))) & 0xffff0000u);
+}
+
 /// The adjoint of `ojas_im2col` as a gather: dx[n][ci][iy][ix] is the sum of
 /// the column-gradient entries of every tap that read the input value, in
 /// ascending (ky, kx), zero where no tap reads it. `dcols` is laid out as
@@ -40,6 +49,7 @@ kernel void ojas_col2im(
     constant uint &pw [[buffer(11)]],
     constant uint &oh [[buffer(12)]],
     constant uint &ow [[buffer(13)]],
+    constant uint &bf16_accum [[buffer(14)]],
     uint i [[thread_position_in_grid]])
 {
     if (i >= total) return;
@@ -48,6 +58,7 @@ kernel void ojas_col2im(
     const uint ci = (i / (w * h)) % c;
     const uint n = i / (w * h * c);
     const ulong width = (ulong)c * kh * kw;
+    const bool bf16_acc = bf16_accum != 0u;
     float acc = 0.0f;
     for (uint ky = 0u; ky < kh; ++ky) {
         const int ty = (int)(iy + ph) - (int)ky;
@@ -60,7 +71,8 @@ kernel void ojas_col2im(
             const uint ox = (uint)tx / sw;
             if (ox >= ow) continue;
             const ulong row = ((ulong)n * oh + oy) * ow + ox;
-            acc += dcols[row * width + ((ulong)ci * kh + ky) * kw + kx];
+            const float v = dcols[row * width + ((ulong)ci * kh + ky) * kw + kx];
+            acc = bf16_acc ? ojas_bf16(acc + ojas_bf16(v)) : (acc + v);
         }
     }
     dx[i] = acc;
@@ -87,6 +99,7 @@ kernel void ojas_dwconv_bwd_x(
     constant uint &pw [[buffer(12)]],
     constant uint &oh [[buffer(13)]],
     constant uint &ow [[buffer(14)]],
+    constant uint &bf16_accum [[buffer(15)]],
     uint i [[thread_position_in_grid]])
 {
     if (i >= total) return;
@@ -95,6 +108,7 @@ kernel void ojas_dwconv_bwd_x(
     const uint ch = (i / (wd * h)) % c;
     const uint n = i / (wd * h * c);
     const ulong plane = ((ulong)n * c + ch) * oh * ow;
+    const bool bf16_acc = bf16_accum != 0u;
     float acc = 0.0f;
     for (uint ky = 0u; ky < kh; ++ky) {
         const int ty = (int)(iy + ph) - (int)ky;
@@ -106,8 +120,14 @@ kernel void ojas_dwconv_bwd_x(
             if (tx < 0 || (uint)tx % sw != 0u) continue;
             const uint ox = (uint)tx / sw;
             if (ox >= ow) continue;
-            const float product = w[((ulong)ch * kh + ky) * kw + kx] * dy[plane + (ulong)oy * ow + ox];
-            acc += product;
+            const float wv = w[((ulong)ch * kh + ky) * kw + kx];
+            const float dyv = dy[plane + (ulong)oy * ow + ox];
+            if (bf16_acc) {
+                acc = ojas_bf16(acc + ojas_bf16(ojas_bf16(wv) * ojas_bf16(dyv)));
+            } else {
+                const float product = wv * dyv;
+                acc += product;
+            }
         }
     }
     dx[i] = acc;
@@ -135,12 +155,14 @@ kernel void ojas_dwconv_bwd_w(
     constant uint &pw [[buffer(13)]],
     constant uint &oh [[buffer(14)]],
     constant uint &ow [[buffer(15)]],
+    constant uint &bf16_accum [[buffer(16)]],
     uint i [[thread_position_in_grid]])
 {
     if (i >= total) return;
     const uint kx = i % kw;
     const uint ky = (i / kw) % kh;
     const uint ch = i / (kw * kh);
+    const bool bf16_acc = bf16_accum != 0u;
     float acc = 0.0f;
     for (uint n = 0u; n < batch; ++n) {
         const ulong xplane = ((ulong)n * c + ch) * h * wd;
@@ -151,8 +173,14 @@ kernel void ojas_dwconv_bwd_w(
             for (uint ox = 0u; ox < ow; ++ox) {
                 const int ix = (int)(ox * sw + kx) - (int)pw;
                 if (ix < 0 || ix >= (int)wd) continue;
-                const float product = x[xplane + (ulong)iy * wd + (uint)ix] * dy[yplane + (ulong)oy * ow + ox];
-                acc += product;
+                const float xv = x[xplane + (ulong)iy * wd + (uint)ix];
+                const float dyv = dy[yplane + (ulong)oy * ow + ox];
+                if (bf16_acc) {
+                    acc = ojas_bf16(acc + ojas_bf16(ojas_bf16(xv) * ojas_bf16(dyv)));
+                } else {
+                    const float product = xv * dyv;
+                    acc += product;
+                }
             }
         }
     }
@@ -169,14 +197,17 @@ kernel void ojas_chan_sum(
     constant uint &channels [[buffer(2)]],
     constant uint &batch [[buffer(3)]],
     constant uint &pixels [[buffer(4)]],
+    constant uint &bf16_accum [[buffer(5)]],
     uint ch [[thread_position_in_grid]])
 {
     if (ch >= channels) return;
+    const bool bf16_acc = bf16_accum != 0u;
     float acc = 0.0f;
     for (uint n = 0u; n < batch; ++n) {
         const ulong at = ((ulong)n * channels + ch) * pixels;
         for (uint p = 0u; p < pixels; ++p) {
-            acc += dy[at + p];
+            const float v = dy[at + p];
+            acc = bf16_acc ? ojas_bf16(acc + ojas_bf16(v)) : (acc + v);
         }
     }
     db[ch] = acc;

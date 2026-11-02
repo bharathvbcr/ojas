@@ -13,7 +13,7 @@
 
 use std::any::Any;
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 
 use ojas_core::{
@@ -197,6 +197,9 @@ pub(crate) enum Lane {
     /// product of two bf16 values is exact in f32, so only the order of the
     /// f32 sums differs from [`Lane::ExactF32`].
     Bf16,
+    /// True bf16 accumulation (`ojas_gemm_bf16_accum`): operands, products
+    /// and running sums are rounded to bf16 at every step.
+    Bf16Accum,
 }
 
 impl Lane {
@@ -212,11 +215,11 @@ impl Lane {
     }
 
     /// f32 values' worth of the bf16 copies tessl makes, for the call, of
-    /// f32 operands of `a` and `b` elements: none on [`Lane::ExactF32`].
-    /// `None` on overflow.
+    /// f32 operands of `a` and `b` elements: none on [`Lane::ExactF32`] or
+    /// [`Lane::Bf16Accum`]. `None` on overflow.
     pub(crate) fn copies(self, a: usize, b: usize) -> Option<usize> {
         match self {
-            Self::ExactF32 => Some(0),
+            Self::ExactF32 | Self::Bf16Accum => Some(0),
             Self::Bf16 => a.div_ceil(2).checked_add(b.div_ceil(2)),
         }
     }
@@ -1290,6 +1293,7 @@ pub(crate) enum Reply {
 
 pub(crate) struct Msg {
     pub cmd: Cmd,
+    pub bf16_accum: bool,
     pub reply: Option<mpsc::SyncSender<Res<Reply>>>,
 }
 
@@ -1303,6 +1307,7 @@ pub(crate) struct Link {
     /// ([`check_mem_cap`]). Fixed when the device opens, so it is read
     /// here, on the host, without a command.
     budget_cap: u64,
+    bf16_accum: AtomicBool,
 }
 
 /// Whether `bytes` may be the memory cap of a device opened with a budget of
@@ -1351,7 +1356,16 @@ impl Link {
             device,
             waits,
             budget_cap,
+            bf16_accum: AtomicBool::new(false),
         }
+    }
+
+    pub(crate) fn set_bf16_accumulation(&self, on: bool) {
+        self.bf16_accum.store(on, Ordering::Relaxed);
+    }
+
+    pub(crate) fn bf16_accumulation(&self) -> bool {
+        self.bf16_accum.load(Ordering::Relaxed)
     }
 
     /// The budget the device opened with, the bound of a memory cap.
@@ -1390,10 +1404,16 @@ impl Link {
 
     /// Run `cmd` on the device thread and wait for its result.
     pub(crate) fn call(&self, cmd: Cmd) -> Res<Reply> {
+        self.call_with(cmd, self.bf16_accumulation())
+    }
+
+    /// Run `cmd` on the device thread with an explicit `bf16_accum` flag.
+    pub(crate) fn call_with(&self, cmd: Cmd, bf16_accum: bool) -> Res<Reply> {
         let (reply, rx) = mpsc::sync_channel(1);
         self.tx
             .send(Msg {
                 cmd,
+                bf16_accum,
                 reply: Some(reply),
             })
             .map_err(|_| gone())?;
@@ -1405,7 +1425,11 @@ impl Link {
     pub(crate) fn post(&self, cmd: Cmd) {
         // A closed channel means the device thread has exited, and its
         // buffer table, with this buffer in it, is already gone.
-        let _ = self.tx.send(Msg { cmd, reply: None });
+        let _ = self.tx.send(Msg {
+            cmd,
+            bf16_accum: false,
+            reply: None,
+        });
     }
 }
 

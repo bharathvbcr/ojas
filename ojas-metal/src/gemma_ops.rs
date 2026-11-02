@@ -38,7 +38,9 @@ pub(crate) const KERNELS: &[&str] = &[
     "ojas_gelu_tanh_fwd",
     "ojas_gelu_tanh_bwd",
     "ojas_segments_from_lens",
+    "ojas_seq_mean_fwd",
     "ojas_seq_mean_bwd",
+    "ojas_l2_normalize_fwd",
     "ojas_l2_normalize_bwd",
 ];
 

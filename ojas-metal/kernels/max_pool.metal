@@ -86,6 +86,11 @@ inline uint ojas_pool_first_window(uint i, uint k, uint s)
     return (lo + s - 1u) / s;
 }
 
+inline float ojas_pool_bf16(float x)
+{
+    return float(bfloat(x));
+}
+
 /// dx[plane][iy][ix] = the sum, over the windows that cover (iy, ix) in
 /// ascending (oy, ox) and whose winner it is, of dy at that window. One
 /// thread per input element; `total` = planes * h * w. An input no window
@@ -105,6 +110,7 @@ kernel void ojas_max_pool2d_bwd(
     constant uint &sh [[buffer(10)]],
     constant uint &sw [[buffer(11)]],
     device atomic_uint *st [[buffer(12)]],
+    constant uint &bf16_acc [[buffer(13)]],
     uint i [[thread_position_in_grid]])
 {
     if (i >= total) return;
@@ -122,7 +128,8 @@ kernel void ojas_max_pool2d_bwd(
     for (uint oy = y_lo; oy < y_hi; ++oy) {
         for (uint ox = x_lo; ox < x_hi; ++ox) {
             if (ojas_pool_argmax(plane, w, kh, kw, sh, sw, oy, ox) == at) {
-                acc += grads[oy * ow + ox];
+                const float g = grads[oy * ow + ox];
+                acc = (bf16_acc != 0u) ? ojas_pool_bf16(acc + ojas_pool_bf16(g)) : (acc + g);
             }
         }
     }

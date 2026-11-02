@@ -80,7 +80,7 @@
 
 use std::any::Any;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use ojas_core::{
     accumulate_grad_dims, adamw_step_dims, argmax_rows_dims, attention_forward_dims,
@@ -203,25 +203,32 @@ impl fmt::Debug for MetalBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MetalBackend")
             .field("device", &self.link.device_name())
+            .field("bf16_accum", &self.bf16_accumulation())
             .finish()
     }
 }
 
 pub(crate) struct MetalTrimHandler {
-    link: Arc<Link>,
+    link: Weak<Link>,
 }
 
 impl fmt::Debug for MetalTrimHandler {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MetalTrimHandler")
-            .field("device", &self.link.device_name())
+            .field(
+                "device",
+                &self.link.upgrade().map(|l| l.device_name().to_string()),
+            )
             .finish()
     }
 }
 
 impl BudgetTrimHandler for MetalTrimHandler {
     fn trim_memory(&self, _needed_bytes: u64) -> u64 {
-        match self.link.call(Cmd::TrimPool) {
+        let Some(link) = self.link.upgrade() else {
+            return 0;
+        };
+        match link.call(Cmd::TrimPool) {
             Ok(Reply::Trimmed(freed)) => freed,
             _ => 0,
         }
@@ -233,17 +240,48 @@ impl MetalBackend {
     /// the `metal` feature, this is [`OjasError::Unsupported`].
     pub fn new(budget: Budget) -> Result<Self, OjasError> {
         let waits = Arc::new(Waits::default());
-        let (tx, device) = crate::device::spawn(Arc::clone(&waits), budget.cap_bytes())?;
+        let (tx, device) = crate::device::spawn(Arc::clone(&waits), budget.clone())?;
         let link = Arc::new(Link::new(tx, device, waits, budget.cap_bytes()));
 
         // Wire automatic cache trim hook: when host or backend reservations hit
         // capacity, evict idle pool freelist buffers to reclaim headroom.
         let trim_handler = Arc::new(MetalTrimHandler {
-            link: Arc::clone(&link),
+            link: Arc::downgrade(&link),
         });
         budget.set_trim_handler(trim_handler);
 
         Ok(Self { link, budget })
+    }
+
+    /// Configure this backend's device to run matmul, linear, convolution,
+    /// attention, per-head gate and gradient/bias reductions with true bf16
+    /// accumulation (`enabled == true`) or f32 accumulation (`enabled == false`),
+    /// and return a cloned handle.
+    pub fn with_bf16_accumulation(&self, enabled: bool) -> Self {
+        self.link.set_bf16_accumulation(enabled);
+        self.clone()
+    }
+
+    /// Enable or disable true bf16 accumulation on this backend's device link.
+    pub fn set_bf16_accumulation(&self, enabled: bool) {
+        self.link.set_bf16_accumulation(enabled);
+    }
+
+    /// Whether this backend runs with true bf16 accumulation.
+    pub fn bf16_accumulation(&self) -> bool {
+        self.link.bf16_accumulation()
+    }
+
+    fn call(&self, cmd: Cmd) -> Res<Reply> {
+        self.link.call_with(cmd, self.bf16_accumulation())
+    }
+
+    fn lane_of(&self, a: &Tensor, b: &Tensor) -> Lane {
+        if self.bf16_accumulation() {
+            Lane::Bf16Accum
+        } else {
+            self.link.lane(a.bf16_exact(), b.bf16_exact())
+        }
     }
 
     pub fn device_name(&self) -> &str {
@@ -440,7 +478,7 @@ impl MetalBackend {
         const OP: &str = "conv2d_forward";
         let dims = conv2d_forward_dims(input, weight, bias, params)?;
         refuse_unsupported_conv2d(OP, &dims)?;
-        let lane = self.link.lane(input.bf16_exact(), weight.bf16_exact());
+        let lane = self.lane_of(input, weight);
         let (input, weight) = (self.widened(input)?, self.widened(weight)?);
         let bias = bias.map(|b| self.widened(b)).transpose()?;
         let (x, w) = (self.f32(OP, &input)?, self.f32(OP, &weight)?);
@@ -579,7 +617,9 @@ impl MetalBackend {
         const OP: &str = "attention_forward";
         let dims = attention_forward_dims(q, k, v, &opts)?;
         let (q, k, v) = (self.widened(q)?, self.widened(k)?, self.widened(v)?);
-        if routes_to_encoder_attn_within(&dims, self.link.has_tensorops(), f64::INFINITY) {
+        if !self.bf16_accumulation()
+            && routes_to_encoder_attn_within(&dims, self.link.has_tensorops(), f64::INFINITY)
+        {
             if let Some(output) =
                 self.encoder_attn_forward(OP, &dims, [&q, &k, &v], (opts.key_lens, opts.scale))?
             {
@@ -917,7 +957,7 @@ impl MetalBackend {
         reservations: Vec<Reservation>,
         cmd: Cmd,
     ) -> Res<Vec<Tensor>> {
-        let bufs = match self.link.call(cmd)? {
+        let bufs = match self.call(cmd)? {
             Reply::Bufs(bufs) => bufs,
             other => return Err(metal_err(format!("{op}: device returned {other:?}"))),
         };
@@ -1704,6 +1744,15 @@ const ENCODER_ATTN_MAX_PAD_RATIO: f64 = 2.25;
 /// `attention_forward_saving` never routes: `encoder_attn` returns no
 /// log-sum-exp.
 fn routes_to_encoder_attn(dims: &AttentionDims, tensorops: bool) -> bool {
+    // When flash cross-attention covers decoupled sequence lengths (Tq != Tk),
+    // yield to native flash cross-attention to avoid O(m^2) pad-q overhead.
+    if dims.q_len != dims.kv_len && tensorops {
+        if let Ok(geom) = attn_launch("routes_to_encoder_attn", dims) {
+            if flash_cross_route(&geom) {
+                return false;
+            }
+        }
+    }
     routes_to_encoder_attn_within(dims, tensorops, ENCODER_ATTN_MAX_PAD_RATIO)
 }
 
@@ -1881,16 +1930,15 @@ fn flash_groups(g: &AttnGeom) -> u64 {
 }
 
 /// Whether the flash kernel can run `g` at all: its head dim is in
-/// [`FLASH_CROSS_HEAD_DIMS`], it is non-causal and unwindowed, has neither a
-/// bias nor key lengths, has queries and keys, and a head's query and key
+/// [`FLASH_CROSS_HEAD_DIMS`], it is non-causal and unwindowed, has no
+/// key lengths, has queries and keys, and a head's query and key
 /// planes are addressable in `i32` as the matrix-unit views require.
-/// Grouped-query heads are covered (the kernel reads KV plane `bh / rep`).
+/// Grouped-query heads and additive bias are covered.
 fn flash_cross_covers(g: &AttnGeom) -> bool {
     let plane = |t: u32| u64::from(t) * u64::from(g.d) <= i32::MAX as u64;
     FLASH_CROSS_HEAD_DIMS.contains(&g.d)
         && !g.causal
         && g.window == 0
-        && g.bias.is_none()
         && !g.has_lens
         && g.q_len > 0
         && g.kv_len > 0
@@ -1900,9 +1948,17 @@ fn flash_cross_covers(g: &AttnGeom) -> bool {
 
 /// Whether the dispatcher takes the flash route for `g`: the kernel covers it
 /// ([`flash_cross_covers`]) and it launches at least [`FLASH_MIN_GROUPS`]
-/// threadgroups; a shorter Q stays on split-K.
+/// threadgroups (or has additive bias, which avoids the split-K allocation/scalar fallback);
+/// a shorter Q without bias stays on split-K.
 fn flash_cross_route(g: &AttnGeom) -> bool {
-    flash_cross_covers(g) && flash_groups(g) >= FLASH_MIN_GROUPS
+    if !flash_cross_covers(g) {
+        return false;
+    }
+    if g.bias.is_some() {
+        flash_groups(g) >= 56
+    } else {
+        flash_groups(g) >= FLASH_MIN_GROUPS
+    }
 }
 
 /// `(splits, per_split)` of the split-K tiled kernel for `g`, or `None` when
@@ -2124,56 +2180,65 @@ impl Backend for MetalBackend {
     /// [`OjasError::Placement`].
     fn upload(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
         const OP: &str = "MetalBackend::upload";
-        match tensor.device_buffer() {
-            Some(buf) => {
-                let ours = buf
-                    .as_any()
-                    .downcast_ref::<MetalBuffer>()
-                    .is_some_and(|mb| Arc::ptr_eq(&mb.link, &self.link));
-                if ours {
-                    Ok(tensor.clone())
-                } else {
-                    Err(OjasError::Placement {
-                        op: OP,
-                        expected: Some(BackendId::Metal),
-                        found: Some(buf.backend()),
-                    })
-                }
-            }
-            None => {
-                // The device thread encodes the window into the new buffer
-                // itself: no host copy of it is made here, and the device
-                // copy is charged before anything is allocated.
-                if !tensor.is_contiguous()? {
-                    return Err(shape(OP, "view is not contiguous"));
-                }
-                let len = tensor
-                    .num_elements()?
-                    .checked_mul(tensor.dtype().size())
-                    .ok_or_else(|| overflow(OP))?;
-                if len == 0 {
-                    return Err(shape(OP, "empty tensor"));
-                }
-                let reservation = self.budget.try_reserve(len as u64)?;
-                let ids = match tensor.dtype() {
-                    DType::U32 => Some(Ids::Host(Arc::from(tensor.u32_slice()?))),
-                    _ => None,
-                };
-                let nb = match self.link.call(Cmd::Upload {
-                    src: tensor.clone(),
-                })? {
-                    Reply::Bufs(mut v) if v.len() == 1 => v.remove(0),
-                    other => return Err(metal_err(format!("{OP}: device returned {other:?}"))),
-                };
-                let buf: Arc<dyn DeviceBuffer> = Arc::new(MetalBuffer {
-                    id: nb.id,
-                    len: nb.bytes,
-                    link: Arc::clone(&self.link),
-                    ids,
+        if let Some(buf) = tensor.device_buffer() {
+            let ours = buf
+                .as_any()
+                .downcast_ref::<MetalBuffer>()
+                .is_some_and(|mb| Arc::ptr_eq(&mb.link, &self.link));
+            if ours {
+                return Ok(tensor.clone());
+            } else {
+                return Err(OjasError::Placement {
+                    op: OP,
+                    expected: Some(BackendId::Metal),
+                    found: Some(buf.backend()),
                 });
-                Tensor::from_device_reserved(buf, tensor.shape(), tensor.dtype(), reservation)
             }
         }
+        if !tensor.is_contiguous()? {
+            return Err(shape(OP, "view is not contiguous"));
+        }
+        let len = tensor
+            .num_elements()?
+            .checked_mul(tensor.dtype().size())
+            .ok_or_else(|| overflow(OP))?;
+        if len == 0 {
+            return Err(shape(OP, "empty tensor"));
+        }
+        if let Some(mbuf) = tensor.mapped_buffer() {
+            if mbuf.backend() != BackendId::Metal {
+                return Err(OjasError::Placement {
+                    op: OP,
+                    expected: Some(BackendId::Metal),
+                    found: Some(mbuf.backend()),
+                });
+            }
+        }
+        let reservation = self.budget.try_reserve(len as u64)?;
+        let ids = match tensor.dtype() {
+            DType::U32 => {
+                if tensor.mapped_buffer().is_some() {
+                    let view = tensor.host_view()?;
+                    Some(Ids::Host(Arc::from(view.as_u32()?)))
+                } else {
+                    Some(Ids::Host(Arc::from(tensor.u32_slice()?)))
+                }
+            }
+            _ => None,
+        };
+        let nb = match self.link.call(Cmd::Upload {
+            src: tensor.clone(),
+        })? {
+            Reply::Bufs(mut v) if v.len() == 1 => v.remove(0),
+            other => return Err(metal_err(format!("{OP}: device returned {other:?}"))),
+        };
+        let buf: Arc<dyn DeviceBuffer> = Arc::new(MetalBuffer {
+            id: nb.id,
+            len: nb.bytes,
+            link: Arc::clone(&self.link),
+            ids,
+        });
+        Tensor::from_device_reserved(buf, tensor.shape(), tensor.dtype(), reservation)
     }
 
     /// A bit-exact device copy. As on the CPU reference, a NaN or infinity
@@ -2339,7 +2404,7 @@ impl Backend for MetalBackend {
     fn linear_forward(&self, input: &Tensor, weight: &Tensor) -> Result<Tensor, OjasError> {
         const OP: &str = "linear_forward";
         let dims = linear_forward_dims(input, weight)?;
-        let lane = self.link.lane(input.bf16_exact(), weight.bf16_exact());
+        let lane = self.lane_of(input, weight);
         let (input, weight) = (self.widened(input)?, self.widened(weight)?);
         let x = self.f32(OP, &input)?;
         let w = self.f32(OP, &weight)?;
@@ -2372,10 +2437,8 @@ impl Backend for MetalBackend {
     ) -> Result<(Tensor, Tensor), OjasError> {
         const OP: &str = "linear_backward";
         let dims = linear_backward_dims(input, weight, grad_output)?;
-        let gx_lane = self
-            .link
-            .lane(grad_output.bf16_exact(), weight.bf16_exact());
-        let gw_lane = self.link.lane(grad_output.bf16_exact(), input.bf16_exact());
+        let gx_lane = self.lane_of(grad_output, weight);
+        let gw_lane = self.lane_of(grad_output, input);
         let input = self.widened(input)?;
         let weight = self.widened(weight)?;
         let grad_output = self.widened(grad_output)?;
@@ -2420,9 +2483,7 @@ impl Backend for MetalBackend {
     ) -> Result<Tensor, OjasError> {
         const OP: &str = "linear_backward_input";
         let dims = linear_backward_dims(input, weight, grad_output)?;
-        let lane = self
-            .link
-            .lane(grad_output.bf16_exact(), weight.bf16_exact());
+        let lane = self.lane_of(grad_output, weight);
         let input = self.widened(input)?;
         let weight = self.widened(weight)?;
         let grad_output = self.widened(grad_output)?;
@@ -2666,7 +2727,7 @@ impl Backend for MetalBackend {
         const OP: &str = "attention_forward";
         let dims = attention_forward_dims(q, k, v, &opts)?;
         let (q, k, v) = (self.widened(q)?, self.widened(k)?, self.widened(v)?);
-        if routes_to_encoder_attn(&dims, self.link.has_tensorops()) {
+        if !self.bf16_accumulation() && routes_to_encoder_attn(&dims, self.link.has_tensorops()) {
             if let Some(output) =
                 self.encoder_attn_forward(OP, &dims, [&q, &k, &v], (opts.key_lens, opts.scale))?
             {
@@ -3629,7 +3690,9 @@ impl Backend for MetalBackend {
     }
 
     /// Fused `x @ W^T + bias` on `matmul2d_tensorops_nt_bf16_f32_bias` when
-    /// running on TensorOps under Bf16 lane, else sequential linear_forward and broadcast_add_forward.
+    /// running on TensorOps under Bf16 lane, or on `ojas_gemm_bf16_accum` when
+    /// running with bf16 accumulation, else sequential linear_forward and
+    /// broadcast_add_forward.
     fn linear_bias_forward(
         &self,
         input: &Tensor,
@@ -3638,8 +3701,10 @@ impl Backend for MetalBackend {
     ) -> Result<Tensor, OjasError> {
         const OP: &str = "linear_bias_forward";
         let dims = linear_bias_forward_dims(input, weight, bias)?;
-        let lane = self.link.lane(input.bf16_exact(), weight.bf16_exact());
-        if self.link.has_tensorops() && lane == Lane::Bf16 && bias.shape() == [dims.out_features] {
+        let lane = self.lane_of(input, weight);
+        if (lane == Lane::Bf16Accum || (self.link.has_tensorops() && lane == Lane::Bf16))
+            && bias.shape() == [dims.out_features]
+        {
             let (input, weight) = (self.widened(input)?, self.widened(weight)?);
             let x = self.f32(OP, &input)?;
             let w = self.f32(OP, &weight)?;
@@ -3993,7 +4058,7 @@ impl Backend for MetalBackend {
         let a = self.f32(OP, acc)?;
         let g = self.f32(OP, grad)?;
         if self.unique(OP, acc).is_ok() {
-            return match self.link.call(Cmd::Accumulate {
+            return match self.call(Cmd::Accumulate {
                 acc: a,
                 g,
                 in_place: true,
@@ -4136,7 +4201,7 @@ impl Backend for MetalBackend {
         self.unique(OP, param)?;
         self.unique(OP, momentum)?;
         let _scratch = self.reserve(OP, muon_scratch_elems(OP, rows, cols)?)?;
-        match self.link.call(Cmd::Muon {
+        match self.call(Cmd::Muon {
             p,
             g,
             m,
@@ -5509,22 +5574,23 @@ mod tests {
             ),
             "head dim 256 routes"
         );
-        // Cross-attention pads Q: the memory encoder's one-frame and
-        // two-frame lengths route (F = 2 spans ratios 2.003 to 2.049), up to a
-        // Tk of 2.25 Tq; three frames (F = 3, ratio 3.01) do not.
+        // Decoupled cross-attention (Tq != Tk) yields to native flash cross-attention
+        // on TensorOps to avoid O(m^2) pad-q overhead:
         for kv_len in [5200usize, 10400, 10624] {
+            let d = AttentionDims {
+                head_dim: 32,
+                heads: 8,
+                kv_heads: 8,
+                kv_len,
+                ..base
+            };
             assert!(
-                routes_to_encoder_attn(
-                    &AttentionDims {
-                        head_dim: 32,
-                        heads: 8,
-                        kv_heads: 8,
-                        kv_len,
-                        ..base
-                    },
-                    true
-                ),
-                "Tq 5184 over Tk {kv_len} routes"
+                !routes_to_encoder_attn(&d, true),
+                "Tq 5184 over Tk {kv_len} yields to flash cross-attention"
+            );
+            assert!(
+                routes_to_encoder_attn_within(&d, true, ENCODER_ATTN_MAX_PAD_RATIO),
+                "Tq 5184 over Tk {kv_len} remains within the pad ratio bound"
             );
         }
         // The bound itself (2.25 Tq) routes; one key more does not.

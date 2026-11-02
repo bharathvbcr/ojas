@@ -15,6 +15,7 @@ const FLAG_CAUSAL: u32 = 1;
 const FLAG_BIAS: u32 = 2;
 const FLAG_LENS: u32 = 4;
 const FLAG_DEAD_ROWS: u32 = 8;
+const FLAG_BF16_ACCUM: u32 = 16;
 
 /// Query rows of one tile (`ATT_BQ`), and key rows (`ATT_BK`).
 const TILE_Q: usize = ATTN_ROWS;
@@ -110,21 +111,20 @@ impl Worker {
             _ => None,
         };
         let st = self.status(op)?;
-        for (a, x) in [
-            (q, &qv),
-            (k, &kv),
-            (v, &vv),
-            (o, &ov),
-            (lse, &lv),
-            (gy, &gv),
-        ] {
+        for (a, x) in [(q, &qv), (k, &kv), (v, &vv)] {
             self.check_operand(&st, a, x, ST_IN)?;
+        }
+        if q_n == 0 {
+            for (a, x) in [(o, &ov), (lse, &lv), (gy, &gv)] {
+                self.check_operand(&st, a, x, ST_IN)?;
+            }
         }
         if let (Some(a), Some(x)) = (bias, bv.as_ref()) {
             self.check_operand(&st, a, x, ST_IN)?;
         }
 
         let rows = u32_of(rows_n)?;
+        let d_flag = g.d | if self.bf16_accum() { 0x8000_0000 } else { 0 };
         self.ktg(
             "ojas_attn_bwd_dr",
             (rows as usize).div_ceil(ATTN_THREADS / 32),
@@ -135,14 +135,21 @@ impl Worker {
                 bind(b, &ov, 1);
                 bind(b, &dvec, 2);
                 set_u32(b, rows, 3);
-                set_u32(b, g.d, 4);
+                set_u32(b, d_flag, 4);
+                bind(b, &lv, 5);
+                bind_st(b, &st, 6);
             },
         )?;
 
         let flags = (if g.causal { FLAG_CAUSAL } else { 0 })
             | (if g.bias.is_some() { FLAG_BIAS } else { 0 })
             | (if g.has_lens { FLAG_LENS } else { 0 })
-            | (if geom.dead_rows { FLAG_DEAD_ROWS } else { 0 });
+            | (if geom.dead_rows { FLAG_DEAD_ROWS } else { 0 })
+            | (if self.bf16_accum() {
+                FLAG_BF16_ACCUM
+            } else {
+                0
+            });
         let [bias_b, bias_h, bias_q] = g.bias.unwrap_or([1, 1, 1]);
         // A buffer the kernel does not read this call is still bound:
         // Metal's validation wants every declared argument set.

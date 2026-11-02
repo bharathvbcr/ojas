@@ -36,6 +36,19 @@ static inline void gemma_flag(device atomic_uint *st, uint word)
     atomic_store_explicit(&st[word], 1u, memory_order_relaxed);
 }
 
+static inline float gemma_bf16(float v)
+{
+    uint b = as_type<uint>(v);
+    if ((b & 0x7f800000u) == 0x7f800000u) {
+        if ((b & 0x007fffffu) != 0u) {
+            return as_type<float>((b | 0x00400000u) & 0xffff0000u);
+        }
+        return v;
+    }
+    b += 0x7fffu + ((b >> 16u) & 1u);
+    return as_type<float>(b & 0xffff0000u);
+}
+
 kernel void ojas_gelu_tanh_fwd(
     device const float *x [[buffer(0)]],
     device float *y [[buffer(1)]],
@@ -166,6 +179,53 @@ kernel void ojas_seq_mean_bwd(
 // kernel is for, and a threadgroup reduction is the obvious change if a
 // profile ever asks for one. The host scans both operands, so this flags
 // only its output.
+kernel void ojas_seq_mean_fwd(
+    device const float *x [[buffer(0)]],
+    device const uint *segments [[buffer(1)]],
+    device float *out [[buffer(2)]],
+    constant uint &S [[buffer(3)]],
+    constant uint &rows [[buffer(4)]],
+    constant uint &D [[buffer(5)]],
+    uint gid [[thread_position_in_grid]])
+{
+    const uint total = S * D;
+    if (gid >= total) return;
+    const uint s = gid / D;
+    const uint d = gid % D;
+    const uint end = min(segments[2u * s + 1u], rows);
+    const uint start = min(segments[2u * s], end);
+    if (end <= start) {
+        out[gid] = 0.0f;
+        return;
+    }
+    float acc = 0.0f;
+    for (uint r = start; r < end; ++r) {
+        acc = gemma_bf16(acc + gemma_bf16(x[(ulong)r * (ulong)D + (ulong)d]));
+    }
+    out[gid] = precise::divide(acc, (float)(end - start));
+}
+
+kernel void ojas_l2_normalize_fwd(
+    device const float *x [[buffer(0)]],
+    device float *out [[buffer(1)]],
+    constant uint &rows [[buffer(2)]],
+    constant uint &dim [[buffer(3)]],
+    constant float &eps [[buffer(4)]],
+    uint r [[thread_position_in_grid]])
+{
+    if (r >= rows) return;
+    const ulong at = (ulong)r * dim;
+    float sum_sq = 0.0f;
+    for (uint c = 0u; c < dim; ++c) {
+        const float v = gemma_bf16(x[at + c]);
+        sum_sq = gemma_bf16(sum_sq + gemma_bf16(v * v));
+    }
+    const float inv = precise::divide(1.0f, max(precise::sqrt(sum_sq), eps));
+    for (uint c = 0u; c < dim; ++c) {
+        out[at + c] = x[at + c] * inv;
+    }
+}
+
 kernel void ojas_l2_normalize_bwd(
     device const float *x [[buffer(0)]],
     device const float *g [[buffer(1)]],
@@ -174,14 +234,22 @@ kernel void ojas_l2_normalize_bwd(
     constant uint &dim [[buffer(4)]],
     constant float &eps [[buffer(5)]],
     device atomic_uint *st [[buffer(6)]],
+    constant uint &bf16_acc [[buffer(7)]],
     uint r [[thread_position_in_grid]])
 {
     if (r >= rows) return;
-    const uint at = r * dim;
+    const ulong at = (ulong)r * dim;
     float sum_sq = 0.0f;
-    for (uint c = 0u; c < dim; ++c) {
-        const float v = x[at + c];
-        sum_sq += v * v;
+    if (bf16_acc != 0u) {
+        for (uint c = 0u; c < dim; ++c) {
+            const float v = gemma_bf16(x[at + c]);
+            sum_sq = gemma_bf16(sum_sq + gemma_bf16(v * v));
+        }
+    } else {
+        for (uint c = 0u; c < dim; ++c) {
+            const float v = x[at + c];
+            sum_sq += v * v;
+        }
     }
     const float norm = precise::sqrt(sum_sq);
     if (!(norm > eps)) {
@@ -193,7 +261,15 @@ kernel void ojas_l2_normalize_bwd(
         return;
     }
     float dot = 0.0f;
-    for (uint c = 0u; c < dim; ++c) dot += (x[at + c] / norm) * g[at + c];
+    if (bf16_acc != 0u) {
+        for (uint c = 0u; c < dim; ++c) {
+            const float y = gemma_bf16(x[at + c] / norm);
+            const float gv = gemma_bf16(g[at + c]);
+            dot = gemma_bf16(dot + gemma_bf16(y * gv));
+        }
+    } else {
+        for (uint c = 0u; c < dim; ++c) dot += (x[at + c] / norm) * g[at + c];
+    }
     for (uint c = 0u; c < dim; ++c) {
         const float d = (g[at + c] - (x[at + c] / norm) * dot) / norm;
         out[at + c] = d;

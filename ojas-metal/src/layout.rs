@@ -71,7 +71,7 @@ pub(crate) use literal::{
 /// change on either side fails here, not as a wrong reduction on a device.
 #[cfg(test)]
 mod source_pins {
-    use super::SQ_PIECE;
+    use super::{CONV1D_BWD_ROWS, GATED_RMS_BWD_ROWS, SQ_PIECE};
     use crate::backend::GROUP_NORM_THREADS;
     use crate::link::RMS_W_CHUNK;
 
@@ -82,10 +82,14 @@ mod source_pins {
         let norm_chunk = SQ_PIECE;
         let rms_w_chunk = RMS_W_CHUNK;
         let gn_threads = GROUP_NORM_THREADS;
+        let gated_rms_bwd_rows = GATED_RMS_BWD_ROWS;
+        let conv1d_bwd_rows = CONV1D_BWD_ROWS;
         for line in [
             format!("#define NORM_CHUNK {norm_chunk}u"),
             format!("#define RMS_W_CHUNK {rms_w_chunk}u"),
             format!("#define GN_THREADS {gn_threads}u"),
+            format!("#define GATED_RMS_BWD_ROWS {gated_rms_bwd_rows}u"),
+            format!("#define CONV1D_BWD_ROWS {conv1d_bwd_rows}u"),
         ] {
             assert!(
                 SOURCE.contains(&line),
