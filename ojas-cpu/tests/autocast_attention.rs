@@ -107,11 +107,14 @@ fn a_bf16_region_rounds_operands_and_output_and_keeps_lse_f32() {
     assert_eq!(bits(&y2), bits(&want_y), "attention_forward_saving output");
     assert_eq!(bits(&lse), bits(&want_lse), "lse must stay unrounded F32");
 
-    // Backward: operands rounded once, gradients emitted rounded.
+    // Backward: operands rounded once, gradients emitted rounded. The
+    // emitted output `y2` is bf16-rounded, so the wrapper does not hand it to
+    // the backward (its `dO · O` would leak a nonzero softmax row sum, see
+    // `attention_rowsum_autocast.rs`): the inner backward sees the f32 output
+    // `mid` of the same rounded operands.
     let rgy = rounded(&f.gy);
-    let ry = rounded(&y2);
     let want = exact
-        .attention_backward(&rq, &rk, &rv, &ry, &lse, &rgy, want_opts, true)
+        .attention_backward(&rq, &rk, &rv, &mid, &want_lse, &rgy, want_opts, true)
         .unwrap();
     let got = ac
         .attention_backward(&f.q, &f.k, &f.v, &y2, &lse, &f.gy, got_opts, true)

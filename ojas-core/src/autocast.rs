@@ -174,10 +174,14 @@ pub const SAM_AUTOCAST_POLICY: &[(&str, AutocastClass)] = &[
             f32_outputs: &[1],
         },
     ),
+    // The saved output (3) is never rounded: an untagged one passes through
+    // f32 and a bf16-tagged one is replaced by an f32 recompute, because the
+    // backward's `dO · O` must cancel the softmax row sum (see
+    // `Autocast::causal_sdpa_backward`). The log-sum-exp (4) stays f32 too.
     (
         "attention_backward",
         AutocastClass::Matmul {
-            f32_operands: &[4],
+            f32_operands: &[3, 4],
             f32_outputs: &[],
         },
     ),
@@ -842,6 +846,17 @@ impl<B: Backend> Backend for Autocast<B> {
     }
 
     /// `lse` is passed through unrounded (see the forward).
+    ///
+    /// An `output` this wrapper emitted is bf16-rounded, and a backward that
+    /// forms each row's `Dr = dO · O` from it no longer cancels the softmax
+    /// row sum: `Σ_j dS_ij` picks up `dO · (O − round(O))`, about
+    /// `2^-9 |dO| |O|`, while the true `dS` shrinks like `1 − P_max` in sharp
+    /// heads (`ojas-cpu/tests/attention_rowsum_autocast.rs` measured dQ errors
+    /// thousands of times the f32 floor). So the output is never rounded
+    /// here: an untagged one passes through f32, like `lse`, and a
+    /// bf16-tagged one is not used at all. The inner backend recomputes the
+    /// f32 output from the same operands instead, at the cost of one
+    /// attention forward.
     fn causal_sdpa_backward(
         &self,
         q: &Tensor,
@@ -852,14 +867,16 @@ impl<B: Backend> Backend for Autocast<B> {
         grad_output: &Tensor,
         window: Option<usize>,
     ) -> Result<(Tensor, Tensor, Tensor), OjasError> {
+        if output.compute_tag() == COMPUTE_BF16 {
+            return self.causal_sdpa_backward_recompute(q, k, v, grad_output, window);
+        }
         let q = self.prep(q)?;
         let k = self.prep(k)?;
         let v = self.prep(v)?;
-        let output = self.prep(output)?;
         let grad_output = self.prep(grad_output)?;
         let (gq, gk, gv) =
             self.inner
-                .causal_sdpa_backward(&q, &k, &v, &output, lse, &grad_output, window)?;
+                .causal_sdpa_backward(&q, &k, &v, output, lse, &grad_output, window)?;
         Ok((self.emit(gq)?, self.emit(gk)?, self.emit(gv)?))
     }
 
@@ -926,7 +943,10 @@ impl<B: Backend> Backend for Autocast<B> {
         Ok((self.emit(out)?, lse))
     }
 
-    /// `lse` is passed through unrounded (see the forward).
+    /// `lse` is passed through unrounded (see the forward). The output is
+    /// never rounded: an untagged one passes through f32, and a bf16-tagged
+    /// one is replaced by the inner backend's f32 recompute, for the row-sum
+    /// reason given on [`Self::causal_sdpa_backward`].
     fn attention_backward(
         &self,
         q: &Tensor,
@@ -941,23 +961,30 @@ impl<B: Backend> Backend for Autocast<B> {
         let q = self.prep(q)?;
         let k = self.prep(k)?;
         let v = self.prep(v)?;
-        let output = self.prep(output)?;
         let grad_output = self.prep(grad_output)?;
         let bias = opts.bias.map(|b| self.prep(b)).transpose()?;
         let opts = AttentionOpts {
             bias: bias.as_deref(),
             ..opts
         };
-        let grads = self.inner.attention_backward(
-            &q,
-            &k,
-            &v,
-            &output,
-            lse,
-            &grad_output,
-            opts,
-            bias_grad,
-        )?;
+        let grads = if output.compute_tag() == COMPUTE_BF16 {
+            // The same operands the forward saw, so the recomputed lse has
+            // the saved lse's bits.
+            let (output, lse) = self.inner.attention_forward_saving(&q, &k, &v, opts)?;
+            self.inner.attention_backward(
+                &q,
+                &k,
+                &v,
+                &output,
+                &lse,
+                &grad_output,
+                opts,
+                bias_grad,
+            )?
+        } else {
+            self.inner
+                .attention_backward(&q, &k, &v, output, lse, &grad_output, opts, bias_grad)?
+        };
         Ok(AttentionGrad {
             q: self.emit(grads.q)?,
             k: self.emit(grads.k)?,
