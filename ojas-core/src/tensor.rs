@@ -3080,8 +3080,8 @@ mod tests {
                 submitted: 9,
             },
         });
-        let t = Tensor::from_mapped(mapped.clone(), &[4], DType::F32, &budget)
-            .expect("mapped tensor");
+        let t =
+            Tensor::from_mapped(mapped.clone(), &[4], DType::F32, &budget).expect("mapped tensor");
 
         // Precondition: a write committed at 9, only 5 completed.
         assert_eq!(mapped.timeline.completed().unwrap(), 5);
@@ -3097,7 +3097,6 @@ mod tests {
             mapped.timeline.completed().unwrap()
         );
     }
-
 
     #[test]
     fn mapped_tensor_supports_zero_copy_to_host_and_enforces_fail_closed_placement() {
