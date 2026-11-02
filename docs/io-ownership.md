@@ -187,22 +187,28 @@ so no Cargo change and no MSRV ask was needed here. tessl declares
 `rust-version = "1.82"` while ojas's workspace floor is `1.97`, which is a
 standing inconsistency this change neither created nor fixed.
 
-## How this lands: ojas first, or the two together
+## How this lands: the ojas half is public; the tessl half is not
 
-This change spans two repositories and **is not landable one at a time.**
-Found by the CI/MSRV session on 2026-11-02 and verified here by name:
+This change spans two repositories and is **not landable one at a time.** The
+constraint was found by the CI/MSRV session on 2026-11-02 and is now **half
+satisfied**, because ojas was pushed later that night.
 
-- `tessl/src/safetensors.rs:238` (at `07c2e23`) calls
-  `ojas_io::SafeTensors::from_bytes`.
-- `fn from_bytes` exists in `ojas-io/src/safetensors.rs` only on ojas's **local**
-  `main` (`0300578`). It was added by this work, in `3e45c70`.
-  `git grep -c 'fn from_bytes' origin/main -- ojas-io/src` matches zero files.
-- ojas's `origin/main` is `dac0b5b`, **29 commits behind** local `main`. tessl's
-  `origin/main` is `a00521f`, six commits behind.
+- `tessl/src/safetensors.rs:238` calls `ojas_io::SafeTensors::from_bytes`, which
+  this work added in `3e45c70`.
+- **As of 2026-11-02, ojas's `origin/main` is `0300578` and `3e45c70` is an
+  ancestor of it** (`git merge-base --is-ancestor` exits 0), so
+  `git grep -c 'fn from_bytes' origin/main -- ojas-io/src` now matches three
+  times in `ojas-io/src/safetensors.rs`. The API the adapter needs is public.
+- tessl's `origin/main` is still `a00521f`, ten commits behind. So the half that
+  remains unpushed is the adapter itself, which is the safe order.
 
-So tessl's adapter cannot compile against the ojas that is on GitHub. The other
-API it uses — `StDtype`, `MAX_HEADER_BYTES`, `TensorSource`, `IoError::detail`,
-`read_u32` — all exist at `dac0b5b`; `from_bytes` is the one that does not.
+An earlier version of this section said `origin/main` was `dac0b5b`, 29 commits
+behind, and that `from_bytes` matched zero files there. That was true when
+written and is not now; the paragraph is corrected rather than deleted, because
+the three-step table below was measured against `dac0b5b` and only makes sense
+with its base stated. Local `main` is four commits ahead of `origin/main`: three
+of this work's records, and one `fix(metal)` commit (`28edc3d`) belonging to
+another session.
 
 Two details worth keeping straight, because they are easy to conflate:
 
@@ -231,9 +237,11 @@ The reason the middle row is green is that the branch's base is `a00521f`, where
 tessl still has its own reader: `git grep -c ojas_io <rev> -- src` matches zero
 files at `a00521f` and at `4f51e89`, and one — this adapter — at `07c2e23`.
 
-**Landing order: push ojas before, or in the same operation as, the adapter.**
-Not before that CI branch, which does not need it. Neither repository was pushed
-by this work.
+**Landing order: ojas before, or with, the adapter.** Not before that CI branch,
+which does not need it. That order was met by circumstance rather than by plan —
+ojas was pushed by another session on the owner's say-so, carrying this work's
+IO commits with it. This work pushed neither repository itself, and tessl's ten
+commits are still local.
 
 One thing to weigh before pushing ojas, found while checking the backlog: of the
 19 commits in `b2dd967..main`, five are another session's — `7087da0` (`to_host`

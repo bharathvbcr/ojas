@@ -217,17 +217,17 @@
 <h2 id="the-ojastessl-path-cycle-survives-this">The ojas/tessl path cycle survives this <a class="anchor" href="#the-ojastessl-path-cycle-survives-this" aria-label="Link to this section">#</a></h2>
 <p>Removing the safetensors strand does <strong>not</strong> break the cycle. <code>ojas-qwen35/src/config.rs</code> still uses <code>tessl::qwen35_model::Qwen35Config</code>, <code>tessl::gdn_train::{GDN_TRAIN_DK, GDN_TRAIN_BV}</code>, <code>tessl::qwen35::GDN_KEY_DIM</code> and <code>tessl::attn_train::ATTN_TRAIN_HEAD_DIM</code> to validate a config against the kernels that will run it, and <code>ojas-metal</code> depends on tessl by design. So <code>ojas-qwen35</code> still path-depends on tessl. Those eleven call sites in <code>config.rs</code> and <code>links = &#34;tessl&#34;</code> in <code>tessl/Cargo.toml</code> were read this pass; the consequence — that an ojas worktree at a second path cannot build, because every crate in one build must point at one tessl path and a worktree gets a lockfile collision and exits 101 — is carried over from the card and from an earlier session&#39;s finding, and was <strong>not</strong> re-run here. What this change removes is one strand of the cycle, not the cycle.</p>
 <p>A note for whoever takes the MSRV decision (D2 in the plan): tessl already declared <code>ojas-io</code> as a path dependency before this change and used it nowhere, so no Cargo change and no MSRV ask was needed here. tessl declares <code>rust-version = &#34;1.82&#34;</code> while ojas&#39;s workspace floor is <code>1.97</code>, which is a standing inconsistency this change neither created nor fixed.</p>
-<h2 id="how-this-lands-ojas-first-or-the-two-together">How this lands: ojas first, or the two together <a class="anchor" href="#how-this-lands-ojas-first-or-the-two-together" aria-label="Link to this section">#</a></h2>
-<p>This change spans two repositories and <strong>is not landable one at a time.</strong> Found by the CI/MSRV session on 2026-11-02 and verified here by name:</p>
+<h2 id="how-this-lands-the-ojas-half-is-public-the-tessl-half-is-not">How this lands: the ojas half is public; the tessl half is not <a class="anchor" href="#how-this-lands-the-ojas-half-is-public-the-tessl-half-is-not" aria-label="Link to this section">#</a></h2>
+<p>This change spans two repositories and is <strong>not landable one at a time.</strong> The constraint was found by the CI/MSRV session on 2026-11-02 and is now <strong>half satisfied</strong>, because ojas was pushed later that night.</p>
 <ul>
-<li><code>tessl/src/safetensors.rs:238</code> (at <code>07c2e23</code>) calls <code>ojas_io::SafeTensors::from_bytes</code>.
+<li><code>tessl/src/safetensors.rs:238</code> calls <code>ojas_io::SafeTensors::from_bytes</code>, which this work added in <code>3e45c70</code>.
 </li>
-<li><code>fn from_bytes</code> exists in <code>ojas-io/src/safetensors.rs</code> only on ojas&#39;s <strong>local</strong> <code>main</code> (<code>0300578</code>). It was added by this work, in <code>3e45c70</code>. <code>git grep -c &#39;fn from_bytes&#39; origin/main -- ojas-io/src</code> matches zero files.
+<li><strong>As of 2026-11-02, ojas&#39;s <code>origin/main</code> is <code>0300578</code> and <code>3e45c70</code> is an ancestor of it</strong> (<code>git merge-base --is-ancestor</code> exits 0), so <code>git grep -c &#39;fn from_bytes&#39; origin/main -- ojas-io/src</code> now matches three times in <code>ojas-io/src/safetensors.rs</code>. The API the adapter needs is public.
 </li>
-<li>ojas&#39;s <code>origin/main</code> is <code>dac0b5b</code>, <strong>29 commits behind</strong> local <code>main</code>. tessl&#39;s <code>origin/main</code> is <code>a00521f</code>, six commits behind.
+<li>tessl&#39;s <code>origin/main</code> is still <code>a00521f</code>, ten commits behind. So the half that remains unpushed is the adapter itself, which is the safe order.
 </li>
 </ul>
-<p>So tessl&#39;s adapter cannot compile against the ojas that is on GitHub. The other API it uses — <code>StDtype</code>, <code>MAX_HEADER_BYTES</code>, <code>TensorSource</code>, <code>IoError::detail</code>, <code>read_u32</code> — all exist at <code>dac0b5b</code>; <code>from_bytes</code> is the one that does not.</p>
+<p>An earlier version of this section said <code>origin/main</code> was <code>dac0b5b</code>, 29 commits behind, and that <code>from_bytes</code> matched zero files there. That was true when written and is not now; the paragraph is corrected rather than deleted, because the three-step table below was measured against <code>dac0b5b</code> and only makes sense with its base stated. Local <code>main</code> is four commits ahead of <code>origin/main</code>: three of this work&#39;s records, and one <code>fix(metal)</code> commit (<code>28edc3d</code>) belonging to another session.</p>
 <p>Two details worth keeping straight, because they are easy to conflate:</p>
 <ul>
 <li>At tessl <code>main</code> (<code>07c2e23</code>) the CI workflow does not mention ojas <strong>at all</strong>, so no cargo job there can resolve tessl&#39;s manifest today, with or without this change — tessl&#39;s path dependencies need ojas on disk. That is the subject of a separate card, not of this one.
@@ -244,7 +244,7 @@
 <tr><td>that branch <strong>plus this adapter</strong></td><td><code>dac0b5b</code></td><td>red on <code>from_bytes</code></td></tr>
 </tbody></table></div>
 <p>The reason the middle row is green is that the branch&#39;s base is <code>a00521f</code>, where tessl still has its own reader: <code>git grep -c ojas_io &lt;rev&gt; -- src</code> matches zero files at <code>a00521f</code> and at <code>4f51e89</code>, and one — this adapter — at <code>07c2e23</code>.</p>
-<p><strong>Landing order: push ojas before, or in the same operation as, the adapter.</strong> Not before that CI branch, which does not need it. Neither repository was pushed by this work.</p>
+<p><strong>Landing order: ojas before, or with, the adapter.</strong> Not before that CI branch, which does not need it. That order was met by circumstance rather than by plan — ojas was pushed by another session on the owner&#39;s say-so, carrying this work&#39;s IO commits with it. This work pushed neither repository itself, and tessl&#39;s ten commits are still local.</p>
 <p>One thing to weigh before pushing ojas, found while checking the backlog: of the 19 commits in <code>b2dd967..main</code>, five are another session&#39;s — <code>7087da0</code> (<code>to_host</code> on a mapped buffer actually waits for the device, which is <code>SharedBuf</code> and <code>Timeline</code> territory, not a docs-only ride-along), <code>32e4642</code>, <code>c681f92</code>, <code>8a3df56</code> and <code>0300578</code>, written 22:34–22:58 and interleaved with this work&#39;s. Pushing ojas <code>main</code> publishes them too. An IO-only split is possible but is a cherry-pick of this work&#39;s fourteen commits, not a range.</p>
 <h2 id="verification">Verification <a class="anchor" href="#verification" aria-label="Link to this section">#</a></h2>
 <p>Every row below is a run with its real exit code captured, not a count read out of a pipe. The ojas-io baseline at <code>9c5e784</code> was 161 passed over 12 binaries.</p>
@@ -287,7 +287,7 @@
 <li><a href="#what-this-leaves-for-ft-b5fb19e6">What this leaves for ft-b5fb19e6</a></li>
 <li><a href="#ojas-oracle-keeps-its-wrapper-and-is-not-a-third-parser">ojas-oracle keeps its wrapper, and is not a third parser</a></li>
 <li><a href="#the-ojastessl-path-cycle-survives-this">The ojas/tessl path cycle survives this</a></li>
-<li><a href="#how-this-lands-ojas-first-or-the-two-together">How this lands: ojas first, or the two together</a></li>
+<li><a href="#how-this-lands-the-ojas-half-is-public-the-tessl-half-is-not">How this lands: the ojas half is public; the tessl half is not</a></li>
 <li><a href="#verification">Verification</a></li>
 </ol></nav>
   </div>
