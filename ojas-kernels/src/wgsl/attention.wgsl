@@ -104,50 +104,66 @@ fn kv_base(bh: u32) -> u32 {
 
 // Four consecutive elements of row `row`, column `c`, zero past `time` or D.
 fn ld4_q(base: u32, row: u32, c: u32) -> vec4<f32> {
-    var v = vec4<f32>(0.0);
-    let d = pw(3u);
-    if (row < pw(0u)) {
-        let i = base + row * d + c;
-        for (var k = 0u; k < 4u; k = k + 1u) {
-            if (c + k < d) { v[k] = aq[i + k]; }
-        }
+    if (row >= pw(0u)) {
+        return vec4<f32>(0.0);
     }
+    let d = pw(3u);
+    let i = base + row * d + c;
+    if (c + 3u < d) {
+        return vec4<f32>(aq[i], aq[i + 1u], aq[i + 2u], aq[i + 3u]);
+    }
+    var v = vec4<f32>(0.0);
+    if (c < d) { v.x = aq[i]; }
+    if (c + 1u < d) { v.y = aq[i + 1u]; }
+    if (c + 2u < d) { v.z = aq[i + 2u]; }
     return v;
 }
 
 fn ld4_k(base: u32, row: u32, c: u32) -> vec4<f32> {
-    var v = vec4<f32>(0.0);
-    let d = pw(3u);
-    if (row < pw(0u)) {
-        let i = base + row * d + c;
-        for (var k = 0u; k < 4u; k = k + 1u) {
-            if (c + k < d) { v[k] = ak[i + k]; }
-        }
+    if (row >= pw(0u)) {
+        return vec4<f32>(0.0);
     }
+    let d = pw(3u);
+    let i = base + row * d + c;
+    if (c + 3u < d) {
+        return vec4<f32>(ak[i], ak[i + 1u], ak[i + 2u], ak[i + 3u]);
+    }
+    var v = vec4<f32>(0.0);
+    if (c < d) { v.x = ak[i]; }
+    if (c + 1u < d) { v.y = ak[i + 1u]; }
+    if (c + 2u < d) { v.z = ak[i + 2u]; }
     return v;
 }
 
 fn ld4_v(base: u32, row: u32, c: u32) -> vec4<f32> {
-    var v = vec4<f32>(0.0);
-    let d = pw(3u);
-    if (row < pw(0u)) {
-        let i = base + row * d + c;
-        for (var k = 0u; k < 4u; k = k + 1u) {
-            if (c + k < d) { v[k] = av[i + k]; }
-        }
+    if (row >= pw(0u)) {
+        return vec4<f32>(0.0);
     }
+    let d = pw(3u);
+    let i = base + row * d + c;
+    if (c + 3u < d) {
+        return vec4<f32>(av[i], av[i + 1u], av[i + 2u], av[i + 3u]);
+    }
+    var v = vec4<f32>(0.0);
+    if (c < d) { v.x = av[i]; }
+    if (c + 1u < d) { v.y = av[i + 1u]; }
+    if (c + 2u < d) { v.z = av[i + 2u]; }
     return v;
 }
 
 fn ld4_do(base: u32, row: u32, c: u32) -> vec4<f32> {
-    var v = vec4<f32>(0.0);
-    let d = pw(3u);
-    if (row < pw(0u)) {
-        let i = base + row * d + c;
-        for (var k = 0u; k < 4u; k = k + 1u) {
-            if (c + k < d) { v[k] = ado[i + k]; }
-        }
+    if (row >= pw(0u)) {
+        return vec4<f32>(0.0);
     }
+    let d = pw(3u);
+    let i = base + row * d + c;
+    if (c + 3u < d) {
+        return vec4<f32>(ado[i], ado[i + 1u], ado[i + 2u], ado[i + 3u]);
+    }
+    var v = vec4<f32>(0.0);
+    if (c < d) { v.x = ado[i]; }
+    if (c + 1u < d) { v.y = ado[i + 1u]; }
+    if (c + 2u < d) { v.z = ado[i + 2u]; }
     return v;
 }
 
@@ -160,30 +176,63 @@ fn hsum(v: vec4<f32>) -> f32 {
 fn st4_0(base: u32, row: u32, c: u32, v: vec4<f32>) {
     let d = pw(3u);
     let i = base + row * d + c;
-    for (var k = 0u; k < 4u; k = k + 1u) {
-        if (c + k < d) {
-            report(v[k]);
-            out0[i + k] = v[k];
-        }
+    if (c + 3u < d) {
+        report(v.x);
+        out0[i] = v.x;
+        report(v.y);
+        out0[i + 1u] = v.y;
+        report(v.z);
+        out0[i + 2u] = v.z;
+        report(v.w);
+        out0[i + 3u] = v.w;
+        return;
+    }
+    if (c < d) {
+        report(v.x);
+        out0[i] = v.x;
+    }
+    if (c + 1u < d) {
+        report(v.y);
+        out0[i + 1u] = v.y;
+    }
+    if (c + 2u < d) {
+        report(v.z);
+        out0[i + 2u] = v.z;
     }
 }
 
 fn st4_1(base: u32, row: u32, c: u32, v: vec4<f32>) {
     let d = pw(3u);
     let i = base + row * d + c;
-    for (var k = 0u; k < 4u; k = k + 1u) {
-        if (c + k < d) {
-            report(v[k]);
-            out1[i + k] = v[k];
-        }
+    if (c + 3u < d) {
+        report(v.x);
+        out1[i] = v.x;
+        report(v.y);
+        out1[i + 1u] = v.y;
+        report(v.z);
+        out1[i + 2u] = v.z;
+        report(v.w);
+        out1[i + 3u] = v.w;
+        return;
+    }
+    if (c < d) {
+        report(v.x);
+        out1[i] = v.x;
+    }
+    if (c + 1u < d) {
+        report(v.y);
+        out1[i + 1u] = v.y;
+    }
+    if (c + 2u < d) {
+        report(v.z);
+        out1[i + 2u] = v.z;
     }
 }
 
 struct Fwd {
     m: f32,
     l: f32,
-    acc: array<vec4<f32>, {{CV}}>,
-}
+{{FWD_ACC_FIELDS}}}
 
 // The online-softmax forward of one query block. Thread `lane` owns row
 // lane / PARTS and, of each key block, keys part * FKPT .. + FKPT for the
@@ -204,10 +253,7 @@ fn fwd_core(qblock: u32, bh: u32, lane: u32) -> Fwd {
     var st: Fwd;
     st.m = NEG;
     st.l = 0.0;
-    for (var cv = 0u; cv < CV; cv = cv + 1u) {
-        st.acc[cv] = vec4<f32>(0.0);
-    }
-    let kend = min(time, q0 + FQ);
+{{FWD_ACC_INIT}}    let kend = min(time, q0 + FQ);
     let row_first = first_key(qi);
     for (var kb = (first_key(q0) / FK) * FK; kb < kend; kb = kb + FK) {
         workgroupBarrier();
@@ -215,27 +261,9 @@ fn fwd_core(qblock: u32, bh: u32, lane: u32) -> Fwd {
             f_kv[(e / DP4) * SP + e % DP4] = ld4_k(kvb, kb + e / DP4, (e % DP4) * 4u);
         }
         workgroupBarrier();
-        var s: array<f32, {{FKPT}}>;
         var bmax = NEG;
-        for (var c = 0u; c < FKPT; c = c + 1u) {
-            let jj = part * FKPT + c;
-            var dot = vec4<f32>(0.0);
-            for (var d4 = 0u; d4 < DP4; d4 = d4 + 1u) {
-                dot = dot + f_q[r * SP + d4] * f_kv[jj * SP + d4];
-            }
-            var sv = hsum(dot) * scale;
-            if (live_row && live_key(qi, kb + jj)) {
-                if (nonfinite(sv)) {
-                    raise();
-                    sv = NEG;
-                }
-            } else {
-                sv = NEG;
-            }
-            s[c] = sv;
-            bmax = max(bmax, sv);
-        }
-        f_red[r * PARTS + part] = bmax;
+        let q_row = r * SP;
+{{FWD_DOTS}}        f_red[r * PARTS + part] = bmax;
         workgroupBarrier();
         var m_new = st.m;
         for (var p = 0u; p < PARTS; p = p + 1u) {
@@ -249,11 +277,13 @@ fn fwd_core(qblock: u32, bh: u32, lane: u32) -> Fwd {
         }
         var psum = 0.0;
         for (var c = 0u; c < FKPT; c = c + 1u) {
+            let jj = part * FKPT + c;
+            let sv = f_p[r * FKP + jj];
             var p = 0.0;
-            if (s[c] != NEG) {
-                p = exp(s[c] - m_new);
+            if (sv != NEG) {
+                p = exp(sv - m_new);
             }
-            f_p[r * FKP + part * FKPT + c] = p;
+            f_p[r * FKP + jj] = p;
             psum = psum + p;
         }
         f_red2[r * PARTS + part] = psum;
@@ -268,10 +298,7 @@ fn fwd_core(qblock: u32, bh: u32, lane: u32) -> Fwd {
         }
         st.l = st.l * alpha + bsum;
         st.m = m_new;
-        for (var cv = 0u; cv < CV; cv = cv + 1u) {
-            st.acc[cv] = st.acc[cv] * alpha;
-        }
-        if (live_row && qi >= kb && row_first < kb + FK) {
+{{FWD_ACC_SCALE}}        if (live_row && qi >= kb && row_first < kb + FK) {
             var jstart = 0u;
             if (row_first > kb) {
                 jstart = row_first - kb;
@@ -279,10 +306,8 @@ fn fwd_core(qblock: u32, bh: u32, lane: u32) -> Fwd {
             let jlim = min(FK, qi - kb + 1u);
             for (var jj = jstart; jj < jlim; jj = jj + 1u) {
                 let p = f_p[r * FKP + jj];
-                for (var cv = 0u; cv < CV; cv = cv + 1u) {
-                    st.acc[cv] = st.acc[cv] + p * f_kv[jj * SP + part * CV + cv];
-                }
-            }
+                let kv_col = jj * SP + part * CV;
+{{FWD_ACC_MADD}}            }
         }
     }
     return st;
@@ -302,10 +327,7 @@ fn attn_fwd(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) 
             inv = 1.0 / st.l;
         }
         let base = wg.y * time * pw(3u);
-        for (var cv = 0u; cv < CV; cv = cv + 1u) {
-            st4_0(base, qi, (part * CV + cv) * 4u, st.acc[cv] * inv);
-        }
-        if (part == 0u) {
+{{FWD_ACC_STORE}}        if (part == 0u) {
             let lse = st.m + log(st.l);
             report(lse);
             out1[wg.y * time + qi] = lse;
@@ -367,48 +389,21 @@ fn attn_bwd_dq(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_i
         lse = astats[wg.y * time + qi];
         delta = astats[bht + wg.y * time + qi];
     }
-    var acc: array<vec4<f32>, {{CV}}>;
-    for (var cv = 0u; cv < CV; cv = cv + 1u) {
-        acc[cv] = vec4<f32>(0.0);
-    }
-    let kend = min(time, q0 + BB);
+{{DQ_ACC_INIT}}    let kend = min(time, q0 + BB);
     let row_first = first_key(qi);
+    let q_row = r * SP;
     for (var kb = (first_key(q0) / BB) * BB; kb < kend; kb = kb + BB) {
         workgroupBarrier();
         for (var e = lane; e < BB * DP4; e = e + BWG) {
             b_c[(e / DP4) * SP + e % DP4] = ld4_v(kvb, kb + e / DP4, (e % DP4) * 4u);
         }
         workgroupBarrier();
-        var dp: array<f32, {{BKPT}}>;
-        for (var c = 0u; c < BKPT; c = c + 1u) {
-            let jj = part * BKPT + c;
-            var dot = vec4<f32>(0.0);
-            for (var d4 = 0u; d4 < DP4; d4 = d4 + 1u) {
-                dot = dot + b_b[r * SP + d4] * b_c[jj * SP + d4];
-            }
-            dp[c] = hsum(dot);
-        }
-        workgroupBarrier();
+{{DQ_DP_DOTS}}        workgroupBarrier();
         for (var e = lane; e < BB * DP4; e = e + BWG) {
             b_c[(e / DP4) * SP + e % DP4] = ld4_k(kvb, kb + e / DP4, (e % DP4) * 4u);
         }
         workgroupBarrier();
-        for (var c = 0u; c < BKPT; c = c + 1u) {
-            let jj = part * BKPT + c;
-            var ds = 0.0;
-            if (live_row && live_key(qi, kb + jj)) {
-                var dot = vec4<f32>(0.0);
-                for (var d4 = 0u; d4 < DP4; d4 = d4 + 1u) {
-                    dot = dot + b_a[r * SP + d4] * b_c[jj * SP + d4];
-                }
-                let s = hsum(dot) * scale;
-                report(s);
-                let p = exp(s - lse);
-                ds = scale * (p * (dp[c] - delta));
-            }
-            b_s[r * BBP + jj] = ds;
-        }
-        workgroupBarrier();
+{{DQ_S_DOTS}}        workgroupBarrier();
         if (live_row && qi >= kb && row_first < kb + BB) {
             var jstart = 0u;
             if (row_first > kb) {
@@ -417,17 +412,12 @@ fn attn_bwd_dq(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_i
             let jlim = min(BB, qi - kb + 1u);
             for (var jj = jstart; jj < jlim; jj = jj + 1u) {
                 let ds = b_s[r * BBP + jj];
-                for (var cv = 0u; cv < CV; cv = cv + 1u) {
-                    acc[cv] = acc[cv] + ds * b_c[jj * SP + part * CV + cv];
-                }
-            }
+                let kv_col = jj * SP + part * CV;
+{{DQ_ACC_MADD}}            }
         }
     }
     if (live_row) {
-        for (var cv = 0u; cv < CV; cv = cv + 1u) {
-            st4_0(base, qi, (part * CV + cv) * 4u, acc[cv]);
-        }
-    }
+{{DQ_ACC_STORE}}    }
 }
 
 // dK and dV for one block of BB key rows of KV plane wg.y. For each of its
@@ -463,22 +453,14 @@ fn attn_bwd_dkv(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_
         b_b[at] = ld4_k(kvb, k0 + e / DP4, (e % DP4) * 4u);
         b_c[at] = ld4_v(kvb, k0 + e / DP4, (e % DP4) * 4u);
     }
-    var dk: array<vec4<f32>, {{CV}}>;
-    var dv: array<vec4<f32>, {{CV}}>;
-    for (var cv = 0u; cv < CV; cv = cv + 1u) {
-        dk[cv] = vec4<f32>(0.0);
-        dv[cv] = vec4<f32>(0.0);
-    }
+{{DKV_ACC_INIT}}    let kv_row = r * SP;
     for (var h = 0u; h < rep; h = h + 1u) {
         let bh = wg.y * rep + h;
         let base = bh * time * pw(3u);
         let srow = bh * time;
         for (var qb = k0; qb < q_end; qb = qb + BB) {
             workgroupBarrier();
-            for (var e = lane; e < BB * DP4; e = e + BWG) {
-                b_a[(e / DP4) * SP + e % DP4] = ld4_q(base, qb + e / DP4, (e % DP4) * 4u);
-            }
-            if (lane < BB) {
+{{DKV_Q_LOAD}}            if (lane < BB) {
                 let i = qb + lane;
                 var lse = 0.0;
                 var dr = 0.0;
@@ -490,42 +472,12 @@ fn attn_bwd_dkv(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_
                 b_st[BB + lane] = dr;
             }
             workgroupBarrier();
-            var p: array<f32, {{BKPT}}>;
-            for (var c = 0u; c < BKPT; c = c + 1u) {
-                let ii = part * BKPT + c;
-                let i = qb + ii;
-                var pv = 0.0;
-                if (live_key_row && i < time && live_key(i, kj)) {
-                    var dot = vec4<f32>(0.0);
-                    for (var d4 = 0u; d4 < DP4; d4 = d4 + 1u) {
-                        dot = dot + b_a[ii * SP + d4] * b_b[r * SP + d4];
-                    }
-                    let s = hsum(dot) * scale;
-                    report(s);
-                    pv = exp(s - b_st[ii]);
-                }
-                p[c] = pv;
-            }
-            workgroupBarrier();
+{{DKV_S_DOTS}}            workgroupBarrier();
             for (var e = lane; e < BB * DP4; e = e + BWG) {
                 b_a[(e / DP4) * SP + e % DP4] = ld4_do(base, qb + e / DP4, (e % DP4) * 4u);
             }
             workgroupBarrier();
-            for (var c = 0u; c < BKPT; c = c + 1u) {
-                let ii = part * BKPT + c;
-                let i = qb + ii;
-                var ds = 0.0;
-                if (live_key_row && i < time && live_key(i, kj)) {
-                    var dot = vec4<f32>(0.0);
-                    for (var d4 = 0u; d4 < DP4; d4 = d4 + 1u) {
-                        dot = dot + b_a[ii * SP + d4] * b_c[r * SP + d4];
-                    }
-                    ds = scale * (p[c] * (hsum(dot) - b_st[BB + ii]));
-                }
-                b_p[r * BBP + ii] = p[c];
-                b_s[r * BBP + ii] = ds;
-            }
-            workgroupBarrier();
+{{DKV_DP_DOTS}}            workgroupBarrier();
             var istart = 0u;
             if (kj > qb) {
                 istart = kj - qb;
@@ -537,30 +489,20 @@ fn attn_bwd_dkv(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_
             if (live_key_row) {
                 for (var ii = istart; ii < iend; ii = ii + 1u) {
                     let pv = b_p[r * BBP + ii];
-                    for (var cv = 0u; cv < CV; cv = cv + 1u) {
-                        dv[cv] = dv[cv] + pv * b_a[ii * SP + part * CV + cv];
-                    }
-                }
+                    let q_col = ii * SP + part * CV;
+{{DV_ACC_MADD}}                }
             }
             workgroupBarrier();
-            for (var e = lane; e < BB * DP4; e = e + BWG) {
-                b_a[(e / DP4) * SP + e % DP4] = ld4_q(base, qb + e / DP4, (e % DP4) * 4u);
-            }
-            workgroupBarrier();
+{{DKV_Q_RELOAD}}            workgroupBarrier();
             if (live_key_row) {
                 for (var ii = istart; ii < iend; ii = ii + 1u) {
                     let ds = b_s[r * BBP + ii];
-                    for (var cv = 0u; cv < CV; cv = cv + 1u) {
-                        dk[cv] = dk[cv] + ds * b_a[ii * SP + part * CV + cv];
-                    }
-                }
+                    let q_col = ii * SP + part * CV;
+{{DK_ACC_MADD}}                }
             }
         }
     }
     if (live_key_row) {
-        for (var cv = 0u; cv < CV; cv = cv + 1u) {
-            st4_0(kvb, kj, (part * CV + cv) * 4u, dk[cv]);
-            st4_1(kvb, kj, (part * CV + cv) * 4u, dv[cv]);
-        }
-    }
+{{DKV_ACC_STORE}}    }
 }
+

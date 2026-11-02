@@ -60,19 +60,29 @@ fn gemm_tile(a_k_fast: bool, b_k_fast: bool, wg: vec3<u32>, lid: vec3<u32>) {
     for (var k0 = 0u; k0 < k_len; k0 = k0 + 16u) {
         let gka = k0 + ka;
         var av = vec4<f32>(0.0);
-        for (var j = 0u; j < 4u; j = j + 1u) {
-            let gr = row0 + qa * 4u + j;
-            if (gr < m_len && gka < k_len) {
-                av[j] = ga[pw(7u) + gr * a_rs + gka * a_cs];
+        if (gka < k_len) {
+            let gr = row0 + qa * 4u;
+            let base = pw(7u) + gr * a_rs + gka * a_cs;
+            if (gr + 3u < m_len) {
+                av = vec4<f32>(ga[base], ga[base + a_rs], ga[base + a_rs * 2u], ga[base + a_rs * 3u]);
+            } else {
+                if (gr < m_len) { av.x = ga[base]; }
+                if (gr + 1u < m_len) { av.y = ga[base + a_rs]; }
+                if (gr + 2u < m_len) { av.z = ga[base + a_rs * 2u]; }
             }
         }
         tile_a[ka * 16u + qa] = av;
         let gkb = k0 + kb;
         var bv = vec4<f32>(0.0);
-        for (var j = 0u; j < 4u; j = j + 1u) {
-            let gcol = col0 + qb * 4u + j;
-            if (gcol < n_len && gkb < k_len) {
-                bv[j] = gb[pw(8u) + gkb * b_rs + gcol * b_cs];
+        if (gkb < k_len) {
+            let gcol = col0 + qb * 4u;
+            let base = pw(8u) + gkb * b_rs + gcol * b_cs;
+            if (gcol + 3u < n_len) {
+                bv = vec4<f32>(gb[base], gb[base + b_cs], gb[base + b_cs * 2u], gb[base + b_cs * 3u]);
+            } else {
+                if (gcol < n_len) { bv.x = gb[base]; }
+                if (gcol + 1u < n_len) { bv.y = gb[base + b_cs]; }
+                if (gcol + 2u < n_len) { bv.z = gb[base + b_cs * 2u]; }
             }
         }
         tile_b[kb * 16u + qb] = bv;
@@ -97,11 +107,13 @@ fn gemm_tile(a_k_fast: bool, b_k_fast: bool, wg: vec3<u32>, lid: vec3<u32>) {
 fn load_row(row: u32, col: u32, m_len: u32, n_len: u32) -> vec4<f32> {
     var v = vec4<f32>(0.0);
     if (pw(10u) == 1u && row < m_len) {
-        for (var j = 0u; j < 4u; j = j + 1u) {
-            if (col + j < n_len) {
-                v[j] = gc[pw(9u) + row * n_len + col + j];
-            }
+        let base = pw(9u) + row * n_len + col;
+        if (col + 3u < n_len) {
+            return vec4<f32>(gc[base], gc[base + 1u], gc[base + 2u], gc[base + 3u]);
         }
+        if (col < n_len) { v.x = gc[base]; }
+        if (col + 1u < n_len) { v.y = gc[base + 1u]; }
+        if (col + 2u < n_len) { v.z = gc[base + 2u]; }
     }
     return v;
 }
@@ -110,12 +122,29 @@ fn store_row(row: u32, col: u32, m_len: u32, n_len: u32, v: vec4<f32>) {
     if (row >= m_len) {
         return;
     }
-    for (var j = 0u; j < 4u; j = j + 1u) {
-        if (col + j < n_len) {
-            let value = v[j];
-            report(value);
-            gc[pw(9u) + row * n_len + col + j] = value;
-        }
+    let base = pw(9u) + row * n_len + col;
+    if (col + 3u < n_len) {
+        report(v.x);
+        gc[base] = v.x;
+        report(v.y);
+        gc[base + 1u] = v.y;
+        report(v.z);
+        gc[base + 2u] = v.z;
+        report(v.w);
+        gc[base + 3u] = v.w;
+        return;
+    }
+    if (col < n_len) {
+        report(v.x);
+        gc[base] = v.x;
+    }
+    if (col + 1u < n_len) {
+        report(v.y);
+        gc[base + 1u] = v.y;
+    }
+    if (col + 2u < n_len) {
+        report(v.z);
+        gc[base + 2u] = v.z;
     }
 }
 
@@ -150,28 +179,34 @@ var<workgroup> big_b: array<vec4<f32>, 512>;
 
 // One vec4 of a tile: four consecutive rows of A (or columns of B) at one k.
 fn big_load_a(m_len: u32, k_len: u32, a_rs: u32, a_cs: u32, row0: u32, q: u32, k: u32) -> vec4<f32> {
-    var v = vec4<f32>(0.0);
-    if (k < k_len) {
-        for (var j = 0u; j < 4u; j = j + 1u) {
-            let gr = row0 + q * 4u + j;
-            if (gr < m_len) {
-                v[j] = ga[pw(7u) + gr * a_rs + k * a_cs];
-            }
-        }
+    if (k >= k_len) {
+        return vec4<f32>(0.0);
     }
+    let gr = row0 + q * 4u;
+    let base = pw(7u) + gr * a_rs + k * a_cs;
+    if (gr + 3u < m_len) {
+        return vec4<f32>(ga[base], ga[base + a_rs], ga[base + a_rs * 2u], ga[base + a_rs * 3u]);
+    }
+    var v = vec4<f32>(0.0);
+    if (gr < m_len) { v.x = ga[base]; }
+    if (gr + 1u < m_len) { v.y = ga[base + a_rs]; }
+    if (gr + 2u < m_len) { v.z = ga[base + a_rs * 2u]; }
     return v;
 }
 
 fn big_load_b(n_len: u32, k_len: u32, b_rs: u32, b_cs: u32, col0: u32, q: u32, k: u32) -> vec4<f32> {
-    var v = vec4<f32>(0.0);
-    if (k < k_len) {
-        for (var j = 0u; j < 4u; j = j + 1u) {
-            let gc = col0 + q * 4u + j;
-            if (gc < n_len) {
-                v[j] = gb[pw(8u) + k * b_rs + gc * b_cs];
-            }
-        }
+    if (k >= k_len) {
+        return vec4<f32>(0.0);
     }
+    let gc = col0 + q * 4u;
+    let base = pw(8u) + k * b_rs + gc * b_cs;
+    if (gc + 3u < n_len) {
+        return vec4<f32>(gb[base], gb[base + b_cs], gb[base + b_cs * 2u], gb[base + b_cs * 3u]);
+    }
+    var v = vec4<f32>(0.0);
+    if (gc < n_len) { v.x = gb[base]; }
+    if (gc + 1u < n_len) { v.y = gb[base + b_cs]; }
+    if (gc + 2u < n_len) { v.z = gb[base + b_cs * 2u]; }
     return v;
 }
 
@@ -201,15 +236,26 @@ fn gemm_big(a_k_fast: bool, b_k_fast: bool, wg: vec3<u32>, lid: vec3<u32>) {
         qb = lane & 31u;
         kb = lane >> 5u;
     }
-    var acc: array<vec4<f32>, 16>;
-    for (var h = 0u; h < 2u; h = h + 1u) {
-        for (var j = 0u; j < 4u; j = j + 1u) {
-            let row = row0 + h * 64u + lid.y * 4u + j;
-            let i = h * 8u + j * 2u;
-            acc[i] = load_row(row, col0 + lid.x * 4u, m_len, n_len);
-            acc[i + 1u] = load_row(row, col0 + 64u + lid.x * 4u, m_len, n_len);
-        }
-    }
+    let r_lo = row0 + lid.y * 4u;
+    let r_hi = row0 + 64u + lid.y * 4u;
+    let c_lo = col0 + lid.x * 4u;
+    let c_hi = col0 + 64u + lid.x * 4u;
+    var acc0 = load_row(r_lo, c_lo, m_len, n_len);
+    var acc1 = load_row(r_lo, c_hi, m_len, n_len);
+    var acc2 = load_row(r_lo + 1u, c_lo, m_len, n_len);
+    var acc3 = load_row(r_lo + 1u, c_hi, m_len, n_len);
+    var acc4 = load_row(r_lo + 2u, c_lo, m_len, n_len);
+    var acc5 = load_row(r_lo + 2u, c_hi, m_len, n_len);
+    var acc6 = load_row(r_lo + 3u, c_lo, m_len, n_len);
+    var acc7 = load_row(r_lo + 3u, c_hi, m_len, n_len);
+    var acc8 = load_row(r_hi, c_lo, m_len, n_len);
+    var acc9 = load_row(r_hi, c_hi, m_len, n_len);
+    var acc10 = load_row(r_hi + 1u, c_lo, m_len, n_len);
+    var acc11 = load_row(r_hi + 1u, c_hi, m_len, n_len);
+    var acc12 = load_row(r_hi + 2u, c_lo, m_len, n_len);
+    var acc13 = load_row(r_hi + 2u, c_hi, m_len, n_len);
+    var acc14 = load_row(r_hi + 3u, c_lo, m_len, n_len);
+    var acc15 = load_row(r_hi + 3u, c_hi, m_len, n_len);
     big_a[ka * 32u + qa] = big_load_a(m_len, k_len, a_rs, a_cs, row0, qa, ka);
     big_b[kb * 32u + qb] = big_load_b(n_len, k_len, b_rs, b_cs, col0, qb, kb);
     workgroupBarrier();
@@ -228,22 +274,22 @@ fn gemm_big(a_k_fast: bool, b_k_fast: bool, wg: vec3<u32>, lid: vec3<u32>) {
             let a1 = big_a[base + kk * 32u + 16u + lid.y];
             let b0 = big_b[base + kk * 32u + lid.x];
             let b1 = big_b[base + kk * 32u + 16u + lid.x];
-            acc[0] = acc[0] + a0.x * b0;
-            acc[1] = acc[1] + a0.x * b1;
-            acc[2] = acc[2] + a0.y * b0;
-            acc[3] = acc[3] + a0.y * b1;
-            acc[4] = acc[4] + a0.z * b0;
-            acc[5] = acc[5] + a0.z * b1;
-            acc[6] = acc[6] + a0.w * b0;
-            acc[7] = acc[7] + a0.w * b1;
-            acc[8] = acc[8] + a1.x * b0;
-            acc[9] = acc[9] + a1.x * b1;
-            acc[10] = acc[10] + a1.y * b0;
-            acc[11] = acc[11] + a1.y * b1;
-            acc[12] = acc[12] + a1.z * b0;
-            acc[13] = acc[13] + a1.z * b1;
-            acc[14] = acc[14] + a1.w * b0;
-            acc[15] = acc[15] + a1.w * b1;
+            acc0 = acc0 + a0.x * b0;
+            acc1 = acc1 + a0.x * b1;
+            acc2 = acc2 + a0.y * b0;
+            acc3 = acc3 + a0.y * b1;
+            acc4 = acc4 + a0.z * b0;
+            acc5 = acc5 + a0.z * b1;
+            acc6 = acc6 + a0.w * b0;
+            acc7 = acc7 + a0.w * b1;
+            acc8 = acc8 + a1.x * b0;
+            acc9 = acc9 + a1.x * b1;
+            acc10 = acc10 + a1.y * b0;
+            acc11 = acc11 + a1.y * b1;
+            acc12 = acc12 + a1.z * b0;
+            acc13 = acc13 + a1.z * b1;
+            acc14 = acc14 + a1.w * b0;
+            acc15 = acc15 + a1.w * b1;
         }
         if (more) {
             let nxt = (1u - cur) * 256u;
@@ -253,15 +299,22 @@ fn gemm_big(a_k_fast: bool, b_k_fast: bool, wg: vec3<u32>, lid: vec3<u32>) {
         workgroupBarrier();
         cur = 1u - cur;
     }
-    // Rows lid.y*4 + j and 64 + lid.y*4 + j; columns lid.x*4.. and 64 + lid.x*4..
-    for (var h = 0u; h < 2u; h = h + 1u) {
-        for (var j = 0u; j < 4u; j = j + 1u) {
-            let row = row0 + h * 64u + lid.y * 4u + j;
-            let i = h * 8u + j * 2u;
-            store_row(row, col0 + lid.x * 4u, m_len, n_len, acc[i]);
-            store_row(row, col0 + 64u + lid.x * 4u, m_len, n_len, acc[i + 1u]);
-        }
-    }
+    store_row(r_lo, c_lo, m_len, n_len, acc0);
+    store_row(r_lo, c_hi, m_len, n_len, acc1);
+    store_row(r_lo + 1u, c_lo, m_len, n_len, acc2);
+    store_row(r_lo + 1u, c_hi, m_len, n_len, acc3);
+    store_row(r_lo + 2u, c_lo, m_len, n_len, acc4);
+    store_row(r_lo + 2u, c_hi, m_len, n_len, acc5);
+    store_row(r_lo + 3u, c_lo, m_len, n_len, acc6);
+    store_row(r_lo + 3u, c_hi, m_len, n_len, acc7);
+    store_row(r_hi, c_lo, m_len, n_len, acc8);
+    store_row(r_hi, c_hi, m_len, n_len, acc9);
+    store_row(r_hi + 1u, c_lo, m_len, n_len, acc10);
+    store_row(r_hi + 1u, c_hi, m_len, n_len, acc11);
+    store_row(r_hi + 2u, c_lo, m_len, n_len, acc12);
+    store_row(r_hi + 2u, c_hi, m_len, n_len, acc13);
+    store_row(r_hi + 3u, c_lo, m_len, n_len, acc14);
+    store_row(r_hi + 3u, c_hi, m_len, n_len, acc15);
 }
 
 @compute @workgroup_size(16, 16, 1)

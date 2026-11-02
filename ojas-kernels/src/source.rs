@@ -154,17 +154,20 @@ fn attention_source(tiles: AttentionTiles) -> Result<String, OjasError> {
     }
     let dp4 = dp / 4;
     let sp = dp4 + 1;
+    let cv = dp4 / parts;
+    let fkpt = fk / parts;
+    let bkpt = bb / parts;
     let words: [(&str, u32); 21] = [
         ("{{DP4}}", dp4),
         ("{{SP}}", sp),
-        ("{{CV}}", dp4 / parts),
+        ("{{CV}}", cv),
         ("{{FQ}}", fq),
         ("{{FKP}}", fk + 1),
-        ("{{FKPT}}", fk / parts),
+        ("{{FKPT}}", fkpt),
         ("{{FK}}", fk),
         ("{{FWG}}", fq * parts),
         ("{{BBP}}", bb + 1),
-        ("{{BKPT}}", bb / parts),
+        ("{{BKPT}}", bkpt),
         ("{{BWG}}", bb * parts),
         ("{{FQ_SP}}", fq * sp),
         ("{{FK_SP}}", fk * sp),
@@ -177,7 +180,167 @@ fn attention_source(tiles: AttentionTiles) -> Result<String, OjasError> {
         ("{{PARTS}}", parts),
         ("{{DP}}", dp),
     ];
+    let mut fwd_acc_fields = String::new();
+    let mut fwd_acc_init = String::new();
+    let mut fwd_acc_scale = String::new();
+    let mut fwd_acc_madd = String::new();
+    let mut fwd_acc_store = String::new();
+    let mut dq_acc_init = String::new();
+    let mut dq_acc_madd = String::new();
+    let mut dq_acc_store = String::new();
+    let mut dkv_acc_init = String::new();
+    let mut dkv_q_load = String::new();
+    let mut dkv_q_reload = String::new();
+    let mut dv_acc_madd = String::new();
+    let mut dk_acc_madd = String::new();
+    let mut dkv_acc_store = String::new();
+    for c in 0..cv {
+        fwd_acc_fields.push_str(&format!("    acc{c}: vec4<f32>,\n"));
+        fwd_acc_init.push_str(&format!("    st.acc{c} = vec4<f32>(0.0);\n"));
+        fwd_acc_scale.push_str(&format!("        st.acc{c} = st.acc{c} * alpha;\n"));
+        fwd_acc_madd.push_str(&format!(
+            "                st.acc{c} = st.acc{c} + p * f_kv[kv_col + {c}u];\n"
+        ));
+        fwd_acc_store.push_str(&format!(
+            "        st4_0(base, qi, (part * CV + {c}u) * 4u, st.acc{c} * inv);\n"
+        ));
+        dq_acc_init.push_str(&format!("    var acc{c} = vec4<f32>(0.0);\n"));
+        dq_acc_madd.push_str(&format!(
+            "                acc{c} = acc{c} + ds * b_c[kv_col + {c}u];\n"
+        ));
+        dq_acc_store.push_str(&format!(
+            "        st4_0(base, qi, (part * CV + {c}u) * 4u, acc{c});\n"
+        ));
+        dkv_acc_init.push_str(&format!(
+            "    var dk{c} = vec4<f32>(0.0);\n    var dv{c} = vec4<f32>(0.0);\n"
+        ));
+        dkv_q_load.push_str(&format!(
+            "            let e_q{c} = lane + {c}u * BWG;\n            let q_reg{c} = ld4_q(base, qb + e_q{c} / DP4, (e_q{c} % DP4) * 4u);\n            b_a[(e_q{c} / DP4) * SP + e_q{c} % DP4] = q_reg{c};\n"
+        ));
+        dkv_q_reload.push_str(&format!(
+            "            b_a[(e_q{c} / DP4) * SP + e_q{c} % DP4] = q_reg{c};\n"
+        ));
+        dv_acc_madd.push_str(&format!(
+            "                    dv{c} = dv{c} + pv * b_a[q_col + {c}u];\n"
+        ));
+        dk_acc_madd.push_str(&format!(
+            "                    dk{c} = dk{c} + ds * b_a[q_col + {c}u];\n"
+        ));
+        dkv_acc_store.push_str(&format!(
+            "        st4_0(kvb, kj, (part * CV + {c}u) * 4u, dk{c});\n        st4_1(kvb, kj, (part * CV + {c}u) * 4u, dv{c});\n"
+        ));
+    }
+
+    let mut fwd_dots = String::new();
+    for c in 0..fkpt {
+        fwd_dots.push_str(&format!("        var fdot{c} = vec4<f32>(0.0);\n"));
+    }
+    fwd_dots.push_str("        if (live_row && qi >= kb && row_first < kb + FK) {\n            for (var d4 = 0u; d4 < DP4; d4 = d4 + 1u) {\n                let qv = f_q[q_row + d4];\n");
+    for c in 0..fkpt {
+        fwd_dots.push_str(&format!(
+            "                fdot{c} = fdot{c} + qv * f_kv[(part * FKPT + {c}u) * SP + d4];\n"
+        ));
+    }
+    fwd_dots.push_str("            }\n        }\n");
+    for c in 0..fkpt {
+        fwd_dots.push_str(&format!(
+            "        {{\n            let jj = part * FKPT + {c}u;\n            var sv = NEG;\n            if (live_row && live_key(qi, kb + jj)) {{\n                sv = hsum(fdot{c}) * scale;\n                if (nonfinite(sv)) {{\n                    raise();\n                    sv = NEG;\n                }}\n            }}\n            f_p[r * FKP + jj] = sv;\n            bmax = max(bmax, sv);\n        }}\n"
+        ));
+    }
+
+    let mut dq_dp_dots = String::new();
+    for c in 0..bkpt {
+        dq_dp_dots.push_str(&format!("        var dpdot{c} = vec4<f32>(0.0);\n"));
+    }
+    dq_dp_dots.push_str("        if (live_row && qi >= kb && row_first < kb + BB) {\n            for (var d4 = 0u; d4 < DP4; d4 = d4 + 1u) {\n                let dov = b_b[q_row + d4];\n");
+    for c in 0..bkpt {
+        dq_dp_dots.push_str(&format!(
+            "                dpdot{c} = dpdot{c} + dov * b_c[(part * BKPT + {c}u) * SP + d4];\n"
+        ));
+    }
+    dq_dp_dots.push_str("            }\n        }\n");
+    for c in 0..bkpt {
+        dq_dp_dots.push_str(&format!(
+            "        b_s[r * BBP + part * BKPT + {c}u] = hsum(dpdot{c});\n"
+        ));
+    }
+
+    let mut dq_s_dots = String::new();
+    for c in 0..bkpt {
+        dq_s_dots.push_str(&format!("        var sdot{c} = vec4<f32>(0.0);\n"));
+    }
+    dq_s_dots.push_str("        if (live_row && qi >= kb && row_first < kb + BB) {\n            for (var d4 = 0u; d4 < DP4; d4 = d4 + 1u) {\n                let qv = b_a[q_row + d4];\n");
+    for c in 0..bkpt {
+        dq_s_dots.push_str(&format!(
+            "                sdot{c} = sdot{c} + qv * b_c[(part * BKPT + {c}u) * SP + d4];\n"
+        ));
+    }
+    dq_s_dots.push_str("            }\n        }\n");
+    for c in 0..bkpt {
+        dq_s_dots.push_str(&format!(
+            "        {{\n            let jj = part * BKPT + {c}u;\n            let dpv = b_s[r * BBP + jj];\n            var ds = 0.0;\n            if (live_row && live_key(qi, kb + jj)) {{\n                let s = hsum(sdot{c}) * scale;\n                report(s);\n                let p = exp(s - lse);\n                ds = scale * (p * (dpv - delta));\n            }}\n            b_s[r * BBP + jj] = ds;\n        }}\n"
+        ));
+    }
+
+    let mut dkv_s_dots = String::new();
+    for c in 0..bkpt {
+        dkv_s_dots.push_str(&format!("            var ksdot{c} = vec4<f32>(0.0);\n"));
+    }
+    dkv_s_dots.push_str("            if (live_key_row) {\n                for (var d4 = 0u; d4 < DP4; d4 = d4 + 1u) {\n                    let kv = b_b[kv_row + d4];\n");
+    for c in 0..bkpt {
+        dkv_s_dots.push_str(&format!(
+            "                    ksdot{c} = ksdot{c} + b_a[(part * BKPT + {c}u) * SP + d4] * kv;\n"
+        ));
+    }
+    dkv_s_dots.push_str("                }\n            }\n");
+    for c in 0..bkpt {
+        dkv_s_dots.push_str(&format!(
+            "            {{\n                let ii = part * BKPT + {c}u;\n                let i = qb + ii;\n                var pv = 0.0;\n                if (live_key_row && i < time && live_key(i, kj)) {{\n                    let s = hsum(ksdot{c}) * scale;\n                    report(s);\n                    pv = exp(s - b_st[ii]);\n                }}\n                b_p[r * BBP + ii] = pv;\n            }}\n"
+        ));
+    }
+
+    let mut dkv_dp_dots = String::new();
+    for c in 0..bkpt {
+        dkv_dp_dots.push_str(&format!("            var kdpdot{c} = vec4<f32>(0.0);\n"));
+    }
+    dkv_dp_dots.push_str("            if (live_key_row) {\n                for (var d4 = 0u; d4 < DP4; d4 = d4 + 1u) {\n                    let vv = b_c[kv_row + d4];\n");
+    for c in 0..bkpt {
+        dkv_dp_dots.push_str(&format!(
+            "                    kdpdot{c} = kdpdot{c} + b_a[(part * BKPT + {c}u) * SP + d4] * vv;\n"
+        ));
+    }
+    dkv_dp_dots.push_str("                }\n            }\n");
+    for c in 0..bkpt {
+        dkv_dp_dots.push_str(&format!(
+            "            {{\n                let ii = part * BKPT + {c}u;\n                let i = qb + ii;\n                let pv = b_p[r * BBP + ii];\n                var ds = 0.0;\n                if (live_key_row && i < time && live_key(i, kj)) {{\n                    ds = scale * (pv * (hsum(kdpdot{c}) - b_st[BB + ii]));\n                }}\n                b_s[r * BBP + ii] = ds;\n            }}\n"
+        ));
+    }
+
+    let blocks: [(&str, &str); 19] = [
+        ("{{FWD_ACC_FIELDS}}", &fwd_acc_fields),
+        ("{{FWD_ACC_INIT}}", &fwd_acc_init),
+        ("{{FWD_ACC_SCALE}}", &fwd_acc_scale),
+        ("{{FWD_ACC_MADD}}", &fwd_acc_madd),
+        ("{{FWD_ACC_STORE}}", &fwd_acc_store),
+        ("{{DQ_ACC_INIT}}", &dq_acc_init),
+        ("{{DQ_ACC_MADD}}", &dq_acc_madd),
+        ("{{DQ_ACC_STORE}}", &dq_acc_store),
+        ("{{DKV_ACC_INIT}}", &dkv_acc_init),
+        ("{{DKV_Q_LOAD}}", &dkv_q_load),
+        ("{{DKV_Q_RELOAD}}", &dkv_q_reload),
+        ("{{DV_ACC_MADD}}", &dv_acc_madd),
+        ("{{DK_ACC_MADD}}", &dk_acc_madd),
+        ("{{DKV_ACC_STORE}}", &dkv_acc_store),
+        ("{{FWD_DOTS}}", &fwd_dots),
+        ("{{DQ_DP_DOTS}}", &dq_dp_dots),
+        ("{{DQ_S_DOTS}}", &dq_s_dots),
+        ("{{DKV_S_DOTS}}", &dkv_s_dots),
+        ("{{DKV_DP_DOTS}}", &dkv_dp_dots),
+    ];
     let mut body = ATTENTION.to_string();
+    for (name, value) in blocks {
+        body = body.replace(name, value);
+    }
     for (name, value) in words {
         body = body.replace(name, &value.to_string());
     }
