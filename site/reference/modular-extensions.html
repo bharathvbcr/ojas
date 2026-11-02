@@ -243,11 +243,11 @@
 <ol>
 <li><strong><code>ojas_core::hal::MappedBuffer</code> Trait:</strong> Implemented by <code>tessl::SharedBuf</code> (<code>src/shared_buf.rs</code>) over pooled <code>StorageModeShared</code> allocations. Exposes a raw host pointer (<code>*mut u8</code>), a 64-bit GPU device address (<code>gpu_address</code>), and a timeline reference.
 </li>
-<li><strong><code>Payload::Mapped</code> on <code>Tensor</code>:</strong> <code>ojas_core::Tensor</code> wraps <code>Arc&lt;dyn MappedBuffer&gt;</code>. Calling <code>to_host()</code> on a mapped tensor acquires a timeline-fenced <code>HostLease</code> over the existing memory without <code>memcpy</code>. Calling <code>upload()</code> verifies the buffer is resident in unified memory and wraps it as a device tensor without copying.
+<li><strong><code>Payload::Mapped</code> on <code>Tensor</code>:</strong> <code>ojas_core::Tensor</code> wraps <code>Arc&lt;dyn MappedBuffer&gt;</code>. Calling <code>to_host()</code> on a mapped tensor acquires a timeline-fenced <code>HostLease</code> over the existing memory without <code>memcpy</code>. Calling <code>upload()</code> on <code>MetalBackend</code> downcasts <code>tessl::SharedBuf</code> and invokes <code>SharedBuf::to_gpu_buffer()</code> to adopt the unified memory allocation directly into the device buffer table without copying (<code>mem_after == mem_before</code>).
 </li>
 <li><strong>Timeline Completion Fences:</strong> RAII leases (<code>HostLease</code>, <code>HostLeaseMut</code>) synchronize CPU reads and writes against GPU timeline stamps (<code>last_use</code>, <code>last_write</code>). Submitting a GPU command encoder against a buffer held by a host write lease returns <code>FenceError::Busy</code> immediately.
 </li>
-<li><strong>Hierarchical Budget Ledger:</strong> <code>ojas_core::Budget</code> serves as the sole authoritative ledger. <code>tessl::BufferPool</code> allocates within a child budget (<code>pool.cache</code>). Under memory pressure, <code>BudgetTrimHandler</code> automatically flushes freelist caches before any allocation is refused.
+<li><strong>Hierarchical Budget Ledger:</strong> <code>ojas_core::Budget</code> serves as the sole authoritative ledger. <code>tessl::BufferPool</code> allocates within a child budget (<code>pool.cache</code>) via <code>BudgetLedger</code> wired in <code>Worker::open</code>. Under memory pressure, <code>BudgetTrimHandler</code> automatically flushes freelist caches before any allocation is refused, and over-budget pool allocations return <code>OjasError::CapacityExceeded</code>.
 </li>
 </ol>
 <h3 id="sparse-substrate-interoperability">Sparse Substrate Interoperability <a class="anchor" href="#sparse-substrate-interoperability" aria-label="Link to this section">#</a></h3>

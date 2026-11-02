@@ -322,7 +322,7 @@
     Layer2 --&gt; Layer1
     Layer3 --&gt; Layer1</pre></figure>
 <p>Inside layer 3, <code>ojas-model</code> sits on <code>ojas-autograd</code>, <code>ojas-io</code> and <code>ojas-data</code>, and <code>ojas-infer</code> sits on <code>ojas-model</code>. <code>ojas-capi</code> depends on the model, inference, io, data, cpu, wgpu, metal and device crates. <code>ojas-qwen35</code> depends only on <code>ojas-core</code>, <code>ojas-io</code> and tessl, and is empty off macOS.</p>
-<p><code>ojas-io</code> is the canonical safetensors reader for both repositories: tessl&#39;s <code>safetensors</code> module is a thin adapter over it and holds no parser, and <code>ojas-qwen35</code> opens checkpoints through ojas-io rather than through tessl. The ownership split, what tessl&#39;s adapter keeps as its own policy, and what the deduplication cost are in <a href="io-ownership.html"><code>io-ownership.md</code></a>. The design is in <a href="framework-design.html"><code>framework-design.md</code></a>.</p>
+<p><code>ojas-io</code> is the canonical safetensors, JSON, and NPY reader/writer for both repositories: tessl retired its duplicate <code>safetensors</code>, <code>json</code>, <code>npy</code>, and <code>plain</code> modules (-1,645 LOC), re-exports <code>ojas_io::{npy, safetensors}</code> directly in <code>tessl/src/lib.rs</code>, and parses model configs via <code>ojas_io::json</code>, while <code>ojas-qwen35</code> opens checkpoints through <code>ojas-io</code> directly. The ownership split and deduplication record are in <a href="io-ownership.html"><code>io-ownership.md</code></a>. The design is in <a href="framework-design.html"><code>framework-design.md</code></a>.</p>
 <hr>
 <h2 id="3-general-purpose-tensor-engine--memory-model">3. General-Purpose Tensor Engine &amp; Memory Model <a class="anchor" href="#3-general-purpose-tensor-engine--memory-model" aria-label="Link to this section">#</a></h2>
 <h3 id="31-tensor-view-model">3.1 Tensor View Model <a class="anchor" href="#31-tensor-view-model" aria-label="Link to this section">#</a></h3>
@@ -377,7 +377,7 @@
 </li>
 <li><strong><code>AllocError</code>:</strong> Strongly typed device allocation error enum (<code>OverBudget</code>, <code>Exhausted</code>, <code>TooLarge</code>, <code>InvalidAlignment</code>, <code>DeviceLost</code>) that converts directly to <code>OjasError::CapacityExceeded</code>.
 </li>
-<li><strong><code>Payload::Mapped</code>:</strong> Tensor storage variant that encapsulates <code>Arc&lt;dyn MappedBuffer&gt;</code>, bridging <code>tessl::SharedBuf</code> into the ojas tensor engine. Direct host accessors fail closed with <code>OjasError::Placement</code>.
+<li><strong><code>Payload::Mapped</code>:</strong> Tensor storage variant that encapsulates <code>Arc&lt;dyn MappedBuffer&gt;</code>, bridging <code>tessl::SharedBuf</code> into the ojas tensor engine. On <code>MetalBackend::upload</code>, <code>Worker::upload</code> downcasts <code>SharedBuf</code> and calls <code>SharedBuf::to_gpu_buffer()</code> to adopt the unified memory buffer directly into the device buffer table with zero byte copies (<code>mem_after == mem_before</code>). Direct host accessors fail closed with <code>OjasError::Placement</code>.
 </li>
 </ul>
 <hr>

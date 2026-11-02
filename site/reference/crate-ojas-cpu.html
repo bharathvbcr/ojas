@@ -286,6 +286,16 @@
 </li>
 </ul>
 </li>
+<li><strong>Gauge-Projected Attention Backward, Exact-Margin Cross-Entropy &amp; Quantized/Sparse Slow-Weight Kernels (<code>src/quant_sparse.rs</code>, <code>tests/numerical_invariants.rs</code>):</strong>
+<ul>
+<li><strong>Full-Range Target-Excluded Cross-Entropy (<code>cross_entropy_mean_backward_exact_margin</code>):</strong> Evaluates $S = \sum_{j \ne y} e^{z_j - z_y}$ starting from <code>0.0f32</code> across all positive target margins (<code>picked == max</code>), eliminating the $m \in [6.0, 20.78]$ <code>1.0f32</code> mantissa absorption window (<code>&lt; 1e-5</code> relative error against <code>f64</code> across $m \in [0.5, 80.0]$) while preserving row-wise zero-sum gradient conservation.
+</li>
+<li><strong>Gauge-Projected Causal SDPA Backward (<code>causal_sdpa_backward_gauge_projected</code>):</strong> Computes $\delta_i = \sum_{j \in \text{keys}(i)} P_{ij} dP_{ij}$ directly from the backward&#39;s recomputed $P_{ij}$ and $dP_{ij}$ across all sequence lengths ($T \le 256$ and $T &gt; 256$), guaranteeing exact row-sum cancellation ($\sum_j dS_{ij} = 0$) and key-translation gauge invariance ($K \leftarrow K + \mathbf{1} c^\top$) even when the forward output tensor was rounded to <code>bf16</code>.
+</li>
+<li><strong>Quantized <code>INT8</code> &amp; Wanda <code>2:4</code> Sparse Linear Engine (<code>QuantizedWeightI8</code>, <code>Sparse24Weight</code>):</strong> Enforces the analytical <code>i8 x i8 -&gt; i32</code> accumulator bound <code>I8_ACCUMULATOR_MAX_K = 131_071</code> ($\lfloor(2^{31}-1)/127^2\rfloor$), refusing $K &gt; 131,071$ with <code>OjasError::OutOfRange</code>, and implements Wanda activation-weighted ($|W_{ij}|\cdot\|X_{\cdot,j}\|_2$) <code>2:4</code> semi-structured pruning and prune-then-quantize slow-weight compression.
+</li>
+</ul>
+</li>
 </ol>
 </aside>
       </article>

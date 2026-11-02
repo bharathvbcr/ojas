@@ -151,8 +151,8 @@
 <h1 id="decision-ojas-owns-safetensors-io-and-checkpoints">Decision: ojas owns safetensors IO and checkpoints <a class="anchor" href="#decision-ojas-owns-safetensors-io-and-checkpoints" aria-label="Link to this section">#</a></h1>
 <p>Owner decision, 2026-11-01. The tessl side of this record is <a href="https://github.com/bharathvbcr/tessl/blob/main/docs/io-ownership.md" rel="noopener"><code>tessl/docs/io-ownership.md</code></a>; the two say the same thing from each repository&#39;s side. This is the IO slice of the ownership split in <a href="unification-plan.html"><code>unification-plan.md</code></a> (phase P8), and it is the first phase of that plan to land.</p>
 <h2 id="the-decision">The decision <a class="anchor" href="#the-decision" aria-label="Link to this section">#</a></h2>
-<p><strong>ojas owns safetensors IO and checkpoints.</strong> <code>ojas_io::safetensors</code> is the canonical reader. tessl&#39;s <code>safetensors</code> module is a thin adapter over it and holds no parser. This follows the binding direction of 2026-10-31 — ojas is the training framework and owns &#34;checkpoints, IO&#34; — and it reverses, in code, the direction an earlier card had taken.</p>
-<p>Before: two parsers for one format, 2,200 lines in ojas-io and 950 in tessl, kept in step by hand. After: one parser, and an adapter that states what is tessl&#39;s.</p>
+<p><strong>ojas owns safetensors, JSON, and NPY IO and checkpoints.</strong> <code>ojas_io::safetensors</code>, <code>ojas_io::json</code>, and <code>ojas_io::npy</code> are the canonical implementations. After phase P8&#39;s initial adapter step and the Milestone M2 completion (2026-11-02), tessl holds <strong>zero</strong> duplicate parsers (<code>src/safetensors.rs</code>, <code>src/json.rs</code>, <code>src/npy.rs</code>, and <code>src/plain.rs</code> were deleted in full, removing 1,645 LOC) and re-exports <code>pub use ojas_io::{npy, safetensors};</code> directly from <code>tessl/src/lib.rs</code>, while <code>tessl/src/config_json.rs</code> consumes <code>ojas_io::json::{JsonValue, JsonLimits}</code>. This follows the binding direction of 2026-10-31 — ojas is the training framework and owns &#34;checkpoints, IO&#34; — and it reverses, in code, the direction an earlier card had taken.</p>
+<p>In the initial P8 step (recorded below for provenance): two safetensors parsers (2,200 lines in ojas-io and 950 in tessl) were converged into one parser plus a 517-line adapter in tessl. In Milestone M2 (2026-11-02), <code>ojas-io</code> absorbed the remaining adapter surface (<code>header_bytes</code>, <code>HeaderEntry</code>/<code>TensorEntry</code> accessors, <code>.npy</code> v1.0/v2.0 reader/writer, and physical-memory default helpers) so that tessl&#39;s 517-line adapter and its duplicate <code>json.rs</code>, <code>npy.rs</code>, and <code>plain.rs</code> modules were deleted outright.</p>
 <p><strong>The tree did not get smaller, and that is the honest number.</strong> tessl lost 368 lines of source net (295 insertions against 663 deletions over three files), and its reader went from 950 lines to a 517-line adapter. ojas-io gained 1,396 insertions against 82 deletions over eight files — <code>src/safetensors.rs</code> is 3,070 lines now and <code>src/open.rs</code> 300 — of which about 385 lines are new tests: <code>tests/tessl_rejection_corpus.rs</code> (246) holds tessl&#39;s whole rejection corpus against the reader underneath, <code>tests/header_amplification.rs</code> (101) measures where the budget refuses, and the <code>widen_in_place</code> test (38) moved here with the code it covers. The rest is the eight bounds in the next section. One duplicate parser is gone; what replaced it is the discipline the surviving reader did not have, with tests that fail without it. Trading 950 duplicated lines for a bound reader is the point, not the line count.</p>
 <h2 id="what-lives-where">What lives where <a class="anchor" href="#what-lives-where" aria-label="Link to this section">#</a></h2>
 <div class="table-wrap"><table>
@@ -272,6 +272,35 @@
 <p>Three earlier attempts produced no number, each for a different reason — a <code>SIGKILL</code> mid-compile at load 38, a six-second build failure on that rename, and a run that reached 74 of 206 binaries before <code>cargo test</code> abandoned the rest at the first failure. The last of those failures was in this work: tessl&#39;s <code>docs_name_real_tools</code> guard rejected its own decision record for naming <code>tests/tessl_rejection_corpus.rs</code> and <code>tests/header_amplification.rs</code>, which are this crate&#39;s files, as though they were tessl&#39;s. Fixed by qualifying them.</p>
 <p>One caveat the run cannot shed: it builds against the live <code>../ojas</code>, which carries that session&#39;s uncommitted additions to <code>ojas-io/src/safetensors.rs</code> (<code>pub type Dtype = StDtype</code>, <code>from_bytes_named</code>). The adapter uses neither, so this is a run of committed tessl against a tree that exists only on this machine.</p>
 <p><strong>What is not verified here, and is not claimed to be.</strong> <code>cargo fmt --all --check</code> in tessl fails on ten files this change never touched — all wrapped at 100 columns where that repo&#39;s <code>rustfmt.toml</code> says 120 — so tessl&#39;s <code>fmt</code> CI job is red on <code>main</code> independently of this work. <code>README.md</code>&#39;s per-crate test counts come from <code>docs/data/test-runs.json</code>, a single recorded run at <code>51825fd</code>, so <code>ojas-io</code> still reads 76 passed there; refreshing that means re-running the whole workspace with the command that file records, which this change did not do. An ojas worktree at a second path still cannot build, for the reason in the section above.</p>
+<hr>
+<h2 id="follow-up-2026-11-02-milestone-m2-complete-retirement-of-tessls-adapter-and-duplicate-parsers">Follow-up (2026-11-02, Milestone M2): Complete Retirement of tessl&#39;s Adapter and Duplicate Parsers <a class="anchor" href="#follow-up-2026-11-02-milestone-m2-complete-retirement-of-tessls-adapter-and-duplicate-parsers" aria-label="Link to this section">#</a></h2>
+<p>In Milestone M2, the remaining 517-line <code>tessl/src/safetensors.rs</code> adapter and tessl&#39;s standalone <code>src/json.rs</code> (482 lines), <code>src/npy.rs</code> (599 lines), and <code>src/plain.rs</code> (47 lines) modules were <strong>deleted in full</strong> (-1,645 lines in <code>tessl/src/</code>):</p>
+<ol>
+<li><strong><code>ojas-io</code> absorbed <code>.npy</code> v1.0/v2.0 and the remaining safetensors surface:</strong>
+<ul>
+<li><code>ojas-io/src/npy.rs</code> now owns <code>.npy</code> v1.0 and v2.0 reading and writing (<code>read_f32</code>, <code>read_i32</code>, <code>read_u32</code>, <code>write_f32</code>, <code>write_u32</code>, <code>from_bytes</code>, and <code>read_*_with_limit</code> budget enforcement).
+</li>
+<li><code>ojas-io/src/safetensors.rs</code> exposes <code>SafeTensors::header_bytes</code>, <code>HeaderEntry</code> / <code>TensorEntry</code> accessors, <code>Dtype</code> / <code>StDtype</code> aliases, and <code>open_with_limit</code> / <code>from_bytes_named</code>.
+</li>
+</ul>
+</li>
+<li><strong>Direct re-export in <code>tessl</code>:</strong>
+<ul>
+<li><code>tessl/src/lib.rs</code> re-exports <code>pub use ojas_io::{npy, safetensors};</code>.
+</li>
+<li><code>tessl/src/config_json.rs</code> parses model configuration files via <code>ojas_io::json::{JsonValue, JsonLimits}</code> (enforcing max depth 64 and structural node budget <code>8 * len + 64 KiB</code>).
+</li>
+<li><code>ojas-qwen35</code> imports <code>ojas_io::safetensors::CheckpointView</code> directly with zero <code>tessl::safetensors</code> references.
+</li>
+</ul>
+</li>
+<li><strong>AdamW scalar deduplication:</strong>
+<ul>
+<li><code>tessl/src/qwen35_adamw.rs</code> delegates step bias-correction and decoupled weight-decay scalar computation directly to <code>ojas_core::AdamWScalars::new</code>, eliminating the duplicate f64 scalar formula.
+</li>
+</ul>
+</li>
+</ol>
       </article>
       <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/io-ownership.md" rel="noopener"><code>docs/io-ownership.md</code></a>. If this page and the repository disagree, the repository wins.</p>
       <nav class="ref-pager" aria-label="Previous and next">
@@ -289,6 +318,7 @@
 <li><a href="#the-ojastessl-path-cycle-survives-this">The ojas/tessl path cycle survives this</a></li>
 <li><a href="#how-this-lands-the-ojas-half-is-public-the-tessl-half-is-not">How this lands: the ojas half is public; the tessl half is not</a></li>
 <li><a href="#verification">Verification</a></li>
+<li><a href="#follow-up-2026-11-02-milestone-m2-complete-retirement-of-tessls-adapter-and-duplicate-parsers">Follow-up (2026-11-02, Milestone M2): Complete Retirement of tessl&#39;s Adapter and Duplicate Parsers</a></li>
 </ol></nav>
   </div>
   <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">

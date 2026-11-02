@@ -585,6 +585,8 @@
 <ul>
 <li>Removed: the per-op status allocation, <code>ojas_status_init</code>, <code>ojas_check_ids</code> (kernels and <code>KERNELS</code> entries), <code>finish</code> and <code>verdict</code>.
 </li>
+<li><strong>In-kernel finiteness folding &amp; <code>float4</code> vectorization:</strong> To eliminate redundant standalone <code>ojas_check_finite</code> dispatches, input (<code>ST_IN</code>) and output (<code>ST_OUT</code>) finiteness checks are folded directly into the compute kernels for RMSNorm (<code>ojas_rms_fwd</code>, <code>ojas_rms_bwd_rows</code>, <code>ojas_rms_bwd_w_sum</code>), LayerNorm (<code>ojas_ln_fwd</code>, <code>ojas_ln_bwd_rows</code>, <code>ojas_ln_bwd_wb_sum</code>), RoPE (<code>ojas_rope_fwd</code>, <code>ojas_rope_bwd</code>), Per-Head Gate (<code>ojas_per_head_gate_fwd</code>, <code>ojas_per_head_gate_bwd</code>), and FlashAttention (<code>attn_fwd_tiled_body</code>, <code>ojas_attn_bwd_dr</code>), preserving <code>ST_IN</code> over <code>ST_OUT</code> precedence and falling back to explicit <code>Worker::check</code> passes on degenerate/partial shapes (<code>rows == 0</code>, <code>dim == 0</code>, or partial rotary table coverage). Remaining standalone checks (<code>Worker::check</code>) and in-place additions (<code>Worker::accum</code>) dispatch vectorized <code>float4</code> kernels (<code>ojas_check_finite_v4</code>, <code>ojas_add_inplace_v4</code>) when offsets and lengths are 4-float aligned (<code>tests/fused_checks.rs</code>).
+</li>
 </ul>
 </li>
 <li><strong>Scan</strong> (<code>Worker::scan</code>, after every waited commit, <code>Worker::settle</code>).

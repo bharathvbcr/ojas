@@ -88,11 +88,11 @@ On Apple Silicon, unified memory allows CPU cores and GPU execution units to acc
 1. **`ojas_core::hal::MappedBuffer` Trait:**
    Implemented by `tessl::SharedBuf` (`src/shared_buf.rs`) over pooled `StorageModeShared` allocations. Exposes a raw host pointer (`*mut u8`), a 64-bit GPU device address (`gpu_address`), and a timeline reference.
 2. **`Payload::Mapped` on `Tensor`:**
-   `ojas_core::Tensor` wraps `Arc<dyn MappedBuffer>`. Calling `to_host()` on a mapped tensor acquires a timeline-fenced `HostLease` over the existing memory without `memcpy`. Calling `upload()` verifies the buffer is resident in unified memory and wraps it as a device tensor without copying.
+   `ojas_core::Tensor` wraps `Arc<dyn MappedBuffer>`. Calling `to_host()` on a mapped tensor acquires a timeline-fenced `HostLease` over the existing memory without `memcpy`. Calling `upload()` on `MetalBackend` downcasts `tessl::SharedBuf` and invokes `SharedBuf::to_gpu_buffer()` to adopt the unified memory allocation directly into the device buffer table without copying (`mem_after == mem_before`).
 3. **Timeline Completion Fences:**
    RAII leases (`HostLease`, `HostLeaseMut`) synchronize CPU reads and writes against GPU timeline stamps (`last_use`, `last_write`). Submitting a GPU command encoder against a buffer held by a host write lease returns `FenceError::Busy` immediately.
 4. **Hierarchical Budget Ledger:**
-   `ojas_core::Budget` serves as the sole authoritative ledger. `tessl::BufferPool` allocates within a child budget (`pool.cache`). Under memory pressure, `BudgetTrimHandler` automatically flushes freelist caches before any allocation is refused.
+   `ojas_core::Budget` serves as the sole authoritative ledger. `tessl::BufferPool` allocates within a child budget (`pool.cache`) via `BudgetLedger` wired in `Worker::open`. Under memory pressure, `BudgetTrimHandler` automatically flushes freelist caches before any allocation is refused, and over-budget pool allocations return `OjasError::CapacityExceeded`.
 
 ### Sparse Substrate Interoperability
 `sparsl` interoperates with `ojas` for structured and unstructured sparse neural network execution:

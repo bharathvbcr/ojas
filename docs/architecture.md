@@ -164,7 +164,7 @@ flowchart TD
 
 Inside layer 3, `ojas-model` sits on `ojas-autograd`, `ojas-io` and `ojas-data`, and `ojas-infer` sits on `ojas-model`. `ojas-capi` depends on the model, inference, io, data, cpu, wgpu, metal and device crates. `ojas-qwen35` depends only on `ojas-core`, `ojas-io` and tessl, and is empty off macOS.
 
-`ojas-io` is the canonical safetensors reader for both repositories: tessl's `safetensors` module is a thin adapter over it and holds no parser, and `ojas-qwen35` opens checkpoints through ojas-io rather than through tessl. The ownership split, what tessl's adapter keeps as its own policy, and what the deduplication cost are in [`io-ownership.md`](io-ownership.md). The design is in [`framework-design.md`](framework-design.md).
+`ojas-io` is the canonical safetensors, JSON, and NPY reader/writer for both repositories: tessl retired its duplicate `safetensors`, `json`, `npy`, and `plain` modules (-1,645 LOC), re-exports `ojas_io::{npy, safetensors}` directly in `tessl/src/lib.rs`, and parses model configs via `ojas_io::json`, while `ojas-qwen35` opens checkpoints through `ojas-io` directly. The ownership split and deduplication record are in [`io-ownership.md`](io-ownership.md). The design is in [`framework-design.md`](framework-design.md).
 
 ---
 
@@ -231,7 +231,7 @@ The vendor-neutral HAL (`ojas_core::hal`) provides the traits through which back
 * **`HostLease` & `HostLeaseMut`:** RAII shared read and exclusive write borrows over a mapped buffer. Synchronizes with GPU execution timeline stamps (`last_use`, `last_write`), ensuring mutual exclusion between GPU kernels and CPU memory slices.
 * **`Timeline`:** Monotonic device completion counter tracking submitted and finished sequence numbers, with poison state handling.
 * **`AllocError`:** Strongly typed device allocation error enum (`OverBudget`, `Exhausted`, `TooLarge`, `InvalidAlignment`, `DeviceLost`) that converts directly to `OjasError::CapacityExceeded`.
-* **`Payload::Mapped`:** Tensor storage variant that encapsulates `Arc<dyn MappedBuffer>`, bridging `tessl::SharedBuf` into the ojas tensor engine. Direct host accessors fail closed with `OjasError::Placement`.
+* **`Payload::Mapped`:** Tensor storage variant that encapsulates `Arc<dyn MappedBuffer>`, bridging `tessl::SharedBuf` into the ojas tensor engine. On `MetalBackend::upload`, `Worker::upload` downcasts `SharedBuf` and calls `SharedBuf::to_gpu_buffer()` to adopt the unified memory buffer directly into the device buffer table with zero byte copies (`mem_after == mem_before`). Direct host accessors fail closed with `OjasError::Placement`.
 
 ---
 
