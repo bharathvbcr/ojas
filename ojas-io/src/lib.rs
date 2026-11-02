@@ -48,7 +48,7 @@ pub use error::IoError;
 pub use half::{bf16_to_f32, f16_to_f32, f32_to_bf16, f32_to_f16, widen_in_place};
 pub use json::{parse_json, parse_json_with, JsonLimits, JsonNumber, JsonValue};
 pub use json_write::{quote, JsonObj};
-pub use open::open_nofollow;
+pub use open::{open_nofollow, open_regular_file};
 pub use replace::{recover_replaced_dir, replace_dir_with, replace_dir_with_if};
 pub use safetensors::{
     encode_f32_as, encode_safetensors, safetensors_file_len, write_safetensors, CheckpointView,

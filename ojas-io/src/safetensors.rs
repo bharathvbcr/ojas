@@ -400,18 +400,29 @@ impl<'a> SafeTensors<'a> {
     /// to each read's own allocation, because a read can allocate more than
     /// the file declares: a 16-bit tensor widened to f32 takes twice its
     /// stored bytes. `None` is unbounded.
-    pub fn open_with_limit(path: &Path, limit: Option<u64>) -> Result<SafeTensors<'static>, IoError> {
+    pub fn open_with_limit(
+        path: &Path,
+        limit: Option<u64>,
+    ) -> Result<SafeTensors<'static>, IoError> {
         let what = path.display();
-        let file = File::open(path).map_err(|e| IoError::new(format!("{what}: {e}")))?;
+        // Not `File::open`: a checkpoint can name a FIFO, and opening one for
+        // reading blocks until a writer appears, so the loader would hang
+        // instead of refusing. `open_regular_file` is the one owner of that
+        // refusal. Symlinks are still followed, which a Hugging Face snapshot
+        // needs.
+        let (file, _) =
+            crate::open::open_regular_file(path).map_err(|e| IoError::new(e.detail().to_string()))?;
         Self::from_file_with_limit(file, limit)
             .map_err(|e| IoError::new(format!("{what}: {}", e.detail())))
     }
 
     /// Validate the header of a file the caller already opened, for example
     /// with `O_NOFOLLOW`. Same checks and caps as [`Self::open`], which calls
-    /// this. Anything but a regular file is refused before a byte is read, so
-    /// a FIFO cannot block the read. Reads are positioned: the file's cursor
-    /// is neither used nor moved.
+    /// this. Anything but a regular file is refused here before a byte is
+    /// read; the open itself is the caller's, and [`Self::open`] does it
+    /// through [`crate::open_regular_file`] so that a FIFO is refused rather
+    /// than blocking it. Reads are positioned: the file's cursor is neither
+    /// used nor moved.
     pub fn from_file(file: File) -> Result<SafeTensors<'static>, IoError> {
         Self::from_file_with_limit(file, None)
     }
@@ -1082,26 +1093,15 @@ const MAX_INDEX_BYTES: u64 = 16 << 20;
 /// real snapshot. What is refused is anything that is not a regular file.
 fn read_index_text(index_path: &Path, what: &str) -> Result<String, IoError> {
     use std::io::Read;
-    // Opening a FIFO for reading blocks until a writer appears, so the path is
-    // judged by `stat` (which follows links) before it is opened, and the
-    // handle is judged again below. This is the order `sha256::open_sha256_hex`
-    // already uses for the same reason.
-    let md = std::fs::metadata(index_path).map_err(|e| IoError::new(format!("{what}: {e}")))?;
-    if !md.is_file() {
-        return Err(IoError::new(format!("{what}: not a regular file")));
-    }
-    if md.len() > MAX_INDEX_BYTES {
+    // Opening a FIFO for reading blocks until a writer appears, and a
+    // checkpoint directory can name one, so the open goes through the same
+    // owner as the shards': it refuses a non-regular file without blocking.
+    let (f, len) = crate::open::open_regular_file(index_path)
+        .map_err(|e| IoError::new(e.detail().to_string()))?;
+    if len > MAX_INDEX_BYTES {
         return Err(IoError::new(format!(
-            "{what}: {} bytes, above the {MAX_INDEX_BYTES}-byte index cap",
-            md.len()
+            "{what}: {len} bytes, above the {MAX_INDEX_BYTES}-byte index cap"
         )));
-    }
-    let f = File::open(index_path).map_err(|e| IoError::new(format!("{what}: {e}")))?;
-    let md = f
-        .metadata()
-        .map_err(|e| IoError::new(format!("{what}: {e}")))?;
-    if !md.is_file() {
-        return Err(IoError::new(format!("{what}: not a regular file")));
     }
     let mut text = String::new();
     // Capped again at the read, so a file that grew between the `fstat` and
@@ -2386,6 +2386,47 @@ mod tests {
             "expected the index cap to refuse, got: {}",
             err.detail()
         );
+    }
+
+    /// A shard that is a FIFO is refused instead of hanging the loader.
+    ///
+    /// `open` called `File::open` and left the regular-file check to
+    /// `from_file`, which only runs once the open has returned. Opening a FIFO
+    /// for reading blocks until a writer appears, so a checkpoint naming one as
+    /// a shard hung the reader indefinitely — the docstring claimed "a FIFO
+    /// cannot block the read", which was true of `from_file`, where the caller
+    /// has already opened the file, and false of `open`, where this crate does.
+    /// A character device is refused for the same reason.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_or_device_is_refused_without_blocking() {
+        let dir = tmp_dir("st_fifo");
+        let fifo = dir.0.join("w.safetensors");
+        let made = std::process::Command::new("mkfifo").arg(&fifo).status();
+        if !made.is_ok_and(|s| s.success()) {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let p = fifo.clone();
+        let worker = std::thread::spawn(move || {
+            tx.send(SafeTensors::open(&p).map(|_| ())).unwrap();
+        });
+        let got = rx.recv_timeout(std::time::Duration::from_secs(5));
+        if got.is_err() {
+            // Release the blocked open so the thread can end.
+            let _ = std::fs::OpenOptions::new().write(true).open(&fifo);
+        }
+        worker.join().unwrap();
+        let err = got.expect("open of a FIFO blocked").unwrap_err();
+        assert!(err.detail().contains("not a regular file"), "{err}");
+
+        // A symlink to a character device: followed, then refused.
+        let link = dir.0.join("dev.safetensors");
+        std::os::unix::fs::symlink("/dev/null", &link).unwrap();
+        let err = SafeTensors::open(&link).unwrap_err();
+        assert!(err.detail().contains("not a regular file"), "{err}");
+        // And the refusal names the path the caller gave.
+        assert!(err.detail().contains("dev.safetensors"), "{err}");
     }
 
     #[cfg(unix)]

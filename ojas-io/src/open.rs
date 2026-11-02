@@ -1,10 +1,13 @@
-//! Opening a file without following a final-component symlink.
+//! Opening a file without following a final-component symlink, and opening a
+//! regular file without blocking on one that is not.
 //!
-//! `O_NOFOLLOW` has no std constant and its value differs by target, so the
-//! table below is the workspace's one copy of it. Values are from the libc
-//! crate's target modules (0.2.189: `unix/bsd/mod.rs`, and under
-//! `unix/linux_like/` the `linux/gnu` and `android` arch modules); a target
-//! not listed is refused rather than opened without the flag.
+//! `O_NOFOLLOW` and `O_NONBLOCK` have no std constants and their values differ
+//! by target, so the tables below are the workspace's one copy of them. Values
+//! are from the libc crate's target modules (0.2.189: `unix/bsd/mod.rs`, and
+//! under `unix/linux_like/` the `linux/gnu` and `android` arch modules).
+//! For `O_NOFOLLOW` a target not listed is refused rather than opened without
+//! the flag; for `O_NONBLOCK` see [`open_regular_file`], which keeps its other
+//! two checks either way.
 
 use crate::error::IoError;
 use std::fs::File;
@@ -78,6 +81,102 @@ const O_NOFOLLOW: Option<i32> = Some(0x2_0000);
     )
 )))]
 const O_NOFOLLOW: Option<i32> = None;
+
+/// `O_NONBLOCK` for this target, or `None` where the table has no entry.
+/// 0x0004 on the BSDs and macOS, 0o4000 on the Linux arches below; MIPS uses
+/// another value and is deliberately absent rather than guessed.
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+))]
+const O_NONBLOCK: Option<i32> = Some(0x0004);
+#[cfg(all(
+    any(target_os = "linux", target_os = "android"),
+    any(
+        target_arch = "aarch64",
+        target_arch = "arm",
+        target_arch = "x86",
+        target_arch = "x86_64",
+        target_arch = "powerpc",
+        target_arch = "powerpc64",
+        target_arch = "riscv64",
+        target_arch = "s390x",
+        target_arch = "loongarch64",
+        target_arch = "sparc64"
+    )
+))]
+const O_NONBLOCK: Option<i32> = Some(0o4000);
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly",
+    all(
+        any(target_os = "linux", target_os = "android"),
+        any(
+            target_arch = "aarch64",
+            target_arch = "arm",
+            target_arch = "x86",
+            target_arch = "x86_64",
+            target_arch = "powerpc",
+            target_arch = "powerpc64",
+            target_arch = "riscv64",
+            target_arch = "s390x",
+            target_arch = "loongarch64",
+            target_arch = "sparc64"
+        )
+    )
+)))]
+const O_NONBLOCK: Option<i32> = None;
+
+/// Open `path` read-only and refuse anything that is not a regular file,
+/// without blocking on one that is not. Symlinks are followed.
+///
+/// Returns the handle and its length from the one `fstat` that judged it, so a
+/// caller validating a header against the length and re-checking the handle's
+/// identity later cannot have the two disagree.
+///
+/// Opening a FIFO for reading blocks until a writer appears, so a checkpoint
+/// naming a FIFO as a shard would hang the loader rather than be refused.
+/// Three things prevent that, and the first two hold on every target:
+///
+/// * `stat` (which follows symlinks, because a Hugging Face cache snapshot
+///   links its shards into `../../blobs`) refuses anything but a regular file
+///   before the open;
+/// * the opened handle is judged again by `fstat`, so the refusal does not
+///   rest on the path alone;
+/// * the open carries `O_NONBLOCK` where this target's value is known, which
+///   also closes the window between the `stat` and the open. On a target
+///   without an entry the flag is omitted and that window stays open; the
+///   other two checks are unaffected.
+///
+/// `O_NONBLOCK` is ignored for regular files, so it changes nothing for the
+/// files this is meant to open.
+pub fn open_regular_file(path: &Path) -> Result<(File, u64), IoError> {
+    let what = path.display();
+    let before = std::fs::metadata(path).map_err(|e| IoError::new(format!("{what}: {e}")))?;
+    if !before.is_file() {
+        return Err(IoError::new(format!("{what}: not a regular file")));
+    }
+    let file = match O_NONBLOCK {
+        Some(flag) => open_flagged(path, flag),
+        None => File::open(path),
+    }
+    .map_err(|e| IoError::new(format!("{what}: {e}")))?;
+    let after = file
+        .metadata()
+        .map_err(|e| IoError::new(format!("{what}: {e}")))?;
+    if !after.is_file() {
+        return Err(IoError::new(format!("{what}: not a regular file")));
+    }
+    Ok((file, after.len()))
+}
 
 /// Open `path` read-only, refusing a final-component symlink.
 ///
