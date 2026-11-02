@@ -1,5 +1,9 @@
 //! The text tower's tensors as transformers names and shapes them, and the
-//! header pre-flight a snapshot passes before tessl reads a byte of it.
+//! header pre-flight a snapshot passes before a byte of it is read.
+//!
+//! Checkpoints are opened through `ojas_io::CheckpointView`: ojas owns
+//! safetensors IO (owner, 2026-11-01), and this crate reaches the reader
+//! directly rather than through tessl's adapter over it.
 //!
 //! [`tower_tensors`] is written in the order of tessl's
 //! `Qwen35Model::parameter_table` (`tessl/src/qwen35_params.rs`, `slots`).
@@ -9,8 +13,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use ojas_io::StDtype;
-use tessl::safetensors::{CheckpointView, Dtype, TensorSource, INDEX_FILE_NAME};
+use ojas_io::{CheckpointView, StDtype, TensorSource, INDEX_FILE_NAME};
 
 use crate::config::{LayerKind, Qwen35TextConfig};
 use crate::error::{Qwen35Error, Result};
@@ -127,14 +130,18 @@ pub fn check_header<'a>(
     )
 }
 
-/// [`check_header`] over any dtype type: `is_float` says which dtypes the
-/// loader widens to f32. One body serves ojas-io's [`StDtype`] and tessl's
-/// [`Dtype`], so neither is converted to the other (neither has every variant
-/// of the other).
-fn check_entries<'a, D: std::fmt::Debug + Copy>(
+/// [`check_header`]'s body: `is_float` says which dtypes the loader widens to
+/// f32.
+///
+/// This used to be generic over the dtype type, because the header a caller
+/// handed in was described by ojas-io's [`StDtype`] while the one read from a
+/// checkpoint came back as tessl's `Dtype`, and neither has every variant of
+/// the other. Both now come from ojas-io, which owns safetensors IO, so there
+/// is one dtype type and the generic had one instantiation left.
+fn check_entries<'a>(
     cfg: &Qwen35TextConfig,
-    entries: impl IntoIterator<Item = (&'a str, D, &'a [u64])>,
-    is_float: impl Fn(D) -> bool,
+    entries: impl IntoIterator<Item = (&'a str, StDtype, &'a [u64])>,
+    is_float: impl Fn(StDtype) -> bool,
     what: &str,
 ) -> Result<HeaderReport> {
     let expected: BTreeMap<String, Vec<usize>> = tower_tensors(cfg)
@@ -196,33 +203,34 @@ fn check_entries<'a, D: std::fmt::Debug + Copy>(
 /// [`check_header`] on a checkpoint: a `.safetensors` file, a
 /// `model.safetensors.index.json`, or a checkpoint directory.
 ///
-/// tessl's `CheckpointView::open` is the one validator of what a checkpoint
-/// may be (the index's fields, every shard's name, containment and format,
-/// and that the `weight_map` and the shards agree name for name), and it is
-/// the same call the loader makes, so nothing is accepted here that loading
-/// would refuse. The dtype and shape of each tensor come from the same view
-/// (`CheckpointView::tensor_info`), so there is no second read of the shards'
-/// headers to drift from the first.
+/// `ojas_io::CheckpointView::open` is the one validator of what a checkpoint
+/// may be (the index's fields and byte cap, every shard's name, containment
+/// and format, and that the `weight_map` and the shards agree name for name),
+/// and it is the same call the loader makes, so nothing is accepted here that
+/// loading would refuse. The dtype and shape of each tensor come from the same
+/// view (`CheckpointView::tensor_info`), so there is no second read of the
+/// shards' headers to drift from the first.
+///
+/// This validator was tessl's until 2026-11-01, when the owner put IO in ojas.
+/// ojas-io's reader is canonical now and tessl's is an adapter over it, so this
+/// is the same validation either way; it just no longer reaches it through the
+/// Metal extension.
 pub fn check_weights_file(cfg: &Qwen35TextConfig, path: &Path) -> Result<HeaderReport> {
     let what = path.display().to_string();
-    let view = CheckpointView::open(path).map_err(Qwen35Error::Config)?;
-    let mut infos: Vec<(&str, Dtype, Vec<u64>)> = Vec::new();
+    let view = CheckpointView::open(path).map_err(|e| Qwen35Error::Config(e.to_string()))?;
+    let mut infos: Vec<(&str, StDtype, Vec<u64>)> = Vec::new();
     for name in view.names() {
         let info = view.tensor_info(name).ok_or_else(|| {
             Qwen35Error::Io(format!(
                 "{what}: the view lists {name:?} but has no header entry for it"
             ))
         })?;
-        infos.push((
-            name,
-            info.dtype,
-            info.shape.iter().map(|&d| d as u64).collect(),
-        ));
+        infos.push((name, info.dtype, info.shape.clone()));
     }
     check_entries(
         cfg,
         infos.iter().map(|(n, d, s)| (*n, *d, s.as_slice())),
-        |d| matches!(d, Dtype::F32 | Dtype::BF16 | Dtype::F16),
+        |d| matches!(d, StDtype::F32 | StDtype::BF16 | StDtype::F16),
         &what,
     )
 }
@@ -234,8 +242,8 @@ pub fn check_weights_file(cfg: &Qwen35TextConfig, path: &Path) -> Result<HeaderR
 #[derive(Clone, Debug)]
 pub struct Snapshot {
     pub config_path: std::path::PathBuf,
-    /// What `tessl::safetensors::CheckpointView::open` takes: a single
-    /// `.safetensors` file, or a snapshot's `model.safetensors.index.json`.
+    /// What `ojas_io::CheckpointView::open` takes: a single `.safetensors`
+    /// file, or a snapshot's `model.safetensors.index.json`.
     pub weights_path: std::path::PathBuf,
     pub config: Qwen35TextConfig,
     pub header: HeaderReport,
@@ -248,9 +256,9 @@ impl Snapshot {
     pub fn from_dir(dir: &Path) -> Result<Self> {
         let config_path = dir.join("config.json");
         let config = Qwen35TextConfig::from_file(&config_path)?;
-        // tessl's rule for a checkpoint directory: an index if one is there
-        // in any form (a dangling link included, which then fails to open),
-        // else `model.safetensors`.
+        // The reader's rule for a checkpoint directory: an index if one is
+        // there in any form (a dangling link included, which then fails to
+        // open), else `model.safetensors`.
         let index = dir.join(INDEX_FILE_NAME);
         let weights_path = if std::fs::symlink_metadata(&index).is_ok() {
             index
