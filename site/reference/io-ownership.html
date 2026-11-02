@@ -217,6 +217,25 @@
 <h2 id="the-ojastessl-path-cycle-survives-this">The ojas/tessl path cycle survives this <a class="anchor" href="#the-ojastessl-path-cycle-survives-this" aria-label="Link to this section">#</a></h2>
 <p>Removing the safetensors strand does <strong>not</strong> break the cycle. <code>ojas-qwen35/src/config.rs</code> still uses <code>tessl::qwen35_model::Qwen35Config</code>, <code>tessl::gdn_train::{GDN_TRAIN_DK, GDN_TRAIN_BV}</code>, <code>tessl::qwen35::GDN_KEY_DIM</code> and <code>tessl::attn_train::ATTN_TRAIN_HEAD_DIM</code> to validate a config against the kernels that will run it, and <code>ojas-metal</code> depends on tessl by design. So <code>ojas-qwen35</code> still path-depends on tessl. Those eleven call sites in <code>config.rs</code> and <code>links = &#34;tessl&#34;</code> in <code>tessl/Cargo.toml</code> were read this pass; the consequence — that an ojas worktree at a second path cannot build, because every crate in one build must point at one tessl path and a worktree gets a lockfile collision and exits 101 — is carried over from the card and from an earlier session&#39;s finding, and was <strong>not</strong> re-run here. What this change removes is one strand of the cycle, not the cycle.</p>
 <p>A note for whoever takes the MSRV decision (D2 in the plan): tessl already declared <code>ojas-io</code> as a path dependency before this change and used it nowhere, so no Cargo change and no MSRV ask was needed here. tessl declares <code>rust-version = &#34;1.82&#34;</code> while ojas&#39;s workspace floor is <code>1.97</code>, which is a standing inconsistency this change neither created nor fixed.</p>
+<h2 id="how-this-lands-ojas-first-or-the-two-together">How this lands: ojas first, or the two together <a class="anchor" href="#how-this-lands-ojas-first-or-the-two-together" aria-label="Link to this section">#</a></h2>
+<p>This change spans two repositories and <strong>is not landable one at a time.</strong> Found by the CI/MSRV session on 2026-11-02 and verified here by name:</p>
+<ul>
+<li><code>tessl/src/safetensors.rs:238</code> (at <code>07c2e23</code>) calls <code>ojas_io::SafeTensors::from_bytes</code>.
+</li>
+<li><code>fn from_bytes</code> exists in <code>ojas-io/src/safetensors.rs</code> only on ojas&#39;s <strong>local</strong> <code>main</code> (<code>0300578</code>). It was added by this work, in <code>3e45c70</code>. <code>git grep -c &#39;fn from_bytes&#39; origin/main -- ojas-io/src</code> matches zero files.
+</li>
+<li>ojas&#39;s <code>origin/main</code> is <code>dac0b5b</code>, <strong>29 commits behind</strong> local <code>main</code>. tessl&#39;s <code>origin/main</code> is <code>a00521f</code>, six commits behind.
+</li>
+</ul>
+<p>So tessl&#39;s adapter cannot compile against the ojas that is on GitHub. The other API it uses — <code>StDtype</code>, <code>MAX_HEADER_BYTES</code>, <code>TensorSource</code>, <code>IoError::detail</code>, <code>read_u32</code> — all exist at <code>dac0b5b</code>; <code>from_bytes</code> is the one that does not.</p>
+<p>Two details worth keeping straight, because they are easy to conflate:</p>
+<ul>
+<li>At tessl <code>main</code> (<code>07c2e23</code>) the CI workflow does not mention ojas <strong>at all</strong>, so no cargo job there can resolve tessl&#39;s manifest today, with or without this change — tessl&#39;s path dependencies need ojas on disk. That is the subject of a separate card, not of this one.
+</li>
+<li>The <code>OJAS_REF: ${{ inputs.ojas_ref || &#39;main&#39; }}</code> default lives on that card&#39;s branch (<code>fix/ci-ojas-checkout-msrv-floor</code>, <code>4f51e89</code>), mirroring ojas&#39;s own <code>TESSL_REF</code>. Once it lands, tessl&#39;s CI resolves ojas at GitHub <code>main</code>. If ojas&#39;s commits are still unpushed then, tessl&#39;s first green-looking push goes red on a missing API — a failure that would look like the sibling-checkout fix and would not be.
+</li>
+</ul>
+<p><strong>Landing order: push ojas before, or in the same operation as, tessl.</strong> Neither repository was pushed by this work.</p>
 <h2 id="verification">Verification <a class="anchor" href="#verification" aria-label="Link to this section">#</a></h2>
 <p>Every row below is a run with its real exit code captured, not a count read out of a pipe. The ojas-io baseline at <code>9c5e784</code> was 161 passed over 12 binaries.</p>
 <div class="table-wrap"><table>
@@ -256,6 +275,7 @@
 <li><a href="#what-this-leaves-for-ft-b5fb19e6">What this leaves for ft-b5fb19e6</a></li>
 <li><a href="#ojas-oracle-keeps-its-wrapper-and-is-not-a-third-parser">ojas-oracle keeps its wrapper, and is not a third parser</a></li>
 <li><a href="#the-ojastessl-path-cycle-survives-this">The ojas/tessl path cycle survives this</a></li>
+<li><a href="#how-this-lands-ojas-first-or-the-two-together">How this lands: ojas first, or the two together</a></li>
 <li><a href="#verification">Verification</a></li>
 </ol></nav>
   </div>

@@ -187,6 +187,39 @@ so no Cargo change and no MSRV ask was needed here. tessl declares
 `rust-version = "1.82"` while ojas's workspace floor is `1.97`, which is a
 standing inconsistency this change neither created nor fixed.
 
+## How this lands: ojas first, or the two together
+
+This change spans two repositories and **is not landable one at a time.**
+Found by the CI/MSRV session on 2026-11-02 and verified here by name:
+
+- `tessl/src/safetensors.rs:238` (at `07c2e23`) calls
+  `ojas_io::SafeTensors::from_bytes`.
+- `fn from_bytes` exists in `ojas-io/src/safetensors.rs` only on ojas's **local**
+  `main` (`0300578`). It was added by this work, in `3e45c70`.
+  `git grep -c 'fn from_bytes' origin/main -- ojas-io/src` matches zero files.
+- ojas's `origin/main` is `dac0b5b`, **29 commits behind** local `main`. tessl's
+  `origin/main` is `a00521f`, six commits behind.
+
+So tessl's adapter cannot compile against the ojas that is on GitHub. The other
+API it uses — `StDtype`, `MAX_HEADER_BYTES`, `TensorSource`, `IoError::detail`,
+`read_u32` — all exist at `dac0b5b`; `from_bytes` is the one that does not.
+
+Two details worth keeping straight, because they are easy to conflate:
+
+- At tessl `main` (`07c2e23`) the CI workflow does not mention ojas **at all**,
+  so no cargo job there can resolve tessl's manifest today, with or without this
+  change — tessl's path dependencies need ojas on disk. That is the subject of a
+  separate card, not of this one.
+- The `OJAS_REF: ${{ inputs.ojas_ref || 'main' }}` default lives on that card's
+  branch (`fix/ci-ojas-checkout-msrv-floor`, `4f51e89`), mirroring ojas's own
+  `TESSL_REF`. Once it lands, tessl's CI resolves ojas at GitHub `main`. If
+  ojas's commits are still unpushed then, tessl's first green-looking push goes
+  red on a missing API — a failure that would look like the sibling-checkout fix
+  and would not be.
+
+**Landing order: push ojas before, or in the same operation as, tessl.** Neither
+repository was pushed by this work.
+
 ## Verification
 
 Every row below is a run with its real exit code captured, not a count read out
