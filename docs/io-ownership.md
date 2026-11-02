@@ -68,7 +68,12 @@ oversight:
   dimensions — above about 8 KiB of dimension text, measured at 4,099
   dimensions in `ojas-io/tests/header_amplification.rs`. No model writes such a
   header; real tensors have rank 5 at most and the 2B's whole header is about
-  90 KB.
+  90 KB. **Ratified by the owner on 2026-11-02: keep the bound.** This is the
+  one behaviour the change narrows rather than preserves, so it was put to the
+  owner rather than recorded as a detail. Raising the ratio to 32x was tried
+  first and reverted: it broke `tests/stream_writer.rs`, whose writer refuses
+  layouts the reader would refuse, and amplification is scale-invariant, so the
+  two repositories' tests were asking for contradictory things.
 
 ## What ojas-io absorbed first, and why the order mattered
 
