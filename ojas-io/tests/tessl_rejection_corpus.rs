@@ -101,30 +101,102 @@ fn json_outside_the_formats_subset_is_rejected() {
     let d = 1.0f32.to_le_bytes();
     let cases: &[(&str, &str, &str)] = &[
         ("not_obj", r#"[1]"#, "not a JSON object"),
-        ("trailing", r#"{"a":{"dtype":"F32","shape":[1],"data_offsets":[0,4]}}x"#, "trailing bytes"),
-        ("float", r#"{"a":{"dtype":"F32","shape":[1.0],"data_offsets":[0,4]}}"#, "non-integer"),
-        ("exp", r#"{"a":{"dtype":"F32","shape":[1e0],"data_offsets":[0,4]}}"#, "non-integer"),
+        (
+            "trailing",
+            r#"{"a":{"dtype":"F32","shape":[1],"data_offsets":[0,4]}}x"#,
+            "trailing bytes",
+        ),
+        (
+            "float",
+            r#"{"a":{"dtype":"F32","shape":[1.0],"data_offsets":[0,4]}}"#,
+            "non-integer",
+        ),
+        (
+            "exp",
+            r#"{"a":{"dtype":"F32","shape":[1e0],"data_offsets":[0,4]}}"#,
+            "non-integer",
+        ),
         // tessl: "unsupported JSON value"
-        ("neg", r#"{"a":{"dtype":"F32","shape":[-1],"data_offsets":[0,4]}}"#, "non-integer"),
-        ("lead0", r#"{"a":{"dtype":"F32","shape":[01],"data_offsets":[0,4]}}"#, "leading zero"),
+        (
+            "neg",
+            r#"{"a":{"dtype":"F32","shape":[-1],"data_offsets":[0,4]}}"#,
+            "non-integer",
+        ),
+        (
+            "lead0",
+            r#"{"a":{"dtype":"F32","shape":[01],"data_offsets":[0,4]}}"#,
+            "leading zero",
+        ),
         // tessl: "unsupported JSON value"
         ("null", r#"{"a":null}"#, "entry is not an object"),
         // tessl: "unsupported JSON value"
         ("bool", r#"{"a":true}"#, "entry is not an object"),
-        ("u64", r#"{"a":{"dtype":"F32","shape":[18446744073709551616],"data_offsets":[0,4]}}"#, "overflows u64"),
-        ("dup", r#"{"a":{"dtype":"F32","shape":[1],"data_offsets":[0,4]},"a":{"dtype":"F32","shape":[1],"data_offsets":[0,4]}}"#, "duplicate key"),
-        ("dup_field", r#"{"a":{"dtype":"F32","dtype":"F32","shape":[1],"data_offsets":[0,4]}}"#, "duplicate key"),
-        ("deep", r#"{"a":{"dtype":"F32","shape":[[1]],"data_offsets":[0,4]}}"#, "nesting deeper"),
-        ("unterminated", r#"{"a":{"dtype":"F32"#, "unterminated string"),
-        ("bad_escape", r#"{"a\q":{"dtype":"F32","shape":[1],"data_offsets":[0,4]}}"#, "invalid escape"),
-        ("plus_hex", r#"{"a\u+041":{"dtype":"F32","shape":[1],"data_offsets":[0,4]}}"#, "bad \\u escape"),
-        ("lone_hi", r#"{"a\ud800":{"dtype":"F32","shape":[1],"data_offsets":[0,4]}}"#, "unpaired high surrogate"),
-        ("lone_lo", r#"{"a\udc00":{"dtype":"F32","shape":[1],"data_offsets":[0,4]}}"#, "unpaired low surrogate"),
-        ("hi_then_char", r#"{"a\ud800A":{"dtype":"F32","shape":[1],"data_offsets":[0,4]}}"#, "unpaired high surrogate"),
-        ("ctrl", "{\"a\tb\":{\"dtype\":\"F32\",\"shape\":[1],\"data_offsets\":[0,4]}}", "control character"),
+        (
+            "u64",
+            r#"{"a":{"dtype":"F32","shape":[18446744073709551616],"data_offsets":[0,4]}}"#,
+            "overflows u64",
+        ),
+        (
+            "dup",
+            r#"{"a":{"dtype":"F32","shape":[1],"data_offsets":[0,4]},"a":{"dtype":"F32","shape":[1],"data_offsets":[0,4]}}"#,
+            "duplicate key",
+        ),
+        (
+            "dup_field",
+            r#"{"a":{"dtype":"F32","dtype":"F32","shape":[1],"data_offsets":[0,4]}}"#,
+            "duplicate key",
+        ),
+        (
+            "deep",
+            r#"{"a":{"dtype":"F32","shape":[[1]],"data_offsets":[0,4]}}"#,
+            "nesting deeper",
+        ),
+        (
+            "unterminated",
+            r#"{"a":{"dtype":"F32"#,
+            "unterminated string",
+        ),
+        (
+            "bad_escape",
+            r#"{"a\q":{"dtype":"F32","shape":[1],"data_offsets":[0,4]}}"#,
+            "invalid escape",
+        ),
+        (
+            "plus_hex",
+            r#"{"a\u+041":{"dtype":"F32","shape":[1],"data_offsets":[0,4]}}"#,
+            "bad \\u escape",
+        ),
+        (
+            "lone_hi",
+            r#"{"a\ud800":{"dtype":"F32","shape":[1],"data_offsets":[0,4]}}"#,
+            "unpaired high surrogate",
+        ),
+        (
+            "lone_lo",
+            r#"{"a\udc00":{"dtype":"F32","shape":[1],"data_offsets":[0,4]}}"#,
+            "unpaired low surrogate",
+        ),
+        (
+            "hi_then_char",
+            r#"{"a\ud800A":{"dtype":"F32","shape":[1],"data_offsets":[0,4]}}"#,
+            "unpaired high surrogate",
+        ),
+        (
+            "ctrl",
+            "{\"a\tb\":{\"dtype\":\"F32\",\"shape\":[1],\"data_offsets\":[0,4]}}",
+            "control character",
+        ),
         ("no_colon", r#"{"a" {"dtype":"F32"}}"#, "expected ':'"),
-        ("no_comma", r#"{"a":{"dtype":"F32" "shape":[1]}}"#, "expected ',' or '}'"),
-        ("arr_comma", r#"{"a":{"dtype":"F32","shape":[1 2],"data_offsets":[0,4]}}"#, "expected ',' or ']'"),
+        (
+            "no_comma",
+            r#"{"a":{"dtype":"F32" "shape":[1]}}"#,
+            "expected ',' or '}'",
+        ),
+        (
+            "arr_comma",
+            r#"{"a":{"dtype":"F32","shape":[1 2],"data_offsets":[0,4]}}"#,
+            "expected ',' or ']'",
+        ),
         ("key", r#"{1:2}"#, "expected a string key"),
     ];
     for (tag, h, needle) in cases {
@@ -137,7 +209,11 @@ fn json_outside_the_formats_subset_is_rejected() {
         "{{\"a{bs}ud800{bs}u0041\":{{\"dtype\":\"F32\",\"shape\":[1],\"data_offsets\":[0,4]}}}}"
     );
     assert!(bad_lo.contains("\\u0041"), "{bad_lo}");
-    expect_rejected("bad_lo", "invalid low surrogate", file("bad_lo", &bad_lo, &d));
+    expect_rejected(
+        "bad_lo",
+        "invalid low surrogate",
+        file("bad_lo", &bad_lo, &d),
+    );
 
     // Invalid UTF-8 in the header.
     let bad = b"{\"\xff\":1}";
@@ -149,16 +225,48 @@ fn json_outside_the_formats_subset_is_rejected() {
 fn entries_must_be_exactly_dtype_shape_and_offsets() {
     let d = 1.0f32.to_le_bytes();
     let cases: &[(&str, &str, &str)] = &[
-        ("unknown_field", r#"{"a":{"dtype":"F32","shape":[1],"data_offsets":[0,4],"x":"y"}}"#, "unexpected or mistyped field \"x\""),
-        ("missing", r#"{"a":{"dtype":"F32","shape":[1]}}"#, "needs dtype, shape and data_offsets"),
-        ("dtype_type", r#"{"a":{"dtype":4,"shape":[1],"data_offsets":[0,4]}}"#, "mistyped field \"dtype\""),
-        ("shape_type", r#"{"a":{"dtype":"F32","shape":"1","data_offsets":[0,4]}}"#, "mistyped field \"shape\""),
-        ("shape_str", r#"{"a":{"dtype":"F32","shape":["1"],"data_offsets":[0,4]}}"#, "non-integer"),
-        ("offs3", r#"{"a":{"dtype":"F32","shape":[1],"data_offsets":[0,4,4]}}"#, "not [begin, end]"),
+        (
+            "unknown_field",
+            r#"{"a":{"dtype":"F32","shape":[1],"data_offsets":[0,4],"x":"y"}}"#,
+            "unexpected or mistyped field \"x\"",
+        ),
+        (
+            "missing",
+            r#"{"a":{"dtype":"F32","shape":[1]}}"#,
+            "needs dtype, shape and data_offsets",
+        ),
+        (
+            "dtype_type",
+            r#"{"a":{"dtype":4,"shape":[1],"data_offsets":[0,4]}}"#,
+            "mistyped field \"dtype\"",
+        ),
+        (
+            "shape_type",
+            r#"{"a":{"dtype":"F32","shape":"1","data_offsets":[0,4]}}"#,
+            "mistyped field \"shape\"",
+        ),
+        (
+            "shape_str",
+            r#"{"a":{"dtype":"F32","shape":["1"],"data_offsets":[0,4]}}"#,
+            "non-integer",
+        ),
+        (
+            "offs3",
+            r#"{"a":{"dtype":"F32","shape":[1],"data_offsets":[0,4,4]}}"#,
+            "not [begin, end]",
+        ),
         // tessl: "unsupported dtype"
-        ("dtype_name", r#"{"a":{"dtype":"F8","shape":[1],"data_offsets":[0,4]}}"#, "unknown dtype \"F8\""),
+        (
+            "dtype_name",
+            r#"{"a":{"dtype":"F8","shape":[1],"data_offsets":[0,4]}}"#,
+            "unknown dtype \"F8\"",
+        ),
         ("entry_type", r#"{"a":"F32"}"#, "not an object"),
-        ("meta_type", r#"{"__metadata__":[1]}"#, "__metadata__ is not an object"),
+        (
+            "meta_type",
+            r#"{"__metadata__":[1]}"#,
+            "__metadata__ is not an object",
+        ),
         ("meta_value", r#"{"__metadata__":{"k":1}}"#, "not a string"),
     ];
     for (tag, h, needle) in cases {
@@ -171,16 +279,51 @@ fn entries_must_be_exactly_dtype_shape_and_offsets() {
 fn offsets_must_match_the_shape_and_tile_the_data_exactly() {
     let d8 = [0u8; 8];
     let cases: &[(&str, &str, usize, &str)] = &[
-        ("reversed", r#"{"a":{"dtype":"F32","shape":[0],"data_offsets":[4,0]}}"#, 4, "outside"),
-        ("past", r#"{"a":{"dtype":"F32","shape":[2],"data_offsets":[0,8]}}"#, 4, "outside"),
-        ("size", r#"{"a":{"dtype":"F32","shape":[2],"data_offsets":[0,4]}}"#, 4, "shape [2] x F32 is 8"),
+        (
+            "reversed",
+            r#"{"a":{"dtype":"F32","shape":[0],"data_offsets":[4,0]}}"#,
+            4,
+            "outside",
+        ),
+        (
+            "past",
+            r#"{"a":{"dtype":"F32","shape":[2],"data_offsets":[0,8]}}"#,
+            4,
+            "outside",
+        ),
+        (
+            "size",
+            r#"{"a":{"dtype":"F32","shape":[2],"data_offsets":[0,4]}}"#,
+            4,
+            "shape [2] x F32 is 8",
+        ),
         // tessl: "no gap or overlap"
-        ("overlap", r#"{"a":{"dtype":"F32","shape":[1],"data_offsets":[0,4]},"b":{"dtype":"F32","shape":[1],"data_offsets":[2,6]}}"#, 6, "gap or overlap"),
-        ("gap", r#"{"a":{"dtype":"F32","shape":[1],"data_offsets":[0,4]},"b":{"dtype":"U8","shape":[2],"data_offsets":[6,8]}}"#, 8, "gap or overlap"),
+        (
+            "overlap",
+            r#"{"a":{"dtype":"F32","shape":[1],"data_offsets":[0,4]},"b":{"dtype":"F32","shape":[1],"data_offsets":[2,6]}}"#,
+            6,
+            "gap or overlap",
+        ),
+        (
+            "gap",
+            r#"{"a":{"dtype":"F32","shape":[1],"data_offsets":[0,4]},"b":{"dtype":"U8","shape":[2],"data_offsets":[6,8]}}"#,
+            8,
+            "gap or overlap",
+        ),
         ("unindexed", ONE_F32, 8, "cover 4 of 8"),
         // tessl: "element count overflows"
-        ("numel", r#"{"a":{"dtype":"U8","shape":[4294967296,4294967296],"data_offsets":[0,0]}}"#, 0, "shape product overflows"),
-        ("bytes", r#"{"a":{"dtype":"F64","shape":[2305843009213693952,2],"data_offsets":[0,0]}}"#, 0, "overflows"),
+        (
+            "numel",
+            r#"{"a":{"dtype":"U8","shape":[4294967296,4294967296],"data_offsets":[0,0]}}"#,
+            0,
+            "shape product overflows",
+        ),
+        (
+            "bytes",
+            r#"{"a":{"dtype":"F64","shape":[2305843009213693952,2],"data_offsets":[0,0]}}"#,
+            0,
+            "overflows",
+        ),
     ];
     for (tag, h, n, needle) in cases {
         expect_rejected(tag, needle, file(tag, h, &d8[..*n]));
@@ -241,6 +384,10 @@ fn the_only_input_tessl_refused_that_this_reader_takes_is_a_bit_exact_sub_byte_s
     // Not bit-exact: still refused, for every sub-byte dtype.
     for tag in ["F4", "F6_E2M3", "F6_E3M2"] {
         let h = format!(r#"{{"a":{{"dtype":"{tag}","shape":[3],"data_offsets":[0,2]}}}}"#);
-        expect_rejected(tag, "is not a whole number of bytes", file(tag, &h, &[0, 0]));
+        expect_rejected(
+            tag,
+            "is not a whole number of bytes",
+            file(tag, &h, &[0, 0]),
+        );
     }
 }

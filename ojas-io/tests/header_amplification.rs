@@ -63,7 +63,11 @@ fn a_header_of_mostly_dimensions_is_refused_above_a_measured_size() {
     // And the refusal names the budget rather than coming back as a parse
     // error about the text.
     let err = SafeTensors::parse(&header_with_dims(hi)).unwrap_err();
-    assert!(err.detail().contains("byte budget exceeded"), "{}", err.detail());
+    assert!(
+        err.detail().contains("byte budget exceeded"),
+        "{}",
+        err.detail()
+    );
 }
 
 /// The header a real model writes is far below the bound: hundreds of tensors

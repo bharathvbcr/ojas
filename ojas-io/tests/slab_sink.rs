@@ -433,7 +433,10 @@ fn a_file_cut_short_after_open_is_an_error_on_every_read() {
         err.detail().contains("file changed since it was opened"),
         "{err}"
     );
-    assert!(ids.iter().all(|&b| b == SENT), "the destination was written");
+    assert!(
+        ids.iter().all(|&b| b == SENT),
+        "the destination was written"
+    );
 
     let mut slab = vec![SENT; 1 << 13];
     let err = st.read_into_slab(&["ids", "h"], 8, &mut slab).unwrap_err();

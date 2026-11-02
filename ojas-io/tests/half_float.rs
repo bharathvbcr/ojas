@@ -305,7 +305,9 @@ fn nan_conversion_is_one_rule_at_every_host_encoder() {
 #[test]
 fn widen_in_place_matches_elementwise() {
     let mut seed = 0x9e37_79b9_7f4a_7c15u64;
-    for &n in &[0usize, 1, 2, 1023, 2047, 2048, 2049, 3072, 4096, 5000, 10_001] {
+    for &n in &[
+        0usize, 1, 2, 1023, 2047, 2048, 2049, 3072, 4096, 5000, 10_001,
+    ] {
         let src: Vec<u16> = (0..n)
             .map(|_| {
                 seed = seed
@@ -314,10 +316,7 @@ fn widen_in_place_matches_elementwise() {
                 (seed >> 48) as u16
             })
             .collect();
-        for (name, widen) in [
-            ("bf16", bf16_to_f32 as fn(u16) -> f32),
-            ("f16", f16_to_f32),
-        ] {
+        for (name, widen) in [("bf16", bf16_to_f32 as fn(u16) -> f32), ("f16", f16_to_f32)] {
             let mut bytes = vec![0u8; 4 * n];
             for (i, v) in src.iter().enumerate() {
                 bytes[2 * n + 2 * i..2 * n + 2 * i + 2].copy_from_slice(&v.to_le_bytes());

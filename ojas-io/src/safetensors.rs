@@ -311,16 +311,11 @@ enum Source<'a> {
         stamp: FileStamp,
     },
     /// Data buffer only (the bytes after the header). Used by [`SafeTensors::parse`].
-    Memory {
-        data: &'a [u8],
-    },
+    Memory { data: &'a [u8] },
     /// The whole serialization, header included, owned by the reader. Used by
     /// [`SafeTensors::from_bytes`] for a checkpoint built on the host, which
     /// has no file to borrow from and no caller buffer to outlive.
-    Owned {
-        data: Vec<u8>,
-        data_start: u64,
-    },
+    Owned { data: Vec<u8>, data_start: u64 },
 }
 
 /// A validated safetensors header, plus a handle for positioned data reads.
@@ -410,8 +405,8 @@ impl<'a> SafeTensors<'a> {
         // instead of refusing. `open_regular_file` is the one owner of that
         // refusal. Symlinks are still followed, which a Hugging Face snapshot
         // needs.
-        let (file, _) =
-            crate::open::open_regular_file(path).map_err(|e| IoError::new(e.detail().to_string()))?;
+        let (file, _) = crate::open::open_regular_file(path)
+            .map_err(|e| IoError::new(e.detail().to_string()))?;
         Self::from_file_with_limit(file, limit)
             .map_err(|e| IoError::new(format!("{what}: {}", e.detail())))
     }
@@ -571,10 +566,14 @@ impl<'a> SafeTensors<'a> {
                 // again, and only while that handle still names the same
                 // contents. A truncation of this file is caught here rather
                 // than coming back as short data.
-                stamp.recheck(file).map_err(|e| IoError::new(format!("{name}: {}", e.detail())))?;
+                stamp
+                    .recheck(file)
+                    .map_err(|e| IoError::new(format!("{name}: {}", e.detail())))?;
                 read_exact_at(file, dst, abs)
                     .map_err(|e| IoError::new(format!("{name}: data: {e}")))?;
-                stamp.recheck(file).map_err(|e| IoError::new(format!("{name}: {}", e.detail())))
+                stamp
+                    .recheck(file)
+                    .map_err(|e| IoError::new(format!("{name}: {}", e.detail())))
             }
         }
     }
@@ -2215,7 +2214,15 @@ mod tests {
 
         let view = CheckpointView::open_with_limit(&index, Some(16)).unwrap();
         // The stored bits fit; the widened read does not.
-        assert_eq!(view.shard("w").unwrap().read_bf16_bits("w").unwrap().1.len(), 8);
+        assert_eq!(
+            view.shard("w")
+                .unwrap()
+                .read_bf16_bits("w")
+                .unwrap()
+                .1
+                .len(),
+            8
+        );
         let err = TensorSource::read_f32(&view, "w").unwrap_err();
         assert!(
             err.detail().contains("payload budget exceeded"),
@@ -2349,7 +2356,10 @@ mod tests {
         assert_eq!(held.metadata()["format"], "pt");
         assert_eq!(held.read_f32("f").unwrap(), opened.read_f32("f").unwrap());
         assert_eq!(held.read_u32("q").unwrap(), opened.read_u32("q").unwrap());
-        assert_eq!(held.read_bytes("f").unwrap(), opened.read_bytes("f").unwrap());
+        assert_eq!(
+            held.read_bytes("f").unwrap(),
+            opened.read_bytes("f").unwrap()
+        );
 
         // The same validation and the same budget as the file route.
         let bad = std::fs::read(&path.0).unwrap()[..6].to_vec();
@@ -2463,9 +2473,9 @@ mod tests {
         let dir = tmp_dir("index_named");
         let index = dir.0.join(INDEX_FILE_NAME);
         for text in [
-            &br#"{"metadata":{}}"#[..],            // no weight_map
-            &b""[..],                              // empty
-            &br#"{"weight_map":{}}"#[..],          // empty weight_map
+            &br#"{"metadata":{}}"#[..],             // no weight_map
+            &b""[..],                               // empty
+            &br#"{"weight_map":{}}"#[..],           // empty weight_map
             &br#"{"weight_map":{"a":"../x"}}"#[..], // not a bare file name
         ] {
             std::fs::write(&index, text).unwrap();
