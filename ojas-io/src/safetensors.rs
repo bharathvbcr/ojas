@@ -1050,6 +1050,21 @@ impl TensorSource for CheckpointView {
     }
 }
 
+/// The element count of `shape`, or `None` if it does not fit in `u64`.
+///
+/// A zero dimension makes the count zero whatever the other dimensions are, so
+/// the verdict must not depend on the order of the dims. A plain left-to-right
+/// `checked_mul` fold collapses `[0, 2^32, 2^32]` to 0 before it reaches the
+/// overflow and so accepts it, while refusing `[2^32, 2^32, 0]` — the same
+/// empty tensor, written the other way round. Both are valid empty tensors and
+/// both are now accepted.
+fn checked_numel(shape: &[u64]) -> Option<u64> {
+    if shape.contains(&0) {
+        return Some(0);
+    }
+    shape.iter().try_fold(1u64, |acc, &d| acc.checked_mul(d))
+}
+
 /// Largest index accepted: a 9B checkpoint's is about 100 KB.
 const MAX_INDEX_BYTES: u64 = 16 << 20;
 
@@ -1531,9 +1546,7 @@ impl<W: Write> SafeTensorsWriter<W> {
 }
 
 fn byte_len(name: &str, shape: &[u64], dtype: StDtype) -> Result<u64, IoError> {
-    let numel = shape
-        .iter()
-        .try_fold(1u64, |acc, &d| acc.checked_mul(d))
+    let numel = checked_numel(shape)
         .ok_or_else(|| IoError::new(format!("{name:?}: shape product overflows")))?;
     // Exact in u128 (a u64 numel times a width of at most 64 bits cannot
     // overflow it), so a byte count that fits u64 is never refused because
@@ -2397,6 +2410,54 @@ mod tests {
         worker.join().unwrap();
         let err = got.expect("open of a FIFO index blocked").unwrap_err();
         assert!(err.detail().contains("not a regular file"), "{err}");
+    }
+
+    /// An empty tensor is accepted however its dimensions are ordered.
+    ///
+    /// `byte_len` folded the shape left with `checked_mul`, so `[0, 2^32,
+    /// 2^32]` collapsed to 0 before it reached the overflow and opened, while
+    /// `[2^32, 2^32, 0]` — the same empty tensor, written the other way round
+    /// — was refused as an overflow. A verdict that depends on the order the
+    /// dimensions happen to be written in is not a verdict about the file.
+    #[test]
+    fn the_shape_overflow_verdict_does_not_depend_on_dimension_order() {
+        fn verdict(shape: [u64; 3]) -> Result<(), String> {
+            let header = format!(
+                r#"{{"t":{{"dtype":"U8","shape":[{},{},{}],"data_offsets":[0,0]}}}}"#,
+                shape[0], shape[1], shape[2]
+            );
+            SafeTensors::parse(&frame(header.as_bytes(), &[]))
+                .map(|_| ())
+                .map_err(|e| e.detail().to_string())
+        }
+
+        let dims = [0u64, 1 << 32, 1 << 32];
+        let perms = [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ];
+        let verdicts: Vec<_> = perms
+            .iter()
+            .map(|p| verdict([dims[p[0]], dims[p[1]], dims[p[2]]]))
+            .collect();
+        assert!(
+            verdicts.iter().all(|v| *v == verdicts[0]),
+            "the verdict changed with the order: {verdicts:?}"
+        );
+        // And the empty tensor is a valid empty tensor.
+        assert!(verdicts[0].is_ok(), "{verdicts:?}");
+
+        // Without the zero, the same dims overflow in every order.
+        assert!(verdict([1 << 32, 1 << 32, 1])
+            .unwrap_err()
+            .contains("overflows"));
+        assert!(verdict([1, 1 << 32, 1 << 32])
+            .unwrap_err()
+            .contains("overflows"));
     }
 
     fn items(t: &[Owned]) -> Vec<TensorOut<'_>> {
