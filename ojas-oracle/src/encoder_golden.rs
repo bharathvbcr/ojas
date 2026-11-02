@@ -216,10 +216,16 @@ fn host_values(t: &Tensor) -> Vec<f32> {
 /// is returned.
 pub fn check<B: Backend>(be: &B) -> Result<Report, OjasError> {
     let cases = parse();
-    assert!(
-        cases.len() >= MIN_CASES,
-        "the fixture lost cases: {}",
-        cases.len()
+    assert_eq!(
+        cases.len(),
+        MIN_CASES,
+        "golden.txt carries {} cases but MIN_CASES pins {}. If you added a \
+         case, raise MIN_CASES to match; if one vanished, restore it. Asserted \
+         exactly rather than as a floor: a `>=` floor only catches a fixture \
+         that shrinks, and silently widens the gap between the pin and the \
+         truth every time a case is added without a bump.",
+        cases.len(),
+        MIN_CASES
     );
     let up = |c: &Golden, key: &str| be.upload(&c.host(key));
     let mut measured: Vec<Measured> = Vec::new();
@@ -320,4 +326,49 @@ pub fn check<B: Backend>(be: &B) -> Result<Report, OjasError> {
         cases: cases.len(),
         measured,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `MIN_CASES` is asserted exactly by `check`, so it has to equal what the
+    /// fixture holds. This is the half of that assertion which needs no
+    /// backend, and so runs everywhere `cargo test -p ojas-oracle --lib` runs.
+    ///
+    /// `check`'s guard was `cases.len() >= MIN_CASES` with nothing testing it.
+    /// A floor only catches a fixture that shrinks: add a case without raising
+    /// the pin and the guard still passes, one case slacker than before, which
+    /// is how the gemma fixture's pin came to sit at 15 against 22 cases. The
+    /// floor is now an equality and this is what fails when the two drift.
+    #[test]
+    fn min_cases_equals_what_the_fixture_holds() {
+        assert_eq!(parse().len(), MIN_CASES);
+    }
+
+    /// The ops the fixture covers, and how many cases each has. Written down so
+    /// that a case lost from one op cannot be hidden by a case added to
+    /// another: the total alone is blind to that, and the total is all
+    /// `MIN_CASES` sees.
+    #[test]
+    fn every_op_keeps_the_case_count_it_was_built_with() {
+        let mut per_op: std::collections::BTreeMap<&str, usize> = Default::default();
+        let cases = parse();
+        for c in &cases {
+            *per_op.entry(c.op.as_str()).or_default() += 1;
+        }
+
+        let want = [
+            ("badd", 6),
+            ("bmul", 6),
+            ("cln", 4),
+            ("gelu", 1),
+            ("lin", 3),
+            ("ln", 6),
+            ("softmax", 5),
+        ];
+        let got: Vec<(&str, usize)> = per_op.into_iter().collect();
+        assert_eq!(got.as_slice(), want.as_slice());
+        assert_eq!(want.iter().map(|(_, n)| n).sum::<usize>(), MIN_CASES);
+    }
 }
