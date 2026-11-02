@@ -1647,14 +1647,35 @@ fn check_header_len(n: u64, file_len: u64) -> Result<(), IoError> {
 
 type Header = (BTreeMap<String, TensorInfo>, BTreeMap<String, String>);
 
-/// The header grammar is the shared strict reader at its defaults (depth 64,
-/// 8 tree bytes per input byte plus 64 KiB). The header's own strictness is
-/// the schema walk below: the root is an object, `__metadata__` holds only
-/// strings, and a tensor entry holds exactly a string `dtype`, a `shape` of
-/// unsigned integers and two unsigned `data_offsets`. Every value in a header
-/// sits at one of those positions, so a float, boolean, `null` or negative
-/// number anywhere is refused here, as the integers-only grammar refused it.
-const HEADER_JSON: JsonLimits = JsonLimits::DEFAULT;
+/// The header's own grammar profile, not the shared reader's defaults.
+///
+/// The header's strictness is mostly the schema walk below: the root is an
+/// object, `__metadata__` holds only strings, and a tensor entry holds exactly
+/// a string `dtype`, a `shape` of unsigned integers and two unsigned
+/// `data_offsets`. Every value in a header sits at one of those positions, so
+/// a float, boolean, `null` or negative number anywhere is refused there.
+///
+/// Two limits are the header's own rather than the defaults:
+///
+/// * **Depth 3, not 64.** The format nests exactly three containers: the root
+///   object, a tensor entry, and that entry's `shape` or `data_offsets` array.
+///   Nothing deeper is this format, so it is refused as nesting rather than
+///   carried as far as the schema walk, where it would be reported as a
+///   dimension that is not an integer.
+/// The tree byte budget stays at the shared default of 8 bytes per input byte
+/// plus 64 KiB, deliberately. A header that is almost all shape dimensions is
+/// the worst case for amplification — `0,` is two input bytes and becomes a
+/// number node, so the tree runs to about sixteen times the text — and such a
+/// header is refused rather than built. tessl's reader had no such bound and
+/// accepted it; this reader is the stricter of the two and stays that way,
+/// because it is the one both repositories now go through. No real checkpoint
+/// is near the bound: a header's bytes are mostly tensor names and dtype tags,
+/// and the 2B's whole header is about 90 KB.
+const HEADER_JSON: JsonLimits = JsonLimits {
+    max_input_bytes: MAX_HEADER_BYTES as usize,
+    max_depth: 3,
+    ..JsonLimits::DEFAULT
+};
 
 fn parse_header(bytes: &[u8], data_len: u64) -> Result<Header, IoError> {
     let text = std::str::from_utf8(bytes)
@@ -2889,12 +2910,17 @@ mod tests {
 
     #[test]
     fn deep_json_non_utf8_header_and_truncated_payload() {
+        // The header's depth limit is the three containers the format nests
+        // (root object, tensor entry, `shape` or `data_offsets` array), not
+        // the shared reader's default of 64, so this asserts the refusal and
+        // not a particular number. One level past the format is already too
+        // deep, which `tessl_rejection_corpus.rs` pins with `shape: [[1]]`.
         let mut deep = br#"{"w":"#.to_vec();
         deep.extend(std::iter::repeat_n(b'[', 65));
         deep.extend(std::iter::repeat_n(b']', 65));
         deep.push(b'}');
-        let err = assert_parse_err(&frame(&deep, &[]), "64");
-        assert!(err.detail().contains("64") || err.detail().contains("nesting"));
+        let err = assert_parse_err(&frame(&deep, &[]), "nesting deeper");
+        assert!(err.detail().contains("nesting deeper than 3"), "{err}");
 
         let mut bad = br#"{"w":{"dtype":"U16","shape":[1],"data_offsets":[0,2]}}"#.to_vec();
         bad[3] = 0xff;

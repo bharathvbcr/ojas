@@ -114,10 +114,7 @@ fn json_outside_the_formats_subset_is_rejected() {
         ("u64", r#"{"a":{"dtype":"F32","shape":[18446744073709551616],"data_offsets":[0,4]}}"#, "overflows u64"),
         ("dup", r#"{"a":{"dtype":"F32","shape":[1],"data_offsets":[0,4]},"a":{"dtype":"F32","shape":[1],"data_offsets":[0,4]}}"#, "duplicate key"),
         ("dup_field", r#"{"a":{"dtype":"F32","dtype":"F32","shape":[1],"data_offsets":[0,4]}}"#, "duplicate key"),
-        // tessl: "nesting deeper". ojas-io's grammar allows the depth and the
-        // schema walk refuses the array where an integer belongs, so the
-        // refusal lands one step later with the same effect.
-        ("deep", r#"{"a":{"dtype":"F32","shape":[[1]],"data_offsets":[0,4]}}"#, "non-integer"),
+        ("deep", r#"{"a":{"dtype":"F32","shape":[[1]],"data_offsets":[0,4]}}"#, "nesting deeper"),
         ("unterminated", r#"{"a":{"dtype":"F32"#, "unterminated string"),
         ("bad_escape", r#"{"a\q":{"dtype":"F32","shape":[1],"data_offsets":[0,4]}}"#, "invalid escape"),
         ("plus_hex", r#"{"a\u+041":{"dtype":"F32","shape":[1],"data_offsets":[0,4]}}"#, "bad \\u escape"),
