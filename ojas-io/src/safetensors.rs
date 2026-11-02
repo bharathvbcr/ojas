@@ -501,6 +501,13 @@ impl<'a> SafeTensors<'a> {
             .ok_or_else(|| IoError::new(format!("no tensor {name:?}")))
     }
 
+    /// Tensor bytes this file's header declares, which the tensors tile
+    /// exactly. What a caller applying its own payload policy needs to know
+    /// about an open file without re-reading the header.
+    pub fn declared_payload_bytes(&self) -> u64 {
+        declared_bytes_of(&self.tensors)
+    }
+
     /// Copy `dst.len()` bytes of tensor `name`, starting `offset` bytes into
     /// that tensor. The read is positioned: the rest of the file is not loaded.
     /// `offset` past the tensor, or a range that would run past it, is an error.
@@ -604,8 +611,10 @@ impl<'a> SafeTensors<'a> {
             StDtype::F16 => self.read_typed(name, dtype, 2, |c| {
                 f16_to_f32(u16::from_le_bytes([c[0], c[1]]))
             }),
+            // Worded as `read_f32_into` words the same refusal: two readers
+            // for one question used to answer it in two different sentences.
             _ => Err(IoError::new(format!(
-                "{name}: {dtype:?} is not a floating-point tensor this crate decodes"
+                "{name}: cannot read {dtype:?} as f32"
             ))),
         }
     }
@@ -955,6 +964,15 @@ impl CheckpointView {
         self.shards.len()
     }
 
+    /// Tensor bytes the shards' headers declare in total. What a caller
+    /// applying its own payload policy needs for a whole checkpoint.
+    pub fn declared_payload_bytes(&self) -> u64 {
+        self.shards
+            .iter()
+            .map(declared_bytes)
+            .fold(0u64, |a, b| a.saturating_add(b))
+    }
+
     fn open_single(path: &Path, limit: Option<u64>) -> Result<Self, IoError> {
         // The budget is the reader's own now, so it holds for the shard's
         // header at open and for every read made through it afterwards.
@@ -975,11 +993,20 @@ impl CheckpointView {
             _ => Path::new("."),
         };
         let text = read_index_text(index_path, &what)?;
-        let by_file = parse_index(&text)?;
+        // Naming the index is not decoration: a refusal like "no weight_map"
+        // or "unexpected end at byte 0", in a snapshot directory holding a
+        // config, an index and several shards, does not say which file was
+        // wrong.
+        let by_file =
+            parse_index(&text).map_err(|e| IoError::new(format!("{what}: {}", e.detail())))?;
 
         let mut paths: Vec<(&String, std::path::PathBuf)> = Vec::with_capacity(by_file.len());
         for (file, names) in &by_file {
-            paths.push((file, shard_path(dir, file, &names[0])?));
+            paths.push((
+                file,
+                shard_path(dir, file, &names[0])
+                    .map_err(|e| IoError::new(format!("{what}: {}", e.detail())))?,
+            ));
         }
 
         let mut shards = Vec::with_capacity(paths.len());
@@ -1148,12 +1175,17 @@ fn parse_index(text: &str) -> Result<BTreeMap<String, Vec<String>>, IoError> {
     Ok(by_file)
 }
 
-/// Tensor bytes one shard's header declares.
-fn declared_bytes(st: &SafeTensors<'static>) -> u64 {
-    st.tensors
+/// Tensor bytes a header declares, summed over its entries.
+fn declared_bytes_of(tensors: &BTreeMap<String, TensorInfo>) -> u64 {
+    tensors
         .values()
         .map(|t| t.end.saturating_sub(t.begin))
         .sum()
+}
+
+/// Tensor bytes one shard's header declares.
+fn declared_bytes(st: &SafeTensors<'static>) -> u64 {
+    declared_bytes_of(&st.tensors)
 }
 
 /// The payload budget, stated once for both ways into a checkpoint.
@@ -2397,6 +2429,32 @@ mod tests {
     /// cannot block the read", which was true of `from_file`, where the caller
     /// has already opened the file, and false of `open`, where this crate does.
     /// A character device is refused for the same reason.
+    /// A refused index says which file was wrong.
+    ///
+    /// The index's own parse errors came back bare — "no weight_map", "JSON:
+    /// unexpected end at byte 0" — so a caller holding a snapshot directory of
+    /// a config, an index and nine shards was told something was malformed but
+    /// not what. The shard-name refusal had the same gap.
+    #[test]
+    fn a_refused_index_names_the_index_file() {
+        let dir = tmp_dir("index_named");
+        let index = dir.0.join(INDEX_FILE_NAME);
+        for text in [
+            &br#"{"metadata":{}}"#[..],            // no weight_map
+            &b""[..],                              // empty
+            &br#"{"weight_map":{}}"#[..],          // empty weight_map
+            &br#"{"weight_map":{"a":"../x"}}"#[..], // not a bare file name
+        ] {
+            std::fs::write(&index, text).unwrap();
+            let err = CheckpointView::open(&index).unwrap_err();
+            assert!(
+                err.detail().contains(INDEX_FILE_NAME),
+                "{:?} does not name the index",
+                err.detail()
+            );
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_fifo_or_device_is_refused_without_blocking() {

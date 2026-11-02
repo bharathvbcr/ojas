@@ -290,3 +290,41 @@ fn nan_conversion_is_one_rule_at_every_host_encoder() {
         assert_eq!(ours == torch, ours == 0x7fc0, "{bits:#010x}");
     }
 }
+
+/// The blocked in-place widen gives the same bytes as widening element by
+/// element into a separate buffer, at sizes below, at and around the block
+/// threshold (`2 * 1024`) and with a ragged tail.
+///
+/// `widen_in_place` reads a 16-bit tensor from the upper half of its own f32
+/// storage and widens it front to back, so a block that wrote past where the
+/// unread elements sit would corrupt them silently and produce a model that
+/// loads and answers wrongly. This test came from tessl, which had a
+/// byte-for-byte copy of this function beside its safetensors parser; the copy
+/// is gone now that ojas-io owns the reader, and the test follows the
+/// implementation it covers rather than being deleted with the duplicate.
+#[test]
+fn widen_in_place_matches_elementwise() {
+    let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+    for &n in &[0usize, 1, 2, 1023, 2047, 2048, 2049, 3072, 4096, 5000, 10_001] {
+        let src: Vec<u16> = (0..n)
+            .map(|_| {
+                seed = seed
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                (seed >> 48) as u16
+            })
+            .collect();
+        for (name, widen) in [
+            ("bf16", bf16_to_f32 as fn(u16) -> f32),
+            ("f16", f16_to_f32),
+        ] {
+            let mut bytes = vec![0u8; 4 * n];
+            for (i, v) in src.iter().enumerate() {
+                bytes[2 * n + 2 * i..2 * n + 2 * i + 2].copy_from_slice(&v.to_le_bytes());
+            }
+            ojas_io::widen_in_place(&mut bytes, n, widen);
+            let want: Vec<u8> = src.iter().flat_map(|&v| widen(v).to_ne_bytes()).collect();
+            assert_eq!(bytes, want, "{name}, n = {n}");
+        }
+    }
+}
