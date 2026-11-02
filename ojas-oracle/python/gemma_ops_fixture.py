@@ -132,8 +132,14 @@ def seq_mean_f64(x: Tensor, key_lens: Tensor) -> Tensor:
         valid_len = min(length, t)
         if valid_len > 0:
             active = x[i, :valid_len, :].to(torch.float64)
-            # In f64, exact mean over active tokens
-            out[i] = active.sum(dim=0) / float(length)
+            # In f64, exact mean over active tokens. The divisor is the number
+            # of tokens actually summed, min(length, t), not the requested
+            # length: a key_lens entry past the end of the sequence asks for
+            # rows that are not there, and the backends divide by what they
+            # summed (`ojas-cpu/src/gemma_ops.rs`, pinned by
+            # `seq_mean_is_the_masked_mean_of_the_leading_rows`, whose
+            # key_lens include 99 with t = 9).
+            out[i] = active.sum(dim=0) / float(valid_len)
         else:
             out[i] = 0.0
     return out

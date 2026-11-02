@@ -20,7 +20,11 @@ const GOLDEN: &str = include_str!(concat!(
     "/fixtures/gemma_ops/golden.txt"
 ));
 
-pub const MIN_CASES: usize = 15;
+/// The number of cases `golden.txt` actually carries, so that a case lost
+/// from the fixture fails the gate instead of passing it. A floor well under
+/// the real count is a check that cannot fail: at 15 against 22 cases, seven
+/// could disappear unnoticed.
+pub const MIN_CASES: usize = 22;
 
 /// One fixture case.
 pub struct GoldenCase {
@@ -195,7 +199,35 @@ pub struct OpRecord {
 
 pub struct Report {
     pub cases_run: usize,
+    /// How many records the parsed fixture should have produced, derived by
+    /// `expected_records`. `check` asserts the real count equals it, so a
+    /// caller needs no hand-written number of its own.
+    pub expected_records: usize,
     pub records: Vec<OpRecord>,
+}
+
+/// How many `OpRecord`s `check` must produce for `cases`, derived from the
+/// fixture rather than written down beside it.
+///
+/// `gelu_tanh` is measured forward and backward, so it contributes two; every
+/// other op contributes one. An op with no arm here panics, exactly as it does
+/// in `check`: the two must agree about what the fixture can contain, and the
+/// failure for a new op is a red test rather than a count that quietly drops.
+///
+/// This exists because the Metal challenger asserted `records.len() >= 25`
+/// while the real count was 26. Adding the `seq_mean over_len` case moved the
+/// truth and left the floor behind, so a record could have gone missing and
+/// still cleared it. A floor that has to be bumped by hand is a floor that
+/// stops being tight at the first change nobody remembers to make.
+pub fn expected_records(cases: &[GoldenCase]) -> usize {
+    cases
+        .iter()
+        .map(|case| match case.op.as_str() {
+            "gelu_tanh" => 2,
+            "seq_mean" | "l2_normalize" | "rms_qkv_norm" | "swa" => 1,
+            other => panic!("unknown op {other} in case {}", case.name),
+        })
+        .sum()
 }
 
 impl Report {
@@ -222,7 +254,17 @@ fn host_f32(be: &impl Backend, t: &Tensor) -> Vec<f32> {
 /// Runs every case in `fixtures/gemma_ops/golden.txt` on `be`.
 pub fn check<B: Backend>(be: &B) -> Result<Report, OjasError> {
     let cases = parse();
-    assert!(cases.len() >= MIN_CASES, "fewer cases than expected");
+    assert_eq!(
+        cases.len(),
+        MIN_CASES,
+        "golden.txt carries {} cases but MIN_CASES pins {}. If you added a \
+         case, raise MIN_CASES to match; if one vanished, restore it. The \
+         count is asserted exactly rather than as a floor so that it cannot \
+         drift above the pin and leave the gate loose.",
+        cases.len(),
+        MIN_CASES
+    );
+    let expected_records = expected_records(&cases);
 
     let budget = be.budget();
     let mut records = Vec::new();
@@ -464,8 +506,85 @@ pub fn check<B: Backend>(be: &B) -> Result<Report, OjasError> {
         }
     }
 
+    assert_eq!(
+        records.len(),
+        expected_records,
+        "{} cases should have produced {expected_records} measured ops but \
+         produced {}. An arm stopped recording one of its measurements, so \
+         something the fixture covers is no longer being compared.",
+        cases.len(),
+        records.len()
+    );
+
     Ok(Report {
         cases_run: cases.len(),
+        expected_records,
         records,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn case(op: &str, name: &str) -> GoldenCase {
+        GoldenCase {
+            op: op.into(),
+            name: name.into(),
+            params: Vec::new(),
+            f32_tensors: HashMap::new(),
+            f64_tensors: HashMap::new(),
+            u32_tensors: HashMap::new(),
+        }
+    }
+
+    /// The fixture's own count, re-derived here rather than copied from
+    /// `expected_records`, so the two have to agree independently.
+    #[test]
+    fn expected_records_matches_an_independent_count_of_the_fixture() {
+        let cases = parse();
+        let gelu = cases.iter().filter(|c| c.op == "gelu_tanh").count();
+        let rest = cases.len() - gelu;
+
+        assert_eq!(expected_records(&cases), gelu * 2 + rest);
+
+        // The absolute numbers, pinned. 22 cases produce 26 measured ops: four
+        // gelu_tanh cases forward and backward, plus one each for the other 18.
+        // Before the `seq_mean over_len` case the truth was 25, which is the
+        // number the Metal challenger's floor was written against; the floor
+        // stayed at 25 when the fixture moved to 26.
+        assert_eq!(cases.len(), 22);
+        assert_eq!(expected_records(&cases), 26);
+    }
+
+    #[test]
+    fn gelu_tanh_counts_twice_and_the_other_ops_once() {
+        assert_eq!(expected_records(&[case("gelu_tanh", "standard")]), 2);
+        assert_eq!(expected_records(&[case("seq_mean", "ragged")]), 1);
+        assert_eq!(expected_records(&[case("l2_normalize", "embed_768")]), 1);
+        assert_eq!(expected_records(&[case("rms_qkv_norm", "mha")]), 1);
+        assert_eq!(expected_records(&[case("swa", "basic")]), 1);
+        assert_eq!(
+            expected_records(&[case("gelu_tanh", "a"), case("swa", "b")]),
+            3
+        );
+        assert_eq!(expected_records(&[]), 0);
+    }
+
+    /// An op with no arm must stop the count, not be skipped from it. `check`
+    /// panics on the same input, and a silent zero here would let a new op be
+    /// added to the fixture and never compared against anything.
+    #[test]
+    #[should_panic(expected = "unknown op mystery_op in case speculative")]
+    fn an_op_with_no_arm_refuses_to_be_counted() {
+        expected_records(&[case("mystery_op", "speculative")]);
+    }
+
+    /// `MIN_CASES` is asserted exactly by `check`, so it has to equal what the
+    /// fixture holds. This is the half of that assertion which needs no
+    /// backend, and so runs everywhere.
+    #[test]
+    fn min_cases_equals_what_the_fixture_holds() {
+        assert_eq!(parse().len(), MIN_CASES);
+    }
 }

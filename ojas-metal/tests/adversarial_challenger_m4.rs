@@ -573,10 +573,24 @@ fn test_l2_normalize_forward_fail_closed_eps() {
 fn test_gemma_golden_fixtures_parity_strict() {
     let m = metal();
     let report = check(&m).expect("gemma golden cases run on metal");
-    assert!(
-        report.records.len() >= 25,
-        "Expected at least 25 evaluated ops, got {}",
-        report.records.len()
+    // Not a hand-written floor. This asserted `>= 25` while the fixture had
+    // grown to 26 measured ops, so one could have gone missing and still
+    // passed. `check` now derives the expectation from the parsed cases and
+    // asserts it exactly; what is left for this test is to confirm the report
+    // it was handed is the full one.
+    assert_eq!(
+        report.records.len(),
+        report.expected_records,
+        "Metal evaluated {} of the {} ops the fixture covers",
+        report.records.len(),
+        report.expected_records
+    );
+    assert_eq!(
+        report.cases_run,
+        ojas_oracle::gemma_golden::MIN_CASES,
+        "ran {} cases, fixture pins {}",
+        report.cases_run,
+        ojas_oracle::gemma_golden::MIN_CASES
     );
 
     let mut worst_abs = 0.0f64;
