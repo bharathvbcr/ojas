@@ -98,20 +98,31 @@ printf '%s\n' '[package]' 'name = "a"' '[dependencies]' \
   'ext = { path = "../../nowhere" }' > "$gone/a/Cargo.toml"
 check "$gone" 'MISSING  a/Cargo.toml -> ../../nowhere' "an unresolvable sibling is named"
 
-# 3. The be9e31a guard: every parsed dependency is in-tree, so the parser has
-#    gone blind to the ones this script exists for. TOML's single quotes are
-#    the realistic way that happens, since the parser requires double quotes.
+# 3. Single-quoted TOML must be parsed. `path = '...'` is as valid as
+#    `path = "..."`, and the parser used to require double quotes — so one
+#    dependency rewritten this way went unseen while the script still reported
+#    success. It must now be seen, which here means named as unresolvable.
+quoted="$tmp/quoted"
+fixture "$quoted"
+printf '%s\n' '[workspace]' 'members = ["a"]' > "$quoted/Cargo.toml"
+mkdir -p "$quoted/a"
+printf '%s\n' '[package]' 'name = "a"' '[dependencies]' \
+  "ext = { path = '../../nowhere-quoted' }" > "$quoted/a/Cargo.toml"
+check "$quoted" 'MISSING  a/Cargo.toml -> ../../nowhere-quoted' \
+  "single-quoted TOML is parsed, not skipped"
+
+# 4. The be9e31a guard, tested on its own terms rather than through a parser
+#    weakness: a tree whose only `..` dependencies stay inside the repository.
+#    `checked` is non-zero, so a guard on it could not fire; `external` is zero,
+#    which here means this script is blind to the dependencies it exists for.
 blind="$tmp/blind"
-mkdir -p "$tmp/sibling-for-blind"
 fixture "$blind"
 printf '%s\n' '[workspace]' 'members = ["a","b"]' > "$blind/Cargo.toml"
 mkdir -p "$blind/a" "$blind/b"
 printf '%s\n' '[package]' 'name = "a"' '[dependencies]' \
   'loc = { path = "../b" }' > "$blind/a/Cargo.toml"
-printf '%s\n' '[package]' 'name = "b"' '[dependencies]' \
-  "ext = { path = '../../sibling-for-blind' }" > "$blind/b/Cargo.toml"
-printf '%s\n' '[package]' 'name = "sibling-for-blind"' > "$tmp/sibling-for-blind/Cargo.toml"
-check "$blind" 'NONE of them leaves' "a parser blind to external deps fails closed"
+printf '%s\n' '[package]' 'name = "b"' > "$blind/b/Cargo.toml"
+check "$blind" 'NONE of them leaves' "in-tree deps only cannot satisfy the guard"
 
 # 4. The 6577c1a hole: a manifest below the first level must be read. The old
 #    glob (Cargo.toml */Cargo.toml) could not see this one.

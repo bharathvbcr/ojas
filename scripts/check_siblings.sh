@@ -146,7 +146,7 @@ while IFS= read -r manifest <&3; do
         ;;
     esac
   done <<EOF_PATHS
-$(grep -oE 'path[[:space:]]*=[[:space:]]*"[^"]+"' "$manifest" 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/' || true)
+$(grep -oE "path[[:space:]]*=[[:space:]]*['\"][^'\"]+['\"]" "$manifest" 2>/dev/null | sed -E "s/.*['\"]([^'\"]+)['\"].*/\1/" || true)
 EOF_PATHS
 done 3<<EOF_MANIFESTS
 $manifests
@@ -164,10 +164,12 @@ EOF_MANIFESTS
 # claiming a coverage check that cannot fail. Found by the tessl mirror's
 # verification, which demonstrated it there with a scratch repository.
 #
-# Concretely, the hole this closes: the grep at the top of the loop requires
-# DOUBLE-quoted TOML (`path = "..."`). Rewrite one dependency with TOML's
-# equally valid single quotes and this script stops seeing it — and before this
-# change it would still have printed a reassuring two-digit total.
+# The hole that motivated it: the parser used to require DOUBLE-quoted TOML, so
+# rewriting one dependency with TOML's equally valid single quotes made this
+# script stop seeing it — while still printing a reassuring two-digit total. The
+# parser now accepts both quote forms (tessl's mirror reached the same fix), so
+# that particular blinding is closed; the guard stays, because it is the general
+# backstop for any future parser change, not a patch for one syntax.
 if [ "$external" -eq 0 ]; then
   fail "parsed $checked path dependencies but NONE of them leaves this
        repository. ojas path-depends on tessl (../../tessl) and gusset
