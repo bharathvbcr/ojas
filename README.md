@@ -458,6 +458,7 @@ cd go && PKG_CONFIG_PATH="$PWD" go test -a -tags gusset_pkgconfig -count=1 -time
 * [**Interactive Documentation**](https://ojas.vbcr.dev) ([`site/index.html`](site/index.html)) — Live labs for determinism, memory budgets, device refusal, the panic firewall, and checked shapes, plus the benchmark comparison.
 * [`docs/web-and-domain.md`](docs/web-and-domain.md) — Domain architecture, CNAME routing (`ojas.vbcr.dev`), and deployment topology.
 * [`docs/architecture.md`](docs/architecture.md) — Comprehensive architectural specification and memory layout.
+* [`docs/io-ownership.md`](docs/io-ownership.md) — Owner decision (2026-11-01): ojas owns safetensors IO and checkpoints, tessl's reader is a thin adapter over `ojas-io`'s.
 * [`docs/status.md`](docs/status.md) — Verification run logs, test matrices, and machine profile.
 * [`docs/adaptive-resources.md`](docs/adaptive-resources.md) — System profiling, adaptive resource planning, CPU topology, cache sizing, copy bandwidth, and unified memory governance.
 * [`docs/bench-cpu-vs-torch.md`](docs/bench-cpu-vs-torch.md) — Benchmarks against PyTorch 2.13 CPU (tiny and larger step, single linear), plus Fast/Accelerate, Metal, and wgpu numbers taken under machine load.

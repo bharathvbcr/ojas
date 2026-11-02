@@ -88,6 +88,7 @@
 <li><a href="data-formats.html">Image data formats</a></li>
 <li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
 <li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="io-ownership.html">Decision: ojas owns safetensors IO and checkpoints</a></li>
 <li><a href="modular-extensions.html">Modular Compute Extensions Architecture</a></li>
 <li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
 <li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
@@ -310,7 +311,7 @@
     subgraph Layer1[&#34;1. Core Substrates &amp; Data Ingestion&#34;]
         Core[&#34;ojas-core (Tensor host &amp; device, Layout, Budget, DType, Numerics, OjasError)&#34;]
         Device[&#34;ojas-device (Device kinds, host probe, ResourcePolicy; no router)&#34;]
-        IO[&#34;ojas-io (Safetensors Reader/Writer, Checkpoint v1 Binary Codec)&#34;]
+        IO[&#34;ojas-io (Safetensors Reader/Writer, Checkpoint v1 Binary Codec)&lt;br/&gt;canonical for tessl too — see io-ownership.md&#34;]
         Data[&#34;ojas-data (Dataset Binary Streaming, Deterministic Counter RNG)&#34;]
         Oracle[&#34;ojas-oracle (IEEE-754 f64 Analytical Reference Data)&#34;]
     end
@@ -320,7 +321,8 @@
     Layer3 --&gt; Layer2
     Layer2 --&gt; Layer1
     Layer3 --&gt; Layer1</pre></figure>
-<p>Inside layer 3, <code>ojas-model</code> sits on <code>ojas-autograd</code>, <code>ojas-io</code> and <code>ojas-data</code>, and <code>ojas-infer</code> sits on <code>ojas-model</code>. <code>ojas-capi</code> depends on the model, inference, io, data, cpu, wgpu, metal and device crates. <code>ojas-qwen35</code> depends only on <code>ojas-core</code>, <code>ojas-io</code> and tessl, and is empty off macOS. The design is in <a href="framework-design.html"><code>framework-design.md</code></a>.</p>
+<p>Inside layer 3, <code>ojas-model</code> sits on <code>ojas-autograd</code>, <code>ojas-io</code> and <code>ojas-data</code>, and <code>ojas-infer</code> sits on <code>ojas-model</code>. <code>ojas-capi</code> depends on the model, inference, io, data, cpu, wgpu, metal and device crates. <code>ojas-qwen35</code> depends only on <code>ojas-core</code>, <code>ojas-io</code> and tessl, and is empty off macOS.</p>
+<p><code>ojas-io</code> is the canonical safetensors reader for both repositories: tessl&#39;s <code>safetensors</code> module is a thin adapter over it and holds no parser, and <code>ojas-qwen35</code> opens checkpoints through ojas-io rather than through tessl. The ownership split, what tessl&#39;s adapter keeps as its own policy, and what the deduplication cost are in <a href="io-ownership.html"><code>io-ownership.md</code></a>. The design is in <a href="framework-design.html"><code>framework-design.md</code></a>.</p>
 <hr>
 <h2 id="3-general-purpose-tensor-engine--memory-model">3. General-Purpose Tensor Engine &amp; Memory Model <a class="anchor" href="#3-general-purpose-tensor-engine--memory-model" aria-label="Link to this section">#</a></h2>
 <h3 id="31-tensor-view-model">3.1 Tensor View Model <a class="anchor" href="#31-tensor-view-model" aria-label="Link to this section">#</a></h3>

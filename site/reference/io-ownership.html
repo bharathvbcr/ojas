@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Decision: ojas owns safetensors IO and checkpoints · ojas reference</title>
+  <meta name="description" content="Owner decision, 2026-11-01. The tessl side of this record is tessl/docs/io-ownership.md; the two say the same thing from each repository&#39;s side. This is the IO slice of the ownership split in unifica…">
+  <meta name="keywords" content="ojas, decision: ojas owns safetensors io and checkpoints, rust deep learning, machine learning, pytorch alternative, neural network, autograd, tensors, metal, wgpu">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/io-ownership.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/io-ownership.html">
+  <meta property="og:title" content="Decision: ojas owns safetensors IO and checkpoints · ojas reference">
+  <meta property="og:description" content="Owner decision, 2026-11-01. The tessl side of this record is tessl/docs/io-ownership.md; the two say the same thing from each repository&#39;s side. This is the IO slice of the ownership split in unifica…">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Decision: ojas owns safetensors IO and checkpoints · ojas reference">
+  <meta property="og:locale" content="en_US">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Decision: ojas owns safetensors IO and checkpoints · ojas reference">
+  <meta name="twitter:description" content="Owner decision, 2026-11-01. The tessl side of this record is tessl/docs/io-ownership.md; the two say the same thing from each repository&#39;s side. This is the IO slice of the ownership split in unifica…">
+  <meta name="twitter:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta name="twitter:image:alt" content="Decision: ojas owns safetensors IO and checkpoints · ojas reference">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "Decision: ojas owns safetensors IO and checkpoints · ojas reference",
+    "description": "Owner decision, 2026-11-01. The tessl side of this record is tessl/docs/io-ownership.md; the two say the same thing from each repository's side. This is the IO slice of the ownership split in unifica…",
+    "url": "https://ojas.vbcr.dev/reference/io-ownership.html",
+    "image": "https://ojas.vbcr.dev/assets/ojas-og.png",
+    "author": {
+      "@type": "Person",
+      "name": "Bharath Chandra Vaddaram",
+      "url": "https://bharath.vbcr.dev/"
+    },
+    "publisher": {
+      "@type": "Organization",
+      "name": "ojas",
+      "url": "https://ojas.vbcr.dev"
+    }
+  }
+  </script>
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adapter-checkpoint.html">Adapter checkpoint, layout version 1</a></li>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="data-formats.html">Image data formats</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="io-ownership.html" class="current" aria-current="page">Decision: ojas owns safetensors IO and checkpoints</a></li>
+<li><a href="modular-extensions.html">Modular Compute Extensions Architecture</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="lappi-lora-mac-runbook.html">Runbook: Lappi decision-model LoRA on the M5 Pro, bf16 then quantised (2026-10-17)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="status-archive-2026-10-05.html">ojas Status Archive: test runs through 2026-10-05</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+<li><a href="unification-plan.html">Unification Plan: ojas as the Training Framework, tessl as the Metal Extension</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+<li><a href="bench-plots.html">Benchmark Plots, Every Result Folder</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Design and contracts</p>
+      <article class="prose-ojas">
+<h1 id="decision-ojas-owns-safetensors-io-and-checkpoints">Decision: ojas owns safetensors IO and checkpoints <a class="anchor" href="#decision-ojas-owns-safetensors-io-and-checkpoints" aria-label="Link to this section">#</a></h1>
+<p>Owner decision, 2026-11-01. The tessl side of this record is <a href="https://github.com/bharathvbcr/tessl/blob/main/docs/io-ownership.md" rel="noopener"><code>tessl/docs/io-ownership.md</code></a>; the two say the same thing from each repository&#39;s side. This is the IO slice of the ownership split in <a href="unification-plan.html"><code>unification-plan.md</code></a> (phase P8), and it is the first phase of that plan to land.</p>
+<h2 id="the-decision">The decision <a class="anchor" href="#the-decision" aria-label="Link to this section">#</a></h2>
+<p><strong>ojas owns safetensors IO and checkpoints.</strong> <code>ojas_io::safetensors</code> is the canonical reader. tessl&#39;s <code>safetensors</code> module is a thin adapter over it and holds no parser. This follows the binding direction of 2026-10-31 — ojas is the training framework and owns &#34;checkpoints, IO&#34; — and it reverses, in code, the direction an earlier card had taken.</p>
+<p>Before: two parsers for one format, 2,200 lines in ojas-io and 950 in tessl, kept in step by hand. After: one parser, and an adapter that states what is tessl&#39;s.</p>
+<h2 id="what-lives-where">What lives where <a class="anchor" href="#what-lives-where" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Concern</th><th>Owner</th></tr></thead>
+<tbody>
+<tr><td>Header grammar, schema walk, tiling of the data buffer, dtype widths</td><td><code>ojas-io</code></td></tr>
+<tr><td>Positioned reads, file-identity re-check, index parsing and its byte cap</td><td><code>ojas-io</code></td></tr>
+<tr><td>Shard-name validation, containment, <code>weight_map</code> agreement</td><td><code>ojas-io</code></td></tr>
+<tr><td>The payload budget a caller passes, and the per-read allocation check</td><td><code>ojas-io</code></td></tr>
+<tr><td>tessl&#39;s <code>Dtype</code> (19 variants) and its refusal of the sub-byte floats</td><td><code>tessl</code></td></tr>
+<tr><td>tessl&#39;s <code>String</code> errors and <code>Vec&lt;usize&gt;</code> shapes</td><td><code>tessl</code></td></tr>
+<tr><td>tessl&#39;s physical-memory default when no limit is given</td><td><code>tessl</code></td></tr>
+<tr><td>Mac inference loaders built on the reader (Qwen3.5, MLX Q4, BERT, EmbeddingGemma 2)</td><td><code>tessl</code></td></tr>
+</tbody></table></div>
+<p>Three things are deliberately not shared, and each is a decision rather than an oversight:</p>
+<ul>
+<li><strong><code>None</code> means different things.</strong> In ojas-io a <code>None</code> payload limit is unbounded: it validates a header without loading the file and reads tensor bytes positioned from disk, so opening a checkpoint larger than memory is a legitimate thing to do, and the read path bounds its allocations fallibly. In tessl <code>None</code> means this machine&#39;s physical memory, because its loaders hand whole tensors to host code. That default is tessl policy and lives in tessl&#39;s adapter.
+</li>
+<li><strong>Sub-byte floats.</strong> ojas-io supports <code>F4</code>, <code>F6_E2M3</code> and <code>F6_E3M2</code> on a checked path: it sizes them from their bit width and refuses any span that is not bit-exact. tessl declines them, because every path below its reader is written in whole bytes. The refusal is <code>TryFrom&lt;StDtype&gt; for Dtype</code>, so it is enforced by the type at open rather than documented. <code>pub type Dtype = StDtype</code> was rejected: it would put three variants in tessl&#39;s namespace and break four exhaustive matches in <code>tessl/src/qwen35.rs</code>.
+</li>
+<li><strong>Header amplification.</strong> ojas-io budgets the JSON tree as it builds it (<code>8 * input + 64 KiB</code>) and refuses a header that would exceed it; tessl&#39;s reader had no such bound. ojas-io is the stricter of the two and stays that way, so tessl can no longer open a header made almost entirely of shape dimensions — above about 8 KiB of dimension text, measured at 4,099 dimensions in <code>ojas-io/tests/header_amplification.rs</code>. No model writes such a header; real tensors have rank 5 at most and the 2B&#39;s whole header is about 90 KB.
+</li>
+</ul>
+<h2 id="what-ojas-io-absorbed-first-and-why-the-order-mattered">What ojas-io absorbed first, and why the order mattered <a class="anchor" href="#what-ojas-io-absorbed-first-and-why-the-order-mattered" aria-label="Link to this section">#</a></h2>
+<p>tessl&#39;s reader was <strong>stricter</strong> than ojas-io&#39;s in several places. Deduplicating in the other order would have dropped each of those bounds silently, so ojas-io absorbed them first, each with a test that fails against the pre-change code. Four of the eight were anticipated; four were found by reading tessl&#39;s suite and by running ojas-qwen35&#39;s adversarial cases against the migrated path.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>#</th><th>What was missing in ojas-io</th><th>Found by</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>SafeTensors::open_with_limit</code>: the only bounded way in was <code>CheckpointView</code></td><td>card</td></tr>
+<tr><td>2</td><td>A per-read budget check — widening BF16 to f32 asks for twice the declared bytes</td><td>card</td></tr>
+<tr><td>3</td><td>The limit reaching each shard&#39;s reader, so reads through a view are bounded</td><td>card</td></tr>
+<tr><td>4</td><td>The limit honoured on a single-file checkpoint (fixed earlier, in 9c5e784)</td><td>card</td></tr>
+<tr><td>5</td><td>File-identity re-check on every read, so a file rewritten in place is refused instead of read through stale offsets</td><td>reading tessl&#39;s suite</td></tr>
+<tr><td>6</td><td>A byte cap and a regular-file check on the checkpoint index</td><td>diffing the two <code>open_index</code> bodies</td></tr>
+<tr><td>7</td><td>Order-independent shape overflow: <code>[2^32, 2^32, 0]</code> was refused while <code>[0, 2^32, 2^32]</code> — the same empty tensor — opened</td><td>reading tessl&#39;s <code>checked_numel</code></td></tr>
+<tr><td>8</td><td>A FIFO named as a shard <strong>hung</strong> the reader instead of being refused</td><td>running the 26 adversarial cases</td></tr>
+</tbody></table></div>
+<p>Item 8 is the one that matters most: it is a hang, not a missing bound. <code>SafeTensors::open</code> called <code>File::open</code> and left the regular-file check until after it returned, and opening a FIFO for reading blocks until a writer appears. Migrating the loader onto this reader without fixing it would have turned a refusal into a denial of service on a hostile checkpoint. <code>open::open_regular_file</code> is the one owner of that refusal now.</p>
+<h2 id="what-became-of-ft-02256073">What became of ft-02256073 <a class="anchor" href="#what-became-of-ft-02256073" aria-label="Link to this section">#</a></h2>
+<p><strong>Re-pointed and kept, not superseded.</strong> That card routed ojas-qwen35&#39;s sharded loading through tessl&#39;s <code>CheckpointView</code> and verified it properly. Its work is merged (<code>4affd09</code> is an ancestor of <code>main</code>), and its 26-case <code>ojas-qwen35/tests/sharded_checkpoint_adversarial.rs</code> is the acceptance bar this change inherited and passes <strong>unchanged, 26/26</strong> — symlink-followed, escaping-shard-name, symlink-loop, dangling-link, oversize-header and FIFO cases included. Not one assertion was edited. What changed is only which reader sits underneath.</p>
+<p>Two runs before that did not pass, and both found real defects rather than test drift: the first hung on the FIFO case (item 8), the second failed two cases that assert a refused index names the index file, which ojas-io&#39;s <code>open_index</code> had stopped doing.</p>
+<h2 id="the-ojastessl-path-cycle-survives-this">The ojas/tessl path cycle survives this <a class="anchor" href="#the-ojastessl-path-cycle-survives-this" aria-label="Link to this section">#</a></h2>
+<p>Removing the safetensors strand does <strong>not</strong> break the cycle. <code>ojas-qwen35/src/config.rs</code> still uses <code>tessl::qwen35_model::Qwen35Config</code>, <code>tessl::gdn_train::{GDN_TRAIN_DK, GDN_TRAIN_BV}</code>, <code>tessl::qwen35::GDN_KEY_DIM</code> and <code>tessl::attn_train::ATTN_TRAIN_HEAD_DIM</code> to validate a config against the kernels that will run it, and <code>ojas-metal</code> depends on tessl by design. So <code>ojas-qwen35</code> still path-depends on tessl, and an ojas worktree at a second path still cannot build (tessl declares <code>links = &#34;tessl&#34;</code>, so every crate in one build must point at one tessl path; a worktree gets a lockfile collision and exits 101). What this change removes is one strand of the cycle, not the cycle.</p>
+<p>A note for whoever takes the MSRV decision (D2 in the plan): tessl already declared <code>ojas-io</code> as a path dependency before this change and used it nowhere, so no Cargo change and no MSRV ask was needed here. tessl declares <code>rust-version = &#34;1.82&#34;</code> while ojas&#39;s workspace floor is <code>1.97</code>, which is a standing inconsistency this change neither created nor fixed.</p>
+<h2 id="verification">Verification <a class="anchor" href="#verification" aria-label="Link to this section">#</a></h2>
+<p>Counts from running, not inferred. The ojas-io baseline at <code>9c5e784</code> was 161 passed over 12 binaries.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Suite</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td><code>ojas-io</code></td><td>181 passed, 0 failed, 14 binaries</td></tr>
+<tr><td><code>ojas-qwen35</code> <code>sharded_checkpoint_adversarial</code></td><td>26 passed, 0 failed</td></tr>
+<tr><td>tessl <code>--test safetensors</code></td><td>12 passed, 0 failed, 1 ignored</td></tr>
+<tr><td>tessl <code>--test reader_bounds</code></td><td>12 passed, 0 failed, no edit to the file</td></tr>
+<tr><td>tessl <code>--lib parser_mutation::</code></td><td>16 passed, 0 failed</td></tr>
+</tbody></table></div>
+<p><code>tessl/tests/safetensors.rs</code> kept its rejection semantics: of the 52 malformed inputs it covers, 42 keep their exact needle and 10 are the same refusal in different words, each annotated in place with the needle it had. No test was deleted or weakened. One contract was changed deliberately — the header amplification bound above — and <code>ojas-io/tests/tessl_rejection_corpus.rs</code> now holds tessl&#39;s whole rejection corpus against the reader underneath, so a future ojas-io change cannot quietly widen what a checkpoint may be.</p>
+<p>The ignored tessl test is <code>opens_the_qwen35_2b_checkpoint</code>, which needs the 4.5 GB file from the Hugging Face cache; it was ignored before this change too.</p>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/docs/io-ownership.md" rel="noopener"><code>docs/io-ownership.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="framework-design.html" rel="prev"><span>Previous</span>Framework layer design (approved; items 1–13 landed)</a>
+        <a href="modular-extensions.html" rel="next" class="next"><span>Next</span>Modular Compute Extensions Architecture</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#the-decision">The decision</a></li>
+<li><a href="#what-lives-where">What lives where</a></li>
+<li><a href="#what-ojas-io-absorbed-first-and-why-the-order-mattered">What ojas-io absorbed first, and why the order mattered</a></li>
+<li><a href="#what-became-of-ft-02256073">What became of ft-02256073</a></li>
+<li><a href="#the-ojastessl-path-cycle-survives-this">The ojas/tessl path cycle survives this</a></li>
+<li><a href="#verification">Verification</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>

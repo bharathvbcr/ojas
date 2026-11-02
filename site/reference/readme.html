@@ -88,6 +88,7 @@
 <li><a href="data-formats.html">Image data formats</a></li>
 <li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
 <li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="io-ownership.html">Decision: ojas owns safetensors IO and checkpoints</a></li>
 <li><a href="modular-extensions.html">Modular Compute Extensions Architecture</a></li>
 <li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
 <li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
@@ -608,6 +609,8 @@ cd go &amp;&amp; PKG_CONFIG_PATH=&#34;$PWD&#34; go test -a -tags gusset_pkgconfi
 <li><a href="https://github.com/bharathvbcr/ojas/blob/main/docs/web-and-domain.md" rel="noopener"><code>docs/web-and-domain.md</code></a> — Domain architecture, CNAME routing (<code>ojas.vbcr.dev</code>), and deployment topology.
 </li>
 <li><a href="architecture.html"><code>docs/architecture.md</code></a> — Comprehensive architectural specification and memory layout.
+</li>
+<li><a href="io-ownership.html"><code>docs/io-ownership.md</code></a> — Owner decision (2026-11-01): ojas owns safetensors IO and checkpoints, tessl&#39;s reader is a thin adapter over <code>ojas-io</code>&#39;s.
 </li>
 <li><a href="status.html"><code>docs/status.md</code></a> — Verification run logs, test matrices, and machine profile.
 </li>

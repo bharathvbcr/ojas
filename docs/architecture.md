@@ -150,7 +150,7 @@ flowchart TD
     subgraph Layer1["1. Core Substrates & Data Ingestion"]
         Core["ojas-core (Tensor host & device, Layout, Budget, DType, Numerics, OjasError)"]
         Device["ojas-device (Device kinds, host probe, ResourcePolicy; no router)"]
-        IO["ojas-io (Safetensors Reader/Writer, Checkpoint v1 Binary Codec)"]
+        IO["ojas-io (Safetensors Reader/Writer, Checkpoint v1 Binary Codec)<br/>canonical for tessl too — see io-ownership.md"]
         Data["ojas-data (Dataset Binary Streaming, Deterministic Counter RNG)"]
         Oracle["ojas-oracle (IEEE-754 f64 Analytical Reference Data)"]
     end
@@ -162,7 +162,9 @@ flowchart TD
     Layer3 --> Layer1
 ```
 
-Inside layer 3, `ojas-model` sits on `ojas-autograd`, `ojas-io` and `ojas-data`, and `ojas-infer` sits on `ojas-model`. `ojas-capi` depends on the model, inference, io, data, cpu, wgpu, metal and device crates. `ojas-qwen35` depends only on `ojas-core`, `ojas-io` and tessl, and is empty off macOS. The design is in [`framework-design.md`](framework-design.md).
+Inside layer 3, `ojas-model` sits on `ojas-autograd`, `ojas-io` and `ojas-data`, and `ojas-infer` sits on `ojas-model`. `ojas-capi` depends on the model, inference, io, data, cpu, wgpu, metal and device crates. `ojas-qwen35` depends only on `ojas-core`, `ojas-io` and tessl, and is empty off macOS.
+
+`ojas-io` is the canonical safetensors reader for both repositories: tessl's `safetensors` module is a thin adapter over it and holds no parser, and `ojas-qwen35` opens checkpoints through ojas-io rather than through tessl. The ownership split, what tessl's adapter keeps as its own policy, and what the deduplication cost are in [`io-ownership.md`](io-ownership.md). The design is in [`framework-design.md`](framework-design.md).
 
 ---
 
