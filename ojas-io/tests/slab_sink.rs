@@ -392,11 +392,20 @@ fn offsets_past_eof_overlap_and_a_truncated_file_are_refused_before_any_slab_rea
 }
 
 /// The header is checked against the file's length when it is opened, but the
-/// file can shrink afterwards. A read of the missing bytes is an error naming
-/// the tensor, never a short or zero-filled success; a tensor before the cut
-/// still reads exactly.
+/// file can shrink afterwards. Every read through that reader is then an error
+/// naming the tensor, never a short or zero-filled success.
+///
+/// This used to assert as well that "a tensor before the cut still reads
+/// exactly". The identity re-check retires that deliberately: the header's
+/// offsets describe the file as it was at open, so once the file has changed
+/// the reader cannot tell which offsets still mean what they did, and
+/// answering for the ranges that happen to survive is a guess. It refuses
+/// every read instead, which is the contract tessl's reader already had and
+/// the one this reader now owns for both. What the test still pins is the part
+/// that matters: an error that names the tensor, and a caller buffer left
+/// untouched.
 #[test]
-fn a_file_cut_short_after_open_is_an_error_on_the_missing_tensor_only() {
+fn a_file_cut_short_after_open_is_an_error_on_every_read() {
     let fx = fixtures();
     let bytes = encode(&fx);
     let f = tmp("cut");
@@ -410,15 +419,28 @@ fn a_file_cut_short_after_open_is_an_error_on_the_missing_tensor_only() {
 
     let mut h = vec![SENT; h_len];
     let err = st.read_tensor_into("h", &mut h).unwrap_err();
-    assert!(err.detail().starts_with("h: data:"), "{err}");
+    assert!(err.detail().starts_with("h: "), "{err}");
+    assert!(
+        err.detail().contains("file changed since it was opened"),
+        "{err}"
+    );
+    assert!(h.iter().all(|&b| b == SENT), "the destination was written");
 
+    // The tensor wholly before the cut is refused too, and by the same check.
     let mut ids = vec![SENT; 24];
-    st.read_tensor_into("ids", &mut ids).unwrap();
-    assert_eq!(ids, fx.iter().find(|f| f.name == "ids").unwrap().data);
+    let err = st.read_tensor_into("ids", &mut ids).unwrap_err();
+    assert!(
+        err.detail().contains("file changed since it was opened"),
+        "{err}"
+    );
+    assert!(ids.iter().all(|&b| b == SENT), "the destination was written");
 
     let mut slab = vec![SENT; 1 << 13];
     let err = st.read_into_slab(&["ids", "h"], 8, &mut slab).unwrap_err();
-    assert!(err.detail().starts_with("h: data:"), "{err}");
+    assert!(
+        err.detail().contains("file changed since it was opened"),
+        "{err}"
+    );
 }
 
 #[test]

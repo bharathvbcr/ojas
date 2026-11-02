@@ -247,11 +247,68 @@ pub struct TensorSpec<'a> {
     pub shape: &'a [u64],
 }
 
+/// What identifies a file's contents at one moment: size, modification time
+/// (to the nanosecond), inode and device.
+///
+/// [`SafeTensors::from_file_with_limit`] records it and every read re-checks
+/// it on the same handle (`fstat`, so no path swap matters); a mismatch is a
+/// "changed since it was opened" error. A file rewritten in place after the
+/// header was validated would otherwise be read with the old header's offsets
+/// and yield plausible wrong weights, which is worse than a refusal. Limits
+/// and consequences, by design:
+///
+/// * a rename-replace at the path is not detected, and must not be: the handle
+///   still names the old inode, so reads keep serving that file's own
+///   consistent bytes;
+/// * a metadata-only change (`touch`) changes the mtime and so refuses the
+///   next read: it fails closed rather than guessing the contents are
+///   unchanged;
+/// * a rewrite that restores the mtime (`utimes`) is not detected;
+/// * the stamp is checked before and after each positioned read, which
+///   narrows a rewrite racing a read to one entirely inside one nanosecond
+///   tick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FileStamp {
+    len: u64,
+    mtime: (i64, i64),
+    ino: u64,
+    dev: u64,
+}
+
+impl FileStamp {
+    fn of(f: &File) -> std::io::Result<Self> {
+        use std::os::unix::fs::MetadataExt;
+        let md = f.metadata()?;
+        Ok(Self {
+            len: md.len(),
+            mtime: (md.mtime(), md.mtime_nsec()),
+            ino: md.ino(),
+            dev: md.dev(),
+        })
+    }
+
+    /// Err if `f` no longer matches `self`.
+    fn recheck(&self, f: &File) -> Result<(), IoError> {
+        let now = Self::of(f).map_err(|e| IoError::new(e.to_string()))?;
+        if now != *self {
+            return Err(IoError::new(format!(
+                "file changed since it was opened (was {self:?}, now {now:?}); \
+                 refusing to read it with the old header's offsets"
+            )));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 enum Source<'a> {
     File {
         file: File,
         data_start: u64,
+        /// The handle's identity when its header was validated. Checked on
+        /// every read: one `fstat` per positioned chunk either side, which is
+        /// far below the cost of the chunk's own I/O.
+        stamp: FileStamp,
     },
     /// Data buffer only (the bytes after the header). Used by [`SafeTensors::parse`].
     Memory {
@@ -266,6 +323,10 @@ enum Source<'a> {
 #[derive(Debug)]
 pub struct SafeTensors<'a> {
     source: Source<'a>,
+    /// The caller's payload budget, applied to the header's declared bytes at
+    /// open and again to each read's own allocation. `None` is unbounded; see
+    /// [`check_payload_budget`] for why that is deliberate here.
+    limit: Option<u64>,
     tensors: BTreeMap<String, TensorInfo>,
     metadata: BTreeMap<String, String>,
 }
@@ -273,13 +334,21 @@ pub struct SafeTensors<'a> {
 impl<'a> SafeTensors<'a> {
     /// Validate `bytes` as a whole file. Does not touch the filesystem.
     pub fn parse(bytes: &'a [u8]) -> Result<Self, IoError> {
+        Self::parse_with_limit(bytes, None)
+    }
+
+    /// [`Self::parse`], refusing a buffer whose declared tensor bytes exceed
+    /// `limit`, which also bounds every later read's own allocation.
+    pub fn parse_with_limit(bytes: &'a [u8], limit: Option<u64>) -> Result<Self, IoError> {
         let (header, data_start, data_len) = split_header(bytes, bytes.len() as u64)?;
         let (tensors, metadata) = parse_header(&header, data_len)?;
+        check_payload_budget("declared tensor bytes", data_len, limit)?;
         let data = bytes
             .get(data_start as usize..)
             .ok_or_else(|| IoError::new("truncated file"))?;
         Ok(Self {
             source: Source::Memory { data },
+            limit,
             tensors,
             metadata,
         })
@@ -287,9 +356,19 @@ impl<'a> SafeTensors<'a> {
 
     /// Open `path` and validate its header. Tensor bytes stay on disk.
     pub fn open(path: &Path) -> Result<SafeTensors<'static>, IoError> {
+        Self::open_with_limit(path, None)
+    }
+
+    /// [`Self::open`], refusing before any payload allocation a file whose
+    /// declared tensor bytes exceed `limit`. The same budget is applied again
+    /// to each read's own allocation, because a read can allocate more than
+    /// the file declares: a 16-bit tensor widened to f32 takes twice its
+    /// stored bytes. `None` is unbounded.
+    pub fn open_with_limit(path: &Path, limit: Option<u64>) -> Result<SafeTensors<'static>, IoError> {
         let what = path.display();
         let file = File::open(path).map_err(|e| IoError::new(format!("{what}: {e}")))?;
-        Self::from_file(file).map_err(|e| IoError::new(format!("{what}: {}", e.detail())))
+        Self::from_file_with_limit(file, limit)
+            .map_err(|e| IoError::new(format!("{what}: {}", e.detail())))
     }
 
     /// Validate the header of a file the caller already opened, for example
@@ -298,11 +377,24 @@ impl<'a> SafeTensors<'a> {
     /// a FIFO cannot block the read. Reads are positioned: the file's cursor
     /// is neither used nor moved.
     pub fn from_file(file: File) -> Result<SafeTensors<'static>, IoError> {
+        Self::from_file_with_limit(file, None)
+    }
+
+    /// [`Self::from_file`] under the payload budget [`Self::open_with_limit`]
+    /// describes.
+    pub fn from_file_with_limit(
+        file: File,
+        limit: Option<u64>,
+    ) -> Result<SafeTensors<'static>, IoError> {
         let meta = file.metadata().map_err(|e| IoError::new(e.to_string()))?;
         if !meta.is_file() {
             return Err(IoError::new("not a regular file"));
         }
-        let file_len = meta.len();
+        // One `fstat` is the source of both the length the header is validated
+        // against and the identity every read re-checks, so a rewrite between
+        // two of them cannot leave the two disagreeing.
+        let stamp = FileStamp::of(&file).map_err(|e| IoError::new(e.to_string()))?;
+        let file_len = stamp.len;
         if file_len < 8 {
             return Err(IoError::new(format!(
                 "truncated file: header length needs 8 bytes, the file has {file_len}"
@@ -321,12 +413,31 @@ impl<'a> SafeTensors<'a> {
         header.resize(n_us, 0);
         read_exact_at(&file, &mut header, 8).map_err(|e| IoError::new(format!("header: {e}")))?;
         let data_start = 8 + n;
-        let (tensors, metadata) = parse_header(&header, file_len - data_start)?;
+        let data_len = file_len - data_start;
+        let (tensors, metadata) = parse_header(&header, data_len)?;
+        check_payload_budget("declared tensor bytes", data_len, limit)?;
         Ok(SafeTensors {
-            source: Source::File { file, data_start },
+            source: Source::File {
+                file,
+                data_start,
+                stamp,
+            },
+            limit,
             tensors,
             metadata,
         })
+    }
+
+    /// Refuse, before it is made, an allocation of `elems` elements of
+    /// `elem_size` bytes that exceeds the payload budget.
+    ///
+    /// `open` bounds what the header declares; a read can allocate more than
+    /// that, so each allocating read is checked against the same budget
+    /// through this one owner. The `_into` readers write into storage the
+    /// caller already owns and so have nothing to bound here.
+    fn check_alloc(&self, name: &str, elems: usize, elem_size: usize) -> Result<(), IoError> {
+        let bytes = (elems as u64).saturating_mul(elem_size as u64);
+        check_payload_budget(&format!("{name}: read allocation"), bytes, self.limit)
     }
 
     pub fn names(&self) -> impl Iterator<Item = &str> {
@@ -377,12 +488,22 @@ impl<'a> SafeTensors<'a> {
                 dst.copy_from_slice(src);
                 Ok(())
             }
-            Source::File { file, data_start } => {
+            Source::File {
+                file,
+                data_start,
+                stamp,
+            } => {
                 let abs = data_start
                     .checked_add(at)
                     .ok_or_else(|| IoError::new(format!("{name}: file offset overflows")))?;
+                // From the handle whose header was validated, never the path
+                // again, and only while that handle still names the same
+                // contents. A truncation of this file is caught here rather
+                // than coming back as short data.
+                stamp.recheck(file).map_err(|e| IoError::new(format!("{name}: {}", e.detail())))?;
                 read_exact_at(file, dst, abs)
-                    .map_err(|e| IoError::new(format!("{name}: data: {e}")))
+                    .map_err(|e| IoError::new(format!("{name}: data: {e}")))?;
+                stamp.recheck(file).map_err(|e| IoError::new(format!("{name}: {}", e.detail())))
             }
         }
     }
@@ -391,6 +512,7 @@ impl<'a> SafeTensors<'a> {
         let info = self.info(name)?;
         let len = usize::try_from(info.end - info.begin)
             .map_err(|_| IoError::new(format!("{name}: tensor too large for this host")))?;
+        self.check_alloc(name, len, 1)?;
         let mut dst = Vec::new();
         dst.try_reserve_exact(len)
             .map_err(|_| IoError::new(format!("{name}: allocation of {len} bytes refused")))?;
@@ -468,6 +590,9 @@ impl<'a> SafeTensors<'a> {
         }
         let count = usize::try_from(span / width_u64)
             .map_err(|_| IoError::new(format!("{name}: tensor too large for this host")))?;
+        // The output, not the stored bytes: widening BF16 to f32 asks for
+        // twice what the header declared, which `open`'s budget did not bound.
+        self.check_alloc(name, count, std::mem::size_of::<T>())?;
         let mut values = Vec::new();
         values
             .try_reserve_exact(count)
@@ -747,9 +872,10 @@ impl CheckpointView {
     }
 
     fn open_single(path: &Path, limit: Option<u64>) -> Result<Self, IoError> {
-        let st = SafeTensors::open(path)?;
+        // The budget is the reader's own now, so it holds for the shard's
+        // header at open and for every read made through it afterwards.
+        let st = SafeTensors::open_with_limit(path, limit)?;
         let what = path.display().to_string();
-        check_payload_budget(&what, declared_bytes(&st), limit)?;
         let owner = st.names().map(|n| (n.to_string(), 0)).collect();
         Ok(Self {
             what,
@@ -777,7 +903,10 @@ impl CheckpointView {
         let mut owner = BTreeMap::new();
         let mut declared = 0u64;
         for (i, ((file, path), names)) in paths.iter().zip(by_file.values()).enumerate() {
-            let st = SafeTensors::open(path)?;
+            // Per shard, inside the reader (so the shard's own reads stay
+            // bounded too), and then cumulatively across the shards opened so
+            // far: an oversized shard is named before the rest are touched.
+            let st = SafeTensors::open_with_limit(path, limit)?;
             declared = declared.saturating_add(declared_bytes(&st));
             check_payload_budget(&what, declared, limit)?;
             for n in names {
@@ -1803,6 +1932,187 @@ mod tests {
         CheckpointView::open(&path.0).unwrap();
     }
 
+    /// `SafeTensors` itself takes a payload budget, so a caller that opens one
+    /// file does not have to go through `CheckpointView` to get the bound.
+    ///
+    /// Before this, `SafeTensors::open_with_limit` did not exist: the only
+    /// bounded way in was `CheckpointView`, and a direct `SafeTensors::open`
+    /// was unbounded whatever the caller wanted.
+    #[test]
+    fn safetensors_open_is_held_to_the_payload_budget() {
+        let path = tmp("budget_st");
+        let t = [Owned {
+            name: "w".into(),
+            dtype: StDtype::F32,
+            shape: vec![2, 3],
+            data: vec![0u8; 24],
+        }];
+        write_safetensors(&path.0, &items(&t), &[]).unwrap();
+
+        let err = SafeTensors::open_with_limit(&path.0, Some(23)).unwrap_err();
+        assert!(
+            err.detail().contains("payload budget exceeded"),
+            "expected a budget refusal, got: {}",
+            err.detail()
+        );
+        // Exactly the budget is allowed, and no budget is unbounded.
+        SafeTensors::open_with_limit(&path.0, Some(24)).unwrap();
+        SafeTensors::open(&path.0).unwrap();
+
+        // The same bound on the in-memory route.
+        let bytes = std::fs::read(&path.0).unwrap();
+        assert!(SafeTensors::parse_with_limit(&bytes, Some(23))
+            .unwrap_err()
+            .detail()
+            .contains("payload budget exceeded"));
+        SafeTensors::parse_with_limit(&bytes, Some(24)).unwrap();
+    }
+
+    /// A read is held to the budget as well as the open, because a read can
+    /// allocate more than the header declares.
+    ///
+    /// Widening BF16 to f32 asks for twice the stored bytes. `open`'s check
+    /// sees only the declared 16, so a budget of 16 used to admit a 32-byte
+    /// allocation: the bound the caller asked for did not hold where it
+    /// mattered. Nothing but the read itself can catch this.
+    #[test]
+    fn a_read_is_held_to_the_payload_budget_the_open_passed() {
+        let path = tmp("budget_read");
+        let t = [Owned {
+            name: "w".into(),
+            dtype: StDtype::BF16,
+            shape: vec![8],
+            data: vec![0u8; 16],
+        }];
+        write_safetensors(&path.0, &items(&t), &[]).unwrap();
+
+        // 16 declared bytes, so the open passes at exactly 16.
+        let st = SafeTensors::open_with_limit(&path.0, Some(16)).unwrap();
+        // Reading the stored bits is 16 bytes and still fits.
+        assert_eq!(st.read_bf16_bits("w").unwrap().1.len(), 8);
+        // Widening to f32 wants 8 * 4 = 32, above the budget: refused.
+        let err = st.read_f32_widened("w").unwrap_err();
+        assert!(
+            err.detail().contains("payload budget exceeded"),
+            "expected a read-allocation refusal, got: {}",
+            err.detail()
+        );
+        // With room for the widened result it reads.
+        let st = SafeTensors::open_with_limit(&path.0, Some(32)).unwrap();
+        assert_eq!(st.read_f32_widened("w").unwrap().1.len(), 8);
+    }
+
+    /// Every shard carries the budget, so reads made through a sharded view
+    /// are bounded too, not only the open.
+    ///
+    /// `open_index` summed the shards and checked the total, but opened each
+    /// shard with `SafeTensors::open`, which had no budget. The view was
+    /// bounded; the reads through it were not.
+    #[test]
+    fn a_shard_read_is_held_to_the_budget_the_view_was_given() {
+        let dir = tmp_dir("budget_shard");
+        let t = [Owned {
+            name: "w".into(),
+            dtype: StDtype::BF16,
+            shape: vec![8],
+            data: vec![0u8; 16],
+        }];
+        let shard = dir.0.join("model-00001-of-00001.safetensors");
+        write_safetensors(&shard, &items(&t), &[]).unwrap();
+        let index = dir.0.join(INDEX_FILE_NAME);
+        std::fs::write(
+            &index,
+            br#"{"weight_map":{"w":"model-00001-of-00001.safetensors"}}"#,
+        )
+        .unwrap();
+
+        let view = CheckpointView::open_with_limit(&index, Some(16)).unwrap();
+        // The stored bits fit; the widened read does not.
+        assert_eq!(view.shard("w").unwrap().read_bf16_bits("w").unwrap().1.len(), 8);
+        let err = TensorSource::read_f32(&view, "w").unwrap_err();
+        assert!(
+            err.detail().contains("payload budget exceeded"),
+            "expected a read-allocation refusal through the shard, got: {}",
+            err.detail()
+        );
+    }
+
+    /// A file rewritten under an open reader fails the read instead of
+    /// serving the old header's offsets over new bytes.
+    ///
+    /// The header is validated once, at open; the offsets in it only describe
+    /// the bytes that were there then. Reading a rewritten file through them
+    /// returns whatever now sits at those positions, which is a model that
+    /// loads and answers wrongly. The identity re-check turns that into a
+    /// refusal. A truncation is the cheapest case to pin: it used to come back
+    /// as short data, or as the right length of the wrong bytes.
+    #[test]
+    fn a_read_refuses_a_file_that_changed_since_it_was_opened() {
+        let path = tmp("stamp_trunc");
+        let t = [Owned {
+            name: "w".into(),
+            dtype: StDtype::F32,
+            shape: vec![2],
+            data: 1.0f32
+                .to_le_bytes()
+                .iter()
+                .chain(2.0f32.to_le_bytes().iter())
+                .copied()
+                .collect(),
+        }];
+        write_safetensors(&path.0, &items(&t), &[]).unwrap();
+        let st = SafeTensors::open(&path.0).unwrap();
+        // It reads before anything changes.
+        assert_eq!(st.read_f32("w").unwrap().1, vec![1.0, 2.0]);
+
+        let len = std::fs::metadata(&path.0).unwrap().len();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path.0)
+            .unwrap()
+            .set_len(len - 2)
+            .unwrap();
+        let err = st.read_f32("w").unwrap_err();
+        assert!(
+            err.detail().contains("file changed since it was opened"),
+            "expected the identity re-check to refuse, got: {}",
+            err.detail()
+        );
+    }
+
+    /// A different file at the same path does not reach an open reader: reads
+    /// go to the handle whose header was validated, so they keep serving that
+    /// file's own consistent bytes.
+    ///
+    /// This is the deliberate limit of the stamp above, and the reason it is
+    /// built on `fstat` of the handle rather than on the path.
+    #[test]
+    fn a_read_comes_from_the_opened_file_even_if_the_path_is_replaced() {
+        let dir = tmp_dir("stamp_swap");
+        let first = dir.0.join("a.safetensors");
+        let t = [Owned {
+            name: "w".into(),
+            dtype: StDtype::F32,
+            shape: vec![1],
+            data: 3.0f32.to_le_bytes().to_vec(),
+        }];
+        write_safetensors(&first, &items(&t), &[]).unwrap();
+        let st = SafeTensors::open(&first).unwrap();
+
+        // A new inode with other bytes is renamed over the path.
+        let second = dir.0.join("b.safetensors");
+        let other = [Owned {
+            name: "w".into(),
+            dtype: StDtype::F32,
+            shape: vec![1],
+            data: 9.0f32.to_le_bytes().to_vec(),
+        }];
+        write_safetensors(&second, &items(&other), &[]).unwrap();
+        std::fs::rename(&second, &first).unwrap();
+
+        assert_eq!(st.read_f32("w").unwrap().1, vec![3.0]);
+    }
+
     fn items(t: &[Owned]) -> Vec<TensorOut<'_>> {
         t.iter()
             .map(|o| TensorOut {
@@ -2178,14 +2488,30 @@ mod tests {
         let mut whole = [0u8; 4];
         opened.read_into("b", 0, &mut whole).unwrap();
         assert_eq!(whole, [0xAA, 0xBB, 0xCC, 0xDD]);
-        // Poison the on-disk prefix. 'b' is a positioned read and stays put.
+        // Poison the on-disk prefix, which is 'a''s range and not 'b''s.
+        //
+        // This used to assert that reading 'b' still returned its own bytes:
+        // the read is positioned, so a rewrite elsewhere in the file did not
+        // reach it. That is true of the bytes and was the wrong thing to
+        // promise. The header 'b''s offsets came from describes the file as it
+        // was at open, and an in-place rewrite can move what those offsets
+        // mean; a reader that answers anyway is guessing. The identity
+        // re-check retires that expectation deliberately and refuses instead,
+        // which is the stronger contract and the one tessl's reader already
+        // had.
         let mut poisoned = bytes.clone();
         let data_at = 8 + header.len();
         poisoned[data_at..data_at + 4].fill(0xA5);
         std::fs::write(&path.0, &poisoned).unwrap();
         let mut again = [0u8; 4];
-        opened.read_into("b", 0, &mut again).unwrap();
-        assert_eq!(again, [0xAA, 0xBB, 0xCC, 0xDD], "read returned the prefix");
+        let err = opened.read_into("b", 0, &mut again).unwrap_err();
+        assert!(
+            err.detail().contains("file changed since it was opened"),
+            "an in-place rewrite must refuse, not answer from stale offsets: {}",
+            err.detail()
+        );
+        // And nothing was written into the caller's buffer.
+        assert_eq!(again, [0u8; 4]);
     }
 
     #[test]
