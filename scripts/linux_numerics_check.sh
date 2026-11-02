@@ -7,22 +7,40 @@
 # platform the workspace builds on. Those digests were produced on an
 # Apple-silicon Mac; CI's Linux job runs x86-64 (`ubuntu-latest`).
 #
-# Whether they hold there has been *inferred* and never measured — it has been
-# listed as a Linux CI blocker on the strength of reading the file, which is not
-# evidence. This script measures it, so the question stops being an opinion.
+# ANSWERED for amd64, 2026-11-01, and not by this script. Read this before
+# spending a VM on it.
 #
-# Two questions, deliberately separated, because the file's digests could be
-# wrong for either reason and the fixes differ:
+# The header used to say the question "has been *inferred* and never measured".
+# That was wrong: CI's `linux (fmt, clippy, test)` job runs
+# `cargo test --workspace --release` on ubuntu-24.04, which includes ojas-cpu,
+# so it has measured this on every push for as long as the test has existed.
 #
-#   linux/arm64  — same architecture, different OS and libm. Isolates "did we
-#                  pin Apple's libm?" A failure here is about the exp/softmax
-#                  implementation, not about SIMD width.
-#   linux/amd64  — CI's actual target. Isolates "did we pin aarch64?" This is
-#                  the arm64 run plus an architecture change, so a failure here
-#                  that passes on arm64 points at the ojas-simd path.
+# The answer was not the predicted pass:
 #
-# A pass on both is a real result and the most likely one: it would retire the
-# blocker claim outright.
+#   Exact digests on x86-64   hold
+#   Fast digests on x86-64    DO NOT hold ("Fast softmax dim=7 amp=1 moved")
+#
+# and that one test was the sole reason main was red (six of seven jobs green).
+#
+# The cause is the ARCHITECTURE, not the OS or libm. CI moves both at once and
+# cannot separate them; running the same test on both targets of one
+# Apple-silicon machine can, because `x86_64-apple-darwin` runs under Rosetta
+# with Apple's libm on both sides:
+#
+#   aarch64-apple-darwin   exact ok   fast ok
+#   x86_64-apple-darwin    exact ok   fast FAILED   <- same case as CI
+#
+# Fast is not broken on x86-64: its worst departure from Exact is 8.94e-8
+# (~1 f32 ulp), the same value measured on aarch64. It rounds the last bit
+# differently, which is what `Numerics::Fast` is documented to be allowed to do
+# (ojas-core/src/backend.rs:32-36: agreement is "a stated tolerance rather than
+# bitwise"). Fixed in 32e4642 by pinning the Fast bits per architecture and
+# adding the tolerance check the softmax path had never had.
+#
+# WHAT IS STILL WORTH RUNNING HERE: linux/arm64 only — same architecture as the
+# recorded digests, different OS and libm, so it isolates "did we pin Apple's
+# libm?" Nothing has measured that. linux/amd64 adds nothing now; CI covers it,
+# and the architecture question is settled above.
 #
 # Invoke: ./scripts/linux_numerics_check.sh [--arch arm64|amd64|both]
 #
