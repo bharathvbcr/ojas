@@ -627,14 +627,31 @@ fn ordinary_rows_are_bit_identical_to_the_commit_before() {
     }
     for (b, (got, fast)) in seen.iter().enumerate() {
         for (k, name) in names.iter().enumerate() {
-            let skipped = (k % 2 == 1 && !recorded_here) || ((k == 2 || k == 3) && !fast);
-            if !skipped {
-                assert_eq!(
-                    got[k], ORDINARY[b][k],
-                    "batch {b} {name}: {:#018x} recorded {:#018x}",
-                    got[k], ORDINARY[b][k]
-                );
+            // Two independent reasons a digest cannot be compared here, kept
+            // apart because collapsing them into one index test is what let
+            // "fast grad" through: it is k == 2, an even index, so the parity
+            // rule below never reached it.
+            let fast_entry = k == 2 || k == 3;
+            if fast_entry && !fast {
+                // No Fast run for this batch, so nothing was computed to
+                // compare; got[k] is still zero. Not a coverage gap.
+                continue;
             }
+            // The losses go through libm `ln`, which differs off Apple silicon
+            // (exact_golden.rs keeps a LIBM_LN list for the same reason), and
+            // `Numerics::Fast` is permitted SIMD, FMA and reassociation, so its
+            // bits belong to the machine that recorded them whatever libm does.
+            // `Exact` is correctly rounded and identical everywhere, which is
+            // why the exact and fused gradients stay asserted unconditionally.
+            if (fast_entry || k % 2 == 1) && !recorded_here {
+                eprintln!("SKIP batch {b} {name}: digests recorded on macOS/aarch64");
+                continue;
+            }
+            assert_eq!(
+                got[k], ORDINARY[b][k],
+                "batch {b} {name}: {:#018x} recorded {:#018x}",
+                got[k], ORDINARY[b][k]
+            );
         }
     }
 }
