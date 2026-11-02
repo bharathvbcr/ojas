@@ -60,9 +60,27 @@ Use `./scripts/dev_fast_check.sh`:
 |---|---|---|---|---|
 | **Tier 1** | Pure shape/dims validators & core traits | `ojas-core` | < 10s | `cargo test -p ojas-core --lib` |
 | **Tier 2** | CPU reference backend & bit-exact numerics | `ojas-cpu` | < 30s | `cargo test -p ojas-cpu --lib --test exact_golden` |
-| **Tier 3** | Autograd reverse-mode Tape & gradchecks | `ojas-autograd` | < 45s | `cargo test -p ojas-autograd --test tape_parity` |
+| **Tier 3** | Autograd reverse-mode Tape & gradchecks | `ojas-autograd` | budget unverified (see note) | `cargo test -p ojas-autograd --test gradcheck --test gradcheck_random --test tape_grad_shape` |
 | **Tier 4** | Metal backend unit tests (Metal hardware) | `ojas-metal` | < 60s | `cargo test -p ojas-metal --lib -- --test-threads=1` |
 | **Tier 5** | Release Workspace Smoke (Pre-commit) | Full Workspace | < 3m | `cargo test --workspace --release --exclude ojas-metal -- --test-threads=4` |
+
+> **On the Tier 3 row (corrected 2026-11-01).** This row used to read
+> `cargo test -p ojas-autograd --test tape_parity`. **There is no `tape_parity` test target** — the
+> command failed for anyone who ran it. Four signals: `ojas-autograd/tests/` contains no
+> `tape_parity*` file; `rg -uu 'tape_parity'` across the repo matched only this line;
+> `devmap_search` returns 0 items on a fresh index; and Cargo itself does not list it —
+> `cargo metadata --no-deps` reports 28 test targets for `ojas-autograd`, among them `gradcheck`,
+> `gradcheck_random` and `tape_grad_shape`, and **no** `tape_parity`. That last check is what
+> verifies the replacement command resolves.
+>
+> The suite itself was **not run** to produce this correction, so the old `< 45s` budget is
+> unverified and has been removed rather than copied forward: put a measured number here the first
+> time someone runs it on a quiet machine. Note the cost is not only test time — `ojas-autograd`
+> carries a macOS-only `ojas-metal` dev-dependency, so a cold run of this row builds `ojas-metal`
+> and `tessl` too, which is why it belongs in the heavy-step queue rather than an inner loop.
+> Also note this row **cannot be run from an ojas git worktree**: `ojas-metal/Cargo.toml:22` has
+> `tessl = { path = "../../tessl" }`, which does not resolve from `.claude/worktrees/<lane>/`, so
+> cargo fails there on every toolchain. Run it from the main checkout.
 
 ### Escalation Rule
 Never run Tier $N+1$ until Tier $N$ passes cleanly. When modifying a core trait in `ojas-core`, always verify Tier 1 before running GPU or autograd tests.

@@ -119,7 +119,7 @@ Each row is an op of the `Backend` trait (`ojas-core/src/backend.rs`). The Metal
 | **Scale** (encoder) | One `f32` multiply per element. `Tape::scale` | `ojas_scale_fwd` | Unsupported | `f32` | `x * s`, finite `s` |
 | **Softmax** (encoder) | Max-subtracted; `exp_exact` under Exact; ascending `f32` sum. Backward (`Backend::softmax_backward`, `Tape::softmax`): exact softmax adjoint along last axis | `ojas_softmax_rows` (one thread per row); backward `ojas_softmax_bwd_rows` | Unsupported | `f32` | Last axis only; permute for another. Forward and backward on CPU and Metal; wgpu and CUDA refuse |
 | **Conv2d** (SAM) | Exact `ojas-cpu/src/spatial.rs`: im2col + one GEMM per image and group (a 1x1 stride-1 convolution reads the image in place); a group with one input channel (depthwise) is a direct loop. Bias added last | `ojas_im2col`, tessl exact-f32 NT GEMM (or `ojas_gemm_bf16_accum` under `bf16_accumulation`), `ojas_conv_nchw` (bias last) at any stride and padding; 1x1 stride-1 unpadded conv skips im2col for direct NN GEMM per image (>2x speedup); selects bf16 GEMM lane on bf16-exact operands (`Link::lane`); depthwise (`groups == in == out`) on the direct kernel `ojas_dwconv`, bit-identical to the CPU; backward on `ojas_col2im`, `ojas_dwconv_bwd_{x,w}`, `ojas_chan_sum`, and GEMM; dilation above 1 and other grouped convolutions are `Unsupported` naming the configuration | Unsupported | `f32`, `bf16` | `[N, C, H, W]` input, PyTorch weight `[O, C/groups, kh, kw]`, optional bias `[O]`; stride, zero padding, dilation, groups. Patch embedding, 1x1, strided 3x3 and 7x7 depthwise are parameter choices. Backward on CPU and Metal (`Backend::conv2d_backward`, `Tape::conv2d`): the input, weight and bias gradients (`ConvGrad`), dX by `W^T . dY` and a col2im gather, dW by a GEMM accumulated over the images in ascending order; gathers only, no scatter or atomics. wgpu and CUDA refuse the backward |
-| **ConvTranspose2d** (SAM) | GEMM `weight^T . x`, then a gather in ascending `(kh, kw)` order | `ojas_permute` to NHWC, tessl exact-f32 NN GEMM (or `ojas_gemm_bf16_accum`), `ojas_convt_nchw` (bias last), and backward on GEMM + `ojas_im2col` + `ojas_chan_sum`, for kernel == stride without padding or output padding; anything else is `Unsupported` | Unsupported | `f32` | Weight `[C, O, kh, kw]`, one group; stride, padding, output padding. Backward on CPU and Metal (`Backend::conv_transpose2d_backward`, `Tape::conv_transpose2d`): im2col of `dY` on the transposed geometry, then two GEMMs. wgpu and CUDA refuse the backward |
+| **ConvTranspose2d** (SAM) | GEMM `weight^T . x`, then a gather in ascending `(kh, kw)` order | `ojas_permute` to NHWC, tessl exact-f32 NN GEMM (or `ojas_gemm_bf16_accum`), `ojas_convt_nchw` (bias last), and backward on GEMM + `ojas_im2col` + `ojas_chan_sum`, for kernel == stride without padding or output padding; anything else is `Unsupported` | Unsupported | `f32` | Weight `[C, O, kh, kw]`, one group; stride, padding, output padding. Backward on CPU and Metal (`Backend::conv_transpose2d_backward`, `Tape::conv_transpose2d`): im2col of `dY` on the transposed geometry, then two GEMMs. Metal's backward takes the same gate as the forward — `refuse_unsupported_conv_transpose2d` (`ojas-metal/src/backend.rs:1646-1659`, called from `ojas-metal/src/backend/spatial_bwd.rs:124`), i.e. `stride == kernel` with zero padding and zero output padding only. wgpu refuses it (trait default, pinned by `ojas-wgpu/tests/sam_ops_refused.rs`); CUDA refuses it. **Neither direction is the generalized op**: SpikeTrack `PROJECT.md` feature 14 is "Generalized Metal `conv_transpose2d_forward` … via col2im gathering"; `ojas_col2im` exists but serves only conv2d's backward `dx`, and Metal still handles only the `kernel == stride` case (the SAM neck's 2×2 stride 2), so **feature 14 is not landed** |
 | **MaxPool2d** (SAM) | Direct loop | `ojas_max_pool2d_fwd` and `ojas_max_pool2d_bwd` (window inverse gather, zero atomics, row-major tie-break) | Unsupported | `f32` | `[N, C, H, W]`, kernel and stride, no padding. Values only, no indices. Backward on CPU and Metal (`Backend::max_pool2d_backward`, `Tape::max_pool2d`): each input gathers the windows whose first maximum it holds, the tie rule the forward's window argmax uses. wgpu and CUDA refuse |
 | **Bilinear interpolate** (SAM) | Torch's source-index rule in f32 | `ojas_bilinear`: one thread per output element, taps formed in the kernel from the host's f32 axis scales (bit-identical to the CPU; no axis tables, so only the output is charged) | Unsupported | `f32` | `[N, C, H, W]` to `out_size`, `align_corners` either way, no antialiasing. Forward only |
 | **Interleaved RoPE** (SAM2, SAM3) | Exact scalar | `ojas_rope` mode 2 (bit-identical to the CPU) | Unsupported | `f32` | Rotates adjacent pairs `(x[2i], x[2i+1])`, no norm; `[B, T, H, D]`, tables `[T, D/2]`. `axial_rope_2d_tables` builds the 2D axial tables (first `D/4` pairs by column, last `D/4` by row). Forward and backward |
@@ -134,6 +134,43 @@ Each row is an op of the `Backend` trait (`ojas-core/src/backend.rs`). The Metal
 
 > [!NOTE]
 > **wgpu and CUDA for the SAM and encoder ops.** The 32 ops of `ojas_core::SAM_AUTOCAST_POLICY` (`attention_forward`, `attention_forward_saving`, `attention_backward`, `linear_bias_forward`, `linear_bias_backward`, `conv2d_forward`, `conv_transpose2d_forward`, `conv2d_backward`, `conv_transpose2d_backward`, `max_pool2d_forward`, `max_pool2d_backward`, `gelu_erf_forward`, `gelu_erf_backward`, `relu_forward`, `scale_forward`, `broadcast_add_forward`, `broadcast_add_backward`, `broadcast_mul_forward`, `broadcast_mul_backward`, `interpolate_bilinear_forward`, `rope_interleaved_forward`, `rope_interleaved_backward`, `layer_norm_forward`, `layer_norm_backward`, `channel_layer_norm_forward`, `channel_layer_norm_backward`, `group_norm_forward`, `softmax_forward`, `softmax_backward`, `concat`, `slice`, `fill`) are refused on both. `WgpuBackend` overrides none of them: each is the trait default and returns `OjasError::Unsupported` under the op's own name, which the wgpu cells above say; `ojas-wgpu/tests/sam_ops_refused.rs` pins it for all 32. The table has no CUDA column because `CudaBackend` (`ojas-cuda/src/backend.rs`) implements `Backend` for `upload`, `download`, `sync` and the budget only; every compute op, these 32 included, is `Unsupported` (explicit refusals for the nanolab ops, the trait default for the rest), and the CUDA kernels in `ojas-cuda` belong to the Qwen3.5 whole-step provider (`Qwen35Step`), which has no SAM op.
+
+> [!WARNING]
+> **Zero-copy UMA tensor sharing is not in any production path (checked 2026-11-01 at `dac0b5b`).**
+> Where this repository's notes describe tensors shared with the GPU without a copy, the op table
+> above still describes what runs. The pieces exist: `Payload::Mapped(Arc<dyn MappedBuffer>)`
+> (`ojas-core/src/tensor.rs:156`), the `MappedBuffer`/`HostLease`/`Timeline` HAL traits
+> (`ojas-core/src/hal.rs`), and the constructors `Tensor::from_mapped` / `from_mapped_reserved`
+> (`tensor.rs:955`, `:967`). What is missing is a caller. Three signals, all pointing the same way:
+> every call of either constructor outside tests is **absent** — the only callers are
+> `ojas-core/src/tensor.rs`'s own unit tests (`:3007`, `:3047`),
+> `ojas-metal/tests/adversarial_tier5_metal.rs` (`:298`, `:361`, `:367`, `:650`, `:777`) and, in
+> the sibling repository, tessl's own `tests/shared_runtime.rs` (`:171`, `:204`, on `origin/main`);
+> the only non-test `MappedBuffer` implementer anywhere is tessl's `SharedBuf`
+> (`tessl/src/shared_buf.rs:658` on tessl `origin/main`, `a00521f`), and nothing in production
+> constructs one into a `Tensor` (the other implementers — `FakeMapped`, `Plain`, `Buf` — are test
+> types); and `ojas-metal/src` contains **no** `from_mapped` call at all (`rg -uu from_mapped
+> ojas-metal/src/` returns nothing), while every device tensor `MetalBackend` hands back is built by
+> `Tensor::from_device_reserved` (`ojas-metal/src/backend.rs` `:945`, `:2174`, `:2246`,
+> `:2300-2301`, `:3267`, `:3432`), whose readback copies through the device thread. `MetalBackend`
+> does also call `Tensor::from_f32` outside its test module (`:2582`, `:2590`, `:2595`, `:4017`),
+> but each of those builds a **host** staging tensor (`host_ones`, `host`) that is immediately
+> passed to `self.upload(…)` — and `upload` itself ends in `from_device_reserved`
+> (`backend.rs:2125-2177`, the call at `:2174`), so it is not a sharing path either. So SpikeTrack `PROJECT.md` feature 9 ("Zero-Copy UMA Buffer Sharing —
+> `Payload::Mapped` on `Tensor`; timeline-fenced zero-copy `to_host` and `upload`") is **not
+> landed**: it is reachable from a test, not from the framework. Treat any "zero-copy UMA" or
+> "`Payload::Mapped` integrated" wording elsewhere in `docs/` as describing the HAL surface, not a
+> path a model takes.
+>
+> **Update (2026-11-02, when this note was merged into `main`):** one half of this has moved.
+> `Worker::upload` (`ojas-metal/src/device.rs:1988-2010`) now adopts a tensor whose payload is a
+> tessl `SharedBuf` without copying (`SharedBuf::to_gpu_buffer`, then `adopt`, at `:2006`), and
+> refuses any other mapped buffer. `ojas-metal/tests/adversarial_m3_zero_copy.rs` exercises that
+> path (it asserts `mem_after == mem_before`); `ojas-core/tests/zero_copy_uma.rs` covers the
+> `Payload::Mapped` surface with a mock buffer and does not reach `Worker::upload`. The other half has not
+> moved: outside tests, nothing constructs a mapped `Tensor` (`from_mapped` / `from_mapped_reserved`
+> still have no non-test caller), so a model run never takes this path, and feature 9 is still
+> not landed for the framework.
 
 > [!WARNING]
 > `MetalBackend` and `WgpuBackend` attention refuse $d_{\text{head}} > 256$ with `OjasError::UnsupportedHeadDim` (`METAL_MAX_HEAD_DIM`, and `ATTENTION_MAX_HEAD_DIM` in `ojas-kernels/src/geometry.rs` for wgpu). Nothing is truncated. Causal SDPA accepts grouped-query head counts.
