@@ -258,7 +258,7 @@ of a pipe. The ojas-io baseline at `9c5e784` was 161 passed over 12 binaries.
 | `cargo clippy -p ojas-io -p ojas-qwen35 -p ojas-oracle --all-targets -- -D warnings` | clean, no error or warning line |
 | `./scripts/fmt_check.sh` | clean |
 | `go run scripts/sitegen/main.go -check` | generated files up to date, 57 files |
-| tessl, `cargo test --release` (full suite, on the GPU) | **not re-run — see below**; the last complete run was 1,435 passed, 1 failed, 36 ignored, 128 binaries, and that one failure is fixed and green |
+| tessl, `cargo test --release --no-fail-fast` (full suite, on the real GPU) | **2,252 passed, 0 failed**, 56 ignored, 206 binaries |
 | tessl, the three binaries that failure touched | **30 passed, 0 failed**, 1 ignored (`host_access_ban` 6, `safetensors` 12, `reader_bounds` 12) |
 | tessl, `cargo test --release --lib parser_mutation::` | **16 passed, 0 failed** |
 | tessl, `cargo clippy --all-targets -- -D warnings` | clean |
@@ -282,20 +282,27 @@ The ignored tessl test worth naming is `opens_the_qwen35_2b_checkpoint`, which
 needs the 4.5 GB file from the Hugging Face cache; it was ignored before this
 change too.
 
-**tessl's full suite could not be re-run, and is not reported as passing.** It
-ran complete once on this work at 1,435 passed / 1 failed / 36 ignored over 128
-binaries. The one failure was
-`host_access_ban::library_code_never_calls_a_panicking_host_accessor`, which
-caught the adapter calling `.read_u32(` in method form — a real defect the guard
-exists to catch, fixed and now green on its own (6 passed, 0 failed), along with
-`safetensors` (12) and `reader_bounds` (12). Two attempts to re-run the whole
-suite after that fix did not produce a result: the first was `SIGKILL`ed
-mid-compile with the machine at load 38, and the second failed to build in six
-seconds with no test run, because another session holds this checkout and has
-`src/config_json.rs` and `src/qwen35_adamw.rs` part-way through a
-`Json` → `JsonValue` rename that does not compile yet. Neither file belongs to
-this work and neither was touched. So the outstanding check is one clean
-end-to-end run of tessl's suite once that refactor lands.
+**tessl's full suite ran clean, on the fourth attempt: 2,252 passed, 0 failed,
+56 ignored over 206 binaries, exit 0.** Not from tessl's live checkout, which
+another session holds mid-rename and which has `src/safetensors.rs` deleted from
+its working tree, but from a detached worktree at tessl `d42305f` placed beside
+the real `../ojas` so the path dependencies resolve, with its own
+`CARGO_TARGET_DIR`. It asserts `enum Dtype` and `impl TryFrom<StDtype>` are
+present before testing, so it cannot be a run of that writer's tree.
+
+Three earlier attempts produced no number, each for a different reason — a
+`SIGKILL` mid-compile at load 38, a six-second build failure on that rename, and
+a run that reached 74 of 206 binaries before `cargo test` abandoned the rest at
+the first failure. The last of those failures was in this work: tessl's
+`docs_name_real_tools` guard rejected its own decision record for naming
+`tests/tessl_rejection_corpus.rs` and `tests/header_amplification.rs`, which are
+this crate's files, as though they were tessl's. Fixed by qualifying them.
+
+One caveat the run cannot shed: it builds against the live `../ojas`, which
+carries that session's uncommitted additions to `ojas-io/src/safetensors.rs`
+(`pub type Dtype = StDtype`, `from_bytes_named`). The adapter uses neither, so
+this is a run of committed tessl against a tree that exists only on this
+machine.
 
 **What is not verified here, and is not claimed to be.** `cargo fmt --all
 --check` in tessl fails on ten files this change never touched — all wrapped at
