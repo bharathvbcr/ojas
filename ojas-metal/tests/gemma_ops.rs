@@ -41,6 +41,165 @@ fn gelu_tanh_forward_and_backward_match_cpu() {
     same_tensor("gelu_tanh_backward", &got_bwd, &want_bwd, 1e-4, 1e-4);
 }
 
+/// Signed-magnitude bits as a monotone integer, so a difference counts the
+/// representable `f32` between two values and `-0.0` is zero from `0.0`.
+fn ordered_bits(x: f32) -> i64 {
+    let b = x.to_bits();
+    if b & 0x8000_0000 != 0 {
+        -i64::from(b & 0x7fff_ffff)
+    } else {
+        i64::from(b)
+    }
+}
+
+fn ulps_apart(a: f32, b: f32) -> i64 {
+    (ordered_bits(a) - ordered_bits(b)).abs()
+}
+
+/// The backward keeps its slope term in the band where the tanh argument
+/// saturates, which the `1 - t*t` form did not.
+///
+/// `gelu_tanh_bwd tails` was the worst of the 26 golden records on Metal at
+/// `1.788e-6`, 99.4% of the `1.8e-6` the gate in
+/// `adversarial_challenger_m4.rs` allows each record — so a small numerics
+/// change in any covered op would have turned the gate red here, reading as
+/// a regression in whatever op was last touched. The error is one element:
+/// at `x = 5` the tanh argument is `8.449`, where the device's
+/// `precise::tanh` returns exactly `1.0f`. `1 - t*t` is then exactly zero,
+/// the entire slope term disappears, and the kernel returns `gy` bit for bit
+/// where the derivative is `1 + 1.5e-6`. Because `0.5 * x * (1 - t*t) *
+/// inner'` scales that cancelled difference by about ten, one ulp of `tanh`
+/// becomes fifteen ulps of answer.
+///
+/// Judged against the CPU backend under `Numerics::Exact`, which is
+/// bit-identical to the f64 torch golden on these inputs
+/// (`ojas-oracle/tests/gemma_golden_cpu.rs` reports `max_abs 0.00e0` for this
+/// record), so CPU parity here is golden parity.
+#[test]
+fn gelu_tanh_backward_keeps_its_slope_term_where_tanh_saturates() {
+    let m = metal();
+    let c = cpu();
+
+    // `case gelu_tanh tails` of ojas-oracle/fixtures/gemma_ops/golden.txt.
+    // `gy` by bits, so the record the oracle gate measures is reproduced
+    // exactly rather than approximately.
+    const FX: [f32; 16] = [
+        -15.0, -12.0, -8.0, -5.0, -3.0, -2.0, -1.0, -0.5, 0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 12.0, 15.0,
+    ];
+    const FGY_BITS: [u32; 16] = [
+        0x3fa4_cf69,
+        0x4007_5434,
+        0x3ef3_a02b,
+        0x3f31_39b3,
+        0xbe91_362f,
+        0xbf96_be66,
+        0x3fa6_7c73,
+        0x3f87_f187,
+        0xbea4_485b,
+        0xbdd6_f200,
+        0xbf0a_677c,
+        0x3f8a_8dc4,
+        0xbf94_f7b1,
+        0x3f80_1282,
+        0xbf00_ed12,
+        0x3f84_8ff0,
+    ];
+    // Index of x = 5, the element that ate the budget.
+    const I5: usize = 12;
+
+    let mut xs: Vec<f32> = FX.to_vec();
+    let mut gys: Vec<f32> = FGY_BITS.iter().map(|&b| f32::from_bits(b)).collect();
+
+    // The saturating band swept densely: |x| past about 3 rounds the tanh
+    // argument towards +-1 while `0.5 * x * inner'` is still of order ten,
+    // so this is where a cancelled difference is amplified most.
+    let sweep: Vec<f32> = (-32..=32).map(|k| k as f32 * 0.25).collect();
+    let sweep_gy = values(sweep.len(), 4242, 2.0);
+    xs.extend_from_slice(&sweep);
+    gys.extend_from_slice(&sweep_gy);
+
+    let n = xs.len();
+    let host_x = host(&xs, &[n]);
+    let host_gy = host(&gys, &[n]);
+    let dev_x = up(&m, &host_x);
+    let dev_gy = up(&m, &host_gy);
+
+    let want = down(&ok("cpu bwd", c.gelu_tanh_backward(&host_x, &host_gy)));
+    let got_t = ok("metal bwd", m.gelu_tanh_backward(&dev_x, &dev_gy));
+    assert_eq!(
+        got_t.device(),
+        Some(ojas_core::BackendId::Metal),
+        "the backward must answer from the device"
+    );
+    let got = down(&got_t);
+
+    // The oracle gate bounds each record by absolute error, so this does
+    // too. `RTOL` at 3e-7 is 2.5 ulps of the value: above the last-place
+    // noise of `precise::exp` and far below the 12.9 ulps relative the
+    // cancelling form left at x = 5.
+    //
+    // `AULP` is not slack, it is the floor the op itself has.
+    // `gelu_tanh'(x)` crosses zero near x = -0.751, where the kernel's
+    // `s + x * slope * du` is a difference of two terms of order one and no
+    // relative bound can hold — the f64 reference only escapes it by
+    // carrying more bits. Both terms are bounded by about 1.1 and the result
+    // is `gy` times their sum, so the irreducible absolute error there is
+    // ulps of one scaled by `|gy|`. 2.4e-7 is two of them.
+    const RTOL: f32 = 3e-7;
+    const AULP: f32 = 2.4e-7;
+    let tol = |w: f32, gy: f32| RTOL * w.abs() + AULP * gy.abs();
+
+    let mut worst = (0usize, 0.0f32);
+    for (i, (&g, &w)) in got.iter().zip(&want).enumerate() {
+        let err = (g - w).abs();
+        if err > worst.1 {
+            worst = (i, err);
+        }
+    }
+    let (wi, werr) = worst;
+    println!(
+        "gelu_tanh_bwd worst of {n}: x = {}, gy = {:e}, metal = {:e} ({:08x}), \
+         cpu/golden = {:e} ({:08x}), |err| = {werr:e}, {} ulp(s)",
+        xs[wi],
+        gys[wi],
+        got[wi],
+        got[wi].to_bits(),
+        want[wi],
+        want[wi].to_bits(),
+        ulps_apart(got[wi], want[wi]),
+    );
+
+    for (i, (&g, &w)) in got.iter().zip(&want).enumerate() {
+        assert!(
+            (g - w).abs() <= tol(w, gys[i]),
+            "x = {}, gy = {:e}: metal {:e} ({:08x}) vs cpu/golden {:e} ({:08x}): \
+             |err| {:e} over the {:e} allowed, {} ulp(s)",
+            xs[i],
+            gys[i],
+            g,
+            g.to_bits(),
+            w,
+            w.to_bits(),
+            (g - w).abs(),
+            tol(w, gys[i]),
+            ulps_apart(g, w),
+        );
+    }
+
+    // The defect stated as one fact: `gelu_tanh'(5)` is `1 + 1.5e-6`, so
+    // `gy * it` is not `gy`. The cancelling form returned `gy`'s own bits.
+    assert_eq!(xs[I5], 5.0, "fixture layout: I5 must be x = 5");
+    assert_ne!(
+        got[I5].to_bits(),
+        gys[I5].to_bits(),
+        "at x = 5 the slope term vanished: metal returned gy ({:08x}) unchanged, \
+         where the golden is {:08x}, {} ulp(s) away",
+        gys[I5].to_bits(),
+        want[I5].to_bits(),
+        ulps_apart(gys[I5], want[I5]),
+    );
+}
+
 #[test]
 fn seq_mean_forward_matches_cpu() {
     let m = metal();

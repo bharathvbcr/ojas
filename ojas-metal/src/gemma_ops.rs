@@ -12,7 +12,11 @@
 //!   words and needs an `up` operand; this is the same formula as one
 //!   element per thread with ojas's finite checks.
 //! - `gelu_tanh_backward`: `ojas_gelu_tanh_bwd`. tessl has no GELU
-//!   derivative. It uses the forward's clamped inner term for both parts.
+//!   derivative. It keeps the forward's `|x| <= 20` bound on the cubic, but
+//!   forms `s + x s(1 - s) u'` from `e^-|u|` rather than
+//!   `0.5 (1 + t) + 0.5 x (1 - t^2) inner'`: both of those cancel as the
+//!   tanh argument saturates, and on an M4 that cost fifteen ulps at
+//!   `x = 5`. Same formula as `ojas_core::gelu_tanh_backward_exact`.
 //! - `seq_mean_forward`: `ojas_segments_from_lens` builds the
 //!   `(b * T, b * T + min(len, T))` row ranges from the device length
 //!   buffer (no readback), then tessl's `segment_mean_rows`.

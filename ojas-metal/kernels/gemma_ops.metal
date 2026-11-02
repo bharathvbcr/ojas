@@ -15,9 +15,11 @@
 //
 // The forward is tessl's own `tessl_gelu_pytorch_tanh`, included from its
 // `act.h` (build.rs passes tessl's kernels directory with -I), so the formula
-// has one owner. The cubic is bounded at |x| <= 20 and the tanh argument at
-// |.| <= 10 there; the backward uses the same bounded inner term for both of
-// its parts, so it differentiates the function the forward computes.
+// has one owner. It bounds the cubic at |x| <= 20 and its tanh argument at
+// |.| <= 10. The backward keeps the same |x| <= 20 bound on the cubic, so it
+// differentiates the same function, but forms the derivative from the sigmoid
+// rather than from 1 + tanh: see `ojas_gelu_tanh_bwd` for why the tanh form
+// cannot carry it in f32 where the argument saturates.
 //
 // Status words, as `ojas_backend.metal`: 0 an input is non-finite, 1 an
 // output is non-finite. Compiled with -ffp-contract=off and
@@ -49,13 +51,31 @@ kernel void ojas_gelu_tanh_fwd(
     if (!isfinite(r)) gemma_flag(st, GEMMA_ST_OUT);
 }
 
-// d/dx [0.5 x (1 + t)], t = tanh(inner(x)):
-//   0.5 (1 + t) + 0.5 x (1 - t^2) inner'(x)
-//   inner'(x) = sqrt(2/pi) (1 + 3 * 0.044715 x^2)
-// with the forward's bounded x for the inner term and its bounded tanh
-// argument, so past |inner| = 10 (where tanh has rounded to +-1 in f32) the
-// second part is exactly 0 and the first is 1 or 0: the derivative of the
-// saturated function, not a NaN from 0 * inf.
+// d/dx [x s(u)], u = 2 sqrt(2/pi) (x + 0.044715 x^3) and s = sigmoid(u):
+//   s + x s(1 - s) u',   u' = 2 sqrt(2/pi) (1 + 3 * 0.044715 x^2)
+//
+// The identity 1 + tanh(u/2) = 2 s makes this the derivative of the exact
+// function the forward computes: the forward's 0.5 x (1 + t) is x s. But it
+// is s and s(1 - s) that an f32 kernel must form, not 1 + t and 1 - t^2.
+// Both of those cancel as |t| -> 1, and 0.5 x u' scales what is left of them
+// by about ten at |x| = 5, so two ulps of tanh became fifteen ulps of answer.
+// Measured on an M4: at x = 5 the kernel returned dy bit for bit, where the
+// derivative is 1 + 1.5e-6. Only t == 1.0f produces that, because 1 - t*t
+// vanishes for no other f32 near one (0x3f7fffff leaves 1.19e-7 and
+// 0x3f7ffffe leaves 2.38e-7), so `precise::tanh` returned 0x3f800000 at
+// |u/2| = 8.4490986 where the correctly rounded value is 0x3f7ffffe, two ulps
+// below. That was 1.788e-6 against the torch golden, 99.4% of the oracle
+// gate's budget, and exactly 0 at x = -5 against -1.07e-6.
+//
+// From e = e^-|u| alone neither s nor s(1 - s) = e / (1 + e)^2 cancels on
+// either tail, and the denominator stays in [1, 2] so no intermediate is ever
+// infinite -- the shape tessl's `tessl_sigmoid` (`act.h`) uses, and the same
+// formula as the CPU reference `ojas_core::gelu_tanh_backward_exact`, which is
+// bit-identical to the golden here. The tanh argument needs no clamp now: past
+// saturation e underflows to 0 on its own, leaving exactly dy for far positive
+// x and a signed zero for far negative x, with no 0 * inf. The cubic keeps the
+// forward's |x| <= 20 bound so x^3 cannot overflow, and the bounded x is what
+// multiplies the slope, so a huge |x| cannot overflow that product either.
 kernel void ojas_gelu_tanh_bwd(
     device const float *x [[buffer(0)]],
     device const float *g [[buffer(1)]],
@@ -70,10 +90,13 @@ kernel void ojas_gelu_tanh_bwd(
     const float xc = clamp(v, -20.0f, 20.0f);
     const float x2 = xc * xc;
     const float x3 = x2 * xc;
-    const float inner = 0.7978845608028654f * (xc + 0.044715f * x3);
-    const float t = precise::tanh(clamp(inner, -10.0f, 10.0f));
-    const float dinner = 0.7978845608028654f * (1.0f + 3.0f * 0.044715f * x2);
-    const float d = 0.5f * (1.0f + t) + 0.5f * v * (1.0f - t * t) * dinner;
+    const float u = 1.5957691216057308f * (xc + 0.044715f * x3);
+    const float e = precise::exp(-fabs(u));
+    const float den = 1.0f + e;
+    const float s = u >= 0.0f ? 1.0f / den : e / den;
+    const float slope = e / (den * den);
+    const float du = 1.5957691216057308f * (1.0f + 3.0f * 0.044715f * x2);
+    const float d = s + xc * slope * du;
     const float r = gy * d;
     out[i] = r;
     if (!isfinite(v) || !isfinite(gy)) gemma_flag(st, GEMMA_ST_IN);
