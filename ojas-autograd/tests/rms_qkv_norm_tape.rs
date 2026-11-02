@@ -101,7 +101,7 @@ fn by_hand(be: &CpuBackend, k: &[Tensor; 6], weighted: bool) -> [Tensor; 6] {
     let kn = be.rms_norm_forward(kt, wk, EPS).unwrap();
     let vn = be.rms_norm_forward(vt, &one, EPS).unwrap();
     let all = be.concat(&[&qn, &kn, &vn], 1).unwrap();
-    let seed = Tensor::from_f32(&vec![1.0; RN], all.shape(), be.budget()).unwrap();
+    let seed = Tensor::from_f32(&[1.0; RN], all.shape(), be.budget()).unwrap();
     let (gall, gr) = be.mul_backward(&all, r, &seed).unwrap();
     // The concat's gradient is its slices, in head order.
     let gq_out = be.slice(&gall, 1, 0, HQ).unwrap();
