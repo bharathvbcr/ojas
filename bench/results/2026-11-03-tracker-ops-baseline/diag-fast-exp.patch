@@ -1,0 +1,15 @@
+--- a/ojas-metal/kernels/ojas_backend.metal
++++ b/ojas-metal/kernels/ojas_backend.metal
+@@ -3229,10 +3229,10 @@
+         const float m_new = max(m_old, mx);
+         // A row that has seen nothing has a zero accumulator: its rescale is
+         // exactly 0, not exp(-inf - -inf).
+-        const float alpha = (m_old == -INFINITY) ? 0.0f : precise::exp(m_old - m_new);
++        const float alpha = (m_old == -INFINITY) ? 0.0f : fast::exp(m_old - m_new);
+         float sum = 0.0f;
+         for (uint c = 0; c < (uint)ATT_FWD_CPR; ++c) {
+-            const float p = (s[c] == -INFINITY) ? 0.0f : precise::exp(s[c] - m_new);
++            const float p = (s[c] == -INFINITY) ? 0.0f : fast::exp(s[c] - m_new);
+             S[r * ATT_FWD_BK + c0 + c] = p;
+             sum += p;
+         }
