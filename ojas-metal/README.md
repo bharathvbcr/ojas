@@ -91,7 +91,7 @@ Implements elementwise operations, vector arithmetic, and reduction passes requi
   * `gelu_erf_forward` & `gelu_erf_backward`: forward routed to tessl BERT `bias_gelu_erf`; backward on `ojas_gelu_erf_bwd`.
   * `relu_forward`: `ojas_relu_fwd` (bit-identical to CPU).
   * `concat`, `slice` & `fill`: device-resident memory assembly (`ojas_concat_part`, `ojas_slice` with full-input finite scan, `ojas_fill_words`). Filled U32 tensors carry `Ids::Below(value + 1)` bounds.
-  * `linear_bias_forward` & `linear_bias_backward`, `broadcast_add_backward` & `broadcast_mul_backward`, `softmax_forward` & `softmax_backward`: GEMM + broadcast add/mul and `ojas_bcast_grad_{part,fin}` reductions; `ojas_softmax_rows` and `ojas_softmax_bwd_rows`.
+  * `linear_bias_forward` & `linear_bias_backward`, `broadcast_add_backward` & `broadcast_mul_backward`, `softmax_forward` & `softmax_backward`: GEMM + broadcast add/mul (an f32 `linear_bias_forward` with a `[out]` bias adds it in place on the GEMM output, `ojas_bias_rows`, bit for bit the composed ops) and `ojas_bcast_grad_{part,fin}` reductions; `ojas_softmax_rows` and `ojas_softmax_bwd_rows`.
 * **AdamW** (`ojas_adamw_check`, `ojas_adamw_apply`): torch's single-tensor step in tessl's f32 arithmetic, with scalars from `ojas_core::check_adamw`. The step is in place and needs no scratch.
   * The check kernel decides the whole step: inputs and every new p, m and v must be finite.
   * The apply kernel, in the same command buffer, writes only if this call's status words are clear. A refused step leaves all three tensors bit-identical and is reported at the next sync point.

@@ -1,0 +1,66 @@
+mac_heavy: 2026-11-03T17:36:56Z 'spiketrack-flash-fwd-4' waiting 0s for the lock; holder: label=spiketrack-held32-boxdelta pid=28870 start=2026-11-03T17:31:36Z cwd=/Users/bharath/Code/research/SpikeTrack 
+mac_heavy: 2026-11-03T17:41:57Z 'spiketrack-flash-fwd-4' waiting 300s for the lock; holder: label=spiketrack-lora-v4-train pid=39790 start=2026-11-03T17:38:18Z cwd=/Users/bharath/Code/research/SpikeTrack 
+mac_heavy: 2026-11-03T17:46:58Z 'spiketrack-flash-fwd-4' waiting 600s for the lock; holder: label=spiketrack-lora-v4-train pid=39790 start=2026-11-03T17:38:18Z cwd=/Users/bharath/Code/research/SpikeTrack 
+mac_heavy: 2026-11-03T17:51:59Z 'spiketrack-flash-fwd-4' waiting 900s for the lock; holder: label=spiketrack-lora-v4-train pid=39790 start=2026-11-03T17:38:18Z cwd=/Users/bharath/Code/research/SpikeTrack 
+mac_heavy: 2026-11-03T17:57:00Z 'spiketrack-flash-fwd-4' waiting 1200s for the lock; holder: label=spiketrack-lora-v4-train pid=39790 start=2026-11-03T17:38:18Z cwd=/Users/bharath/Code/research/SpikeTrack 
+mac_heavy: 2026-11-03T18:02:02Z 'spiketrack-flash-fwd-4' waiting 1500s for the lock; holder: label=spiketrack-lora-v4-train pid=39790 start=2026-11-03T17:38:18Z cwd=/Users/bharath/Code/research/SpikeTrack 
+mac_heavy: 2026-11-03T18:04:02Z 'spiketrack-flash-fwd-4' waits without the lock: no cargo slot free (all 2 held in /Users/bharath/.cache/cargo-slots)
+mac_heavy: 2026-11-03T18:07:43Z 'spiketrack-flash-fwd-4' waiting 1840s for the lock; holder: label=spiketrack-lora-v4-train pid=39790 start=2026-11-03T17:38:18Z cwd=/Users/bharath/Code/research/SpikeTrack 
+mac_heavy: 2026-11-03T18:10:04Z 'spiketrack-flash-fwd-4' waits without the lock: no cargo slot free (all 2 held in /Users/bharath/.cache/cargo-slots)
+mac_heavy: 2026-11-03T18:12:44Z 'spiketrack-flash-fwd-4' waiting 2140s for the lock; holder: label=spiketrack-lora-v4-select pid=63572 start=2026-11-03T18:10:48Z cwd=/Users/bharath/Code/research/SpikeTrack 
+mac_heavy: 2026-11-03T18:17:45Z 'spiketrack-flash-fwd-4' waiting 2440s for the lock; holder: label=spiketrack-lora-v4-select pid=63572 start=2026-11-03T18:10:48Z cwd=/Users/bharath/Code/research/SpikeTrack 
+mac_heavy: 2026-11-03T18:22:46Z 'spiketrack-flash-fwd-4' waiting 2740s for the lock; holder: label=spiketrack-lora-v4-select pid=63572 start=2026-11-03T18:10:48Z cwd=/Users/bharath/Code/research/SpikeTrack 
+mac_heavy: 2026-11-03T18:27:47Z 'spiketrack-flash-fwd-4' holds the lock (waited 3040s; load 4.49, 1320 processes); running: bash /Users/bharath/Code/kern1103/bins/job4.sh
+== rules.md mtime 2026-11-03T11:36:17
+== ojas HEAD 145c6889be4ac2968d7cdc235e4e9fdc42cc324d; tessl 52bdd196265a687def945fc5834cefdce48b08ff
+== start 2026-11-03T18:27:47Z 12:27  up 1 day, 23:23, 1 user, load averages: 4.49 5.99 6.47
+== build ops-P (c1676d6) 18:27:47Z load { 4.49 5.99 6.47 }
+ops-P c1676d6 a20c3d9ddcf35b61
+== build ops-F (aade8fa) 18:27:59Z load { 4.08 5.83 6.41 }
+ops-F aade8fa 0083647597583205
+== build st-A (c1676d6) 18:28:08Z load { 3.92 5.77 6.38 }
+st-A c1676d6 9419dce2111336ab
+== build st-F (aade8fa) 18:29:06Z load { 7.10 6.39 6.58 }
+st-F aade8fa cdc8ca8050a1ce76
+?? bench/results/2026-11-03-linear-bias-inplace/bins.tsv
+== hashes F: identical to P
+== ops round 0 order P F P2 18:29:33Z load { 8.02 6.70 6.68 }
+== ops round 1 order P P2 F 18:29:34Z load { 7.78 6.68 6.67 }
+== ops round 2 order P2 P F 18:29:35Z load { 7.78 6.68 6.67 }
+== ops round 3 order P2 F P 18:29:36Z load { 7.78 6.68 6.67 }
+== ops round 4 order F P2 P 18:29:37Z load { 7.78 6.68 6.67 }
+== ops round 5 order F P P2 18:29:38Z load { 7.78 6.68 6.67 }
+== ops round 6 order P F P2 18:29:38Z load { 7.64 6.66 6.67 }
+== ops round 7 order P P2 F 18:29:39Z load { 7.64 6.66 6.67 }
+== ctl-F 18:29:40Z load { 7.64 6.66 6.67 }
+== r1-A 18:30:48Z load { 6.80 6.69 6.68 }
+== r1-F 18:31:53Z load { 6.58 6.53 6.61 }
+== r2-F 18:33:00Z load { 6.80 6.66 6.66 }
+== r2-A 18:34:08Z load { 10.79 7.55 6.97 }
+== r3-A 18:35:27Z load { 13.29 9.23 7.67 }
+== r3-F 18:36:47Z load { 16.07 10.90 8.43 }
+== ctl-A 18:38:00Z load { 11.38 10.83 8.63 }
+ctl-A: byte-identical to ctl-F
+r1-A: byte-identical to ctl-F
+r1-F: byte-identical to ctl-F
+r2-F: byte-identical to ctl-F
+r2-A: byte-identical to ctl-F
+r3-A: byte-identical to ctl-F
+r3-F: byte-identical to ctl-F
+# e2e: SpikeTrack 38e0a35, ojas base (A) vs F; steady frames >= 8
+memory attention (device): A 283.8 / 302.4 / 308.1 ms; F 277.6 / 292.0 / 287.3 ms; ratio 0.978 / 0.965 / 0.932; noise 0.086; not measured (inside the noise)
+tracker step: A 399.9 / 446.4 / 469.0 ms; F 395.5 / 443.4 / 414.5 ms; ratio 0.989 / 0.993 / 0.884; noise 0.173; not measured (inside the noise)
+frames per run: r1-A 26, r1-F 26, r2-A 26, r2-F 26, r3-A 26, r3-F 26
+== tests at F 18:39:19Z load { 14.14 11.81 9.20 }
+== test linear_bias_fused passed: test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+== test attention_flash_bits passed: test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+== test encoder_ops passed: test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+== test encoder_ops_edges passed: test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+== test bf16_accumulation passed: test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+== test autocast_precast_weight passed: test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+== test attention_flash passed: test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.23s
+== test attention_routing passed: test result: ok. 15 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 2.64s
+== clippy 18:40:10Z load { 10.49 11.19 9.11 }
+== clippy clean
+== end 2026-11-03T18:40:17Z 12:40  up 1 day, 23:36, 1 user, load averages: 13.33 11.77 9.33 status 0
+mac_heavy: 2026-11-03T18:40:19Z 'spiketrack-flash-fwd-4' finished with exit 0

@@ -1,0 +1,11 @@
+   Compiling ojas-metal v0.1.0 (/Users/bharath/Code/kern1103/ojas/ojas-metal)
+    Finished `release` profile [optimized] target(s) in 1.39s
+     Running tests/autocast_precast_weight.rs (/Users/bharath/Code/kern1103/target/release/deps/autocast_precast_weight-2f31c6f4780e8f49)
+
+running 3 tests
+test a_precast_weight_gives_the_untagged_weights_bits_with_one_round_fewer ... ok
+test a_precast_weight_runs_the_bf16_lane ... ok
+test an_in_place_write_clears_the_tag_and_the_call_matches_the_untagged_path ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+

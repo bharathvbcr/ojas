@@ -1,0 +1,26 @@
+   Compiling ojas-metal v0.1.0 (/Users/bharath/Code/kern1103/ojas/ojas-metal)
+    Finished `release` profile [optimized] target(s) in 1.86s
+     Running tests/attention_routing.rs (/Users/bharath/Code/kern1103/target/release/deps/attention_routing-d0f7c7335f92ba32)
+
+running 18 tests
+test a_budget_that_holds_the_output_but_not_the_routed_scratch_runs_the_general_kernel ... ok
+test a_cross_attention_budget_without_room_for_the_padded_scratch_runs_the_general_kernel ... ok
+test a_non_finite_operand_faults_under_the_name_that_was_called_on_the_routed_path ... ok
+test cross_attention_padded_route_against_general_wall_clock ... ignored, timing, not a correctness check
+test detector_cross_attention_wall_clock ... ignored, timing, not a correctness check
+test empty_operands_are_refused_with_a_shape_error_before_routing ... ok
+test head_dim_32_routed_against_general_wall_clock ... ignored, timing, not a correctness check
+test offset_device_views_take_the_routed_path_correctly ... ok
+test routed_attention_with_scores_past_the_exp_overflow_matches_cpu ... ok
+test routed_cross_attention_matches_cpu ... ok
+test routed_cross_attention_matches_the_general_kernel_at_the_memory_shapes ... ok
+test routed_self_attention_at_head_dim_32_matches_cpu ... ok
+test routed_self_attention_at_head_dim_32_matches_the_general_kernel ... ok
+test routed_self_attention_matches_cpu_on_small_and_vision_head_slices ... ok
+test routed_self_attention_matches_the_general_kernel_at_the_sam_shapes ... ok
+test the_calls_that_stay_on_the_general_kernel_still_match_cpu ... ok
+test the_pad_ratio_bound_and_the_tiled_kernel_split_the_shape_classes ... ok
+test the_route_is_taken_for_plain_self_attention_and_for_nothing_else ... ok
+
+test result: ok. 15 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 2.64s
+

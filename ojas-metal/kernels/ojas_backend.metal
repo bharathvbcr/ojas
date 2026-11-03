@@ -2855,6 +2855,27 @@ kernel void ojas_bcast_binary(
     if (!isfinite(r)) ojas_flag(st, ST_OUT);
 }
 
+/// y[row, col] += bias[col] in place, over a 2-D grid (`col` on x, `row` on
+/// y): the f32 `linear_bias_forward`'s bias, on the GEMM's own output. The
+/// add is `ojas_bcast_binary`'s f32 `a + b` (no contraction: the crate builds
+/// with `-ffp-contract=off`), so the bits are the composed linear and
+/// broadcast add's. A sum that is not finite sets ST_OUT; that also catches
+/// a non-finite product, since the bias was checked finite before.
+kernel void ojas_bias_rows(
+    device float *y [[buffer(0)]],
+    device const float *bias [[buffer(1)]],
+    constant uint &rows [[buffer(2)]],
+    constant uint &cols [[buffer(3)]],
+    device atomic_uint *st [[buffer(4)]],
+    uint2 gid [[thread_position_in_grid]])
+{
+    if (gid.x >= cols || gid.y >= rows) return;
+    const ulong at = (ulong)gid.y * cols + gid.x;
+    const float r = y[at] + bias[gid.x];
+    y[at] = r;
+    if (!isfinite(r)) ojas_flag(st, ST_OUT);
+}
+
 /// y = x * scale.
 kernel void ojas_scale_fwd(
     device const float *x [[buffer(0)]],
@@ -3031,6 +3052,143 @@ kernel void ojas_attn_bwd_dr(
 /// (the ragged tail of the last block) is masked, so its score is not read
 /// and its probability is exactly 0. Otherwise `Tk == T` and the form is the
 /// causal one above.
+///
+/// This body is the sequential bf16 accumulation mode
+/// (`MetalBackend::set_bf16_accumulation`): scalar loops that round to bf16
+/// after every multiply and add, in the same blocks and rows as the f32 body
+/// below. It has its own entry point (`ojas_attn_fwd_bf16`), so the f32
+/// entries carry no runtime branch to it.
+inline void attn_fwd_bf16_body(
+    device float *Q, device float *K, device float *V, device float *O, device float *LSE,
+    device atomic_uint *st, uint T, uint Tk, bool cross, uint D, uint rep, uint W, float scale,
+    uint2 tgpig, uint tid, threadgroup float *S, threadgroup float *m_row,
+    threadgroup float *l_row, threadgroup float *a_row,
+    device const float *bias, uint bias_flags, uint bias_b, uint bias_h, uint bias_q, uint H)
+{
+    const uint q0 = tgpig.x * (uint)ATT_BQ;
+    if (q0 >= T) { return; }
+    const uint nq = min((uint)ATT_BQ, T - q0);
+    const uint bh = tgpig.y;
+    const uint b = (H > 0u) ? (bh / H) : 0u;
+    const uint h = (H > 0u) ? (bh % H) : 0u;
+    const ulong base = (ulong)bh * T * D;
+    const ulong kv_base = (ulong)(bh / rep) * Tk * D;
+    const uint t_end = cross ? Tk : q0 + nq;
+    const bool has_bias = (bias_flags & 2u) != 0u;
+
+    const uint r = tid / (uint)ATT_TPR;
+    const uint c0 = (tid % (uint)ATT_TPR) * (uint)ATT_FWD_CPR;
+    const bool row_live = r < nq;
+    const uint qi = q0 + r;
+    bool bad = false;
+
+    if (tid < (uint)ATT_BQ) {
+        m_row[tid] = -INFINITY;
+        l_row[tid] = 0.0f;
+    }
+    for (uint e = tid; e < nq * D; e += (uint)ATT_THREADS) {
+        const uint rr = e / D;
+        const uint d = e % D;
+        O[base + (ulong)(q0 + rr) * D + d] = 0.0f;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    ulong bias_at = 0;
+    if (has_bias && row_live) {
+        const ulong plane = (ulong)(bias_b == 1u ? 0u : b) * bias_h + (bias_h == 1u ? 0u : h);
+        bias_at = (plane * bias_q + (bias_q == 1u ? 0u : qi)) * Tk;
+    }
+
+    const float scale_bf = ojas_bf16(scale);
+    for (uint kb = cross ? 0u : attn_first_key(q0, W, ATT_FWD_BK); kb < t_end;
+         kb += (uint)ATT_FWD_BK) {
+        for (uint idx = tid; idx < (uint)(ATT_BQ * ATT_FWD_BK); idx += (uint)ATT_THREADS) {
+            const uint rr = idx / (uint)ATT_FWD_BK;
+            const uint cc = idx % (uint)ATT_FWD_BK;
+            const uint qq = q0 + rr;
+            const uint kk = kb + cc;
+            float acc = 0.0f;
+            if (qq < T && kk < Tk) {
+                const ulong q_off = base + (ulong)qq * D;
+                const ulong k_off = kv_base + (ulong)kk * D;
+                for (uint d = 0u; d < D; ++d) {
+                    acc = ojas_bf16(acc + ojas_bf16(ojas_bf16(Q[q_off + d]) * ojas_bf16(K[k_off + d])));
+                }
+            }
+            S[idx] = acc;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        float s[ATT_FWD_CPR];
+        float mx = -INFINITY;
+        for (uint c = 0; c < (uint)ATT_FWD_CPR; ++c) {
+            const uint kj = kb + c0 + c;
+            const bool live = row_live && (cross ? kj < Tk : attn_live(qi, kj, W));
+            float v = ojas_bf16(S[r * ATT_FWD_BK + c0 + c] * scale_bf);
+            if (has_bias && live) {
+                v = ojas_bf16(v + ojas_bf16(bias[bias_at + kj]));
+            }
+            const bool ok = live && isfinite(v);
+            bad = bad || (live && !ok);
+            s[c] = ok ? v : -INFINITY;
+            mx = max(mx, s[c]);
+        }
+        mx = max(mx, simd_shuffle_xor(mx, 1));
+        mx = max(mx, simd_shuffle_xor(mx, 2));
+        const float m_old = m_row[r];
+        const float m_new = max(m_old, mx);
+        const float alpha = (m_old == -INFINITY) ? 0.0f : ojas_bf16(precise::exp(m_old - m_new));
+        for (uint c = 0; c < (uint)ATT_FWD_CPR; ++c) {
+            const float p = (s[c] == -INFINITY) ? 0.0f : ojas_bf16(precise::exp(s[c] - m_new));
+            S[r * ATT_FWD_BK + c0 + c] = p;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if ((tid % (uint)ATT_TPR) == 0u) {
+            float row_sum = 0.0f;
+            for (uint cc = 0u; cc < (uint)ATT_FWD_BK; ++cc) {
+                row_sum = ojas_bf16(row_sum + S[r * ATT_FWD_BK + cc]);
+            }
+            l_row[r] = ojas_bf16(ojas_bf16(l_row[r] * alpha) + row_sum);
+            m_row[r] = m_new;
+            a_row[r] = alpha;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (uint e = tid; e < nq * D; e += (uint)ATT_THREADS) {
+            const uint rr = e / D;
+            const uint d = e % D;
+            const ulong o_at = base + (ulong)(q0 + rr) * D + d;
+            float acc = ojas_bf16(O[o_at] * a_row[rr]);
+            const uint nk = min((uint)ATT_FWD_BK, Tk > kb ? Tk - kb : 0u);
+            for (uint cc = 0u; cc < nk; ++cc) {
+                const float p = S[rr * ATT_FWD_BK + cc];
+                const float vv = ojas_bf16(V[kv_base + (ulong)(kb + cc) * D + d]);
+                acc = ojas_bf16(acc + ojas_bf16(p * vv));
+            }
+            O[o_at] = acc;
+        }
+        threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_threadgroup);
+    }
+    if (row_live && (tid % (uint)ATT_TPR) == 0u) {
+        const float lse_v = ojas_bf16(m_row[r] + ojas_bf16(precise::log(l_row[r])));
+        LSE[(ulong)bh * T + qi] = lse_v;
+        bad = bad || !isfinite(lse_v);
+    }
+    for (uint e = tid; e < nq * D; e += (uint)ATT_THREADS) {
+        const uint rr = e / D;
+        const uint d = e % D;
+        const ulong o_at = base + (ulong)(q0 + rr) * D + d;
+        const float l = l_row[rr];
+        const float inv = (l > 0.0f) ? ojas_bf16(precise::divide(1.0f, l)) : 0.0f;
+        const float ov = ojas_bf16(O[o_at] * inv);
+        O[o_at] = ov;
+        bad = bad || !isfinite(ov);
+    }
+    if (bad) atomic_store_explicit(&st[ST_OUT], 1u, memory_order_relaxed);
+}
+
+/// The f32 forward on the TensorOps matrix units: the `ojas_attn_fwd_d##DM`
+/// entries.
 template <int DM>
 inline void attn_fwd_tiled_body(
     device float *Q, device float *K, device float *V, device float *O, device float *LSE,
@@ -3048,121 +3206,7 @@ inline void attn_fwd_tiled_body(
     const ulong base = (ulong)bh * T * D;
     const ulong kv_base = (ulong)(bh / rep) * Tk * D;
     const uint t_end = cross ? Tk : q0 + nq;
-    const bool bf16_acc = (bias_flags & 32u) != 0u;
     const bool has_bias = (bias_flags & 2u) != 0u;
-
-    if (bf16_acc) {
-        const uint r = tid / (uint)ATT_TPR;
-        const uint c0 = (tid % (uint)ATT_TPR) * (uint)ATT_FWD_CPR;
-        const bool row_live = r < nq;
-        const uint qi = q0 + r;
-        bool bad = false;
-
-        if (tid < (uint)ATT_BQ) {
-            m_row[tid] = -INFINITY;
-            l_row[tid] = 0.0f;
-        }
-        for (uint e = tid; e < nq * D; e += (uint)ATT_THREADS) {
-            const uint rr = e / D;
-            const uint d = e % D;
-            O[base + (ulong)(q0 + rr) * D + d] = 0.0f;
-        }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-
-        ulong bias_at = 0;
-        if (has_bias && row_live) {
-            const ulong plane = (ulong)(bias_b == 1u ? 0u : b) * bias_h + (bias_h == 1u ? 0u : h);
-            bias_at = (plane * bias_q + (bias_q == 1u ? 0u : qi)) * Tk;
-        }
-
-        const float scale_bf = ojas_bf16(scale);
-        for (uint kb = cross ? 0u : attn_first_key(q0, W, ATT_FWD_BK); kb < t_end;
-             kb += (uint)ATT_FWD_BK) {
-            for (uint idx = tid; idx < (uint)(ATT_BQ * ATT_FWD_BK); idx += (uint)ATT_THREADS) {
-                const uint rr = idx / (uint)ATT_FWD_BK;
-                const uint cc = idx % (uint)ATT_FWD_BK;
-                const uint qq = q0 + rr;
-                const uint kk = kb + cc;
-                float acc = 0.0f;
-                if (qq < T && kk < Tk) {
-                    const ulong q_off = base + (ulong)qq * D;
-                    const ulong k_off = kv_base + (ulong)kk * D;
-                    for (uint d = 0u; d < D; ++d) {
-                        acc = ojas_bf16(acc + ojas_bf16(ojas_bf16(Q[q_off + d]) * ojas_bf16(K[k_off + d])));
-                    }
-                }
-                S[idx] = acc;
-            }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
-
-            float s[ATT_FWD_CPR];
-            float mx = -INFINITY;
-            for (uint c = 0; c < (uint)ATT_FWD_CPR; ++c) {
-                const uint kj = kb + c0 + c;
-                const bool live = row_live && (cross ? kj < Tk : attn_live(qi, kj, W));
-                float v = ojas_bf16(S[r * ATT_FWD_BK + c0 + c] * scale_bf);
-                if (has_bias && live) {
-                    v = ojas_bf16(v + ojas_bf16(bias[bias_at + kj]));
-                }
-                const bool ok = live && isfinite(v);
-                bad = bad || (live && !ok);
-                s[c] = ok ? v : -INFINITY;
-                mx = max(mx, s[c]);
-            }
-            mx = max(mx, simd_shuffle_xor(mx, 1));
-            mx = max(mx, simd_shuffle_xor(mx, 2));
-            const float m_old = m_row[r];
-            const float m_new = max(m_old, mx);
-            const float alpha = (m_old == -INFINITY) ? 0.0f : ojas_bf16(precise::exp(m_old - m_new));
-            for (uint c = 0; c < (uint)ATT_FWD_CPR; ++c) {
-                const float p = (s[c] == -INFINITY) ? 0.0f : ojas_bf16(precise::exp(s[c] - m_new));
-                S[r * ATT_FWD_BK + c0 + c] = p;
-            }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
-            if ((tid % (uint)ATT_TPR) == 0u) {
-                float row_sum = 0.0f;
-                for (uint cc = 0u; cc < (uint)ATT_FWD_BK; ++cc) {
-                    row_sum = ojas_bf16(row_sum + S[r * ATT_FWD_BK + cc]);
-                }
-                l_row[r] = ojas_bf16(ojas_bf16(l_row[r] * alpha) + row_sum);
-                m_row[r] = m_new;
-                a_row[r] = alpha;
-            }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
-
-            for (uint e = tid; e < nq * D; e += (uint)ATT_THREADS) {
-                const uint rr = e / D;
-                const uint d = e % D;
-                const ulong o_at = base + (ulong)(q0 + rr) * D + d;
-                float acc = ojas_bf16(O[o_at] * a_row[rr]);
-                const uint nk = min((uint)ATT_FWD_BK, Tk > kb ? Tk - kb : 0u);
-                for (uint cc = 0u; cc < nk; ++cc) {
-                    const float p = S[rr * ATT_FWD_BK + cc];
-                    const float vv = ojas_bf16(V[kv_base + (ulong)(kb + cc) * D + d]);
-                    acc = ojas_bf16(acc + ojas_bf16(p * vv));
-                }
-                O[o_at] = acc;
-            }
-            threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_threadgroup);
-        }
-        if (row_live && (tid % (uint)ATT_TPR) == 0u) {
-            const float lse_v = ojas_bf16(m_row[r] + ojas_bf16(precise::log(l_row[r])));
-            LSE[(ulong)bh * T + qi] = lse_v;
-            bad = bad || !isfinite(lse_v);
-        }
-        for (uint e = tid; e < nq * D; e += (uint)ATT_THREADS) {
-            const uint rr = e / D;
-            const uint d = e % D;
-            const ulong o_at = base + (ulong)(q0 + rr) * D + d;
-            const float l = l_row[rr];
-            const float inv = (l > 0.0f) ? ojas_bf16(precise::divide(1.0f, l)) : 0.0f;
-            const float ov = ojas_bf16(O[o_at] * inv);
-            O[o_at] = ov;
-            bad = bad || !isfinite(ov);
-        }
-        if (bad) atomic_store_explicit(&st[ST_OUT], 1u, memory_order_relaxed);
-        return;
-    }
 
     constexpr auto qk_desc = matmul2d_descriptor(
         ATT_BQ, ATT_FWD_BK, DM, false, true, false, matmul2d_descriptor::mode::multiply);
@@ -3362,6 +3406,36 @@ OJAS_ATTN_TILED(32)
 OJAS_ATTN_TILED(64)
 OJAS_ATTN_TILED(128)
 OJAS_ATTN_TILED(256)
+
+/* The forward under bf16 accumulation (`attn_fwd_bf16_body`), at every head
+   dim the f32 entries cover: its loops run to the runtime D. Same buffers and
+   grid as `ojas_attn_fwd_d##DM`; bit 5 of `bias_flags` is not read. */
+kernel void ojas_attn_fwd_bf16(
+    device const float *q [[buffer(0)]], device const float *k [[buffer(1)]],
+    device const float *v [[buffer(2)]], device float *o [[buffer(3)]],
+    device float *lse [[buffer(4)]], device atomic_uint *st [[buffer(5)]],
+    constant uint &T [[buffer(6)]], constant uint &D [[buffer(7)]],
+    constant uint &rep [[buffer(8)]], constant uint &W [[buffer(9)]],
+    constant float &scale [[buffer(10)]], constant uint &Tk [[buffer(11)]],
+    constant uint &cross [[buffer(12)]],
+    device const float *bias [[buffer(13)]],
+    constant uint &bias_flags [[buffer(14)]],
+    constant uint &bias_b [[buffer(15)]],
+    constant uint &bias_h [[buffer(16)]],
+    constant uint &bias_q [[buffer(17)]],
+    constant uint &H [[buffer(18)]],
+    uint2 tgpig [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]])
+{
+    threadgroup float S[ATT_BQ * ATT_FWD_BK];
+    threadgroup float m_row[ATT_BQ];
+    threadgroup float l_row[ATT_BQ];
+    threadgroup float a_row[ATT_BQ];
+    attn_fwd_bf16_body(const_cast<device float *>(q), const_cast<device float *>(k),
+                       const_cast<device float *>(v), o, lse, st, T, Tk, cross != 0u, D,
+                       rep, W, scale, tgpig, tid, S, m_row, l_row, a_row, bias,
+                       bias_flags, bias_b, bias_h, bias_q, H);
+}
 
 // ------------------------------------------ general attention (forward) ---
 //

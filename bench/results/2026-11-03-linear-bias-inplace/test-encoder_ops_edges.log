@@ -1,0 +1,15 @@
+   Compiling ojas-metal v0.1.0 (/Users/bharath/Code/kern1103/ojas/ojas-metal)
+    Finished `release` profile [optimized] target(s) in 1.48s
+     Running tests/encoder_ops_edges.rs (/Users/bharath/Code/kern1103/target/release/deps/encoder_ops_edges-6d8d35acecf10ff7)
+
+running 7 tests
+test autocast_over_metal_reaches_the_metal_methods_not_the_refusing_default ... ok
+test layer_norm_matches_cpu_at_width_one_and_at_awkward_widths ... ok
+test layer_norm_of_a_large_mean_row_matches_an_f64_reference ... ok
+test layer_norm_refuses_a_negative_eps_it_cannot_run ... ok
+test offset_device_views_give_the_cpu_answer ... ok
+test softmax_matches_cpu_on_large_logits_and_wide_rows ... ok
+test softmax_of_a_masked_row_is_a_deferred_fault_like_the_cpus_refusal ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+

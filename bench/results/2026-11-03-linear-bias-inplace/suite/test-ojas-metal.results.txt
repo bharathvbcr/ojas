@@ -1,0 +1,155 @@
+     Running unittests src/lib.rs (/Users/bharath/Code/kern1103/target/release/deps/ojas_metal-87d457029fe9301b)
+test result: ok. 87 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.90s
+     Running tests/accumulate_grad.rs (/Users/bharath/Code/kern1103/target/release/deps/accumulate_grad-837dc6863c814e1e)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+     Running tests/adamw_msl_parity.rs (/Users/bharath/Code/kern1103/target/release/deps/adamw_msl_parity-8d49bbe6c83b7ee7)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.55s
+     Running tests/adversarial_challenger_m4.rs (/Users/bharath/Code/kern1103/target/release/deps/adversarial_challenger_m4-27aa05d4e0cbf503)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+     Running tests/adversarial_m3_zero_copy.rs (/Users/bharath/Code/kern1103/target/release/deps/adversarial_m3_zero_copy-3ea4eb88813ad391)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+     Running tests/adversarial_m4_cross_attention.rs (/Users/bharath/Code/kern1103/target/release/deps/adversarial_m4_cross_attention-920ac6cc79ae2988)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.11s
+     Running tests/adversarial_tier5_metal.rs (/Users/bharath/Code/kern1103/target/release/deps/adversarial_tier5_metal-6bc67df6b2d7c1fa)
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+     Running tests/attention_backward.rs (/Users/bharath/Code/kern1103/target/release/deps/attention_backward-a23a7988dbd85726)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.65s
+     Running tests/attention_backward_general.rs (/Users/bharath/Code/kern1103/target/release/deps/attention_backward_general-22961d5bd36188ac)
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.99s
+     Running tests/attention_dims.rs (/Users/bharath/Code/kern1103/target/release/deps/attention_dims-0aae1e6cb5c1207d)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+     Running tests/attention_flash.rs (/Users/bharath/Code/kern1103/target/release/deps/attention_flash-5396d6320c05cb92)
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.62s
+     Running tests/attention_flash_bits.rs (/Users/bharath/Code/kern1103/target/release/deps/attention_flash_bits-94c8783fb6ef21e5)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s
+     Running tests/attention_forward.rs (/Users/bharath/Code/kern1103/target/release/deps/attention_forward-a161439391a141ee)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.52s
+     Running tests/attention_general.rs (/Users/bharath/Code/kern1103/target/release/deps/attention_general-7ca19bcef4a4a6f1)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+     Running tests/attention_masked_nonfinite.rs (/Users/bharath/Code/kern1103/target/release/deps/attention_masked_nonfinite-9610c9521fa743f6)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+     Running tests/attention_routing.rs (/Users/bharath/Code/kern1103/target/release/deps/attention_routing-d0f7c7335f92ba32)
+test result: ok. 15 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 2.52s
+     Running tests/attention_tiled.rs (/Users/bharath/Code/kern1103/target/release/deps/attention_tiled-47e3bbea69bec23f)
+test result: ok. 12 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.44s
+     Running tests/attention_window.rs (/Users/bharath/Code/kern1103/target/release/deps/attention_window-c1f023ce3a867880)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+     Running tests/autocast_lane.rs (/Users/bharath/Code/kern1103/target/release/deps/autocast_lane-b62b9cfac6e36f1e)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+     Running tests/autocast_precast_weight.rs (/Users/bharath/Code/kern1103/target/release/deps/autocast_precast_weight-2f31c6f4780e8f49)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+     Running tests/backend_contract.rs (/Users/bharath/Code/kern1103/target/release/deps/backend_contract-859403e161c6333a)
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.39s
+     Running tests/backend_parity.rs (/Users/bharath/Code/kern1103/target/release/deps/backend_parity-5ec94017376544d0)
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.68s
+     Running tests/bf16_accumulation.rs (/Users/bharath/Code/kern1103/target/release/deps/bf16_accumulation-fa11e12bcdfac6a5)
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s
+     Running tests/bf16_operands.rs (/Users/bharath/Code/kern1103/target/release/deps/bf16_operands-e87534db88e60040)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+     Running tests/bilinear.rs (/Users/bharath/Code/kern1103/target/release/deps/bilinear-42cba7729fab1d1d)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.12s
+     Running tests/cast_bf16.rs (/Users/bharath/Code/kern1103/target/release/deps/cast_bf16-de267065fabc1c6b)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+     Running tests/charged_temporaries.rs (/Users/bharath/Code/kern1103/target/release/deps/charged_temporaries-ce13351ec105438f)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+     Running tests/check_finite.rs (/Users/bharath/Code/kern1103/target/release/deps/check_finite-b52a1e6712bedbe9)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+     Running tests/clip_multi.rs (/Users/bharath/Code/kern1103/target/release/deps/clip_multi-4278d8d5c3901ef7)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+     Running tests/concat_slice_fill.rs (/Users/bharath/Code/kern1103/target/release/deps/concat_slice_fill-4c984f2247e33035)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+     Running tests/concurrency.rs (/Users/bharath/Code/kern1103/target/release/deps/concurrency-c0907f29eccba97e)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+     Running tests/conv2d_depthwise.rs (/Users/bharath/Code/kern1103/target/release/deps/conv2d_depthwise-7d23bc3d5bde2e28)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s
+     Running tests/conv2d_gemm.rs (/Users/bharath/Code/kern1103/target/release/deps/conv2d_gemm-f398b556141156ce)
+test result: ok. 13 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.56s
+     Running tests/conv2d_pointwise.rs (/Users/bharath/Code/kern1103/target/release/deps/conv2d_pointwise-32c29e98f9182d37)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+     Running tests/conv2d_via_im2col.rs (/Users/bharath/Code/kern1103/target/release/deps/conv2d_via_im2col-6ec4292f8fbfe481)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+     Running tests/conv_backward.rs (/Users/bharath/Code/kern1103/target/release/deps/conv_backward-2d79adfbfc2264ae)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+     Running tests/conv_transpose2d_gemm.rs (/Users/bharath/Code/kern1103/target/release/deps/conv_transpose2d_gemm-f6d547248895c6b6)
+test result: ok. 8 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.25s
+     Running tests/cross_entropy.rs (/Users/bharath/Code/kern1103/target/release/deps/cross_entropy-ccec57aa7ac16aeb)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.75s
+     Running tests/deferred_faults.rs (/Users/bharath/Code/kern1103/target/release/deps/deferred_faults-c95bbcf6ce4317c1)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+     Running tests/encoder_backward.rs (/Users/bharath/Code/kern1103/target/release/deps/encoder_backward-48a158740a8089c6)
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.09s
+     Running tests/encoder_ops.rs (/Users/bharath/Code/kern1103/target/release/deps/encoder_ops-2b809eb024156643)
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+     Running tests/encoder_ops_edges.rs (/Users/bharath/Code/kern1103/target/release/deps/encoder_ops_edges-6d8d35acecf10ff7)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+     Running tests/freed_buffers.rs (/Users/bharath/Code/kern1103/target/release/deps/freed_buffers-878b3d41f8186c7a)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+     Running tests/frozen_adversarial.rs (/Users/bharath/Code/kern1103/target/release/deps/frozen_adversarial-6c3385504b276110)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+     Running tests/frozen_checked.rs (/Users/bharath/Code/kern1103/target/release/deps/frozen_checked-4c6009ec1f575deb)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+     Running tests/fused_checks.rs (/Users/bharath/Code/kern1103/target/release/deps/fused_checks-ea54aeef2f7f62ee)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+     Running tests/gate_dbias.rs (/Users/bharath/Code/kern1103/target/release/deps/gate_dbias-f3605e516ef32417)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
+     Running tests/gate_saved.rs (/Users/bharath/Code/kern1103/target/release/deps/gate_saved-b145fd8e27bbb32e)
+test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.07s
+     Running tests/gdn.rs (/Users/bharath/Code/kern1103/target/release/deps/gdn-d82effdcf74ed66a)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+     Running tests/gemma_golden_metal.rs (/Users/bharath/Code/kern1103/target/release/deps/gemma_golden_metal-6e21c11a4440d7a9)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+     Running tests/gemma_ops.rs (/Users/bharath/Code/kern1103/target/release/deps/gemma_ops-bfd271bb89f684cf)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+     Running tests/group_norm.rs (/Users/bharath/Code/kern1103/target/release/deps/group_norm-7068aea34e6e7c13)
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.95s
+     Running tests/hybrid.rs (/Users/bharath/Code/kern1103/target/release/deps/hybrid-e0792be24a24ed53)
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+     Running tests/kv_cache.rs (/Users/bharath/Code/kern1103/target/release/deps/kv_cache-d4d8fec480ffe4a6)
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.19s
+     Running tests/linear_bias_fused.rs (/Users/bharath/Code/kern1103/target/release/deps/linear_bias_fused-fb27b6475131454c)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+     Running tests/linear_ce.rs (/Users/bharath/Code/kern1103/target/release/deps/linear_ce-bd46ab646d0f997e)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.08s
+     Running tests/linear_ce_collapse.rs (/Users/bharath/Code/kern1103/target/release/deps/linear_ce_collapse-8a79c4acb310ed7a)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+     Running tests/max_pool.rs (/Users/bharath/Code/kern1103/target/release/deps/max_pool-3fd10f4f08026943)
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+     Running tests/mem_cap_setter.rs (/Users/bharath/Code/kern1103/target/release/deps/mem_cap_setter-1e7c11ec3ebcf9ea)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+     Running tests/memory_set_aside.rs (/Users/bharath/Code/kern1103/target/release/deps/memory_set_aside-81a9f9a945ae0024)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+     Running tests/mnist_step.rs (/Users/bharath/Code/kern1103/target/release/deps/mnist_step-6f8cd181838d0f73)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+     Running tests/norms.rs (/Users/bharath/Code/kern1103/target/release/deps/norms-f0e9ca7b1d48b123)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+     Running tests/permute.rs (/Users/bharath/Code/kern1103/target/release/deps/permute-3226c53b6238c4b2)
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+     Running tests/permute_patterns.rs (/Users/bharath/Code/kern1103/target/release/deps/permute_patterns-97a15c414ed35ecf)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.83s
+     Running tests/pool_ledger.rs (/Users/bharath/Code/kern1103/target/release/deps/pool_ledger-b622826eed03ff99)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+     Running tests/relu.rs (/Users/bharath/Code/kern1103/target/release/deps/relu-8fe3bae563cdde4d)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+     Running tests/rope_interleaved.rs (/Users/bharath/Code/kern1103/target/release/deps/rope_interleaved-e520420c566ea4a8)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+     Running tests/sam_fixtures_metal.rs (/Users/bharath/Code/kern1103/target/release/deps/sam_fixtures_metal-ec85dfc36a2deba2)
+test result: ok. 0 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/scratch_stacking.rs (/Users/bharath/Code/kern1103/target/release/deps/scratch_stacking-36621c2693556c0e)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.54s
+     Running tests/shape_first.rs (/Users/bharath/Code/kern1103/target/release/deps/shape_first-313d6aefee4465c0)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+     Running tests/topk_rows.rs (/Users/bharath/Code/kern1103/target/release/deps/topk_rows-9720b0d34088e73b)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+     Running tests/training_step.rs (/Users/bharath/Code/kern1103/target/release/deps/training_step-d5de704f9b4301e3)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+     Running tests/upload_heap.rs (/Users/bharath/Code/kern1103/target/release/deps/upload_heap-71defbcf4274dd56)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+     Running tests/wait_count.rs (/Users/bharath/Code/kern1103/target/release/deps/wait_count-29900dab0a9a0e5e)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+     Running tests/wait_triggers.rs (/Users/bharath/Code/kern1103/target/release/deps/wait_triggers-053b1ae6500c14ca)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+     Running tests/window_padding.rs (/Users/bharath/Code/kern1103/target/release/deps/window_padding-e2c952edf156a845)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+     Running tests/with_runtime.rs (/Users/bharath/Code/kern1103/target/release/deps/with_runtime-4d019f4042ea013e)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

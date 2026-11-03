@@ -1,0 +1,19 @@
+   Compiling ojas-metal v0.1.0 (/Users/bharath/Code/kern1103/ojas/ojas-metal)
+    Finished `release` profile [optimized] target(s) in 1.45s
+     Running tests/encoder_ops.rs (/Users/bharath/Code/kern1103/target/release/deps/encoder_ops-2b809eb024156643)
+
+running 11 tests
+test a_non_finite_operand_is_a_deferred_fault_naming_the_op ... ok
+test an_overflowing_output_is_a_deferred_fault ... ok
+test broadcast_add_and_mul_match_cpu_bit_for_bit ... ok
+test channel_layer_norm_matches_cpu ... ok
+test gelu_erf_matches_cpu_across_the_tails ... ok
+test layer_norm_matches_cpu ... ok
+test layer_norm_refuses_a_zero_eps_it_cannot_run ... ok
+test linear_bias_matches_cpu ... ok
+test scale_matches_cpu_bit_for_bit ... ok
+test shape_errors_are_the_cpus_and_immediate ... ok
+test softmax_matches_cpu ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+

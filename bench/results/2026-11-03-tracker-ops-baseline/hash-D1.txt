@@ -1,0 +1,12 @@
+hash	spiketrack_x36400_fwd	7dcf1982b8a935f8	flash_d32 [0, 0] -> [1, 0]
+hash	spiketrack_x36400_saving	015a4d5f1ffb254d
+hash	x_d32_q100_k333	8e75a4cdc81484e4	flash_d32 [2, 0] -> [3, 0]
+hash	x_d32_q5184_k15600	f8830d81ed3b3424	flash_d32 [3, 0] -> [4, 0]
+hash	x_d64_q65_k129_b2h3	3328ba788e3da0fe	flash_d32 [4, 0] -> [4, 0]
+hash	x_d128_q40_k70	60db1648ce1f392b	flash_d32 [4, 0] -> [4, 0]
+hash	x_d32_q100_k333_bias	57e9841d0f71ee0e	flash_d32 [4, 0] -> [5, 0]
+hash	causal_d32_t200	9c4887f457f67704
+hash	causal_d64_t150_w37	432a0c3963043c4a
+hash	bf16_x_d32_q100_k333	51fa858092bf555a	flash_d32 [6, 0] -> [7, 0]
+hash	bf16_x_d32_q100_k333_bias	c670009859424277	flash_d32 [7, 0] -> [8, 0]
+hash	bf16_causal_d32_t200	f975f211e1ce5364

@@ -229,6 +229,8 @@ const KERNELS: &[&str] = &[
     "ojas_attn_bwd_dq_d128",
     "ojas_attn_bwd_dkv_d128",
     "ojas_attn_fwd_d256",
+    "ojas_attn_fwd_bf16",
+    "ojas_bias_rows",
     "ojas_attn_gen_fwd",
     "ojas_im2col",
     "ojas_xattn_part_d16",
@@ -2500,7 +2502,20 @@ impl Worker {
             let bias_t = self.tt(&bv, &[nout])?;
             tessl::gemm::gemm_nt_bf16_bias(&a, &b, &c, &bias_t, false).map_err(metal_err)?;
         } else {
-            return Err(metal_err("linear_bias requires Lane::Bf16 and TensorOps"));
+            // f32: the exact-f32 GEMM, then the bias added in place by a pass
+            // that checks each sum (`ojas_bias_rows`), so no output scan and
+            // no second buffer. Bit for bit `linear_forward` followed by
+            // `broadcast_add_forward`.
+            self.gemm_nt(lane, &xv, &wv, &y, rows, kin, nout)?;
+            let (r, c) = (u32_of(rows)?, u32_of(nout)?);
+            self.k2("ojas_bias_rows", nout, rows, |b| {
+                bind(b, &y, 0);
+                bind(b, &bv, 1);
+                set_u32(b, r, 2);
+                set_u32(b, c, 3);
+                bind_st(b, &st, 4);
+            })?;
+            return Ok(self.keep(vec![y]));
         }
         self.check(&st, &y, ST_OUT)?;
         Ok(self.keep(vec![y]))
@@ -2728,6 +2743,19 @@ impl Worker {
         Ok(self.keep(vec![y]))
     }
 
+    /// The tiled forward's entry point for a call at head dim `d`: the f32
+    /// matrix-unit kernel of its compiled width, or `ojas_attn_fwd_bf16` (one
+    /// entry for every width) under bf16 accumulation. Two entries, so the f32
+    /// kernel carries no runtime branch to the scalar bf16 loops.
+    fn attn_fwd_kernel(&self, d: u32) -> Res<String> {
+        let width = Self::attn_width(d)?;
+        Ok(if self.bf16_accum() {
+            "ojas_attn_fwd_bf16".to_string()
+        } else {
+            format!("ojas_attn_fwd_d{width}")
+        })
+    }
+
     /// Compiled width of the tiled attention kernels (`ojas_attn_*_d*`).
     /// Their threadgroup memory does not grow with the head dim, so they are
     /// built up to 256; `ojas_core::METAL_MAX_HEAD_DIM` may refuse less
@@ -2780,7 +2808,7 @@ impl Worker {
     /// row's log-sum-exp. Grouped-query heads read their KV plane in place.
     fn sdpa(&mut self, q: Arg, k: Arg, v: Arg, g: SdpaGeom) -> Res<Reply> {
         const OP: &str = "causal_sdpa_forward";
-        let width = Self::attn_width(g.d)?;
+        let name = self.attn_fwd_kernel(g.d)?;
         let scale = sdpa_scale(g.d)?;
         attn_plane_fits(OP, g.t, g.d)?;
         let (qv, kv, vv) = (self.view(q)?, self.view(k)?, self.view(v)?);
@@ -2792,7 +2820,6 @@ impl Worker {
         // live scores, O and LSE in-kernel and sets ST_OUT when any is
         // non-finite.
         if qv.n > 0 {
-            let name = format!("ojas_attn_fwd_d{width}");
             let groups = (g.t as usize).div_ceil(ATTN_ROWS);
             let bias_flags = if self.bf16_accum() { 32u32 } else { 0u32 };
             self.ktg(&name, groups, g.bh as usize, ATTN_THREADS, |b| {
@@ -2944,9 +2971,9 @@ impl Worker {
         if g.flash {
             if qv.n > 0 {
                 // One threadgroup per 32 query rows of a plane, four
-                // simdgroups, no partials: `ojas_attn_fwd_d{width}` with `cross`.
-                let width = Self::attn_width(g.d)?;
-                let name = format!("ojas_attn_fwd_d{width}");
+                // simdgroups, no partials: `ojas_attn_fwd_d{width}` (or the
+                // bf16 entry) with `cross`.
+                let name = self.attn_fwd_kernel(g.d)?;
                 let [bias_b, bias_h, bias_q] = g.bias.unwrap_or([1, 1, 1]);
                 let bias_flags = (u32::from(g.bias.is_some()) << 1) | bf16_flag;
                 let bias_buf = bv.as_ref().unwrap_or(&qv);

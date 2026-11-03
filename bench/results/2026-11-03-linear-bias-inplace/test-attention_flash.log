@@ -1,0 +1,19 @@
+   Compiling ojas-metal v0.1.0 (/Users/bharath/Code/kern1103/ojas/ojas-metal)
+    Finished `release` profile [optimized] target(s) in 1.61s
+     Running tests/attention_flash.rs (/Users/bharath/Code/kern1103/target/release/deps/attention_flash-5396d6320c05cb92)
+
+running 11 tests
+test a_budget_that_holds_only_the_outputs_still_runs_the_flash_kernel ... ok
+test a_non_finite_operand_faults_under_the_name_that_was_called ... ok
+test a_row_maximum_that_moves_between_key_blocks_is_rescaled ... ok
+test a_tight_tolerance_at_the_sam_scale_cannot_hide_a_mask_or_rescale_error ... ok
+test attention_forward_beyond_the_pad_ratio_runs_the_flash_kernel ... ok
+test flash_cross_attention_adversarial_additive_bias_stress ... ok
+test flash_cross_attention_with_additive_bias_matches_cpu ... ok
+test query_and_key_counts_around_the_key_block_and_the_query_block_match ... ok
+test the_calls_the_route_does_not_cover_are_planned_and_run_elsewhere ... ok
+test the_dispatcher_routes_on_the_threadgroup_floor ... ok
+test the_sam_shapes_and_batches_and_grouped_heads_match ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.23s
+

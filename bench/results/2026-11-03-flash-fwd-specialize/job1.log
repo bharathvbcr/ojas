@@ -1,0 +1,141 @@
+mac_heavy: 2026-11-03T15:28:55Z 'spiketrack-flash-fwd-1' waiting 0s for the lock; holder: label=spiketrack-e23-paired pid=61274 start=2026-11-03T15:27:48Z cwd=/Users/bharath/Code/research/SpikeTrack 
+mac_heavy: 2026-11-03T15:33:56Z 'spiketrack-flash-fwd-1' waiting 300s for the lock; holder: label=spiketrack-e23-paired pid=61274 start=2026-11-03T15:27:48Z cwd=/Users/bharath/Code/research/SpikeTrack 
+mac_heavy: 2026-11-03T15:38:57Z 'spiketrack-flash-fwd-1' waiting 600s for the lock; holder: label=spiketrack-e23-paired pid=61274 start=2026-11-03T15:27:48Z cwd=/Users/bharath/Code/research/SpikeTrack 
+mac_heavy: 2026-11-03T15:43:58Z 'spiketrack-flash-fwd-1' waiting 900s for the lock; holder: label=spiketrack-e23-paired pid=61274 start=2026-11-03T15:27:48Z cwd=/Users/bharath/Code/research/SpikeTrack 
+mac_heavy: 2026-11-03T15:48:59Z 'spiketrack-flash-fwd-1' waiting 1200s for the lock; holder: label=spiketrack-e23-paired pid=61274 start=2026-11-03T15:27:48Z cwd=/Users/bharath/Code/research/SpikeTrack 
+mac_heavy: 2026-11-03T15:54:00Z 'spiketrack-flash-fwd-1' waiting 1500s for the lock; holder: label=spiketrack-e23-paired pid=61274 start=2026-11-03T15:27:48Z cwd=/Users/bharath/Code/research/SpikeTrack 
+mac_heavy: 2026-11-03T15:59:01Z 'spiketrack-flash-fwd-1' waiting 1800s for the lock; holder: label=spiketrack-e23-paired pid=61274 start=2026-11-03T15:27:48Z cwd=/Users/bharath/Code/research/SpikeTrack 
+mac_heavy: 2026-11-03T16:04:02Z 'spiketrack-flash-fwd-1' waiting 2100s for the lock; holder: label=spiketrack-e23-paired pid=61274 start=2026-11-03T15:27:48Z cwd=/Users/bharath/Code/research/SpikeTrack 
+mac_heavy: 2026-11-03T16:09:03Z 'spiketrack-flash-fwd-1' waiting 2400s for the lock; holder: label=spiketrack-e23-paired pid=61274 start=2026-11-03T15:27:48Z cwd=/Users/bharath/Code/research/SpikeTrack 
+mac_heavy: 2026-11-03T16:14:04Z 'spiketrack-flash-fwd-1' waiting 2700s for the lock; holder: label=spiketrack-e23-paired pid=61274 start=2026-11-03T15:27:48Z cwd=/Users/bharath/Code/research/SpikeTrack 
+mac_heavy: 2026-11-03T16:19:05Z 'spiketrack-flash-fwd-1' waiting 3000s for the lock; holder: label=spiketrack-e23-paired pid=61274 start=2026-11-03T15:27:48Z cwd=/Users/bharath/Code/research/SpikeTrack 
+mac_heavy: 2026-11-03T16:21:25Z 'spiketrack-flash-fwd-1' waits without the lock: no cargo slot free (all 2 held in /Users/bharath/.cache/cargo-slots)
+mac_heavy: 2026-11-03T16:24:06Z 'spiketrack-flash-fwd-1' waiting 3300s for the lock; holder: label=spiketrack-e23-paired pid=61274 start=2026-11-03T15:27:48Z cwd=/Users/bharath/Code/research/SpikeTrack 
+mac_heavy: 2026-11-03T16:29:07Z 'spiketrack-flash-fwd-1' waiting 3600s for the lock; holder: label=spiketrack-e23-paired pid=61274 start=2026-11-03T15:27:48Z cwd=/Users/bharath/Code/research/SpikeTrack 
+mac_heavy: 2026-11-03T16:34:08Z 'spiketrack-flash-fwd-1' waiting 3900s for the lock; holder: label=spiketrack-e23-paired pid=61274 start=2026-11-03T15:27:48Z cwd=/Users/bharath/Code/research/SpikeTrack 
+mac_heavy: 2026-11-03T16:34:49Z 'spiketrack-flash-fwd-1' holds the lock (waited 3940s; load 11.23, 1492 processes); running: bash /Users/bharath/Code/kern1103/ojas/bench/results/2026-11-03-flash-fwd-specialize/job1.sh
+== rules.md mtime 2026-11-03T09:30:35
+== ojas HEAD 33cddcd92ca22d178c0904811fade2906edaee52 (claude/flash-fwd-specialize-1103); tessl 52bdd196265a687def945fc5834cefdce48b08ff
+== ojas status:
+?? bench/results/2026-11-03-flash-fwd-specialize/
+?? ojas-metal/tests/attention_flash_bits.rs
+== tessl status:
+== start 2026-11-03T16:34:49Z 10:34  up 1 day, 21:30, 1 user, load averages: 11.23 14.31 13.70
+== build A (3406d65) 16:34:49Z load { 11.23 14.31 13.70 }
+A 3406d65 a2d037e19161ae88
+== build B (c80bda3) 16:35:52Z load { 17.22 16.03 14.42 }
+B c80bda3 92d70148b0ee8b77
+== build C (33cddcd) 16:36:02Z load { 15.57 15.71 14.33 }
+C 33cddcd a0748016c39b87cb
+== builds done 16:36:12Z load { 13.94 15.36 14.22 }
+== hash A 16:36:12Z load { 13.94 15.36 14.22 }
+== hash B 16:36:12Z load { 13.94 15.36 14.22 }
+== hash C 16:36:13Z load { 13.94 15.36 14.22 }
+== hashes B: identical to A on every line
+== hashes C: identical to A on every line
+== round 0 order A B C A2 16:36:15Z load { 13.94 15.36 14.22 }
+r0	probe	A	x36400	min 46.996	p10 47.275	median 47.937	p90 49.536	n 15	flash_d32 [18, 0]	load_start 13.94 15.36 14.22	load_end 13.23 15.19 14.17
+r0	probe	A	x15600	min 18.852	p10 19.341	median 19.752	p90 20.172	n 15	flash_d32 [18, 0]	load_start 13.94 15.36 14.22	load_end 13.23 15.19 14.17
+r0	probe	A	ctl	min 5.488	p10 5.496	median 5.524	p90 5.704	n 15	flash_d32 [0, 0]	load_start 13.94 15.36 14.22	load_end 13.23 15.19 14.17
+r0	probe	B	x36400	min 47.630	p10 47.641	median 49.849	p90 53.924	n 15	flash_d32 [18, 0]	load_start 13.23 15.19 14.17	load_end 13.23 15.19 14.17
+r0	probe	B	x15600	min 19.614	p10 19.705	median 20.752	p90 21.668	n 15	flash_d32 [18, 0]	load_start 13.23 15.19 14.17	load_end 13.23 15.19 14.17
+r0	probe	B	ctl	min 5.518	p10 5.539	median 5.846	p90 6.117	n 15	flash_d32 [0, 0]	load_start 13.23 15.19 14.17	load_end 13.23 15.19 14.17
+r0	probe	C	x36400	min 47.876	p10 50.236	median 51.341	p90 54.335	n 15	flash_d32 [18, 0]	load_start 13.23 15.19 14.17	load_end 13.23 15.19 14.17
+r0	probe	C	x15600	min 19.903	p10 21.156	median 21.433	p90 22.027	n 15	flash_d32 [18, 0]	load_start 13.23 15.19 14.17	load_end 13.23 15.19 14.17
+r0	probe	C	ctl	min 5.780	p10 5.855	median 6.016	p90 6.383	n 15	flash_d32 [0, 0]	load_start 13.23 15.19 14.17	load_end 13.23 15.19 14.17
+r0	probe	A2	x36400	min 46.584	p10 47.212	median 47.748	p90 48.674	n 15	flash_d32 [18, 0]	load_start 13.23 15.19 14.17	load_end 12.41 14.99 14.10
+r0	probe	A2	x15600	min 19.070	p10 19.102	median 19.559	p90 20.848	n 15	flash_d32 [18, 0]	load_start 13.23 15.19 14.17	load_end 12.41 14.99 14.10
+r0	probe	A2	ctl	min 5.415	p10 5.497	median 5.577	p90 5.862	n 15	flash_d32 [0, 0]	load_start 13.23 15.19 14.17	load_end 12.41 14.99 14.10
+== round 1 order A A2 C B 16:36:21Z load { 12.41 14.99 14.10 }
+r1	probe	A	x36400	min 47.026	p10 47.236	median 48.065	p90 49.298	n 15	flash_d32 [18, 0]	load_start 12.41 14.99 14.10	load_end 12.41 14.99 14.10
+r1	probe	A	x15600	min 19.096	p10 19.103	median 19.507	p90 19.931	n 15	flash_d32 [18, 0]	load_start 12.41 14.99 14.10	load_end 12.41 14.99 14.10
+r1	probe	A	ctl	min 5.487	p10 5.498	median 5.563	p90 5.649	n 15	flash_d32 [0, 0]	load_start 12.41 14.99 14.10	load_end 12.41 14.99 14.10
+r1	probe	A2	x36400	min 47.345	p10 47.771	median 48.348	p90 49.343	n 15	flash_d32 [18, 0]	load_start 12.41 14.99 14.10	load_end 12.41 14.99 14.10
+r1	probe	A2	x15600	min 19.148	p10 19.161	median 19.547	p90 20.506	n 15	flash_d32 [18, 0]	load_start 12.41 14.99 14.10	load_end 12.41 14.99 14.10
+r1	probe	A2	ctl	min 5.488	p10 5.498	median 5.605	p90 5.721	n 15	flash_d32 [0, 0]	load_start 12.41 14.99 14.10	load_end 12.41 14.99 14.10
+r1	probe	C	x36400	min 46.756	p10 46.936	median 48.627	p90 50.584	n 15	flash_d32 [18, 0]	load_start 12.41 14.99 14.10	load_end 12.41 14.99 14.10
+r1	probe	C	x15600	min 19.509	p10 19.528	median 20.461	p90 20.997	n 15	flash_d32 [18, 0]	load_start 12.41 14.99 14.10	load_end 12.41 14.99 14.10
+r1	probe	C	ctl	min 5.413	p10 5.487	median 5.798	p90 6.040	n 15	flash_d32 [0, 0]	load_start 12.41 14.99 14.10	load_end 12.41 14.99 14.10
+r1	probe	B	x36400	min 48.235	p10 48.601	median 50.502	p90 52.686	n 15	flash_d32 [18, 0]	load_start 12.41 14.99 14.10	load_end 11.89 14.84 14.05
+r1	probe	B	x15600	min 19.529	p10 19.541	median 20.817	p90 21.987	n 15	flash_d32 [18, 0]	load_start 12.41 14.99 14.10	load_end 11.89 14.84 14.05
+r1	probe	B	ctl	min 5.537	p10 5.541	median 5.762	p90 6.036	n 15	flash_d32 [0, 0]	load_start 12.41 14.99 14.10	load_end 11.89 14.84 14.05
+== round 2 order C A2 A B 16:36:27Z load { 11.89 14.84 14.05 }
+r2	probe	C	x36400	min 46.570	p10 47.233	median 49.746	p90 51.469	n 15	flash_d32 [18, 0]	load_start 11.89 14.84 14.05	load_end 11.89 14.84 14.05
+r2	probe	C	x15600	min 19.716	p10 19.897	median 20.517	p90 21.867	n 15	flash_d32 [18, 0]	load_start 11.89 14.84 14.05	load_end 11.89 14.84 14.05
+r2	probe	C	ctl	min 5.551	p10 5.599	median 5.754	p90 6.101	n 15	flash_d32 [0, 0]	load_start 11.89 14.84 14.05	load_end 11.89 14.84 14.05
+r2	probe	A2	x36400	min 47.622	p10 47.625	median 49.177	p90 52.602	n 15	flash_d32 [18, 0]	load_start 11.89 14.84 14.05	load_end 11.89 14.84 14.05
+r2	probe	A2	x15600	min 19.184	p10 19.202	median 19.922	p90 20.804	n 15	flash_d32 [18, 0]	load_start 11.89 14.84 14.05	load_end 11.89 14.84 14.05
+r2	probe	A2	ctl	min 5.463	p10 5.506	median 5.755	p90 6.529	n 15	flash_d32 [0, 0]	load_start 11.89 14.84 14.05	load_end 11.89 14.84 14.05
+r2	probe	A	x36400	min 47.518	p10 48.900	median 49.923	p90 52.747	n 15	flash_d32 [18, 0]	load_start 11.89 14.84 14.05	load_end 11.02 14.61 13.98
+r2	probe	A	x15600	min 19.762	p10 19.866	median 20.606	p90 21.146	n 15	flash_d32 [18, 0]	load_start 11.89 14.84 14.05	load_end 11.02 14.61 13.98
+r2	probe	A	ctl	min 5.573	p10 5.586	median 5.861	p90 6.432	n 15	flash_d32 [0, 0]	load_start 11.89 14.84 14.05	load_end 11.02 14.61 13.98
+r2	probe	B	x36400	min 49.815	p10 50.083	median 51.189	p90 52.239	n 15	flash_d32 [18, 0]	load_start 11.02 14.61 13.98	load_end 11.02 14.61 13.98
+r2	probe	B	x15600	min 20.232	p10 20.384	median 20.867	p90 21.509	n 15	flash_d32 [18, 0]	load_start 11.02 14.61 13.98	load_end 11.02 14.61 13.98
+r2	probe	B	ctl	min 5.703	p10 5.709	median 5.939	p90 6.017	n 15	flash_d32 [0, 0]	load_start 11.02 14.61 13.98	load_end 11.02 14.61 13.98
+== round 3 order C B A A2 16:36:33Z load { 11.02 14.61 13.98 }
+r3	probe	C	x36400	min 49.303	p10 49.627	median 51.622	p90 57.057	n 15	flash_d32 [18, 0]	load_start 11.02 14.61 13.98	load_end 11.02 14.61 13.98
+r3	probe	C	x15600	min 20.519	p10 20.664	median 21.361	p90 25.576	n 15	flash_d32 [18, 0]	load_start 11.02 14.61 13.98	load_end 11.02 14.61 13.98
+r3	probe	C	ctl	min 5.721	p10 5.763	median 5.916	p90 9.502	n 15	flash_d32 [0, 0]	load_start 11.02 14.61 13.98	load_end 11.02 14.61 13.98
+r3	probe	B	x36400	min 51.740	p10 52.219	median 56.005	p90 61.721	n 15	flash_d32 [18, 0]	load_start 11.02 14.61 13.98	load_end 12.38 14.83 14.06
+r3	probe	B	x15600	min 20.749	p10 21.002	median 24.555	p90 27.394	n 15	flash_d32 [18, 0]	load_start 11.02 14.61 13.98	load_end 12.38 14.83 14.06
+r3	probe	B	ctl	min 6.316	p10 6.378	median 8.084	p90 15.806	n 15	flash_d32 [0, 0]	load_start 11.02 14.61 13.98	load_end 12.38 14.83 14.06
+r3	probe	A	x36400	min 47.466	p10 48.152	median 50.631	p90 51.746	n 15	flash_d32 [18, 0]	load_start 12.38 14.83 14.06	load_end 12.38 14.83 14.06
+r3	probe	A	x15600	min 19.471	p10 19.855	median 20.873	p90 21.966	n 15	flash_d32 [18, 0]	load_start 12.38 14.83 14.06	load_end 12.38 14.83 14.06
+r3	probe	A	ctl	min 5.571	p10 5.655	median 6.001	p90 6.245	n 15	flash_d32 [0, 0]	load_start 12.38 14.83 14.06	load_end 12.38 14.83 14.06
+r3	probe	A2	x36400	min 49.275	p10 49.668	median 50.278	p90 51.068	n 15	flash_d32 [18, 0]	load_start 12.38 14.83 14.06	load_end 12.38 14.83 14.06
+r3	probe	A2	x15600	min 20.173	p10 20.244	median 20.695	p90 21.504	n 15	flash_d32 [18, 0]	load_start 12.38 14.83 14.06	load_end 12.38 14.83 14.06
+r3	probe	A2	ctl	min 5.736	p10 5.788	median 5.941	p90 6.130	n 15	flash_d32 [0, 0]	load_start 12.38 14.83 14.06	load_end 12.38 14.83 14.06
+== round 4 order A B C A2 16:36:39Z load { 12.38 14.83 14.06 }
+r4	probe	A	x36400	min 47.498	p10 48.006	median 49.565	p90 51.008	n 15	flash_d32 [18, 0]	load_start 12.38 14.83 14.06	load_end 11.47 14.60 13.98
+r4	probe	A	x15600	min 19.090	p10 19.425	median 19.894	p90 20.586	n 15	flash_d32 [18, 0]	load_start 12.38 14.83 14.06	load_end 11.47 14.60 13.98
+r4	probe	A	ctl	min 5.565	p10 5.597	median 5.684	p90 5.829	n 15	flash_d32 [0, 0]	load_start 12.38 14.83 14.06	load_end 11.47 14.60 13.98
+r4	probe	B	x36400	min 46.930	p10 47.677	median 48.660	p90 50.247	n 15	flash_d32 [18, 0]	load_start 11.47 14.60 13.98	load_end 11.47 14.60 13.98
+r4	probe	B	x15600	min 19.416	p10 19.472	median 20.108	p90 20.819	n 15	flash_d32 [18, 0]	load_start 11.47 14.60 13.98	load_end 11.47 14.60 13.98
+r4	probe	B	ctl	min 5.470	p10 5.519	median 5.699	p90 5.944	n 15	flash_d32 [0, 0]	load_start 11.47 14.60 13.98	load_end 11.47 14.60 13.98
+r4	probe	C	x36400	min 47.083	p10 47.174	median 48.128	p90 53.426	n 15	flash_d32 [18, 0]	load_start 11.47 14.60 13.98	load_end 11.47 14.60 13.98
+r4	probe	C	x15600	min 19.476	p10 19.667	median 20.088	p90 20.883	n 15	flash_d32 [18, 0]	load_start 11.47 14.60 13.98	load_end 11.47 14.60 13.98
+r4	probe	C	ctl	min 5.521	p10 5.544	median 5.667	p90 6.488	n 15	flash_d32 [0, 0]	load_start 11.47 14.60 13.98	load_end 11.47 14.60 13.98
+r4	probe	A2	x36400	min 46.993	p10 46.993	median 47.885	p90 49.694	n 15	flash_d32 [18, 0]	load_start 11.47 14.60 13.98	load_end 11.47 14.60 13.98
+r4	probe	A2	x15600	min 19.043	p10 19.094	median 19.507	p90 19.881	n 15	flash_d32 [18, 0]	load_start 11.47 14.60 13.98	load_end 11.47 14.60 13.98
+r4	probe	A2	ctl	min 5.485	p10 5.488	median 5.622	p90 5.738	n 15	flash_d32 [0, 0]	load_start 11.47 14.60 13.98	load_end 11.47 14.60 13.98
+== round 5 order A A2 C B 16:36:45Z load { 11.47 14.60 13.98 }
+r5	probe	A	x36400	min 47.577	p10 47.642	median 47.944	p90 50.249	n 15	flash_d32 [18, 0]	load_start 11.47 14.60 13.98	load_end 10.87 14.42 13.92
+r5	probe	A	x15600	min 18.956	p10 19.112	median 19.443	p90 20.322	n 15	flash_d32 [18, 0]	load_start 11.47 14.60 13.98	load_end 10.87 14.42 13.92
+r5	probe	A	ctl	min 5.510	p10 5.512	median 5.553	p90 5.689	n 15	flash_d32 [0, 0]	load_start 11.47 14.60 13.98	load_end 10.87 14.42 13.92
+r5	probe	A2	x36400	min 46.602	p10 47.008	median 47.592	p90 49.187	n 15	flash_d32 [18, 0]	load_start 10.87 14.42 13.92	load_end 10.87 14.42 13.92
+r5	probe	A2	x15600	min 19.014	p10 19.275	median 19.605	p90 19.775	n 15	flash_d32 [18, 0]	load_start 10.87 14.42 13.92	load_end 10.87 14.42 13.92
+r5	probe	A2	ctl	min 5.497	p10 5.525	median 5.579	p90 5.870	n 15	flash_d32 [0, 0]	load_start 10.87 14.42 13.92	load_end 10.87 14.42 13.92
+r5	probe	C	x36400	min 47.044	p10 47.075	median 47.814	p90 50.141	n 15	flash_d32 [18, 0]	load_start 10.87 14.42 13.92	load_end 10.87 14.42 13.92
+r5	probe	C	x15600	min 19.492	p10 19.614	median 19.889	p90 20.962	n 15	flash_d32 [18, 0]	load_start 10.87 14.42 13.92	load_end 10.87 14.42 13.92
+r5	probe	C	ctl	min 5.511	p10 5.538	median 5.602	p90 6.157	n 15	flash_d32 [0, 0]	load_start 10.87 14.42 13.92	load_end 10.87 14.42 13.92
+r5	probe	B	x36400	min 47.691	p10 47.731	median 48.593	p90 51.346	n 15	flash_d32 [18, 0]	load_start 10.87 14.42 13.92	load_end 10.24 14.23 13.86
+r5	probe	B	x15600	min 19.349	p10 19.445	median 19.684	p90 20.060	n 15	flash_d32 [18, 0]	load_start 10.87 14.42 13.92	load_end 10.24 14.23 13.86
+r5	probe	B	ctl	min 5.514	p10 5.527	median 5.591	p90 5.750	n 15	flash_d32 [0, 0]	load_start 10.87 14.42 13.92	load_end 10.24 14.23 13.86
+== round 6 order C A2 A B 16:36:51Z load { 10.24 14.23 13.86 }
+r6	probe	C	x36400	min 46.887	p10 47.071	median 47.889	p90 48.840	n 15	flash_d32 [18, 0]	load_start 10.24 14.23 13.86	load_end 10.24 14.23 13.86
+r6	probe	C	x15600	min 19.499	p10 19.690	median 19.852	p90 20.769	n 15	flash_d32 [18, 0]	load_start 10.24 14.23 13.86	load_end 10.24 14.23 13.86
+r6	probe	C	ctl	min 5.500	p10 5.509	median 5.621	p90 6.314	n 15	flash_d32 [0, 0]	load_start 10.24 14.23 13.86	load_end 10.24 14.23 13.86
+r6	probe	A2	x36400	min 47.363	p10 47.607	median 49.620	p90 60.063	n 15	flash_d32 [18, 0]	load_start 10.24 14.23 13.86	load_end 10.24 14.23 13.86
+r6	probe	A2	x15600	min 19.242	p10 19.478	median 19.892	p90 25.624	n 15	flash_d32 [18, 0]	load_start 10.24 14.23 13.86	load_end 10.24 14.23 13.86
+r6	probe	A2	ctl	min 5.540	p10 5.548	median 5.764	p90 7.701	n 15	flash_d32 [0, 0]	load_start 10.24 14.23 13.86	load_end 10.24 14.23 13.86
+r6	probe	A	x36400	min 49.286	p10 51.105	median 52.588	p90 55.563	n 15	flash_d32 [18, 0]	load_start 10.24 14.23 13.86	load_end 9.90 14.10 13.81
+r6	probe	A	x15600	min 20.205	p10 20.302	median 21.466	p90 22.811	n 15	flash_d32 [18, 0]	load_start 10.24 14.23 13.86	load_end 9.90 14.10 13.81
+r6	probe	A	ctl	min 5.777	p10 5.808	median 6.160	p90 7.012	n 15	flash_d32 [0, 0]	load_start 10.24 14.23 13.86	load_end 9.90 14.10 13.81
+r6	probe	B	x36400	min 49.673	p10 49.924	median 52.791	p90 54.834	n 15	flash_d32 [18, 0]	load_start 9.90 14.10 13.81	load_end 9.90 14.10 13.81
+r6	probe	B	x15600	min 20.628	p10 20.632	median 21.779	p90 22.709	n 15	flash_d32 [18, 0]	load_start 9.90 14.10 13.81	load_end 9.90 14.10 13.81
+r6	probe	B	ctl	min 5.769	p10 5.821	median 6.116	p90 6.350	n 15	flash_d32 [0, 0]	load_start 9.90 14.10 13.81	load_end 9.90 14.10 13.81
+== round 7 order C B A A2 16:36:57Z load { 9.90 14.10 13.81 }
+r7	probe	C	x36400	min 52.468	p10 55.400	median 58.539	p90 62.368	n 15	flash_d32 [18, 0]	load_start 9.90 14.10 13.81	load_end 9.90 14.10 13.81
+r7	probe	C	x15600	min 22.137	p10 22.445	median 24.377	p90 26.297	n 15	flash_d32 [18, 0]	load_start 9.90 14.10 13.81	load_end 9.90 14.10 13.81
+r7	probe	C	ctl	min 6.449	p10 6.458	median 7.001	p90 12.852	n 15	flash_d32 [0, 0]	load_start 9.90 14.10 13.81	load_end 9.90 14.10 13.81
+r7	probe	B	x36400	min 49.868	p10 50.873	median 52.091	p90 54.912	n 15	flash_d32 [18, 0]	load_start 9.90 14.10 13.81	load_end 9.83 14.01 13.78
+r7	probe	B	x15600	min 20.606	p10 20.976	median 21.461	p90 21.951	n 15	flash_d32 [18, 0]	load_start 9.90 14.10 13.81	load_end 9.83 14.01 13.78
+r7	probe	B	ctl	min 5.794	p10 5.884	median 6.125	p90 6.360	n 15	flash_d32 [0, 0]	load_start 9.90 14.10 13.81	load_end 9.83 14.01 13.78
+r7	probe	A	x36400	min 49.271	p10 49.923	median 52.664	p90 54.440	n 15	flash_d32 [18, 0]	load_start 9.83 14.01 13.78	load_end 9.83 14.01 13.78
+r7	probe	A	x15600	min 20.307	p10 20.489	median 21.376	p90 22.252	n 15	flash_d32 [18, 0]	load_start 9.83 14.01 13.78	load_end 9.83 14.01 13.78
+r7	probe	A	ctl	min 5.906	p10 5.937	median 6.195	p90 6.556	n 15	flash_d32 [0, 0]	load_start 9.83 14.01 13.78	load_end 9.83 14.01 13.78
+r7	probe	A2	x36400	min 53.375	p10 54.005	median 56.165	p90 58.170	n 15	flash_d32 [18, 0]	load_start 9.83 14.01 13.78	load_end 9.83 14.01 13.78
+r7	probe	A2	x15600	min 20.730	p10 21.175	median 23.027	p90 27.435	n 15	flash_d32 [18, 0]	load_start 9.83 14.01 13.78	load_end 9.83 14.01 13.78
+r7	probe	A2	ctl	min 6.083	p10 6.224	median 7.344	p90 11.139	n 15	flash_d32 [0, 0]	load_start 9.83 14.01 13.78	load_end 9.83 14.01 13.78
+== end 2026-11-03T16:37:04Z 10:37  up 1 day, 21:32, 1 user, load averages: 9.83 14.01 13.78
+mac_heavy: 2026-11-03T16:37:04Z 'spiketrack-flash-fwd-1' finished with exit 0
