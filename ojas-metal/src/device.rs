@@ -230,6 +230,7 @@ const KERNELS: &[&str] = &[
     "ojas_attn_bwd_dkv_d128",
     "ojas_attn_fwd_d256",
     "ojas_attn_fwd_bf16",
+    "ojas_bias_rows",
     "ojas_attn_gen_fwd",
     "ojas_im2col",
     "ojas_xattn_part_d16",
@@ -2501,7 +2502,20 @@ impl Worker {
             let bias_t = self.tt(&bv, &[nout])?;
             tessl::gemm::gemm_nt_bf16_bias(&a, &b, &c, &bias_t, false).map_err(metal_err)?;
         } else {
-            return Err(metal_err("linear_bias requires Lane::Bf16 and TensorOps"));
+            // f32: the exact-f32 GEMM, then the bias added in place by a pass
+            // that checks each sum (`ojas_bias_rows`), so no output scan and
+            // no second buffer. Bit for bit `linear_forward` followed by
+            // `broadcast_add_forward`.
+            self.gemm_nt(lane, &xv, &wv, &y, rows, kin, nout)?;
+            let (r, c) = (u32_of(rows)?, u32_of(nout)?);
+            self.k2("ojas_bias_rows", nout, rows, |b| {
+                bind(b, &y, 0);
+                bind(b, &bv, 1);
+                set_u32(b, r, 2);
+                set_u32(b, c, 3);
+                bind_st(b, &st, 4);
+            })?;
+            return Ok(self.keep(vec![y]));
         }
         self.check(&st, &y, ST_OUT)?;
         Ok(self.keep(vec![y]))

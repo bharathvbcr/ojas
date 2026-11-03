@@ -3689,10 +3689,13 @@ impl Backend for MetalBackend {
         self.gemma_gelu_tanh_backward(input, grad_output)
     }
 
-    /// Fused `x @ W^T + bias` on `matmul2d_tensorops_nt_bf16_f32_bias` when
-    /// running on TensorOps under Bf16 lane, or on `ojas_gemm_bf16_accum` when
-    /// running with bf16 accumulation, else sequential linear_forward and
-    /// broadcast_add_forward.
+    /// Fused `x @ W^T + bias` for a `[out]` bias: on
+    /// `matmul2d_tensorops_nt_bf16_f32_bias` when running on TensorOps under
+    /// Bf16 lane, on `ojas_gemm_bf16_accum` when running with bf16
+    /// accumulation, and on the exact-f32 GEMM plus an in-place bias pass
+    /// (`ojas_bias_rows`, bit for bit the composed ops) under the f32 lane.
+    /// Any other bias shape runs `linear_forward` then
+    /// `broadcast_add_forward`.
     fn linear_bias_forward(
         &self,
         input: &Tensor,
@@ -3702,8 +3705,7 @@ impl Backend for MetalBackend {
         const OP: &str = "linear_bias_forward";
         let dims = linear_bias_forward_dims(input, weight, bias)?;
         let lane = self.lane_of(input, weight);
-        if (lane == Lane::Bf16Accum || (self.link.has_tensorops() && lane == Lane::Bf16))
-            && bias.shape() == [dims.out_features]
+        if (lane != Lane::Bf16 || self.link.has_tensorops()) && bias.shape() == [dims.out_features]
         {
             let (input, weight) = (self.widened(input)?, self.widened(weight)?);
             let x = self.f32(OP, &input)?;

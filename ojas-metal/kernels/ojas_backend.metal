@@ -2855,6 +2855,27 @@ kernel void ojas_bcast_binary(
     if (!isfinite(r)) ojas_flag(st, ST_OUT);
 }
 
+/// y[row, col] += bias[col] in place, over a 2-D grid (`col` on x, `row` on
+/// y): the f32 `linear_bias_forward`'s bias, on the GEMM's own output. The
+/// add is `ojas_bcast_binary`'s f32 `a + b` (no contraction: the crate builds
+/// with `-ffp-contract=off`), so the bits are the composed linear and
+/// broadcast add's. A sum that is not finite sets ST_OUT; that also catches
+/// a non-finite product, since the bias was checked finite before.
+kernel void ojas_bias_rows(
+    device float *y [[buffer(0)]],
+    device const float *bias [[buffer(1)]],
+    constant uint &rows [[buffer(2)]],
+    constant uint &cols [[buffer(3)]],
+    device atomic_uint *st [[buffer(4)]],
+    uint2 gid [[thread_position_in_grid]])
+{
+    if (gid.x >= cols || gid.y >= rows) return;
+    const ulong at = (ulong)gid.y * cols + gid.x;
+    const float r = y[at] + bias[gid.x];
+    y[at] = r;
+    if (!isfinite(r)) ojas_flag(st, ST_OUT);
+}
+
 /// y = x * scale.
 kernel void ojas_scale_fwd(
     device const float *x [[buffer(0)]],
