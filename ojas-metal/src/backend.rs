@@ -1909,7 +1909,10 @@ enum AttnKernel {
 /// lengths, head dim 16).
 const FLASH_CROSS_HEAD_DIMS: [u32; 4] = [32, 64, 128, 256];
 
-/// Query rows of one flash threadgroup (`ATT_BQ` in the Metal source).
+/// The unit [`FLASH_MIN_GROUPS`] counts in: 32 query rows of a plane. The
+/// f32 flash kernel launches one threadgroup per 64 rows (`ATT_FWD_BQ`); the
+/// route counts 32-row blocks, the kernel's earlier height, so the taller
+/// tile moved no call from one kernel to another.
 const FLASH_ROWS_PER_GROUP: u32 = 32;
 
 /// The fewest threadgroups a call must launch for the flash route to take it.

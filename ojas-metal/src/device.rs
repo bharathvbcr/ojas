@@ -139,6 +139,11 @@ const WS_GROWTH: u64 = 64 << 20;
 /// The forward kernel's key tile is wider (`ATT_FWD_BK`); its grid is
 /// still one threadgroup per query block.
 const ATTN_THREADS: usize = 128;
+/// The f32 forward's query rows and threads per threadgroup (`ATT_FWD_BQ`
+/// and `ATT_FWD_NSG` simdgroups in the Metal source); the bf16 forward
+/// entry keeps [`ATTN_ROWS`] on [`ATTN_THREADS`].
+const ATTN_FWD_ROWS: usize = 64;
+const ATTN_FWD_THREADS: usize = 256;
 /// Query rows of one `ojas_xattn_part_dD` threadgroup (`XA_ROWS` in the kernel).
 const XA_ROWS: usize = 128;
 /// Threads of one GroupNorm threadgroup (`GN_THREADS` in the kernel).
@@ -2729,16 +2734,22 @@ impl Worker {
         Ok(self.keep(vec![y]))
     }
 
-    /// The tiled forward's entry point for a call at head dim `d`: the f32
-    /// matrix-unit kernel of its compiled width, or `ojas_attn_fwd_bf16` (one
-    /// entry for every width) under bf16 accumulation. Two entries, so the f32
+    /// The tiled forward's entry point for a call at head dim `d`, with its
+    /// query rows and threads per threadgroup: the f32 matrix-unit kernel of
+    /// its compiled width ([`ATTN_FWD_ROWS`] on [`ATTN_FWD_THREADS`]), or
+    /// `ojas_attn_fwd_bf16` (one entry for every width, [`ATTN_ROWS`] on
+    /// [`ATTN_THREADS`]) under bf16 accumulation. Two entries, so the f32
     /// kernel carries no runtime branch to the scalar bf16 loops.
-    fn attn_fwd_kernel(&self, d: u32) -> Res<String> {
+    fn attn_fwd_kernel(&self, d: u32) -> Res<(String, usize, usize)> {
         let width = Self::attn_width(d)?;
         Ok(if self.bf16_accum() {
-            "ojas_attn_fwd_bf16".to_string()
+            ("ojas_attn_fwd_bf16".to_string(), ATTN_ROWS, ATTN_THREADS)
         } else {
-            format!("ojas_attn_fwd_d{width}")
+            (
+                format!("ojas_attn_fwd_d{width}"),
+                ATTN_FWD_ROWS,
+                ATTN_FWD_THREADS,
+            )
         })
     }
 
@@ -2794,7 +2805,7 @@ impl Worker {
     /// row's log-sum-exp. Grouped-query heads read their KV plane in place.
     fn sdpa(&mut self, q: Arg, k: Arg, v: Arg, g: SdpaGeom) -> Res<Reply> {
         const OP: &str = "causal_sdpa_forward";
-        let name = self.attn_fwd_kernel(g.d)?;
+        let (name, rows, threads) = self.attn_fwd_kernel(g.d)?;
         let scale = sdpa_scale(g.d)?;
         attn_plane_fits(OP, g.t, g.d)?;
         let (qv, kv, vv) = (self.view(q)?, self.view(k)?, self.view(v)?);
@@ -2806,9 +2817,9 @@ impl Worker {
         // live scores, O and LSE in-kernel and sets ST_OUT when any is
         // non-finite.
         if qv.n > 0 {
-            let groups = (g.t as usize).div_ceil(ATTN_ROWS);
+            let groups = (g.t as usize).div_ceil(rows);
             let bias_flags = if self.bf16_accum() { 32u32 } else { 0u32 };
-            self.ktg(&name, groups, g.bh as usize, ATTN_THREADS, |b| {
+            self.ktg(&name, groups, g.bh as usize, threads, |b| {
                 bind(b, &qv, 0);
                 bind(b, &kv, 1);
                 bind(b, &vv, 2);
@@ -2956,40 +2967,34 @@ impl Worker {
         let bf16_flag = if self.bf16_accum() { 32u32 } else { 0u32 };
         if g.flash {
             if qv.n > 0 {
-                // One threadgroup per 32 query rows of a plane, four
-                // simdgroups, no partials: `ojas_attn_fwd_d{width}` (or the
-                // bf16 entry) with `cross`.
-                let name = self.attn_fwd_kernel(g.d)?;
+                // One threadgroup per 64 query rows of a plane on eight
+                // simdgroups (32 on four for the bf16 entry), no partials:
+                // `ojas_attn_fwd_d{width}` (or the bf16 entry) with `cross`.
+                let (name, rows, threads) = self.attn_fwd_kernel(g.d)?;
                 let [bias_b, bias_h, bias_q] = g.bias.unwrap_or([1, 1, 1]);
                 let bias_flags = (u32::from(g.bias.is_some()) << 1) | bf16_flag;
                 let bias_buf = bv.as_ref().unwrap_or(&qv);
-                self.ktg(
-                    &name,
-                    q_len.div_ceil(ATTN_ROWS),
-                    planes,
-                    ATTN_THREADS,
-                    |b| {
-                        bind(b, &qv, 0);
-                        bind(b, &kv, 1);
-                        bind(b, &vv, 2);
-                        bind(b, &o, 3);
-                        bind(b, &lse, 4);
-                        bind_st(b, &st, 5);
-                        set_u32(b, g.q_len, 6);
-                        set_u32(b, g.d, 7);
-                        set_u32(b, g.rep, 8);
-                        set_u32(b, 0, 9);
-                        set_f32(b, scale, 10);
-                        set_u32(b, g.kv_len, 11);
-                        set_u32(b, 1, 12);
-                        bind(b, bias_buf, 13);
-                        set_u32(b, bias_flags, 14);
-                        set_u32(b, bias_b, 15);
-                        set_u32(b, bias_h, 16);
-                        set_u32(b, bias_q, 17);
-                        set_u32(b, g.heads, 18);
-                    },
-                )?;
+                self.ktg(&name, q_len.div_ceil(rows), planes, threads, |b| {
+                    bind(b, &qv, 0);
+                    bind(b, &kv, 1);
+                    bind(b, &vv, 2);
+                    bind(b, &o, 3);
+                    bind(b, &lse, 4);
+                    bind_st(b, &st, 5);
+                    set_u32(b, g.q_len, 6);
+                    set_u32(b, g.d, 7);
+                    set_u32(b, g.rep, 8);
+                    set_u32(b, 0, 9);
+                    set_f32(b, scale, 10);
+                    set_u32(b, g.kv_len, 11);
+                    set_u32(b, 1, 12);
+                    bind(b, bias_buf, 13);
+                    set_u32(b, bias_flags, 14);
+                    set_u32(b, bias_b, 15);
+                    set_u32(b, bias_h, 16);
+                    set_u32(b, bias_q, 17);
+                    set_u32(b, g.heads, 18);
+                })?;
             }
         } else if let (true, Some(part)) = (qv.n > 0, part.as_ref()) {
             let flags =
