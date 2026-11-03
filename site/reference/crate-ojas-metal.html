@@ -273,7 +273,7 @@
 </li>
 <li><code>concat</code>, <code>slice</code> &amp; <code>fill</code>: device-resident memory assembly (<code>ojas_concat_part</code>, <code>ojas_slice</code> with full-input finite scan, <code>ojas_fill_words</code>). Filled U32 tensors carry <code>Ids::Below(value + 1)</code> bounds.
 </li>
-<li><code>linear_bias_forward</code> &amp; <code>linear_bias_backward</code>, <code>broadcast_add_backward</code> &amp; <code>broadcast_mul_backward</code>, <code>softmax_forward</code> &amp; <code>softmax_backward</code>: GEMM + broadcast add/mul and <code>ojas_bcast_grad_{part,fin}</code> reductions; <code>ojas_softmax_rows</code> and <code>ojas_softmax_bwd_rows</code>.
+<li><code>linear_bias_forward</code> &amp; <code>linear_bias_backward</code>, <code>broadcast_add_backward</code> &amp; <code>broadcast_mul_backward</code>, <code>softmax_forward</code> &amp; <code>softmax_backward</code>: GEMM + broadcast add/mul (an f32 <code>linear_bias_forward</code> with a <code>[out]</code> bias adds it in place on the GEMM output, <code>ojas_bias_rows</code>, bit for bit the composed ops) and <code>ojas_bcast_grad_{part,fin}</code> reductions; <code>ojas_softmax_rows</code> and <code>ojas_softmax_bwd_rows</code>.
 </li>
 </ul>
 </li>
