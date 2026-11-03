@@ -1,0 +1,40 @@
+    Checking objc2-encode v4.1.0
+    Checking ojas-core v0.1.0 (/Users/bharath/Code/kern1103/ojas/ojas-core)
+    Checking objc2 v0.6.4
+    Checking libc v0.2.191
+    Checking bitflags v2.13.2
+    Checking block2 v0.6.2
+    Checking objc2-core-foundation v0.3.2
+    Checking ojas-io v0.1.0 (/Users/bharath/Code/kern1103/ojas/ojas-io)
+    Checking objc2-foundation v0.3.2
+    Checking dispatch2 v0.3.1
+   Compiling ojas-metal v0.1.0 (/Users/bharath/Code/kern1103/ojas/ojas-metal)
+    Checking ojas-device v0.1.0 (/Users/bharath/Code/kern1103/ojas/ojas-device)
+    Checking ojas-kernels v0.1.0 (/Users/bharath/Code/kern1103/ojas/ojas-kernels)
+    Checking ojas-simd v0.1.0 (/Users/bharath/Code/kern1103/ojas/ojas-simd)
+    Checking ojas-cpu v0.1.0 (/Users/bharath/Code/kern1103/ojas/ojas-cpu)
+    Checking ojas-data v0.1.0 (/Users/bharath/Code/kern1103/ojas/ojas-data)
+    Checking ojas-oracle v0.1.0 (/Users/bharath/Code/kern1103/ojas/ojas-oracle)
+    Checking objc2-metal v0.3.2
+    Checking tessl v0.2.0 (/Users/bharath/Code/kern1103/tessl)
+error[E0277]: can't compare `&str` with `str`
+   --> ojas-metal/tests/attention_flash_bits.rs:154:9
+    |
+154 |         assert_eq!(name, want_name, "case order differs from GOLDEN");
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `&str == str`
+    |
+    = help: the trait `std::cmp::PartialEq<str>` is not implemented for `&str`
+help: the trait `std::cmp::PartialEq` is implemented for `str`
+   --> /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/str/traits.rs:27:0
+    = note: required for `&&str` to implement `std::cmp::PartialEq<&str>`
+
+error[E0614]: type `u64` cannot be dereferenced
+   --> ojas-metal/tests/attention_flash_bits.rs:156:17
+    |
+156 |             *h, *want,
+    |                 ^^^^^ can't be dereferenced
+
+Some errors have detailed explanations: E0277, E0614.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `ojas-metal` (test "attention_flash_bits") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...

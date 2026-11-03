@@ -1,0 +1,194 @@
+mac_heavy: 2026-11-03T16:44:53Z 'spiketrack-flash-fwd-3' waiting 0s for the lock; holder: label=spiketrack-lora-v4-cache pid=61120 start=2026-11-03T16:43:39Z cwd=/Users/bharath/Code/research/SpikeTrack 
+mac_heavy: 2026-11-03T16:49:54Z 'spiketrack-flash-fwd-3' waiting 300s for the lock; holder: label=spiketrack-lora-v4-cache pid=61120 start=2026-11-03T16:43:39Z cwd=/Users/bharath/Code/research/SpikeTrack 
+mac_heavy: 2026-11-03T16:54:56Z 'spiketrack-flash-fwd-3' waiting 600s for the lock; holder: label=spiketrack-lora-v4-cache pid=61120 start=2026-11-03T16:43:39Z cwd=/Users/bharath/Code/research/SpikeTrack 
+mac_heavy: 2026-11-03T16:59:57Z 'spiketrack-flash-fwd-3' waiting 900s for the lock; holder: label=spiketrack-lora-v4-cache pid=61120 start=2026-11-03T16:43:39Z cwd=/Users/bharath/Code/research/SpikeTrack 
+mac_heavy: 2026-11-03T17:04:58Z 'spiketrack-flash-fwd-3' waiting 1200s for the lock; holder: label=spiketrack-lora-v4-cache pid=61120 start=2026-11-03T16:43:39Z cwd=/Users/bharath/Code/research/SpikeTrack 
+mac_heavy: 2026-11-03T17:07:59Z 'spiketrack-flash-fwd-3' waits without the lock: no cargo slot free (all 2 held in /Users/bharath/.cache/cargo-slots)
+mac_heavy: 2026-11-03T17:09:59Z 'spiketrack-flash-fwd-3' waiting 1500s for the lock; holder: label=spiketrack-lora-v4-cache pid=61120 start=2026-11-03T16:43:39Z cwd=/Users/bharath/Code/research/SpikeTrack 
+mac_heavy: 2026-11-03T17:15:00Z 'spiketrack-flash-fwd-3' waiting 1800s for the lock; holder: label=spiketrack-lora-v4-cache pid=61120 start=2026-11-03T16:43:39Z cwd=/Users/bharath/Code/research/SpikeTrack 
+mac_heavy: 2026-11-03T17:20:02Z 'spiketrack-flash-fwd-3' waiting 2100s for the lock; holder: label=spiketrack-lora-v4-cache pid=61120 start=2026-11-03T16:43:39Z cwd=/Users/bharath/Code/research/SpikeTrack 
+mac_heavy: 2026-11-03T17:25:02Z 'spiketrack-flash-fwd-3' waiting 2400s for the lock; holder: label=spiketrack-box-delta pid=64974 start=2026-11-03T17:20:30Z cwd=/Users/bharath/Code/research/SpikeTrack 
+mac_heavy: 2026-11-03T17:29:23Z 'spiketrack-flash-fwd-3' holds the lock (waited 2660s; load 8.29, 1491 processes); running: bash /Users/bharath/Code/kern1103/ojas/bench/results/2026-11-03-tracker-ops-baseline/job3.sh
+== rules.md mtime 2026-11-03T10:44:30
+== ojas HEAD 6ce775d83f50dbd49e10ed553dff6a7448d8d490; tessl 52bdd196265a687def945fc5834cefdce48b08ff
+?? bench/results/2026-11-03-tracker-ops-baseline/
+== start 2026-11-03T17:29:23Z 11:29  up 1 day, 22:25, 1 user, load averages: 8.29 7.42 7.77
+A a2d037e19161ae88 (job 1)
+== build D1 17:29:23Z load { 8.29 7.42 7.77 }
+D1 6e10d61de329ca76 (3406d65 + diag-fast-exp.patch)
+?? bench/results/2026-11-03-tracker-ops-baseline/
+== build ops probe + test at tip 17:29:36Z load { 8.07 7.40 7.76 }
+ops 0fc734a0a4b3630f (6ce775d)
+== hash D1 17:29:47Z
+== D1 hash lines differing from A: 9
+== d1 round 0 order A D1 A2 17:29:49Z load { 7.97 7.41 7.76 }
+r0	probe	A	x36400	min 46.699	p10 46.783	median 48.519	p90 52.660	n 15	flash_d32 [18, 0]	load_start 7.97 7.41 7.76	load_end 7.97 7.41 7.76
+r0	probe	A	x15600	min 18.867	p10 18.998	median 19.584	p90 21.964	n 15	flash_d32 [18, 0]	load_start 7.97 7.41 7.76	load_end 7.97 7.41 7.76
+r0	probe	A	ctl	min 5.488	p10 5.528	median 5.569	p90 6.671	n 15	flash_d32 [0, 0]	load_start 7.97 7.41 7.76	load_end 7.97 7.41 7.76
+r0	probe	D1	x36400	min 45.680	p10 45.741	median 46.623	p90 47.484	n 15	flash_d32 [18, 0]	load_start 7.97 7.41 7.76	load_end 7.97 7.41 7.76
+r0	probe	D1	x15600	min 18.397	p10 18.459	median 18.903	p90 19.124	n 15	flash_d32 [18, 0]	load_start 7.97 7.41 7.76	load_end 7.97 7.41 7.76
+r0	probe	D1	ctl	min 5.500	p10 5.504	median 5.545	p90 5.837	n 15	flash_d32 [0, 0]	load_start 7.97 7.41 7.76	load_end 7.97 7.41 7.76
+r0	probe	A2	x36400	min 46.292	p10 46.490	median 47.429	p90 49.146	n 15	flash_d32 [18, 0]	load_start 8.05 7.44 7.77	load_end 8.05 7.44 7.77
+r0	probe	A2	x15600	min 18.736	p10 18.874	median 19.149	p90 19.741	n 15	flash_d32 [18, 0]	load_start 8.05 7.44 7.77	load_end 8.05 7.44 7.77
+r0	probe	A2	ctl	min 5.491	p10 5.503	median 5.556	p90 5.721	n 15	flash_d32 [0, 0]	load_start 8.05 7.44 7.77	load_end 8.05 7.44 7.77
+== d1 round 1 order A2 D1 A 17:29:53Z load { 8.05 7.44 7.77 }
+r1	probe	A2	x36400	min 45.671	p10 46.011	median 46.888	p90 48.683	n 15	flash_d32 [18, 0]	load_start 8.05 7.44 7.77	load_end 8.05 7.44 7.77
+r1	probe	A2	x15600	min 18.722	p10 18.819	median 19.074	p90 19.623	n 15	flash_d32 [18, 0]	load_start 8.05 7.44 7.77	load_end 8.05 7.44 7.77
+r1	probe	A2	ctl	min 5.494	p10 5.498	median 5.559	p90 5.768	n 15	flash_d32 [0, 0]	load_start 8.05 7.44 7.77	load_end 8.05 7.44 7.77
+r1	probe	D1	x36400	min 45.369	p10 45.939	median 46.748	p90 47.445	n 15	flash_d32 [18, 0]	load_start 8.05 7.44 7.77	load_end 8.05 7.44 7.77
+r1	probe	D1	x15600	min 18.562	p10 18.645	median 18.945	p90 19.269	n 15	flash_d32 [18, 0]	load_start 8.05 7.44 7.77	load_end 8.05 7.44 7.77
+r1	probe	D1	ctl	min 5.490	p10 5.507	median 5.553	p90 5.894	n 15	flash_d32 [0, 0]	load_start 8.05 7.44 7.77	load_end 8.05 7.44 7.77
+r1	probe	A	x36400	min 46.331	p10 46.574	median 47.361	p90 48.588	n 15	flash_d32 [18, 0]	load_start 8.05 7.44 7.77	load_end 8.21 7.48 7.78
+r1	probe	A	x15600	min 18.821	p10 19.071	median 19.379	p90 19.638	n 15	flash_d32 [18, 0]	load_start 8.05 7.44 7.77	load_end 8.21 7.48 7.78
+r1	probe	A	ctl	min 5.486	p10 5.486	median 5.530	p90 5.726	n 15	flash_d32 [0, 0]	load_start 8.05 7.44 7.77	load_end 8.21 7.48 7.78
+== d1 round 2 order A D1 A2 17:29:57Z load { 8.21 7.48 7.78 }
+r2	probe	A	x36400	min 46.194	p10 46.665	median 47.514	p90 48.535	n 15	flash_d32 [18, 0]	load_start 8.21 7.48 7.78	load_end 8.21 7.48 7.78
+r2	probe	A	x15600	min 19.001	p10 19.093	median 19.559	p90 20.027	n 15	flash_d32 [18, 0]	load_start 8.21 7.48 7.78	load_end 8.21 7.48 7.78
+r2	probe	A	ctl	min 5.465	p10 5.483	median 5.551	p90 5.700	n 15	flash_d32 [0, 0]	load_start 8.21 7.48 7.78	load_end 8.21 7.48 7.78
+r2	probe	D1	x36400	min 46.208	p10 46.579	median 47.922	p90 50.575	n 15	flash_d32 [18, 0]	load_start 8.21 7.48 7.78	load_end 8.21 7.48 7.78
+r2	probe	D1	x15600	min 18.824	p10 19.035	median 19.355	p90 20.729	n 15	flash_d32 [18, 0]	load_start 8.21 7.48 7.78	load_end 8.21 7.48 7.78
+r2	probe	D1	ctl	min 5.546	p10 5.591	median 5.826	p90 8.385	n 15	flash_d32 [0, 0]	load_start 8.21 7.48 7.78	load_end 8.21 7.48 7.78
+r2	probe	A2	x36400	min 49.490	p10 49.916	median 52.100	p90 53.358	n 15	flash_d32 [18, 0]	load_start 8.21 7.48 7.78	load_end 8.27 7.51 7.79
+r2	probe	A2	x15600	min 19.986	p10 20.812	median 21.399	p90 22.303	n 15	flash_d32 [18, 0]	load_start 8.21 7.48 7.78	load_end 8.27 7.51 7.79
+r2	probe	A2	ctl	min 5.525	p10 5.560	median 5.984	p90 6.388	n 15	flash_d32 [0, 0]	load_start 8.21 7.48 7.78	load_end 8.27 7.51 7.79
+== d1 round 3 order A2 D1 A 17:30:02Z load { 8.27 7.51 7.79 }
+r3	probe	A2	x36400	min 46.507	p10 47.598	median 49.917	p90 51.285	n 15	flash_d32 [18, 0]	load_start 8.27 7.51 7.79	load_end 8.27 7.51 7.79
+r3	probe	A2	x15600	min 18.854	p10 19.260	median 19.761	p90 21.228	n 15	flash_d32 [18, 0]	load_start 8.27 7.51 7.79	load_end 8.27 7.51 7.79
+r3	probe	A2	ctl	min 5.550	p10 5.589	median 5.715	p90 6.587	n 15	flash_d32 [0, 0]	load_start 8.27 7.51 7.79	load_end 8.27 7.51 7.79
+r3	probe	D1	x36400	min 46.071	p10 46.375	median 47.567	p90 48.912	n 15	flash_d32 [18, 0]	load_start 8.27 7.51 7.79	load_end 8.27 7.51 7.79
+r3	probe	D1	x15600	min 18.688	p10 18.737	median 19.067	p90 19.714	n 15	flash_d32 [18, 0]	load_start 8.27 7.51 7.79	load_end 8.27 7.51 7.79
+r3	probe	D1	ctl	min 5.545	p10 5.619	median 5.773	p90 6.009	n 15	flash_d32 [0, 0]	load_start 8.27 7.51 7.79	load_end 8.27 7.51 7.79
+r3	probe	A	x36400	min 46.305	p10 46.452	median 47.397	p90 47.954	n 15	flash_d32 [18, 0]	load_start 8.27 7.51 7.79	load_end 8.27 7.51 7.79
+r3	probe	A	x15600	min 18.771	p10 18.967	median 19.294	p90 19.689	n 15	flash_d32 [18, 0]	load_start 8.27 7.51 7.79	load_end 8.27 7.51 7.79
+r3	probe	A	ctl	min 5.479	p10 5.483	median 5.561	p90 5.824	n 15	flash_d32 [0, 0]	load_start 8.27 7.51 7.79	load_end 8.27 7.51 7.79
+== d1 round 4 order A D1 A2 17:30:06Z load { 8.27 7.51 7.79 }
+r4	probe	A	x36400	min 46.567	p10 46.863	median 47.660	p90 48.727	n 15	flash_d32 [18, 0]	load_start 8.27 7.51 7.79	load_end 7.85 7.43 7.76
+r4	probe	A	x15600	min 18.716	p10 18.871	median 19.253	p90 19.783	n 15	flash_d32 [18, 0]	load_start 8.27 7.51 7.79	load_end 7.85 7.43 7.76
+r4	probe	A	ctl	min 5.463	p10 5.474	median 5.540	p90 5.668	n 15	flash_d32 [0, 0]	load_start 8.27 7.51 7.79	load_end 7.85 7.43 7.76
+r4	probe	D1	x36400	min 45.572	p10 45.576	median 46.253	p90 46.924	n 15	flash_d32 [18, 0]	load_start 7.85 7.43 7.76	load_end 7.85 7.43 7.76
+r4	probe	D1	x15600	min 18.301	p10 18.437	median 18.774	p90 19.325	n 15	flash_d32 [18, 0]	load_start 7.85 7.43 7.76	load_end 7.85 7.43 7.76
+r4	probe	D1	ctl	min 5.493	p10 5.511	median 5.547	p90 5.766	n 15	flash_d32 [0, 0]	load_start 7.85 7.43 7.76	load_end 7.85 7.43 7.76
+r4	probe	A2	x36400	min 47.105	p10 47.146	median 48.052	p90 49.412	n 15	flash_d32 [18, 0]	load_start 7.85 7.43 7.76	load_end 7.85 7.43 7.76
+r4	probe	A2	x15600	min 18.768	p10 18.771	median 19.140	p90 19.428	n 15	flash_d32 [18, 0]	load_start 7.85 7.43 7.76	load_end 7.85 7.43 7.76
+r4	probe	A2	ctl	min 5.436	p10 5.495	median 5.523	p90 5.692	n 15	flash_d32 [0, 0]	load_start 7.85 7.43 7.76	load_end 7.85 7.43 7.76
+== d1 round 5 order A2 D1 A 17:30:11Z load { 7.85 7.43 7.76 }
+r5	probe	A2	x36400	min 46.291	p10 46.647	median 47.693	p90 49.617	n 15	flash_d32 [18, 0]	load_start 7.85 7.43 7.76	load_end 7.54 7.38 7.73
+r5	probe	A2	x15600	min 18.872	p10 18.937	median 19.096	p90 19.488	n 15	flash_d32 [18, 0]	load_start 7.85 7.43 7.76	load_end 7.54 7.38 7.73
+r5	probe	A2	ctl	min 5.463	p10 5.507	median 5.562	p90 5.801	n 15	flash_d32 [0, 0]	load_start 7.85 7.43 7.76	load_end 7.54 7.38 7.73
+r5	probe	D1	x36400	min 45.192	p10 45.824	median 46.601	p90 48.905	n 15	flash_d32 [18, 0]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+r5	probe	D1	x15600	min 18.271	p10 18.591	median 19.138	p90 19.265	n 15	flash_d32 [18, 0]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+r5	probe	D1	ctl	min 5.441	p10 5.485	median 5.555	p90 5.686	n 15	flash_d32 [0, 0]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+r5	probe	A	x36400	min 46.433	p10 46.614	median 47.362	p90 49.243	n 15	flash_d32 [18, 0]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+r5	probe	A	x15600	min 18.757	p10 18.844	median 19.203	p90 19.828	n 15	flash_d32 [18, 0]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+r5	probe	A	ctl	min 5.499	p10 5.510	median 5.553	p90 5.674	n 15	flash_d32 [0, 0]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+== ops round 0 17:30:15Z load { 7.54 7.38 7.73 }
+ops	r0	perm_head36k	min 0.423	p10 0.426	median 0.456	p90 0.521	n 15	dispatches,runs,generic,tile,check [1, 1, 0, 0, 0]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r0	perm_ident36k	min 0.425	p10 0.433	median 0.444	p90 0.542	n 15	dispatches,runs,generic,tile,check [1, 1, 0, 0, 0]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r0	perm_generic36k	min 0.675	p10 0.681	median 0.707	p90 0.744	n 15	dispatches,runs,generic,tile,check [2, 0, 1, 0, 1]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r0	perm_head5k	min 0.188	p10 0.189	median 0.221	p90 0.281	n 15	dispatches,runs,generic,tile,check [1, 1, 0, 0, 0]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r0	resadd36k	min 0.538	p10 0.559	median 0.593	p90 0.691	n 15	dispatches,runs,generic,tile,check [1, 0, 0, 0, 0]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r0	lin36k	min 1.336	p10 1.340	median 1.396	p90 1.446	n 15	dispatches,runs,generic,tile,check [4, 0, 0, 0, 3]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r0	linb36k	min 1.588	p10 1.621	median 1.671	p90 1.702	n 15	dispatches,runs,generic,tile,check [5, 0, 0, 0, 3]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r0	badd36k	min 0.434	p10 0.439	median 0.472	p90 0.555	n 15	dispatches,runs,generic,tile,check [1, 0, 0, 0, 0]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r0	lin5k_up	min 1.373	p10 1.378	median 1.418	p90 1.444	n 15	dispatches,runs,generic,tile,check [4, 0, 0, 0, 3]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r0	linb5k_up	min 1.701	p10 1.710	median 1.748	p90 1.786	n 15	dispatches,runs,generic,tile,check [5, 0, 0, 0, 3]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+== ops round 1 17:30:15Z load { 7.54 7.38 7.73 }
+ops	r1	perm_head36k	min 0.429	p10 0.430	median 0.481	p90 0.542	n 15	dispatches,runs,generic,tile,check [1, 1, 0, 0, 0]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r1	perm_ident36k	min 0.415	p10 0.425	median 0.489	p90 0.551	n 15	dispatches,runs,generic,tile,check [1, 1, 0, 0, 0]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r1	perm_generic36k	min 0.693	p10 0.704	median 0.757	p90 0.823	n 15	dispatches,runs,generic,tile,check [2, 0, 1, 0, 1]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r1	perm_head5k	min 0.179	p10 0.181	median 0.242	p90 0.309	n 15	dispatches,runs,generic,tile,check [1, 1, 0, 0, 0]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r1	resadd36k	min 0.573	p10 0.592	median 0.642	p90 0.734	n 15	dispatches,runs,generic,tile,check [1, 0, 0, 0, 0]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r1	lin36k	min 1.332	p10 1.370	median 1.464	p90 1.641	n 15	dispatches,runs,generic,tile,check [4, 0, 0, 0, 3]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r1	linb36k	min 1.628	p10 1.672	median 1.736	p90 1.814	n 15	dispatches,runs,generic,tile,check [5, 0, 0, 0, 3]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r1	badd36k	min 0.453	p10 0.472	median 0.510	p90 0.577	n 15	dispatches,runs,generic,tile,check [1, 0, 0, 0, 0]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r1	lin5k_up	min 1.399	p10 1.410	median 1.465	p90 1.537	n 15	dispatches,runs,generic,tile,check [4, 0, 0, 0, 3]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r1	linb5k_up	min 1.709	p10 1.718	median 1.823	p90 1.886	n 15	dispatches,runs,generic,tile,check [5, 0, 0, 0, 3]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+== ops round 2 17:30:16Z load { 7.54 7.38 7.73 }
+ops	r2	perm_head36k	min 0.431	p10 0.438	median 0.461	p90 0.516	n 15	dispatches,runs,generic,tile,check [1, 1, 0, 0, 0]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r2	perm_ident36k	min 0.426	p10 0.427	median 0.458	p90 0.508	n 15	dispatches,runs,generic,tile,check [1, 1, 0, 0, 0]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r2	perm_generic36k	min 0.685	p10 0.711	median 0.754	p90 0.814	n 15	dispatches,runs,generic,tile,check [2, 0, 1, 0, 1]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r2	perm_head5k	min 0.190	p10 0.198	median 0.223	p90 0.299	n 15	dispatches,runs,generic,tile,check [1, 1, 0, 0, 0]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r2	resadd36k	min 0.566	p10 0.578	median 0.610	p90 0.656	n 15	dispatches,runs,generic,tile,check [1, 0, 0, 0, 0]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r2	lin36k	min 1.355	p10 1.355	median 1.410	p90 1.467	n 15	dispatches,runs,generic,tile,check [4, 0, 0, 0, 3]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r2	linb36k	min 1.626	p10 1.648	median 1.701	p90 1.785	n 15	dispatches,runs,generic,tile,check [5, 0, 0, 0, 3]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r2	badd36k	min 0.438	p10 0.449	median 0.481	p90 0.538	n 15	dispatches,runs,generic,tile,check [1, 0, 0, 0, 0]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r2	lin5k_up	min 1.377	p10 1.393	median 1.430	p90 1.613	n 15	dispatches,runs,generic,tile,check [4, 0, 0, 0, 3]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r2	linb5k_up	min 1.707	p10 1.713	median 1.750	p90 1.945	n 15	dispatches,runs,generic,tile,check [5, 0, 0, 0, 3]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+== ops round 3 17:30:16Z load { 7.54 7.38 7.73 }
+ops	r3	perm_head36k	min 0.423	p10 0.429	median 0.471	p90 0.510	n 15	dispatches,runs,generic,tile,check [1, 1, 0, 0, 0]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r3	perm_ident36k	min 0.423	p10 0.425	median 0.465	p90 0.509	n 15	dispatches,runs,generic,tile,check [1, 1, 0, 0, 0]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r3	perm_generic36k	min 0.684	p10 0.685	median 0.724	p90 0.795	n 15	dispatches,runs,generic,tile,check [2, 0, 1, 0, 1]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r3	perm_head5k	min 0.186	p10 0.187	median 0.219	p90 0.309	n 15	dispatches,runs,generic,tile,check [1, 1, 0, 0, 0]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r3	resadd36k	min 0.572	p10 0.574	median 0.628	p90 0.731	n 15	dispatches,runs,generic,tile,check [1, 0, 0, 0, 0]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r3	lin36k	min 1.353	p10 1.357	median 1.430	p90 1.450	n 15	dispatches,runs,generic,tile,check [4, 0, 0, 0, 3]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r3	linb36k	min 1.605	p10 1.652	median 1.697	p90 1.778	n 15	dispatches,runs,generic,tile,check [5, 0, 0, 0, 3]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r3	badd36k	min 0.444	p10 0.467	median 0.504	p90 0.550	n 15	dispatches,runs,generic,tile,check [1, 0, 0, 0, 0]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r3	lin5k_up	min 1.408	p10 1.410	median 1.435	p90 1.543	n 15	dispatches,runs,generic,tile,check [4, 0, 0, 0, 3]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r3	linb5k_up	min 1.689	p10 1.724	median 1.789	p90 1.872	n 15	dispatches,runs,generic,tile,check [5, 0, 0, 0, 3]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+== ops round 4 17:30:16Z load { 7.54 7.38 7.73 }
+ops	r4	perm_head36k	min 0.418	p10 0.425	median 0.462	p90 0.565	n 15	dispatches,runs,generic,tile,check [1, 1, 0, 0, 0]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r4	perm_ident36k	min 0.414	p10 0.419	median 0.449	p90 0.506	n 15	dispatches,runs,generic,tile,check [1, 1, 0, 0, 0]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r4	perm_generic36k	min 0.680	p10 0.684	median 0.701	p90 0.784	n 15	dispatches,runs,generic,tile,check [2, 0, 1, 0, 1]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r4	perm_head5k	min 0.172	p10 0.185	median 0.214	p90 0.279	n 15	dispatches,runs,generic,tile,check [1, 1, 0, 0, 0]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r4	resadd36k	min 0.544	p10 0.563	median 0.597	p90 0.707	n 15	dispatches,runs,generic,tile,check [1, 0, 0, 0, 0]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r4	lin36k	min 1.340	p10 1.348	median 1.373	p90 1.555	n 15	dispatches,runs,generic,tile,check [4, 0, 0, 0, 3]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r4	linb36k	min 1.597	p10 1.609	median 1.658	p90 1.705	n 15	dispatches,runs,generic,tile,check [5, 0, 0, 0, 3]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r4	badd36k	min 0.423	p10 0.426	median 0.470	p90 0.506	n 15	dispatches,runs,generic,tile,check [1, 0, 0, 0, 0]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r4	lin5k_up	min 1.363	p10 1.367	median 1.420	p90 1.524	n 15	dispatches,runs,generic,tile,check [4, 0, 0, 0, 3]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+ops	r4	linb5k_up	min 1.669	p10 1.694	median 1.728	p90 1.793	n 15	dispatches,runs,generic,tile,check [5, 0, 0, 0, 3]	load_start 7.54 7.38 7.73	load_end 7.54 7.38 7.73
+== ops round 5 17:30:17Z load { 7.54 7.38 7.73 }
+ops	r5	perm_head36k	min 0.418	p10 0.424	median 0.437	p90 0.481	n 15	dispatches,runs,generic,tile,check [1, 1, 0, 0, 0]	load_start 7.54 7.38 7.73	load_end 7.34 7.34 7.72
+ops	r5	perm_ident36k	min 0.417	p10 0.421	median 0.442	p90 0.470	n 15	dispatches,runs,generic,tile,check [1, 1, 0, 0, 0]	load_start 7.54 7.38 7.73	load_end 7.34 7.34 7.72
+ops	r5	perm_generic36k	min 0.687	p10 0.691	median 0.712	p90 0.798	n 15	dispatches,runs,generic,tile,check [2, 0, 1, 0, 1]	load_start 7.54 7.38 7.73	load_end 7.34 7.34 7.72
+ops	r5	perm_head5k	min 0.178	p10 0.190	median 0.217	p90 0.261	n 15	dispatches,runs,generic,tile,check [1, 1, 0, 0, 0]	load_start 7.54 7.38 7.73	load_end 7.34 7.34 7.72
+ops	r5	resadd36k	min 0.556	p10 0.581	median 0.604	p90 0.704	n 15	dispatches,runs,generic,tile,check [1, 0, 0, 0, 0]	load_start 7.54 7.38 7.73	load_end 7.34 7.34 7.72
+ops	r5	lin36k	min 1.337	p10 1.359	median 1.398	p90 1.545	n 15	dispatches,runs,generic,tile,check [4, 0, 0, 0, 3]	load_start 7.54 7.38 7.73	load_end 7.34 7.34 7.72
+ops	r5	linb36k	min 1.606	p10 1.636	median 1.664	p90 1.760	n 15	dispatches,runs,generic,tile,check [5, 0, 0, 0, 3]	load_start 7.54 7.38 7.73	load_end 7.34 7.34 7.72
+ops	r5	badd36k	min 0.439	p10 0.440	median 0.467	p90 0.613	n 15	dispatches,runs,generic,tile,check [1, 0, 0, 0, 0]	load_start 7.54 7.38 7.73	load_end 7.34 7.34 7.72
+ops	r5	lin5k_up	min 1.376	p10 1.385	median 1.419	p90 1.429	n 15	dispatches,runs,generic,tile,check [4, 0, 0, 0, 3]	load_start 7.54 7.38 7.73	load_end 7.34 7.34 7.72
+ops	r5	linb5k_up	min 1.713	p10 1.713	median 1.746	p90 1.852	n 15	dispatches,runs,generic,tile,check [5, 0, 0, 0, 3]	load_start 7.54 7.38 7.73	load_end 7.34 7.34 7.72
+== test attention_flash_bits 17:30:17Z load { 7.34 7.34 7.72 }
+== test FAILED
+   Compiling ojas-metal v0.1.0 (/Users/bharath/Code/kern1103/ojas/ojas-metal)
+error[E0277]: can't compare `&str` with `str`
+   --> ojas-metal/tests/attention_flash_bits.rs:154:9
+    |
+154 |         assert_eq!(name, want_name, "case order differs from GOLDEN");
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `&str == str`
+    |
+    = help: the trait `PartialEq<str>` is not implemented for `&str`
+help: the trait `PartialEq` is implemented for `str`
+   --> /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/str/traits.rs:27:0
+    = note: required for `&&str` to implement `PartialEq<&str>`
+
+error[E0614]: type `u64` cannot be dereferenced
+   --> ojas-metal/tests/attention_flash_bits.rs:156:17
+    |
+156 |             *h, *want,
+    |                 ^^^^^ can't be dereferenced
+
+Some errors have detailed explanations: E0277, E0614.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `ojas-metal` (test "attention_flash_bits") due to 2 previous errors
+== clippy 17:30:18Z load { 7.34 7.34 7.72 }
+== clippy FAILED
+error[E0277]: can't compare `&str` with `str`
+   --> ojas-metal/tests/attention_flash_bits.rs:154:9
+    |
+154 |         assert_eq!(name, want_name, "case order differs from GOLDEN");
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `&str == str`
+    |
+    = help: the trait `std::cmp::PartialEq<str>` is not implemented for `&str`
+--
+error[E0614]: type `u64` cannot be dereferenced
+   --> ojas-metal/tests/attention_flash_bits.rs:156:17
+    |
+156 |             *h, *want,
+    |                 ^^^^^ can't be dereferenced
+
+Some errors have detailed explanations: E0277, E0614.
+--
+error: could not compile `ojas-metal` (test "attention_flash_bits") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+== end 2026-11-03T17:30:31Z 11:30  up 1 day, 22:26, 1 user, load averages: 7.05 7.27 7.69 status 1
+mac_heavy: 2026-11-03T17:30:31Z 'spiketrack-flash-fwd-3' finished with exit 1

@@ -1,0 +1,10 @@
+   Compiling ojas-metal v0.1.0 (/Users/bharath/Code/kern1103/ojas/ojas-metal)
+    Finished `release` profile [optimized] target(s) in 1.38s
+     Running tests/attention_flash_bits.rs (/Users/bharath/Code/kern1103/target/release/deps/attention_flash_bits-94c8783fb6ef21e5)
+
+running 2 tests
+test bf16_accumulation_runs_its_own_forward_entry ... ok
+test flash_forward_bits_match_the_kernels_before_the_retile ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+

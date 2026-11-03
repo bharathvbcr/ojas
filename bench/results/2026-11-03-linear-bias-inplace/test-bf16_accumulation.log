@@ -1,0 +1,20 @@
+   Compiling ojas-metal v0.1.0 (/Users/bharath/Code/kern1103/ojas/ojas-metal)
+    Finished `release` profile [optimized] target(s) in 2.13s
+     Running tests/bf16_accumulation.rs (/Users/bharath/Code/kern1103/target/release/deps/bf16_accumulation-fa11e12bcdfac6a5)
+
+running 12 tests
+test bf16_accumulation_toggle_and_budget_inheritance ... ok
+test cached_attention_and_per_head_gate_accumulate_in_bf16 ... ok
+test causal_conv1d_silu_bilinear_and_adds_accumulate_in_bf16 ... ok
+test causal_sdpa_and_general_attention_accumulate_in_bf16 ... ok
+test conv2d_im2col_pointwise_depthwise_and_transpose_accumulate_in_bf16 ... ok
+test edge_cases_multi_chunk_and_non_finite_under_bf16_accumulation ... ok
+test linear_forward_and_backward_accumulate_in_bf16 ... ok
+test norms_forward_and_row_backward_accumulate_in_bf16 ... ok
+test pool_norm_gdn_and_vres_backward_accumulate_in_bf16 ... ok
+test reductions_embedding_accumulate_grad_linear_ce_and_muon_accumulate_in_bf16 ... ok
+test seq_mean_and_l2_normalize_accumulate_in_bf16 ... ok
+test softmax_and_cross_entropy_online_reductions_accumulate_in_bf16 ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+

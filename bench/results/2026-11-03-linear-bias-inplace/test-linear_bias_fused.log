@@ -1,0 +1,12 @@
+   Compiling ojas-metal v0.1.0 (/Users/bharath/Code/kern1103/ojas/ojas-metal)
+   Compiling tessl v0.2.0 (/Users/bharath/Code/kern1103/tessl)
+    Finished `release` profile [optimized] target(s) in 24.63s
+     Running tests/linear_bias_fused.rs (/Users/bharath/Code/kern1103/target/release/deps/linear_bias_fused-fb27b6475131454c)
+
+running 3 tests
+test an_overflowing_fused_sum_is_the_ops_deferred_fault ... ok
+test fused_f32_linear_bias_equals_the_composed_ops_bit_for_bit ... ok
+test fused_f32_linear_bias_reads_an_unaligned_input_view ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+
