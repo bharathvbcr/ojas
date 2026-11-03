@@ -2959,12 +2959,6 @@ kernel void ojas_softmax_rows(
 // each in the forward.
 #define ATT_TPR 4
 #define ATT_FWD_CPR (ATT_FWD_BK / ATT_TPR)
-// The f32 forward's query rows per threadgroup, and its simdgroups: four
-// threads a row, as the bf16 body's ATT_BQ rows on ATT_NSG. Each key and
-// value block a threadgroup reads serves 64 rows, not 32. A row's softmax
-// and its sums are the same operations in the same order at either height.
-#define ATT_FWD_BQ 64
-#define ATT_FWD_NSG (ATT_FWD_BQ * ATT_TPR / 32)
 
 /// Key `j` is in query `i`'s window.
 inline bool attn_live(uint i, uint j, uint W)
@@ -3173,7 +3167,7 @@ inline void attn_fwd_bf16_body(
 }
 
 /// The f32 forward on the TensorOps matrix units: the `ojas_attn_fwd_d##DM`
-/// entries, ATT_FWD_BQ query rows on ATT_FWD_NSG simdgroups a threadgroup.
+/// entries.
 template <int DM>
 inline void attn_fwd_tiled_body(
     device float *Q, device float *K, device float *V, device float *O, device float *LSE,
@@ -3182,9 +3176,9 @@ inline void attn_fwd_tiled_body(
     threadgroup float *l_row, threadgroup float *a_row,
     device const float *bias, uint bias_flags, uint bias_b, uint bias_h, uint bias_q, uint H)
 {
-    const uint q0 = tgpig.x * (uint)ATT_FWD_BQ;
+    const uint q0 = tgpig.x * (uint)ATT_BQ;
     if (q0 >= T) { return; }
-    const uint nq = min((uint)ATT_FWD_BQ, T - q0);
+    const uint nq = min((uint)ATT_BQ, T - q0);
     const uint bh = tgpig.y;
     const uint b = (H > 0u) ? (bh / H) : 0u;
     const uint h = (H > 0u) ? (bh % H) : 0u;
@@ -3194,24 +3188,24 @@ inline void attn_fwd_tiled_body(
     const bool has_bias = (bias_flags & 2u) != 0u;
 
     constexpr auto qk_desc = matmul2d_descriptor(
-        ATT_FWD_BQ, ATT_FWD_BK, DM, false, true, false, matmul2d_descriptor::mode::multiply);
+        ATT_BQ, ATT_FWD_BK, DM, false, true, false, matmul2d_descriptor::mode::multiply);
     constexpr auto pv_desc = matmul2d_descriptor(
-        ATT_FWD_BQ, DM, ATT_FWD_BK, false, false, false, matmul2d_descriptor::mode::multiply_accumulate);
-    matmul2d<qk_desc, execution_simdgroups<ATT_FWD_NSG>> qk_op;
-    matmul2d<pv_desc, execution_simdgroups<ATT_FWD_NSG>> pv_op;
+        ATT_BQ, DM, ATT_FWD_BK, false, false, false, matmul2d_descriptor::mode::multiply_accumulate);
+    matmul2d<qk_desc, execution_simdgroups<ATT_NSG>> qk_op;
+    matmul2d<pv_desc, execution_simdgroups<ATT_NSG>> pv_op;
 
     auto mQ = tensor(Q + base, dextents<int, 2>{(int)D, (int)T}, array<int, 2>{1, (int)D});
     auto mK = tensor(K + kv_base, dextents<int, 2>{(int)D, (int)Tk}, array<int, 2>{1, (int)D});
     auto mV = tensor(V + kv_base, dextents<int, 2>{(int)D, (int)Tk}, array<int, 2>{1, (int)D});
     auto tQ = mQ.slice(0, (int)q0);
-    auto tP = tensor(S, dextents<int, 2>{ATT_FWD_BK, ATT_FWD_BQ}, array<int, 2>{1, ATT_FWD_BK});
+    auto tP = tensor(S, dextents<int, 2>{ATT_FWD_BK, ATT_BQ}, array<int, 2>{1, ATT_FWD_BK});
 
     auto oT = pv_op.template get_destination_cooperative_tensor<
         decltype(tP), decltype(mV.slice(0, 0)), float>();
 #pragma clang loop unroll(full)
     for (uint16_t i = 0; i < oT.get_capacity(); ++i) { oT[i] = 0.0f; }
 
-    if (tid < (uint)ATT_FWD_BQ) {
+    if (tid < (uint)ATT_BQ) {
         m_row[tid] = -INFINITY;
         l_row[tid] = 0.0f;
     }
@@ -3333,10 +3327,10 @@ kernel void ojas_attn_fwd_d##DM(                                              \
     uint2 tgpig [[threadgroup_position_in_grid]],                             \
     uint tid [[thread_index_in_threadgroup]])                                 \
 {                                                                             \
-    threadgroup float S[ATT_FWD_BQ * ATT_FWD_BK];                             \
-    threadgroup float m_row[ATT_FWD_BQ];                                      \
-    threadgroup float l_row[ATT_FWD_BQ];                                      \
-    threadgroup float a_row[ATT_FWD_BQ];                                      \
+    threadgroup float S[ATT_BQ * ATT_FWD_BK];                                 \
+    threadgroup float m_row[ATT_BQ];                                          \
+    threadgroup float l_row[ATT_BQ];                                          \
+    threadgroup float a_row[ATT_BQ];                                          \
     attn_fwd_tiled_body<DM>(const_cast<device float *>(q),                    \
                             const_cast<device float *>(k),                    \
                             const_cast<device float *>(v), o, lse, st, T, Tk, \
