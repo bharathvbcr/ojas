@@ -723,3 +723,15 @@ No chart: the folder holds only scripts, logs or text that is not a measurement 
 ## 2026-11-02-nanolab-config-ab
 
 No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
+## 2026-11-03-flash-fwd-specialize
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
+## 2026-11-03-linear-bias-inplace
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
+## 2026-11-03-tracker-ops-baseline
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.
