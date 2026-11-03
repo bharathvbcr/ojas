@@ -1,0 +1,4 @@
+# e2e: SpikeTrack 38e0a35, ojas base (A) vs F; steady frames >= 8
+memory attention (device): A 283.8 / 302.4 / 308.1 ms; F 277.6 / 292.0 / 287.3 ms; ratio 0.978 / 0.965 / 0.932; noise 0.086; not measured (inside the noise)
+tracker step: A 399.9 / 446.4 / 469.0 ms; F 395.5 / 443.4 / 414.5 ms; ratio 0.989 / 0.993 / 0.884; noise 0.173; not measured (inside the noise)
+frames per run: r1-A 26, r1-F 26, r2-A 26, r2-F 26, r3-A 26, r3-F 26
