@@ -1,0 +1,19 @@
+kernel identity (gate 2): OK
+
+control (gate 3): ctl median ratio over A, per round; median over rounds
+  B: 1.058 1.036 1.013 1.347 1.003 1.007 0.993 0.989  median 1.010  in bar
+  C: 1.089 1.042 0.982 0.986 0.997 1.009 0.913 1.130  median 1.003  in bar
+  A2: 1.010 1.008 0.982 0.990 0.989 1.005 0.936 1.185  median 0.997  in bar
+  window: clean
+
+x36400: A medians 47.94 48.06 49.92 50.63 49.56 47.94 52.59 52.66
+  noise N (max |A2/A - 1|) = 0.066
+  B/A: 1.040 1.051 1.025 1.106 0.982 1.014 1.004 0.989  median 1.019 (range 0.982-1.106); min-of-mins ratio 0.999; not measured (inside the noise)
+  C/A: 1.071 1.012 0.996 1.020 0.971 0.997 0.911 1.112  median 1.004 (range 0.911-1.112); min-of-mins ratio 0.991; not measured (inside the noise)
+  A2/A: 0.996 1.006 0.985 0.993 0.966 0.993 0.944 1.066  median 0.993 (range 0.944-1.066); min-of-mins ratio 0.991; not measured (inside the noise)
+
+x15600: A medians 19.75 19.51 20.61 20.87 19.89 19.44 21.47 21.38
+  noise N (max |A2/A - 1|) = 0.077
+  B/A: 1.051 1.067 1.013 1.176 1.011 1.012 1.015 1.004  median 1.014 (range 1.004-1.176); min-of-mins ratio 1.026; not measured (inside the noise)
+  C/A: 1.085 1.049 0.996 1.023 1.010 1.023 0.925 1.140  median 1.023 (range 0.925-1.140); min-of-mins ratio 1.033; not measured (inside the noise)
+  A2/A: 0.990 1.002 0.967 0.991 0.981 1.008 0.927 1.077  median 0.991 (range 0.927-1.077); min-of-mins ratio 1.009; not measured (inside the noise)
