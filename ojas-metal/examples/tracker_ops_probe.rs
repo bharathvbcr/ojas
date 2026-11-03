@@ -1,6 +1,9 @@
 //! SpikeTrack memory-attention small ops, timed one by one
 //! (bench/results/2026-11-03-tracker-ops-baseline).
 //!
+//! `tracker_ops_probe hash` prints an FNV-1a 64 hash of each linear arm's
+//! output (and of the FFN's down projection `[5184,2048] x [256,2048]`).
+//!
 //! `tracker_ops_probe <warmups> <runs> <tag>` times each arm with a device
 //! sync on both sides of every call, odd rounds in reverse order, and prints
 //! per arm the min, p10, median and p90 in ms, the dispatches one call
@@ -94,6 +97,41 @@ mod probe {
         let bias2048 = up(&[2048], 10, 0.1);
         let swap = [0usize, 2, 1, 3];
         let ident = [0usize, 1, 2, 3];
+
+        if args.first().map(String::as_str) == Some("hash") {
+            // FNV-1a 64 over the f32 bits of each linear arm's output: every
+            // binary of an A/B must print the same lines.
+            let x5k2 = up(&[5184, 2048], 11, 1.0);
+            let w_down = up(&[256, 2048], 12, 0.05);
+            let outs = [
+                ("lin36k", m.linear_forward(&x36, &w256)),
+                ("linb36k", m.linear_bias_forward(&x36, &w256, &bias256)),
+                ("lin5k_up", m.linear_forward(&x5, &w2048)),
+                ("linb5k_up", m.linear_bias_forward(&x5, &w2048, &bias2048)),
+                (
+                    "linb5k_down",
+                    m.linear_bias_forward(&x5k2, &w_down, &bias256),
+                ),
+            ];
+            m.sync().expect("sync");
+            for (name, t) in outs {
+                let v = t
+                    .expect(name)
+                    .to_host(&budget)
+                    .expect("host")
+                    .to_f32_vec()
+                    .expect("f32");
+                let mut h = 0xcbf2_9ce4_8422_2325u64;
+                for x in v {
+                    for byte in x.to_bits().to_le_bytes() {
+                        h ^= u64::from(byte);
+                        h = h.wrapping_mul(0x0000_0100_0000_01B3);
+                    }
+                }
+                println!("hash\t{name}\t{h:016x}");
+            }
+            return;
+        }
 
         let arms: Vec<Arm<'_>> = vec![
             (

@@ -150,7 +150,7 @@ fn flash_forward_bits_match_the_kernels_before_the_retile() {
         "golden hashes were recorded on {RECORDED_ON}; record this device's from a build of 286a444. This build's:\n{}",
         printed.join("\n")
     );
-    for ((name, h), (want_name, want)) in got.iter().zip(GOLDEN) {
+    for ((name, h), (want_name, want)) in got.iter().zip(GOLDEN.iter()) {
         assert_eq!(name, want_name, "case order differs from GOLDEN");
         assert_eq!(
             *h, *want,
