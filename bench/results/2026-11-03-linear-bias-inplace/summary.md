@@ -49,6 +49,18 @@ the 12 projections over 36k memory tokens and 0.22 ms on each of the 4 FFN up pr
 is ~3 ms per full-depth frame **[inferred]**, plus an unmeasured share on the 5,184-token
 projections and on every other f32 linear with a bias in SpikeTrack (detector, necks).
 
+## Whole-suite check (job 5, 18:51-18:55Z, `suite/`)
+
+Run at tip `8b5dc42` (F plus docs and results; the library is F's):
+
+| check | result |
+|---|---|
+| `cargo test --release -p ojas-metal -- --test-threads=1` | **passed**: 624 passed, 0 failed, 22 ignored |
+| `cargo test --release -p ojas-model -- --test-threads=1` | **passed**: 432 passed, 0 failed, 8 ignored |
+| `cargo clippy --workspace --all-targets -- -D warnings` | **failed**, on the pre-existing `ojas-cpu/src/quant_sparse.rs:468` `chunks_exact` lint (toolchain 1.99), the one `../2026-11-02-sam-xattn-q2/summary.md` recorded. That stops the run in `ojas-cpu`, so other crates were not linted by it. `ojas-metal` was linted clean with `--no-deps` in job 4. |
+
+`./scripts/fmt_check.sh` and `./scripts/check_tracked_targets.sh` pass at the tip.
+
 ## What it is
 
 - `ojas-metal/kernels/ojas_backend.metal` `ojas_bias_rows`: `y[row, col] += bias[col]` in place, a
