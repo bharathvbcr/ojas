@@ -116,10 +116,10 @@ use ojas_core::{
 
 use crate::layout::{CONV1D_BWD_ROWS, CONV1D_WIDTHS, GATED_RMS_BWD_MAX_DIM, GATED_RMS_BWD_ROWS};
 use crate::link::{
-    cached_attn_origin, cached_attn_part, check_mem_cap, metal_err, norm_chunks, rms_w_chunks, Arg,
-    AttnExtra, AttnGeom, BilinearGeom, Cmd, Conv1dGeom, ConvGeom, EmbedRows, EncAttnGeom, GdnArgs,
-    GroupNormGeom, Lane, LceGeom, Link, ReadAs, Reply, Res, RmsSide, RopeMode, SdpaGeom,
-    WaitCounts, Waits, SQ_OUT_WORDS,
+    cached_attn_origin, cached_attn_part, check_mem_cap, check_overlap_dispatches, metal_err,
+    norm_chunks, rms_w_chunks, Arg, AttnExtra, AttnGeom, BilinearGeom, Cmd, Conv1dGeom, ConvGeom,
+    EmbedRows, EncAttnGeom, GdnArgs, GroupNormGeom, Lane, LceGeom, Link, ReadAs, Reply, Res,
+    RmsSide, RopeMode, SdpaGeom, WaitCounts, Waits, SQ_OUT_WORDS,
 };
 use crate::permute;
 
@@ -761,6 +761,27 @@ impl MetalBackend {
         match self.link.call(Cmd::SetMemCap { bytes })? {
             Reply::Done => Ok(()),
             other => Err(metal_err(format!("set_mem_cap: device returned {other:?}"))),
+        }
+    }
+
+    /// Set how many dispatches the device thread records before it commits
+    /// them to the GPU without waiting (256 when a backend opens). An
+    /// unwaited commit lets the GPU run what was recorded while the host
+    /// records the next ops or does work of its own; a smaller count starts
+    /// the GPU sooner, at the cost of one more commit each time. It moves
+    /// when work reaches the GPU, not what it computes: the bits are those
+    /// of a run that never commits early
+    /// (`overlap_commits_from_many_threads_match_a_serial_run_bit_for_bit`).
+    /// It applies to every handle on the device. Zero is
+    /// [`OjasError::OutOfRange`]; on a poisoned backend it is
+    /// [`OjasError::Poisoned`].
+    pub fn set_overlap_dispatches(&self, dispatches: usize) -> Result<(), OjasError> {
+        check_overlap_dispatches(dispatches)?;
+        match self.link.call(Cmd::SetOverlap { dispatches })? {
+            Reply::Done => Ok(()),
+            other => Err(metal_err(format!(
+                "set_overlap_dispatches: device returned {other:?}"
+            ))),
         }
     }
 
@@ -5449,6 +5470,38 @@ mod tests {
                 m.mem_cap().expect("a poisoned backend reports its cap"),
                 opened
             );
+        });
+    }
+
+    /// `set_overlap_dispatches` refuses zero before any command, and a count
+    /// of 1 (an unwaited commit after every dispatch) keeps the bits of a run
+    /// that never commits early, across several chains on one backend.
+    #[test]
+    fn set_overlap_dispatches_refuses_zero_and_keeps_the_bits() {
+        const LEN: usize = 300;
+        watchdog(300, || {
+            let serial = MetalBackend::new(Budget::new(1 << 30)).expect("Metal device");
+            tune(&serial, Some(usize::MAX), None, (0, 0));
+            let one = std::sync::Barrier::new(1);
+            let want: Vec<_> = (0..3).map(|i| chain(&serial, i, LEN, &one)).collect();
+            let m = MetalBackend::new(Budget::new(1 << 30)).expect("Metal device");
+            let r = m.set_overlap_dispatches(0);
+            assert!(
+                matches!(
+                    r,
+                    Err(OjasError::OutOfRange {
+                        op: "set_overlap_dispatches",
+                        ..
+                    })
+                ),
+                "{r:?}"
+            );
+            m.set_overlap_dispatches(1).expect("overlap 1");
+            for (i, w) in want.iter().enumerate() {
+                let got = chain(&m, i as u32, LEN, &one);
+                assert!(got == *w, "chain {i}: bits differ from the serial run");
+            }
+            assert_eq!(pending(&m), None);
         });
     }
 

@@ -611,6 +611,12 @@ pub(crate) enum Cmd {
     SetMemCap {
         bytes: u64,
     },
+    /// Replace the dispatches recorded between unwaited commits
+    /// (`OVERLAP_DISPATCHES` by default). The caller has already run
+    /// [`check_overlap_dispatches`]: `dispatches` is non-zero.
+    SetOverlap {
+        dispatches: usize,
+    },
     /// Test hook: encode a dispatch, then panic on the device thread, as a
     /// bug mid-op would.
     #[cfg(test)]
@@ -1318,6 +1324,18 @@ pub(crate) struct Link {
 /// temporaries, and the pool cap. It runs on the host, before any command,
 /// so a refused cap costs the device nothing and a poisoned backend refuses
 /// it the same way.
+pub(crate) fn check_overlap_dispatches(dispatches: usize) -> Res<()> {
+    if dispatches == 0 {
+        return Err(OjasError::OutOfRange {
+            op: "set_overlap_dispatches",
+            detail:
+                "zero dispatches between unwaited commits is meaningless: give a positive count"
+                    .into(),
+        });
+    }
+    Ok(())
+}
+
 pub(crate) fn check_mem_cap(bytes: u64, budget_cap: u64) -> Res<()> {
     if bytes == 0 {
         return Err(OjasError::OutOfRange {

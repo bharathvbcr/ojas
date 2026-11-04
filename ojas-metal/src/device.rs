@@ -1535,6 +1535,11 @@ impl Worker {
                 self.book.borrow_mut().mem_cap = bytes;
                 Ok(Reply::Done)
             }
+            // Validated on the host (`check_overlap_dispatches`) before it is sent.
+            Cmd::SetOverlap { dispatches } => {
+                self.book.borrow_mut().overlap = dispatches;
+                Ok(Reply::Done)
+            }
             Cmd::Upload { src } => self.upload(&src),
             Cmd::Run(job) => self.run_provider(job),
             #[cfg(test)]
