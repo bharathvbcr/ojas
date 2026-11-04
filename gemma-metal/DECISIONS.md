@@ -749,3 +749,104 @@ Inference-stack decisions for agents. Training decisions stay in
 - **Overturn if:** a per-process GPU-time signal lands that can attribute noise
   to a specific competitor, at which point the dispersion arm can become a
   precondition check instead of a verdict.
+
+---
+
+## D20. Measure GEMV fraction of peak before a megakernel (measured 2026-11-04: the GEMV is near peak; the gap is between kernels)
+
+- **Decision:** No decode megakernel, Core ML export or further dispatch-count
+  fusion until the Q4 GEMV is measured against the memory-bandwidth ceiling
+  and against MLX's quantized matmul at E4B's shapes (ojas task
+  ft-5b2a72ee, a precondition of the megakernel probe ft-e6d8035e).
+- **Why (evidence from another workload):** SpikeTrack (SAM 3.1 at batch 1,
+  2026-11-03/04) showed when a compiled graph pays. One Core ML program in
+  place of per-op Metal cut the ViT trunk's dispatches 6,284 → 4,007 per
+  frame and the frame to 0.80× (fp32), and Core ML runs SAM's whole
+  segmentation head (24.8 ms fp32) faster than Ojas's two 3×3 convs alone
+  (26.9 + 6.2 ms isolated). That regime writes and re-reads large
+  activations between many small ops. Sources: `../SpikeTrack/bench/results/`
+  `coreml-trunk/README.md`, `coreml-seghead/`, `e26-pipeline/README.md`;
+  `../tessl/docs/apple-silicon/fusion_and_placement.md` gathers them.
+- **Why it does not transfer here:** E4B decode reads ~2.86 GiB of weights
+  per token whatever the kernel boundaries are (D15 profile). Launch tax is
+  an ~8% ceiling and removing 90 dispatches did not move tok/s (D15); ICB and
+  encode-once were flat or slower (D16). At ~42 ms/token that is ~70 GB/s
+  effective [inferred], against mlx-lm's ~3× (D2, not like-for-like per D10).
+  The gap is the GEMV's bandwidth or what sits between GEMVs, not compilation.
+- **Also learned there (applies to prefill, if it is ever offloaded):** a
+  Metal → Core ML → Metal boundary costs a host copy of every crossing tensor
+  today; the SAM necks and head were 2–4× faster as programs and 0.97–1.07×
+  in the frame because of it. Offload only a region whose compute dwarfs its
+  I/O, or remove the copies first (tessl ft-77620e66). The Neural Engine was
+  slower than the GPU for the SAM trunk (2.39 s vs 0.26 s per call).
+- **Overturn if:** ft-5b2a72ee shows the Q4 GEMV matches MLX in isolation
+  (then the gap is between kernels and the persistent prototype is next), or
+  a profile shows intermediates rather than weights dominate a decode step.
+- **Measured 2026-11-04 (ft-5b2a72ee): overturned.** The probe is in
+  `bench/results/gemv_fraction_of_peak_20261104/`. tessl's `gemv_q4_mlx_simd` alone at E4B's shapes,
+  over 3 interleaved rounds with parity checked:
+  - MLP 230-248 GB/s, which is 83-89% of the 275-281 GB/s read ceiling;
+  - attention q/o 76-81%;
+  - lm_head 96-102%;
+  - MLX 0.32 `quantized_matmul` is no faster at any of these shapes. The exception is a lone 512-row
+    K or V, where MLX is 2x faster: 64 threadgroups underfill the GPU there.
+
+  The "Why it does not transfer here" reading above was therefore wrong about the cause. The GEMVs of a
+  token at that rate are ~13 ms of a ~42 ms token. The ~29 ms gap is between kernels: non-GEMV kernels,
+  barriers and waits, host work [inferred]. So inter-kernel serialisation is the lever. That is what a
+  persistent or megakernel removes, and ft-e6d8035e proceeds under its own rule. Its first step is a
+  per-dispatch GPU-timestamp profile of a real token that splits kernel time from gaps. D15's "launch
+  tax 3.3 ms" counted only the 90 dispatches fusion removed; it does not bound the gaps across all ~600.
+  But removing those 90 left tok/s flat (D15), so the gap may not scale with dispatch count. It may be
+  slower in-graph kernels (the fused gate/up and the bf16-x variants were not timed alone) or waits. The
+  profile has to locate it before a megakernel is built.
+- **Contended run (D19).** The host was at load 9-13 throughout, and this is labelled as such. The
+  ceiling and both kernels were timed under that load in alternating rounds, and the three rounds of each
+  arm agree within 5% on the MLP shapes (61.8-64.2 and 59.4-61.9 us). Contention would lower the GEMV's numbers, not raise them, so
+  "near peak" holds as a lower bound. The tessl-against-MLX ordering should be re-read on a quiet machine
+  before it is quoted as a margin.
+
+## D21. Decode stalls removed; `FUSE_LAYER` on by default (2026-11-04)
+
+Evidence: `bench/results/dispatch_profile_20261104/README.md` (E4B shapes, random MLX Q4 weights;
+real weights not on disk).
+
+- **Every dispatch committed and waited.** `IcbScalarPool` wrote a host-mapped buffer per scalar,
+  and tessl commits and waits before any host mapping: 599 commits per token, 96.8 ms host encode
+  for 17.5 ms of kernels. Outside DecodeIcb / encode-once the pool now binds through the constant
+  arena, and `pos_buf` / the seed token are GPU stores. `GEMMA_METAL_STABLE_SCALARS=1` is the old
+  path. This is the likely reason D20's "gap between kernels" existed; inferred, not shown on real
+  weights.
+- **Decode attention ran one lane per head.** One-query calls now take tessl's split-KV decode
+  (`nn::flash_attn_decode_values`); the stable path keeps the tiled kernel.
+- Paired A/B, 64 steps: 8.6-9.0 -> 80.7-83.4 tok/s (12.0 ms per token, flat in context).
+- **`FUSE_LAYER` default ON**, overturning "keep OFF" above (2026-07-20) on its own stated rule:
+  exactness passed then on real weights, and now it wins in every round, 80.4-82.1 -> 82.2-83.3
+  tok/s (`fusion_ab.log`), with identical 24-token greedy streams at E4B shapes in all four
+  combinations of `FUSE_LAYER` and `STABLE_SCALARS`. Its gain was flat while every dispatch waited.
+- **`FUSE_GATE_DOWN` stays OFF:** 8.3 tok/s against ~82 in every round (`fusion_ab.log`). Traced:
+  the persistent kernel alone takes 2.4 ms per layer (101.7 ms per token, stamped) against ~0.16 ms
+  for gate_up_gelu + down. Its software grid barrier caps it at `PERSISTENT_INTERP_MAX_TG = 8`
+  threadgroups, because Metal does not guarantee a larger grid is co-resident, and 8 threadgroups
+  cannot stream the MLP weights. Each call also writes two host flags, synchronizes and reads one
+  back. Even fixed, it would save the 40 KB intermediate and one launch per layer: the megakernel
+  pattern costs more bandwidth than it saves here.
+- **Ceiling for further fusion / megakernel (D20 follow-up):** GEMV is 10.9 of 12.0 ms per token
+  and runs at 83-89% of the read ceiling, so the non-GEMV remainder is about 1.1 ms (about 10%
+  tok/s).
+- **Roofline [I, computed]:** ~2.86 GiB of weights per token (D15) in 12.0 ms is ~256 GB/s, 91-93%
+  of the 275-281 GB/s read ceiling (`bench/results/gemv_fraction_of_peak_20261104`). Activations
+  and the KV cache are already bf16, so an fp16 path saves no bytes. mlx-lm's E4B token is ~13 ms
+  (D2). What remains is the ~1.1 ms above, or fewer weight bytes (a lower-bit quant), which changes
+  the model's outputs.
+- **Core ML and fp16 weights, measured [V]** (`bench/results/coreml_gemv_probe_20261104`, a chain
+  of 24 MLP-shaped GEMVs, random weights, quiet machine, one run per arm): Core ML int4 (block 64)
+  on the GPU takes 66-67 us per layer, tied with tessl's Q4 (59-64 us GPU, 68-78 us wall). fp16
+  weights take 205 us, 3.1-3.4x slower. The Neural Engine takes 332 us (fp16) and 777 us (int4).
+  A Core ML export of the decode would not be faster, so it is not pursued.
+- **Core ML decode export, measured [I]** (`bench/results/coreml_decode_export_20261104`, an E4B-shaped
+  decode step with the KV cache as Core ML state, random weights, composed from a 6-layer block, a
+  quarter output head and the predict overhead): an estimated 21.0 ms per token at int4 and 49.0 ms
+  at fp16, against gemma-metal's 12.0 ms, with less work per layer than gemma-metal. Rejected.
+- **Overturn if:** real-weight E4B tokens differ between `STABLE_SCALARS=0/1` or `FUSE_LAYER=0/1`,
+  or real-weight decode does not show the gain.

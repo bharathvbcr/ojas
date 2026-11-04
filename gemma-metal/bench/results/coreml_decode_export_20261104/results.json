@@ -1,0 +1,50 @@
+{
+ "steps": 48,
+ "warm": 8,
+ "rows": [
+  {
+   "program": "noop",
+   "arm": "fp16",
+   "ms_min": 0.03254198236390948,
+   "ms_median": 0.03514598938636482,
+   "weight_GB": 0.0,
+   "GBps_at_median": null
+  },
+  {
+   "program": "head",
+   "arm": "fp16",
+   "ms_min": 1.469957991503179,
+   "ms_median": 1.5800420078448951,
+   "weight_GB": 0.33554432,
+   "GBps_at_median": 212.3641766067138
+  },
+  {
+   "program": "head",
+   "arm": "int4",
+   "ms_min": 0.5830830195918679,
+   "ms_median": 0.6252500170376152,
+   "weight_GB": 0.08912896,
+   "GBps_at_median": 142.5493123891238
+  },
+  {
+   "program": "block6",
+   "arm": "fp16",
+   "ms_min": 5.539625009987503,
+   "ms_median": 6.1434999806806445,
+   "weight_GB": 1.14294784,
+   "GBps_at_median": 186.04180737270414
+  },
+  {
+   "program": "block6",
+   "arm": "int4",
+   "ms_min": 2.4414589861407876,
+   "ms_median": 2.692916983505711,
+   "weight_GB": 0.30359552,
+   "GBps_at_median": 112.73853663501029
+  }
+ ],
+ "estimated_42_layer_ms_per_token": {
+  "fp16": 48.973208002280444,
+  "int4": 20.99995905882679
+ }
+}

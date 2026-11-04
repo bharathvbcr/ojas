@@ -688,6 +688,118 @@ pub fn load_mlx_affine_q4_shards(
     Ok(banks)
 }
 
+/// Random-weight banks with exactly the tensor set and dtypes that
+/// [`load_mlx_affine_q4_shards`] produces from `mlx-community/gemma-4-e4b-it-4bit`
+/// for `text`: MLX affine Q4 projections, embeddings and PLE table (group size
+/// from `opts.scheme`), bf16 norms and layer scalars, no k/v on KV-share
+/// consumers. Kernel shapes and the dispatch graph are the real model's; the
+/// values are not, so a decode on these banks is for timing only. Dequantized
+/// weights are uniform in about ±0.08 and norms are 1, so activations stay finite.
+pub fn synthetic_mlx_q4_banks(
+    mut text: Gemma4TextConfig,
+    opts: LoadOptions,
+    seed: u64,
+) -> Result<HostWeightBanks> {
+    text.validate()?;
+    let kv_layout = KvLayout::from_config(&text, opts.max_seq)?;
+    let group_size = match opts.scheme {
+        QuantScheme::Q4Mlx { group_size } | QuantScheme::Q4 { group_size } => group_size,
+        _ => 64,
+    };
+    let mut state = seed | 1;
+    let mut next = move || {
+        // xorshift64*: cheap enough for the ~5 GB of packed nibbles.
+        state ^= state >> 12;
+        state ^= state << 25;
+        state ^= state >> 27;
+        state.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    };
+    let mut q4 = |rows: usize, cols: usize| -> Result<QuantMatrix> {
+        let words = rows
+            .checked_mul(cols / 8)
+            .ok_or_else(|| Error::Weights(format!("synthetic [{rows},{cols}] overflows")))?;
+        let mut w = Vec::with_capacity(words);
+        while w.len() < words {
+            let r = next();
+            w.push(r as u32);
+            if w.len() < words {
+                w.push((r >> 32) as u32);
+            }
+        }
+        let groups = rows * (cols / group_size);
+        // Nibble q in 0..16 dequantizes to scale * q + bias = (q - 7.5) * 0.01.
+        quant_matrix_from_mlx_q4(
+            rows,
+            cols,
+            group_size,
+            &w,
+            &vec![0.01f32; groups],
+            &vec![-0.075f32; groups],
+        )
+    };
+    let ones = |n: usize, value: f32| -> Result<QuantMatrix> {
+        quantize_affine_f32(n, 1, &vec![value; n], QuantScheme::Bf16)
+    };
+
+    let hidden = text.hidden_size;
+    let inter = text.intermediate_size;
+    let mut matrices = Vec::new();
+    let mut push = |name: String, matrix: QuantMatrix| matrices.push(NamedMatrix { name, matrix });
+    push("embed_tokens.weight".into(), q4(text.vocab_size, hidden)?);
+    push("norm.weight".into(), ones(hidden, 1.0)?);
+    for li in 0..text.num_hidden_layers {
+        let map = kv_layout.layer(li)?;
+        let (hkv, d) = match map.layer_type {
+            crate::config::LayerType::SlidingAttention => (text.num_key_value_heads, text.head_dim),
+            crate::config::LayerType::FullAttention => (text.global_kv_heads(), text.global_head_dim),
+        };
+        let hq = text.num_attention_heads;
+        let p = format!("layers.{li}");
+        push(format!("{p}.self_attn.q_proj.weight"), q4(hq * d, hidden)?);
+        push(format!("{p}.self_attn.o_proj.weight"), q4(hidden, hq * d)?);
+        push(format!("{p}.self_attn.q_norm.weight"), ones(d, 1.0)?);
+        if !kv_layout.is_consumer(li) {
+            push(format!("{p}.self_attn.k_proj.weight"), q4(hkv * d, hidden)?);
+            push(format!("{p}.self_attn.v_proj.weight"), q4(hkv * d, hidden)?);
+            push(format!("{p}.self_attn.k_norm.weight"), ones(d, 1.0)?);
+        }
+        push(format!("{p}.mlp.gate_proj.weight"), q4(inter, hidden)?);
+        push(format!("{p}.mlp.up_proj.weight"), q4(inter, hidden)?);
+        push(format!("{p}.mlp.down_proj.weight"), q4(hidden, inter)?);
+        for norm in [
+            "input_layernorm",
+            "post_attention_layernorm",
+            "pre_feedforward_layernorm",
+            "post_feedforward_layernorm",
+        ] {
+            push(format!("{p}.{norm}.weight"), ones(hidden, 1.0)?);
+        }
+        push(format!("{p}.layer_scalar"), ones(1, 1.0)?);
+    }
+    let ple = if text.has_ple() {
+        let cols = text.num_hidden_layers * text.hidden_size_per_layer_input;
+        Some(PleBanks {
+            layers: vec![crate::ple::PleLayerBank {
+                layer: 0,
+                vocab: text.vocab_size_per_layer_input,
+                dim: cols,
+                matrix: q4(text.vocab_size_per_layer_input, cols)?,
+            }],
+        })
+    } else {
+        None
+    };
+    let banks = HostWeightBanks {
+        config: text,
+        scheme: QuantScheme::Q4Mlx { group_size },
+        matrices,
+        ple,
+        kv_layout,
+    };
+    banks.validate_metal_limits()?;
+    Ok(banks)
+}
+
 /// Resolve an MLX Q4 companion tensor (`scales` / `biases`), searching other
 /// safetensor shards when the tensor lives across a shard boundary.
 fn lookup_f32_tensor_across(

@@ -12,8 +12,9 @@ old `gemv_kv` (solo≡fused already; solo≠old `gemv_kv` at `k[41]`). Fix:
 bank-partition K∥V like QKV (solo reduce per TG). Hot dump after fix:
 **solo ≡ gemv_kv ≡ fused** bit-exact (`qkv_ab_dump_e4b_banksplit_kv.txt`).
 Dispatch drops still engage (E4B 599.9 → both 509.9 Δ=90; **31B QKV 727.9 →
-667.9 Δ=−60**). Tok/s ~flat — keep opt-in; **do not default-on `FUSE_QKV`/
-`FUSE_LAYER`**. Do not copy into `gates.md` as default-on.
+667.9 Δ=−60**). Tok/s ~flat then — kept opt-in. **Superseded 2026-11-04 (DECISIONS D21):
+`FUSE_LAYER` is default ON** after per-dispatch commits were removed; it now wins 1.2% in every
+round at E4B shapes, with identical token streams.
 
 **E4B full arms vs bank-split `gemv_kv` (2026-07-20, TRACE=1):**
 [`bench/results/fusion_ab_e4b_20260720T012511Z.json`](../bench/results/fusion_ab_e4b_20260720T012511Z.json)

@@ -406,7 +406,13 @@ pub struct GemmaGpu {
     /// Stable scalar pool for ICB / encode-once binds (FA/kv/softcap). Fixed
     /// GPU addresses — contents rewritten per dispatch/step; not const-arena.
     pub(crate) icb_scalars: IcbScalarPool,
+    /// Split-KV decode partials, one per (batch, heads, K/V capacity, head
+    /// dim) the decode attention has met; a session meets two (sliding, global).
+    decode_scratch: std::sync::Mutex<Vec<(DecodeScratchKey, tessl::nn::DecodeScratch)>>,
 }
+
+/// (batch, heads, K/V capacity, head dim) of a [`GemmaGpu::decode_scratch`] entry.
+type DecodeScratchKey = (u32, u32, usize, u32);
 
 /// Stable `GpuBuffer` arena for per-token / per-dispatch scalars (A0 / D16).
 ///
@@ -417,17 +423,46 @@ pub struct GemmaGpu {
 /// binds land at the same offsets every token → ICB-friendly stable GPU addresses.
 /// Call `push_*` *before* `with_binder` so binder-nop replay still refreshes slots.
 ///
+/// Only DecodeIcb capture/replay and encode-once need those stable addresses.
+/// Writing a Hot buffer from the host maps it, and tessl commits the open
+/// command buffer and waits before any host mapping, so a GPU write per push
+/// cost one commit and one wait per dispatch (599 per E4B token). Outside
+/// those modes ([`IcbScalarPool::stable`] false) a push only fills a host
+/// shadow, and the bind passes the value through the binder's constant arena,
+/// which is bump-allocated per command buffer and never waits.
+///
 /// Cursors are atomics (not Mutex): decode is single-threaded per session; A2
 /// cuts ~hundreds of lock/unlock pairs per binder-nop prep step.
 pub(crate) struct IcbScalarPool {
-    /// Softcap f32×1 (model-constant; rewritten per softcap dispatch).
+    /// Softcap f32×1 (model-constant; written only when the value changes).
     softcap: GpuBuffer,
+    /// Bits of the value in [`Self::softcap`]: a rewrite maps the buffer, which
+    /// commits and waits, so an unchanged value is not rewritten.
+    softcap_bits: std::sync::atomic::AtomicU32,
     /// Hot u32 workspace (bump-allocated per bind within a step).
     u32s: GpuBuffer,
     /// Hot f32 workspace (FA scale + other per-dispatch floats).
     f32s: GpuBuffer,
     cursor_u32: std::sync::atomic::AtomicUsize,
     cursor_f32: std::sync::atomic::AtomicUsize,
+    /// Host copies of every pushed slot (f32s as bits), read by the binds.
+    shadow_u32: Box<[std::sync::atomic::AtomicU32]>,
+    shadow_f32: Box<[std::sync::atomic::AtomicU32]>,
+    /// Whether pushes also write the GPU pool and binds point at it. Set at
+    /// [`Self::reset_step`] from [`scalars_need_stable_buffer`], so a push and
+    /// its bind always agree; true until the first step.
+    stable: std::sync::atomic::AtomicBool,
+}
+
+/// Whether this step's scalars must live at stable GPU addresses: a DecodeIcb
+/// capture or replay, or encode-once, re-reads the bound pool slots later
+/// ([`stable_scalars_forced`] is the A/B reference arm).
+fn scalars_need_stable_buffer() -> bool {
+    stable_scalars_forced()
+        || tessl::decode_icb_enabled()
+        || tessl::icb_execute_enabled()
+        || tessl::decode_icb_capture_active()
+        || encode_once_enabled()
 }
 
 impl IcbScalarPool {
@@ -454,21 +489,34 @@ impl IcbScalarPool {
         }
         Ok(Self {
             softcap,
+            softcap_bits: std::sync::atomic::AtomicU32::new(30.0f32.to_bits()),
             u32s,
             f32s,
             cursor_u32: std::sync::atomic::AtomicUsize::new(0),
             cursor_f32: std::sync::atomic::AtomicUsize::new(0),
+            shadow_u32: (0..Self::U32_SLOTS).map(|_| std::sync::atomic::AtomicU32::new(0)).collect(),
+            shadow_f32: (0..Self::F32_SLOTS).map(|_| std::sync::atomic::AtomicU32::new(0)).collect(),
+            stable: std::sync::atomic::AtomicBool::new(true),
         })
     }
 
     pub(crate) fn set_softcap(&self, v: f32) {
-        self.softcap.write_f32(&[v]);
+        if self.softcap_bits.swap(v.to_bits(), Ordering::Relaxed) != v.to_bits() {
+            self.softcap.write_f32(&[v]);
+        }
     }
 
     /// Reset bump cursors (call once per decode/verify step before layer loop).
     pub(crate) fn reset_step(&self) {
         self.cursor_u32.store(0, Ordering::Relaxed);
         self.cursor_f32.store(0, Ordering::Relaxed);
+        self.stable
+            .store(scalars_need_stable_buffer(), Ordering::Relaxed);
+    }
+
+    /// Whether pushes write the GPU pool this step (see [`Self::stable`]).
+    pub(crate) fn stable(&self) -> bool {
+        self.stable.load(Ordering::Relaxed)
     }
 
     /// Current bump watermarks (debug / ICB offset parity).
@@ -496,7 +544,10 @@ impl IcbScalarPool {
                 Self::U32_SLOTS
             )));
         }
-        self.u32s.contents_u32()[slot] = v;
+        self.shadow_u32[slot].store(v, Ordering::Relaxed);
+        if self.stable() {
+            self.u32s.contents_u32()[slot] = v;
+        }
         icb_scalar_tape_record_u32_const(v);
         Ok(slot * 4)
     }
@@ -511,7 +562,10 @@ impl IcbScalarPool {
                 Self::U32_SLOTS
             )));
         }
-        self.u32s.contents_u32()[slot] = v;
+        self.shadow_u32[slot].store(v, Ordering::Relaxed);
+        if self.stable() {
+            self.u32s.contents_u32()[slot] = v;
+        }
         icb_scalar_tape_record_u32_dyn(src);
         Ok(slot * 4)
     }
@@ -526,19 +580,32 @@ impl IcbScalarPool {
                 Self::F32_SLOTS
             )));
         }
-        self.f32s.contents_f32()[slot] = v;
+        self.shadow_f32[slot].store(v.to_bits(), Ordering::Relaxed);
+        if self.stable() {
+            self.f32s.contents_f32()[slot] = v;
+        }
         icb_scalar_tape_record_f32_const(v);
         Ok(slot * 4)
     }
 
+    /// Bind the u32 pushed at byte offset `off` to buffer `index`.
     #[inline]
-    fn bind_u32(&self, bnd: &mut tessl::dispatch::Binder<'_>, off: usize, index: usize) {
-        set_gpu_buf_offset(bnd, &self.u32s, off, index);
+    pub(crate) fn bind_u32(&self, bnd: &mut tessl::dispatch::Binder<'_>, off: usize, index: usize) {
+        if self.stable() {
+            set_gpu_buf_offset(bnd, &self.u32s, off, index);
+        } else {
+            bnd.bind_u32(self.shadow_u32[off / 4].load(Ordering::Relaxed), index);
+        }
     }
 
+    /// Bind the f32 pushed at byte offset `off` to buffer `index`.
     #[inline]
-    fn bind_f32(&self, bnd: &mut tessl::dispatch::Binder<'_>, off: usize, index: usize) {
-        set_gpu_buf_offset(bnd, &self.f32s, off, index);
+    pub(crate) fn bind_f32(&self, bnd: &mut tessl::dispatch::Binder<'_>, off: usize, index: usize) {
+        if self.stable() {
+            set_gpu_buf_offset(bnd, &self.f32s, off, index);
+        } else {
+            bnd.bind_f32(f32::from_bits(self.shadow_f32[off / 4].load(Ordering::Relaxed)), index);
+        }
     }
 }
 
@@ -855,6 +922,7 @@ impl GemmaGpu {
             act_bf16: std::sync::Mutex::new(None),
             act_f32: std::sync::Mutex::new(None),
             icb_scalars,
+            decode_scratch: std::sync::Mutex::new(Vec::new()),
         })
     }
 
@@ -1420,10 +1488,10 @@ pub fn kv_ring_densify(
     dispatch_1d(&gpu.rt, &p, n, |bnd| {
         set_gpu_buf(bnd, src, 0);
         set_gpu_buf(bnd, dst, 1);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.u32s, n_slot_off, 2);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.u32s, capacity_off, 3);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.u32s, filled_off, 4);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.u32s, start_off, 5);
+        gpu.icb_scalars.bind_u32(bnd, n_slot_off, 2);
+        gpu.icb_scalars.bind_u32(bnd, capacity_off, 3);
+        gpu.icb_scalars.bind_u32(bnd, filled_off, 4);
+        gpu.icb_scalars.bind_u32(bnd, start_off, 5);
     })
     .map_err(map_metal)
 }
@@ -1574,6 +1642,75 @@ fn validate_direct_attn_storage(
     Ok(capacity)
 }
 
+/// Single-query attention on tessl's split-KV decode ([`tessl::nn::flash_attn_decode_values`]),
+/// or `false` when this call must take the tiled kernel: more than one query
+/// row, or a stable scalar pool (DecodeIcb / encode-once re-reads the bound
+/// scalars, and the values path fixes them at encode). The tiled kernels run
+/// one live lane in 32 at `Tq == 1` over `B*H` threadgroups and walk every key
+/// on that lane; this splits the keys over threadgroups with every lane live.
+#[allow(clippy::too_many_arguments)]
+fn decode_attn_values(
+    gpu: &GemmaGpu,
+    q: &GpuBuffer,
+    k: &GpuBuffer,
+    v: &GpuBuffer,
+    o: &GpuBuffer,
+    b: u32,
+    tq: u32,
+    tkv: u32,
+    h: u32,
+    hkv: u32,
+    head_dim: u32,
+    window: u32,
+    scale: f32,
+    q_pos_offset: u32,
+    kv_pos_offset: u32,
+    kv_capacity: usize,
+    out_bf16: bool,
+) -> Result<bool> {
+    if tq != 1 || gpu.icb_scalars.stable() {
+        return Ok(false);
+    }
+    let key = (b, h, kv_capacity, head_dim);
+    let mut cache = gpu
+        .decode_scratch
+        .lock()
+        .map_err(|_| Error::Metal("decode scratch lock poisoned".into()))?;
+    let at = match cache.iter().position(|(k, _)| *k == key) {
+        Some(i) => i,
+        None => {
+            let s = tessl::nn::DecodeScratch::new(&gpu.rt, b, h, kv_capacity, head_dim).map_err(map_metal)?;
+            cache.push((key, s));
+            cache.len() - 1
+        }
+    };
+    let dims = tessl::nn::AttnDims {
+        batch: b,
+        tq,
+        heads: h,
+        heads_kv: hkv,
+        window,
+        scale,
+    };
+    tessl::nn::flash_attn_decode_values(
+        &gpu.rt,
+        q,
+        k,
+        v,
+        o,
+        &cache[at].1,
+        tkv,
+        q_pos_offset,
+        kv_pos_offset,
+        dims,
+        head_dim,
+        kv_capacity,
+        out_bf16,
+    )
+    .map_err(map_metal)?;
+    Ok(true)
+}
+
 /// Sliding-window FA @ D=256.
 ///
 /// Layout: Q/O `[B,Tq,H,D]`, K/V `[B,capacity,Hkv,D]`; only the first live
@@ -1634,6 +1771,12 @@ pub fn flash_attn_swa_h256_ex(
 ) -> Result<()> {
     let kv_capacity =
         validate_direct_attn_storage(gpu, q, k, v, o, b, tq, h, hkv, 256, window, scale, out_bf16)?;
+    if decode_attn_values(
+        gpu, q, k, v, o, b, tq, tkv, h, hkv, 256, window, scale, q_pos_offset, kv_pos_offset, kv_capacity as usize,
+        out_bf16,
+    )? {
+        return Ok(());
+    }
     let p = gpu
         .rt
         .pipeline(KernelId::FlashAttnSwaH256.entry_name())
@@ -1668,17 +1811,17 @@ pub fn flash_attn_swa_h256_ex(
         set_gpu_buf(bnd, k, 1);
         set_gpu_buf(bnd, v, 2);
         set_gpu_buf(bnd, o, 3);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.u32s, b_off, 4);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.u32s, tq_off, 5);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.u32s, tkv_off, 6);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.u32s, h_off, 7);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.u32s, hkv_off, 8);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.u32s, window_off, 9);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.f32s, scale_off, 10);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.u32s, q_pos_off, 11);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.u32s, kv_pos_off, 12);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.u32s, out_bf16_off, 13);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.u32s, kv_capacity_off, 14);
+        gpu.icb_scalars.bind_u32(bnd, b_off, 4);
+        gpu.icb_scalars.bind_u32(bnd, tq_off, 5);
+        gpu.icb_scalars.bind_u32(bnd, tkv_off, 6);
+        gpu.icb_scalars.bind_u32(bnd, h_off, 7);
+        gpu.icb_scalars.bind_u32(bnd, hkv_off, 8);
+        gpu.icb_scalars.bind_u32(bnd, window_off, 9);
+        gpu.icb_scalars.bind_f32(bnd, scale_off, 10);
+        gpu.icb_scalars.bind_u32(bnd, q_pos_off, 11);
+        gpu.icb_scalars.bind_u32(bnd, kv_pos_off, 12);
+        gpu.icb_scalars.bind_u32(bnd, out_bf16_off, 13);
+        gpu.icb_scalars.bind_u32(bnd, kv_capacity_off, 14);
     })
     .map_err(map_metal)
 }
@@ -1744,16 +1887,16 @@ pub fn flash_attn_swa_h128(
         set_gpu_buf(bnd, k, 1);
         set_gpu_buf(bnd, v, 2);
         set_gpu_buf(bnd, o, 3);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.u32s, b_off, 4);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.u32s, tq_off, 5);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.u32s, tkv_off, 6);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.u32s, h_off, 7);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.u32s, hkv_off, 8);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.u32s, window_off, 9);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.f32s, scale_off, 10);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.u32s, q_pos_off, 11);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.u32s, kv_pos_off, 12);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.u32s, kv_capacity_off, 13);
+        gpu.icb_scalars.bind_u32(bnd, b_off, 4);
+        gpu.icb_scalars.bind_u32(bnd, tq_off, 5);
+        gpu.icb_scalars.bind_u32(bnd, tkv_off, 6);
+        gpu.icb_scalars.bind_u32(bnd, h_off, 7);
+        gpu.icb_scalars.bind_u32(bnd, hkv_off, 8);
+        gpu.icb_scalars.bind_u32(bnd, window_off, 9);
+        gpu.icb_scalars.bind_f32(bnd, scale_off, 10);
+        gpu.icb_scalars.bind_u32(bnd, q_pos_off, 11);
+        gpu.icb_scalars.bind_u32(bnd, kv_pos_off, 12);
+        gpu.icb_scalars.bind_u32(bnd, kv_capacity_off, 13);
     })
     .map_err(map_metal)
 }
@@ -1827,6 +1970,11 @@ pub fn flash_attn_global_h512_ex(
 ) -> Result<()> {
     let kv_capacity =
         validate_direct_attn_storage(gpu, q, k, v, o, b, tq, h, hkv, 512, 0, scale, out_bf16)?;
+    if decode_attn_values(
+        gpu, q, k, v, o, b, tq, tkv, h, hkv, 512, 0, scale, q_pos_offset, kv_pos_offset, kv_capacity as usize, out_bf16,
+    )? {
+        return Ok(());
+    }
     let p = gpu
         .rt
         .pipeline(KernelId::FlashAttnGlobalH512.entry_name())
@@ -1860,16 +2008,16 @@ pub fn flash_attn_global_h512_ex(
         set_gpu_buf(bnd, k, 1);
         set_gpu_buf(bnd, v, 2);
         set_gpu_buf(bnd, o, 3);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.u32s, b_off, 4);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.u32s, tq_off, 5);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.u32s, tkv_off, 6);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.u32s, h_off, 7);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.u32s, hkv_off, 8);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.f32s, scale_off, 9);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.u32s, q_pos_off, 10);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.u32s, kv_pos_off, 11);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.u32s, out_bf16_off, 12);
-        set_gpu_buf_offset(bnd, &gpu.icb_scalars.u32s, kv_capacity_off, 13);
+        gpu.icb_scalars.bind_u32(bnd, b_off, 4);
+        gpu.icb_scalars.bind_u32(bnd, tq_off, 5);
+        gpu.icb_scalars.bind_u32(bnd, tkv_off, 6);
+        gpu.icb_scalars.bind_u32(bnd, h_off, 7);
+        gpu.icb_scalars.bind_u32(bnd, hkv_off, 8);
+        gpu.icb_scalars.bind_f32(bnd, scale_off, 9);
+        gpu.icb_scalars.bind_u32(bnd, q_pos_off, 10);
+        gpu.icb_scalars.bind_u32(bnd, kv_pos_off, 11);
+        gpu.icb_scalars.bind_u32(bnd, out_bf16_off, 12);
+        gpu.icb_scalars.bind_u32(bnd, kv_capacity_off, 13);
     })
     .map_err(map_metal)
 }
@@ -2121,8 +2269,9 @@ pub fn rms_qkv_rope_kv_store(
     };
     let kv_capacity_off = gpu.icb_scalars.push_u32(kv_capacity)?;
     // SAFETY: all scalar values were included in the canonical preflight.
-    // Slot 16 is the documented stable-pool exception and stays within the
-    // validated `target.dst_offset` allocation.
+    // Slot 16 is the documented exception: with a stable pool it stays within
+    // the validated `target.dst_offset` allocation, and otherwise it is one
+    // `u32` in the binder's constant arena (`IcbScalarPool::bind_u32`).
     unsafe {
         tessl::nn::rms_qkv_rope_with_scalars(
             &gpu.rt,
@@ -3405,9 +3554,14 @@ pub fn e4b_dual_norm_enabled() -> bool {
     flag_cached(&E4B_DUAL_NORM, "GEMMA_METAL_E4B_DUAL_NORM", || false)
 }
 
-/// Master opt-in for layer fusion. Default OFF.
+/// Master switch for layer fusion (QKV in one GEMV, `rms_qkv_rope` + KV store,
+/// PLE lookup + residual). Default ON since 2026-11-04: bit-exact token
+/// streams on real E4B weights (DECISIONS, 2026-07-20) and at E4B shapes, and
+/// +1.2% decode tok/s once dispatches stopped committing per call
+/// (`bench/results/dispatch_profile_20261104/fusion_ab.log`). Before that the
+/// gain was flat. `GEMMA_METAL_FUSE_LAYER=0` turns it off.
 pub fn fuse_layer_enabled() -> bool {
-    flag_cached(&FUSE_LAYER, "GEMMA_METAL_FUSE_LAYER", || false)
+    flag_cached(&FUSE_LAYER, "GEMMA_METAL_FUSE_LAYER", || true)
 }
 
 /// Fused producer Q∥K∥V GEMV — one dispatch for all three projections.
@@ -3470,6 +3624,34 @@ pub fn encode_once_enabled() -> bool {
     }
     let on = env_on("GEMMA_METAL_ENCODE_ONCE").unwrap_or(false);
     ENCODE_ONCE.store(if on { 1 } else { 0 }, Ordering::Relaxed);
+    on
+}
+
+// --- Stable scalar pool outside ICB (A/B reference, opt-in) ------------------
+//
+// Keeps [`IcbScalarPool`] writing its GPU pool on every push even when no ICB
+// mode needs it: the pre-2026-11-04 behaviour, one commit and wait per
+// dispatch. The reference arm of the scalar-pool A/B and its parity test.
+//
+//   GEMMA_METAL_STABLE_SCALARS=1
+
+/// -1 = read env once, 0 = off, 1 = on. Tests may call [`set_stable_scalars`].
+static STABLE_SCALARS: AtomicI8 = AtomicI8::new(-1);
+
+/// Force the stable scalar pool on/off (tests / A/B). Overrides env. Takes
+/// effect at the next step.
+pub fn set_stable_scalars(on: bool) {
+    STABLE_SCALARS.store(if on { 1 } else { 0 }, Ordering::Relaxed);
+}
+
+/// Whether [`IcbScalarPool`] is forced onto its GPU pool. Default OFF.
+pub fn stable_scalars_forced() -> bool {
+    let v = STABLE_SCALARS.load(Ordering::Relaxed);
+    if v >= 0 {
+        return v == 1;
+    }
+    let on = env_on("GEMMA_METAL_STABLE_SCALARS").unwrap_or(false);
+    STABLE_SCALARS.store(if on { 1 } else { 0 }, Ordering::Relaxed);
     on
 }
 
@@ -4597,6 +4779,19 @@ pub fn copy_f32_range(
 }
 
 /// Copy one u32: `src[0]` → `dst[0]` (via 4-byte `copy_f32` elem kernel).
+/// `dst[0] = value` on the GPU. The value rides the binder's constant arena,
+/// so the host never maps `dst`: a host mapping commits the open command
+/// buffer and waits for the GPU.
+pub fn store_u32(gpu: &GemmaGpu, dst: &GpuBuffer, value: u32) -> Result<()> {
+    let p = gpu.rt.pipeline("copy_u32").map_err(map_metal)?;
+    dispatch_1d(&gpu.rt, &p, 1, |bnd| {
+        bnd.bind_u32(value, 0);
+        set_gpu_buf(bnd, dst, 1);
+        set_u32(bnd, 1, 2);
+    })
+    .map_err(map_metal)
+}
+
 pub fn copy_u32_one(gpu: &GemmaGpu, src: &GpuBuffer, dst: &GpuBuffer) -> Result<()> {
     let p = gpu.rt.pipeline("copy_f32").map_err(map_metal)?; // 4-byte elem copy OK
     dispatch_1d(&gpu.rt, &p, 1, |bnd| {

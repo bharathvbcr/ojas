@@ -1376,6 +1376,23 @@ impl HiddenCapture {
     }
 }
 
+/// One profiled decode token ([`GpuDecodeSession::profile_decode_token`]).
+#[derive(Debug, Clone)]
+pub struct TokenProfile {
+    /// Host time in `step_inner` (encoding), ms. The GPU has not started yet:
+    /// the command buffer commits at `synchronize`.
+    pub host_encode_ms: f64,
+    /// Host time in `synchronize` (commit + GPU run + wake), ms.
+    pub sync_ms: f64,
+    /// Dispatches / barriers tessl encoded for this token (`infer_trace`).
+    pub dispatches: u64,
+    pub barriers: u64,
+    /// Command buffers committed while encoding and syncing this token.
+    pub commits: u64,
+    /// Per-dispatch GPU stamps, when requested.
+    pub stamps: Option<tessl::dispatch_stamps::DispatchStampBatch>,
+}
+
 /// Persistent decode session: Hot weights + GPU-resident KV + scratch.
 pub struct GpuDecodeSession {
     pub model: GpuSynthModel,
@@ -1836,11 +1853,14 @@ impl GpuDecodeSession {
         // Stable scalar arena (FA/kv/softcap) — deterministic bump per step for ICB.
         self.model.gpu.icb_scalars.reset_step();
         self.model.gpu.icb_scalars.set_softcap(self.model.softcap);
+        // Layer tags for tessl's opt-in per-dispatch stamps (no-op when off).
+        // Set before the step's first dispatch, the `pos_buf` store below.
+        tessl::dispatch_stamps::set_stamp_layer(-1);
         if fuse_gate_down_enabled() {
             let _ = self.ensure_fuse_gate_down_scratch()?;
         }
         // Encode-once prep: pos + seed are GPU-resident; host writes pos once / step.
-        self.sync_pos_buf(pos as u32);
+        self.sync_pos_buf(pos as u32)?;
         // DecodeIcb (opt-in; mini + E4B Hot; not 31B):
         //  - First **head** decode: Binder capture tape → from_commands (layers).
         //  - Later Ready **head** steps: scalar-write tape + frozen-tape execute.
@@ -1980,7 +2000,15 @@ impl GpuDecodeSession {
         match seed {
             StepSeed::Host(t) => {
                 crate::trace_op!("seed_tok", format!("write_u32 token={t}"), {
-                    self.seed_tok.write_u32(&[t]);
+                    // As `sync_pos_buf`: a host write commits and waits.
+                    if self.model.gpu.icb_scalars.stable() {
+                        self.seed_tok.write_u32(&[t]);
+                    } else {
+                        crate::kernels::store_u32(&self.model.gpu, &self.seed_tok, t)?;
+                        if tessl::ab_flags::need_barrier(true) {
+                            self.model.gpu.barrier()?;
+                        }
+                    }
                 });
             }
             StepSeed::FromArgmax => {
@@ -2052,6 +2080,7 @@ impl GpuDecodeSession {
             0..n_layers
         };
         for li in layer_iter {
+            tessl::dispatch_stamps::set_stamp_layer(li as i32);
             let (
                 layer_type,
                 role,
@@ -3427,6 +3456,7 @@ impl GpuDecodeSession {
             }
         }
 
+        tessl::dispatch_stamps::set_stamp_layer(n_layers as i32);
         if head {
             {
                 let gpu = &self.model.gpu;
@@ -3698,8 +3728,21 @@ impl GpuDecodeSession {
     }
 
     /// Write [`Self::pos_buf`] once at step/verify start (host → GPU, not per layer).
-    fn sync_pos_buf(&self, pos: u32) {
-        self.pos_buf.write_u32(&[pos]);
+    /// Set `pos_buf` for this step. A stable scalar pool (ICB / encode-once)
+    /// keeps the host write; otherwise a one-thread GPU store, because the host
+    /// write maps the buffer, which commits and waits for the previous token.
+    fn sync_pos_buf(&self, pos: u32) -> Result<()> {
+        let gpu = &self.model.gpu;
+        if gpu.icb_scalars.stable() {
+            self.pos_buf.write_u32(&[pos]);
+            return Ok(());
+        }
+        crate::kernels::store_u32(gpu, &self.pos_buf, pos)?;
+        // Kernels read `pos_buf` next; hazard mode orders only explicit edges.
+        if tessl::ab_flags::need_barrier(true) {
+            gpu.barrier()?;
+        }
+        Ok(())
     }
 
     /// A2 residual: replay captured scalar pushes + KV host commits without the
@@ -4149,7 +4192,7 @@ impl GpuDecodeSession {
         let _capture_ao = CaptureAlwaysOnGuard::enter(self.capture.is_some());
         let m = tokens.len();
         let pos0 = self.pos;
-        self.sync_pos_buf(pos0 as u32);
+        self.sync_pos_buf(pos0 as u32)?;
         let hidden = self.model.hidden as u32;
         let h_usz = self.model.hidden;
         let eps = self.model.eps;
@@ -4796,7 +4839,7 @@ impl GpuDecodeSession {
             self.shared_global.trim(t)?;
         }
         self.pos -= n;
-        self.sync_pos_buf(self.pos as u32);
+        self.sync_pos_buf(self.pos as u32)?;
         if let Some(ref mut c) = self.capture {
             // Keep capture timeline aligned with KV/`pos` when capturing.
             let trim_c = n.min(c.t);
@@ -5057,6 +5100,66 @@ impl GpuDecodeSession {
             verifies.push(mtp.verify_and_adapt(&draft, &target));
         }
         Ok((out, verifies))
+    }
+
+    /// Reset, prefill `prompt[..len-1]`, and run the first generated token so a
+    /// following [`Self::profile_decode_token`] can seed from the GPU-resident argmax.
+    pub fn profile_prime(&mut self, prompt: &[u32]) -> Result<()> {
+        let last = *prompt
+            .last()
+            .ok_or_else(|| Error::Config("profile_prime: empty prompt".into()))?;
+        self.reset();
+        for &t in &prompt[..prompt.len() - 1] {
+            self.step_prefill(t)?;
+        }
+        let _ = self.step_inner(StepSeed::Host(last), false, true)?;
+        self.model.gpu.synchronize()?;
+        Ok(())
+    }
+
+    /// One decode token in its own command buffer: encode, then `synchronize`.
+    /// With `stamps` on, tessl writes a GPU timestamp after every dispatch and
+    /// the resolved batch is returned (see `tessl::dispatch_stamps` for what a
+    /// stamp does and does not measure). The returned timings are always taken,
+    /// so stamps-on and stamps-off tokens are directly comparable. The tessl
+    /// runtime must have been built with the flag on for stamps to exist.
+    pub fn profile_decode_token(&mut self, stamps: bool) -> Result<TokenProfile> {
+        tessl::ab_flags::set_dispatch_stamps(stamps);
+        let _ = self.model.gpu.rt.take_dispatch_stamps();
+        tessl::infer_trace::set_enabled(true);
+        let before = tessl::infer_trace::snapshot();
+        let t0 = std::time::Instant::now();
+        let enc = self.step_inner(StepSeed::FromArgmax, false, true);
+        let t1 = std::time::Instant::now();
+        let sync = enc.and_then(|_| self.model.gpu.synchronize());
+        let t2 = std::time::Instant::now();
+        let counts = tessl::infer_trace::snapshot().since(&before);
+        tessl::infer_trace::set_enabled(false);
+        tessl::ab_flags::set_dispatch_stamps(false);
+        sync?;
+        let batch = if stamps {
+            match self.model.gpu.rt.take_dispatch_stamps() {
+                Some(Ok(b)) => Some(b),
+                Some(Err(e)) => return Err(Error::Metal(format!("dispatch stamps: {e}"))),
+                None => {
+                    return Err(Error::Metal(
+                        "dispatch stamps requested but none armed: build the runtime with \
+                         tessl::ab_flags::set_dispatch_stamps(true) first"
+                            .into(),
+                    ))
+                }
+            }
+        } else {
+            None
+        };
+        Ok(TokenProfile {
+            host_encode_ms: (t1 - t0).as_secs_f64() * 1e3,
+            sync_ms: (t2 - t1).as_secs_f64() * 1e3,
+            dispatches: counts.dispatches,
+            barriers: counts.barriers,
+            commits: counts.commits,
+            stamps: batch,
+        })
     }
 
     /// Decode-only timing: measures `n_steps` incremental steps after prefill of `prompt`.
