@@ -29,7 +29,7 @@ mod memory;
 mod permute;
 
 pub use backend::{MetalBackend, MetalBuffer, METAL_TOPK_MAX_K};
-pub use link::WaitCounts;
+pub use link::{Conv2dTensorOps, WaitCounts};
 pub use memory::MetalMemory;
 
 #[cfg(all(target_os = "macos", feature = "metal"))]
@@ -70,6 +70,14 @@ mod device {
             op: "chunked_gdn_forward",
             detail: NO_METAL.to_string(),
         })
+    }
+
+    /// Without tessl no convolution takes its matrix-unit op.
+    pub(crate) fn conv2d_tops_scratch_elems(
+        _: crate::link::Conv2dTensorOps,
+        _: &crate::link::ConvGeom,
+    ) -> Res<Option<usize>> {
+        Ok(None)
     }
 }
 #[cfg(all(target_os = "macos", feature = "metal"))]

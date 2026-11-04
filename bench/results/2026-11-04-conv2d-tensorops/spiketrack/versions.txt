@@ -1,0 +1,4 @@
+date 2026-11-04T20:18:53Z
+SpikeTrack ca4ffac docs(readme): why SpikeTrack is needed, with sources, binary 18849cbb9c694e71
+ojas 59adac6 Merge branch 'claude/flash-fwd-specialize-1103': in-place f32 bias for linear_bias_forward (bit-identical, 11-13% faster per op) and the flash forward A/B negative + the uncommitted Conv2dTensorOps route
+tessl 52bdd19 Merge fix/hosted-lib-device-check (PR #5): validate the hosted manifest's entries instead of assuming them + the uncommitted tessl::conv

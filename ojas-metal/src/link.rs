@@ -13,7 +13,7 @@
 
 use std::any::Any;
 use std::fmt;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{mpsc, Arc};
 
 use ojas_core::{
@@ -511,6 +511,52 @@ pub(crate) struct PoolGeom {
     pub stride: [u32; 2],
 }
 
+/// Whether `conv2d_forward` sends the convolutions tessl's matrix-unit op covers
+/// (`tessl::conv`: 3x3, stride 1, one group, equal padding, output channels a
+/// multiple of 16) to that op, and in which precision; everything else keeps
+/// the im2col route. Both precisions accumulate in f32 and write f32: `F32`
+/// measured a relative L2 error of about 1e-6 against an f64 reference at
+/// K = 2304, `F16` (inputs and weights rounded to f16) about 3e-4. `Off` when
+/// a backend opens, unless `OJAS_METAL_CONV2D_TENSOROPS` is `f32` or `f16`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Conv2dTensorOps {
+    Off,
+    F32,
+    F16,
+}
+
+impl Conv2dTensorOps {
+    const fn bits(self) -> u8 {
+        match self {
+            Self::Off => 0,
+            Self::F32 => 1,
+            Self::F16 => 2,
+        }
+    }
+
+    const fn from_bits(b: u8) -> Self {
+        match b {
+            1 => Self::F32,
+            2 => Self::F16,
+            _ => Self::Off,
+        }
+    }
+
+    /// `OJAS_METAL_CONV2D_TENSOROPS`: unset or `off` is `Off`; any other value
+    /// than `f32` or `f16` is refused, so a typo cannot silently run the old route.
+    pub(crate) fn from_env() -> Res<Self> {
+        match std::env::var("OJAS_METAL_CONV2D_TENSOROPS").as_deref() {
+            Err(_) | Ok("") | Ok("off") => Ok(Self::Off),
+            Ok("f32") => Ok(Self::F32),
+            Ok("f16") => Ok(Self::F16),
+            Ok(other) => Err(OjasError::OutOfRange {
+                op: "OJAS_METAL_CONV2D_TENSOROPS",
+                detail: format!("{other:?} is not off, f32 or f16"),
+            }),
+        }
+    }
+}
+
 /// A convolution as GEMM, validated and within the kernels' limits:
 /// `[batch, c, h, w]` input, `[o, c, kh, kw]` weight, `[batch, o, oh, ow]`
 /// output, dilation 1, one group.
@@ -818,6 +864,9 @@ pub(crate) enum Cmd {
         geom: ConvGeom,
         lane: Lane,
         pointwise: bool,
+        /// The device takes tessl's matrix-unit op when this is not `Off`
+        /// and the op covers `geom`.
+        tops: Conv2dTensorOps,
     },
     /// `conv_transpose2d_forward` with kernel == stride: a permute to NHWC, a
     /// GEMM and a layout pass; `geom` holds the input extents, the output
@@ -1314,6 +1363,7 @@ pub(crate) struct Link {
     /// here, on the host, without a command.
     budget_cap: u64,
     bf16_accum: AtomicBool,
+    conv_tops: AtomicU8,
 }
 
 /// Whether `bytes` may be the memory cap of a device opened with a budget of
@@ -1368,6 +1418,7 @@ impl Link {
         device: DeviceInfo,
         waits: Arc<Waits>,
         budget_cap: u64,
+        conv_tops: Conv2dTensorOps,
     ) -> Self {
         Self {
             tx,
@@ -1375,7 +1426,16 @@ impl Link {
             waits,
             budget_cap,
             bf16_accum: AtomicBool::new(false),
+            conv_tops: AtomicU8::new(conv_tops.bits()),
         }
+    }
+
+    pub(crate) fn set_conv2d_tensorops(&self, mode: Conv2dTensorOps) {
+        self.conv_tops.store(mode.bits(), Ordering::Relaxed);
+    }
+
+    pub(crate) fn conv2d_tensorops(&self) -> Conv2dTensorOps {
+        Conv2dTensorOps::from_bits(self.conv_tops.load(Ordering::Relaxed))
     }
 
     pub(crate) fn set_bf16_accumulation(&self, on: bool) {

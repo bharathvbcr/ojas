@@ -38,6 +38,7 @@ use tessl::tensor::{gpu_copy, GpuBuffer, Tensor as TT};
 use tessl::DType;
 
 use crate::layout::{CONV1D_BWD_ROWS, GATED_RMS_BWD_ROWS};
+use crate::link::Conv2dTensorOps;
 use crate::link::{
     cached_attn_origin, cached_attn_part, cached_attn_splits, copied_at, device_lost, metal_err,
     norm_chunks, reduce_groups, rms_w_chunks, Arg, AttnExtra, AttnGeom, BilinearGeom, Cmd,
@@ -46,6 +47,45 @@ use crate::link::{
     SQ_OUT_WORDS,
 };
 use crate::permute::{self, Plan};
+
+/// The precision of tessl's matrix-unit convolution for `g` under `mode`, or
+/// `None` where the mode is `Off` or the op does not cover `g`: it pads both
+/// spatial sides by one amount, and covers what
+/// `tessl::conv::conv2d_tensorops_supports` says (the Metal backend runs no
+/// dilated convolution, and depthwise ones never reach this route).
+fn tops_precision(mode: Conv2dTensorOps, g: &ConvGeom) -> Option<tessl::conv::ConvPrecision> {
+    let precision = match mode {
+        Conv2dTensorOps::Off => return None,
+        Conv2dTensorOps::F32 => tessl::conv::ConvPrecision::F32,
+        Conv2dTensorOps::F16 => tessl::conv::ConvPrecision::F16,
+    };
+    let [kh, kw] = g.kernel.map(|k| k as usize);
+    let stride = (g.stride[0] as usize, g.stride[1] as usize);
+    let covered = g.padding[0] == g.padding[1]
+        && tessl::conv::conv2d_tensorops_supports(
+            g.c as usize,
+            g.o as usize,
+            kh,
+            kw,
+            stride,
+            (1, 1),
+            1,
+        );
+    covered.then_some(precision)
+}
+
+/// The scratch elements tessl's matrix-unit convolution allocates for `g`, or
+/// `None` where [`tops_precision`] keeps `g` off it. tessl owns the sizes; the
+/// backend charges them in place of the im2col route's when it is `Some`.
+pub(crate) fn conv2d_tops_scratch_elems(mode: Conv2dTensorOps, g: &ConvGeom) -> Res<Option<usize>> {
+    if tops_precision(mode, g).is_none() {
+        return Ok(None);
+    }
+    let us = |d: u32| d as usize;
+    tessl::conv::conv2d_nchw_scratch_elems(us(g.batch), us(g.c), us(g.o), us(g.oh), us(g.ow))
+        .map(Some)
+        .ok_or_else(|| metal_err("conv2d_forward: the convolution's scratch overflows"))
+}
 
 mod attn_bwd;
 mod pool;
@@ -1692,9 +1732,12 @@ impl Worker {
                 geom,
                 lane,
                 pointwise,
+                tops,
             } => {
                 if pointwise {
                     self.conv2d_pointwise(op, [x, w], bias, geom, lane)
+                } else if let Some(precision) = tops_precision(tops, &geom) {
+                    self.conv2d_tops(op, [x, w], bias, geom, precision)
                 } else {
                     self.conv2d(op, [x, w], bias, geom, lane)
                 }
@@ -3189,6 +3232,60 @@ impl Worker {
             set_u32(b, pixels_u, 5);
             set_u32(b, has_bias, 6);
         })?;
+        self.check(&st, &y, ST_OUT)?;
+        Ok(self.keep(vec![y]))
+    }
+
+    /// [`Self::conv2d`] on tessl's matrix-unit op (`tessl::conv`), which packs
+    /// the input to padded NHWC, convolves into an NHWC scratch and writes
+    /// the NCHW output with the bias added; only for a `g` that
+    /// [`tops_precision`] accepted. Operands and output are scanned as the
+    /// im2col route scans them.
+    fn conv2d_tops(
+        &mut self,
+        op: &'static str,
+        [x, w]: [Arg; 2],
+        bias: Option<Arg>,
+        g: ConvGeom,
+        precision: tessl::conv::ConvPrecision,
+    ) -> Res<Reply> {
+        let xv = self.view(x)?;
+        let wv = self.view(w)?;
+        let bv = bias.map(|a| self.view(a)).transpose()?;
+        let [kh, kw] = g.kernel;
+        let us = |d: u32| d as usize;
+        let (b, c, o) = (us(g.batch), us(g.c), us(g.o));
+        let x_shape = [b, c, us(g.h), us(g.w)];
+        let w_shape = [o, c, us(kh), us(kw)];
+        let y_shape = [b, o, us(g.oh), us(g.ow)];
+        let numel = |s: &[usize]| s.iter().try_fold(1usize, |acc, &d| acc.checked_mul(d));
+        let out_n = numel(&y_shape)
+            .ok_or_else(|| metal_err(format!("{op}: convolution extent overflows")))?;
+        if Some(xv.n) != numel(&x_shape)
+            || Some(wv.n) != numel(&w_shape)
+            || bv.as_ref().is_some_and(|b| b.n != o)
+        {
+            return Err(metal_err(format!(
+                "{op}: buffers do not hold a {x_shape:?} input, a {w_shape:?} weight and the bias asked for"
+            )));
+        }
+        let y = self.fresh(out_n)?;
+        let st = self.status(op)?;
+        self.check(&st, &xv, ST_IN)?;
+        self.check_operand(&st, w, &wv, ST_IN)?;
+        if let (Some(a), Some(b)) = (bias, bv.as_ref()) {
+            self.check_operand(&st, a, b, ST_IN)?;
+        }
+        let bias_t = bv.as_ref().map(|b| self.tt(b, &[o])).transpose()?;
+        tessl::conv::conv2d_nchw(
+            &self.tt(&xv, &x_shape)?,
+            &self.tt(&wv, &w_shape)?,
+            bias_t.as_ref(),
+            &self.tt(&y, &y_shape)?,
+            us(g.padding[0]),
+            precision,
+        )
+        .map_err(metal_err)?;
         self.check(&st, &y, ST_OUT)?;
         Ok(self.keep(vec![y]))
     }

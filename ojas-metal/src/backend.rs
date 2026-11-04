@@ -115,6 +115,7 @@ use ojas_core::{
 };
 
 use crate::layout::{CONV1D_BWD_ROWS, CONV1D_WIDTHS, GATED_RMS_BWD_MAX_DIM, GATED_RMS_BWD_ROWS};
+use crate::link::Conv2dTensorOps;
 use crate::link::{
     cached_attn_origin, cached_attn_part, check_mem_cap, check_overlap_dispatches, metal_err,
     norm_chunks, rms_w_chunks, Arg, AttnExtra, AttnGeom, BilinearGeom, Cmd, Conv1dGeom, ConvGeom,
@@ -241,7 +242,8 @@ impl MetalBackend {
     pub fn new(budget: Budget) -> Result<Self, OjasError> {
         let waits = Arc::new(Waits::default());
         let (tx, device) = crate::device::spawn(Arc::clone(&waits), budget.clone())?;
-        let link = Arc::new(Link::new(tx, device, waits, budget.cap_bytes()));
+        let conv_tops = Conv2dTensorOps::from_env()?;
+        let link = Arc::new(Link::new(tx, device, waits, budget.cap_bytes(), conv_tops));
 
         // Wire automatic cache trim hook: when host or backend reservations hit
         // capacity, evict idle pool freelist buffers to reclaim headroom.
@@ -270,6 +272,18 @@ impl MetalBackend {
     /// Whether this backend runs with true bf16 accumulation.
     pub fn bf16_accumulation(&self) -> bool {
         self.link.bf16_accumulation()
+    }
+
+    /// Send the convolutions tessl's matrix-unit op covers to it, in the
+    /// precision given ([`Conv2dTensorOps`]), or keep every convolution on
+    /// the im2col route (`Off`). It applies to every handle on the device.
+    pub fn set_conv2d_tensorops(&self, mode: Conv2dTensorOps) {
+        self.link.set_conv2d_tensorops(mode);
+    }
+
+    /// Which convolutions take tessl's matrix-unit op ([`Self::set_conv2d_tensorops`]).
+    pub fn conv2d_tensorops(&self) -> Conv2dTensorOps {
+        self.link.conv2d_tensorops()
     }
 
     fn call(&self, cmd: Cmd) -> Res<Reply> {
@@ -497,7 +511,18 @@ impl MetalBackend {
             return self.one(OP, &dims.out_shape(), 0, cmd);
         }
         let pointwise = allow_pointwise && pointwise_conv(&dims, x);
-        let scratch = if pointwise {
+        // One read of the mode: the route and its charge must agree.
+        let mode = self.conv2d_tensorops();
+        let tops_scratch = if pointwise {
+            None
+        } else {
+            crate::device::conv2d_tops_scratch_elems(mode, &geom)?
+        };
+        let scratch = if let Some(elems) = tops_scratch {
+            // tessl's padded NHWC input copy and HWIO weights, in f16 or f32:
+            // no im2col matrix and no product.
+            elems
+        } else if pointwise {
             // No im2col matrix and no product: the GEMM writes the output.
             // tessl's bf16 lane narrows the input of each image and the
             // weight on every call, and the copies live until the command
@@ -531,6 +556,11 @@ impl MetalBackend {
             geom,
             lane,
             pointwise,
+            tops: if tops_scratch.is_some() {
+                mode
+            } else {
+                Conv2dTensorOps::Off
+            },
         };
         self.one(OP, &dims.out_shape(), scratch, cmd)
     }

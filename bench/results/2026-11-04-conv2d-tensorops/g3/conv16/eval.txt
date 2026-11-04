@@ -1,0 +1,8 @@
+video   frames  gt boxes  pred boxes  outside   HOTA   DetA   AssA   LocA
+21         300      5635        6656        0  0.6695 0.5934 0.7647 0.7872
+22         300      3229        3211        0  0.6691 0.6492 0.6988 0.7534
+36         300     13847       15216        0  0.5319 0.4627 0.6297 0.7145
+47         300      2045        2752        0  0.4840 0.4156 0.5652 0.7280
+82         300      8193        8883        0  0.5289 0.4242 0.7772 0.7015
+all       1500     32949       36718        0  0.5695 0.4830 0.7171 0.7288
+wrote /Users/bharath/Code/research/ojas/bench/results/2026-11-04-conv2d-tensorops/g3/conv16/eval.json
