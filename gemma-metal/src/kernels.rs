@@ -4778,6 +4778,41 @@ pub fn copy_f32_range(
     .map_err(map_metal)
 }
 
+/// `out_bf16[i] = gelu_tanh(gate[i]) * up[up_elem_offset + i]` for `i < n`: tessl's
+/// `mlp_gelu_tanh_bf16` with `up` bound at an offset, so one row of a packed `[rows, n]`
+/// f32 buffer feeds the multiply without a copy (Gemma4's per-layer inputs).
+pub fn mlp_gelu_tanh_bf16_up_at(
+    gpu: &GemmaGpu,
+    gate: &GpuBuffer,
+    up: &GpuBuffer,
+    up_elem_offset: usize,
+    out_bf16: &GpuBuffer,
+    n: u32,
+) -> Result<()> {
+    if n == 0 {
+        return Ok(());
+    }
+    let bytes = (n as usize) * 4;
+    let up_off = up_elem_offset.saturating_mul(4);
+    if up_off + bytes > up.nbytes() || bytes > gate.nbytes() || bytes / 2 > out_bf16.nbytes() {
+        return Err(Error::Metal(format!(
+            "mlp_gelu_tanh_bf16_up_at: n={n} up off={up_elem_offset} OOB (gate {} B, up {} B, out {} B)",
+            gate.nbytes(),
+            up.nbytes(),
+            out_bf16.nbytes()
+        )));
+    }
+    let p = gpu.rt.pipeline("mlp_gelu_tanh_bf16").map_err(map_metal)?;
+    let n_off = gpu.icb_scalars.push_u32(n)?;
+    dispatch_1d(&gpu.rt, &p, n as usize, |bnd| {
+        set_gpu_buf(bnd, gate, 0);
+        set_gpu_buf_offset(bnd, up, up_off, 1);
+        set_gpu_buf(bnd, out_bf16, 2);
+        gpu.icb_scalars.bind_u32(bnd, n_off, 3);
+    })
+    .map_err(map_metal)
+}
+
 /// Copy one u32: `src[0]` → `dst[0]` (via 4-byte `copy_f32` elem kernel).
 /// `dst[0] = value` on the GPU. The value rides the binder's constant arena,
 /// so the host never maps `dst`: a host mapping commits the open command

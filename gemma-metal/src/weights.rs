@@ -523,9 +523,9 @@ pub fn load_mlx_affine_q4_shards(
                 }
                 continue;
             }
-            if name.contains("per_layer_input_gate") || name.contains("per_layer_projection") {
-                continue;
-            }
+            // `per_layer_input_gate`, `per_layer_projection`, `per_layer_model_projection` and
+            // `per_layer_projection_norm` load like any other tensor: Gemma4's per-layer input
+            // (MLX `_project_per_layer_inputs` and the DecoderLayer gate block) needs all four.
             let t = st
                 .tensor(name)
                 .map_err(|e| Error::Safetensors(e.to_string()))?;

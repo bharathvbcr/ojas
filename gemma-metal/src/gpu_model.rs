@@ -20,7 +20,8 @@ use crate::kernels::{
     icb_tape_note_commit_shared_sliding, icb_tape_note_commit_sliding, icb_tape_set_kv_ctx_global,
     icb_tape_set_kv_ctx_shared_global, icb_tape_set_kv_ctx_shared_sliding,
     icb_tape_set_kv_ctx_sliding, kv_ring_densify, kv_store_timestep_pair_off, mlp_gelu_tanh,
-    mlp_gelu_tanh_bf16, ple_lookup, ple_lookup_q4_mlx, ple_lookup_q4_mlx_residual, ple_residual_add,
+    mlp_gelu_tanh_bf16, mlp_gelu_tanh_bf16_up_at, ple_lookup, ple_lookup_q4_mlx,
+    ple_lookup_q4_mlx_residual, ple_residual_add,
     fuse_ple_residual_enabled, fuse_rope_kv_enabled, persistent_interp_enabled,
     persistent_interp_fa_o_proj, persistent_interp_fa_o_proj_program, persistent_interp_gate_down,
     persistent_interp_gate_down_program, persistent_interp_gate_down_q4, prepare_act_bf16,
@@ -773,6 +774,17 @@ pub struct GpuSynthLayer {
     pub layer_scalar: f32,
     /// Per-layer bf16 PLE table (synthetic). Prefer `ple_q4` for MLX.
     pub ple_table: Option<GpuBuffer>,
+    /// Gemma4 per-layer input block, run after the FFN residual (MLX DecoderLayer):
+    /// `x += post_per_layer_input_norm(per_layer_projection(gelu(per_layer_input_gate(x)) * ple))`.
+    /// `None` on graphs without those tensors (31B, synthetic).
+    pub ple_block: Option<PleBlock>,
+}
+
+/// One layer's per-layer-input gate, projection and output norm.
+pub struct PleBlock {
+    pub gate: HotQuantBanks,
+    pub proj: HotQuantBanks,
+    pub post_norm: GpuBuffer,
 }
 
 /// Full graph on GPU Hot banks (synthetic or real HF/MLX).
@@ -805,6 +817,10 @@ pub struct GpuSynthModel {
     pub host: Option<SyntheticE4bGraph>,
     /// Shared MLX Q4 PLE bank covering all layers (`dim = L * ple_dim`).
     pub ple_q4: Option<HotQuantBanks>,
+    /// Gemma4 `per_layer_model_projection` (`[L * ple_dim, hidden]`) and
+    /// `per_layer_projection_norm` (`[ple_dim]`): the embedding's share of every layer's
+    /// per-layer input. Present with [`GpuSynthLayer::ple_block`].
+    pub ple_model_proj: Option<(HotQuantBanks, GpuBuffer)>,
 }
 
 fn upload_f32_hot(gpu: &GemmaGpu, data: &[f32]) -> Result<GpuBuffer> {
@@ -923,6 +939,7 @@ impl GpuSynthModel {
                 post_ff_norm: None,
                 layer_scalar: 1.0,
                 ple_table,
+                ple_block: None,
             });
         }
 
@@ -953,6 +970,7 @@ impl GpuSynthModel {
             kv,
             host: Some(host),
             ple_q4: None,
+            ple_model_proj: None,
         })
     }
 
@@ -1162,6 +1180,25 @@ impl GpuSynthModel {
                 .unwrap_or(1.0);
 
             let ple_table = None;
+            // All three or none: a partial block would silently compute a different model.
+            let ple_block = match (
+                banks.require(&format!("{prefix}.per_layer_input_gate.weight")),
+                banks.require(&format!("{prefix}.per_layer_projection.weight")),
+                banks.require(&format!("{prefix}.post_per_layer_input_norm.weight")),
+            ) {
+                (Ok(g), Ok(p), Ok(n)) => Some(PleBlock {
+                    gate: upload_quant_hot(&gpu, g)?,
+                    proj: upload_quant_hot(&gpu, p)?,
+                    post_norm: upload_f32_hot(&gpu, &n.dequant_f32()?)?,
+                }),
+                (Err(_), Err(_), _) => None,
+                _ => {
+                    return Err(Error::Weights(format!(
+                        "{prefix}: per_layer_input_gate / per_layer_projection / \
+                         post_per_layer_input_norm must all be present or all absent"
+                    )));
+                }
+            };
 
             layers.push(GpuSynthLayer {
                 layer_type: map.layer_type,
@@ -1188,6 +1225,7 @@ impl GpuSynthModel {
                 post_ff_norm,
                 layer_scalar,
                 ple_table,
+                ple_block,
             });
             if li == 0 || li + 1 == cfg.num_hidden_layers || li % 8 == 0 {
                 diag::log(
@@ -1213,11 +1251,31 @@ impl GpuSynthModel {
         } else {
             None
         };
+        let n_ple_blocks = layers.iter().filter(|l| l.ple_block.is_some()).count();
+        let ple_model_proj = match (
+            banks.require("per_layer_model_projection.weight"),
+            banks.require("per_layer_projection_norm.weight"),
+        ) {
+            (Ok(p), Ok(n)) => Some((
+                upload_quant_hot(&gpu, p)?,
+                upload_f32_hot(&gpu, &n.dequant_f32()?)?,
+            )),
+            _ => None,
+        };
+        let full_ple = ple_q4.is_some() && ple_model_proj.is_some() && n_ple_blocks == layers.len();
+        if (ple_model_proj.is_some() || n_ple_blocks > 0) && !full_ple {
+            return Err(Error::Weights(format!(
+                "incomplete Gemma4 per-layer input: table={} model_projection={} blocks={n_ple_blocks}/{}",
+                ple_q4.is_some(),
+                ple_model_proj.is_some(),
+                layers.len()
+            )));
+        }
         if ple_q4.is_some() {
             diag::log(
                 "gpu",
                 format_args!(
-                    "PLE Q4 Hot uploaded vocab×(L·dim) — gate/proj still skipped (lookup residual only)"
+                    "PLE Q4 Hot uploaded vocab×(L·dim); per-layer gate/projection blocks={n_ple_blocks}"
                 ),
             );
         }
@@ -1256,6 +1314,7 @@ impl GpuSynthModel {
             kv,
             host: None,
             ple_q4,
+            ple_model_proj,
         })
     }
 
@@ -1433,6 +1492,13 @@ pub struct GpuDecodeSession {
     k_dense: GpuBuffer,
     v_dense: GpuBuffer,
     ple_out: GpuBuffer,
+    /// Gemma4 per-layer input, embedding share: `per_layer_model_projection(x_embed)` for all
+    /// layers (`[L * ple_dim]`), then the same rows through `per_layer_projection_norm`.
+    ple_all: GpuBuffer,
+    ple_all_n: GpuBuffer,
+    /// A layer's gate pre-activation (`[ple_dim]`) and `gelu(gate) * input` (bf16).
+    ple_g: GpuBuffer,
+    ple_gg: GpuBuffer,
     /// Active input token for embed / PLE (`[1]`). Host or GPU-seeded; never written by softcap.
     seed_tok: GpuBuffer,
     /// Softcap-argmax next token (`[1]`). Separate from [`Self::seed_tok`] so verify can
@@ -1624,6 +1690,10 @@ impl GpuDecodeSession {
             k_dense: alloc(max_kv_elems)?,
             v_dense: alloc(max_kv_elems)?,
             ple_out: alloc(ple_dim * vm_act)?,
+            ple_all: alloc(ple_dim * cfg.num_hidden_layers.max(1))?,
+            ple_all_n: alloc(ple_dim * cfg.num_hidden_layers.max(1))?,
+            ple_g: alloc(ple_dim)?,
+            ple_gg: alloc(ple_dim)?,
             seed_tok: model.gpu.rt.alloc_buffer(4).map_err(Error::Metal)?,
             argmax_tok: model.gpu.rt.alloc_buffer(4).map_err(Error::Metal)?,
             pos_buf: model.gpu.rt.alloc_buffer(4).map_err(Error::Metal)?,
@@ -1798,7 +1868,118 @@ impl GpuDecodeSession {
         Ok(())
     }
 
+    /// Embed the seed token into `x`, then (Gemma4 with per-layer inputs) project it into
+    /// every layer's per-layer input share.
     fn embed_from_seed(&self, h: usize) -> Result<()> {
+        self.embed_x_from_seed(h)?;
+        self.project_per_layer_inputs()
+    }
+
+    /// MLX `_project_per_layer_inputs`: every layer's per-layer input for this token, into
+    /// `ple_all_n` (`[L * ple_dim]`): `per_layer_projection_norm` over each layer's rows of
+    /// `per_layer_model_projection(x)`, plus `embed_tokens_per_layer[tok] * sqrt(ple_dim)`.
+    /// MLX scales the projection by `hidden^-0.5` and the sum by `2^-0.5`; both are dropped
+    /// because an RMSNorm follows each (this one, and `post_per_layer_input_norm` after the
+    /// layer's projection, which the sum only multiplies into).
+    fn project_per_layer_inputs(&self) -> Result<()> {
+        let Some((ref proj, ref norm)) = self.model.ple_model_proj else {
+            return Ok(());
+        };
+        let table =
+            self.model.ple_q4.as_ref().ok_or_else(|| {
+                Error::Config("per-layer model projection without PLE table".into())
+            })?;
+        let gpu = &self.model.gpu;
+        let ple_dim = self.model.cfg.hidden_size_per_layer_input as u32;
+        let n_layers = self.model.layers.len() as u32;
+        let barrier = || -> Result<()> {
+            if tessl::ab_flags::need_barrier(true) {
+                gpu.barrier()?;
+            }
+            Ok(())
+        };
+        barrier()?;
+        proj.gemv(gpu, &self.x, &self.ple_all)?;
+        barrier()?;
+        rms_norm_f32(
+            gpu,
+            &self.ple_all,
+            norm,
+            &self.ple_all_n,
+            n_layers,
+            ple_dim,
+            self.model.eps,
+        )?;
+        // The whole table row in one dispatch (all layers: one "layer" of width L * ple_dim).
+        // WAR: it overwrites `ple_all`, which the norm above reads.
+        barrier()?;
+        ple_lookup_q4_mlx(
+            gpu,
+            &self.seed_tok,
+            &table.packed,
+            &table.scales,
+            &table.zeros,
+            &self.ple_all,
+            n_layers * ple_dim,
+            self.model.vocab as u32,
+            1,
+            (ple_dim as f32).sqrt(),
+            0,
+            1,
+            table.group_size,
+        )?;
+        barrier()?;
+        ple_residual_add(gpu, &self.ple_all_n, &self.ple_all, 1.0, n_layers * ple_dim)
+    }
+
+    /// MLX DecoderLayer per-layer input block, after the FFN residual, with `layer_scalar`
+    /// folded in: `x = layer_scalar * (x + post_per_layer_input_norm(per_layer_projection(
+    /// gelu_tanh(per_layer_input_gate(x)) * ple[li])))`, `ple` from
+    /// [`Self::project_per_layer_inputs`].
+    fn per_layer_input_block(&self, li: usize, layer_scalar: f32) -> Result<()> {
+        let gpu = &self.model.gpu;
+        let block = self.model.layers[li]
+            .ple_block
+            .as_ref()
+            .ok_or_else(|| Error::Config(format!("layer {li}: no per-layer input block")))?;
+        let ple_dim = self.model.cfg.hidden_size_per_layer_input as u32;
+        let eps = self.model.eps;
+        let barrier = || -> Result<()> {
+            if tessl::ab_flags::need_barrier(true) {
+                gpu.barrier()?;
+            }
+            Ok(())
+        };
+        crate::trace_op!("ple_block", format!("layer={li} ple_dim={ple_dim}"), {
+            // RAW on x (FFN residual) before the gate reads it.
+            barrier()?;
+            block.gate.gemv(gpu, &self.x, &self.ple_g)?;
+            barrier()?;
+            // gelu(gate) * ple[li] as bf16 (`ple_gg` holds ple_dim bf16 in its f32 capacity).
+            // Folding this into the gate GEMV's epilogue measured slower (README, v3).
+            mlp_gelu_tanh_bf16_up_at(
+                gpu,
+                &self.ple_g,
+                &self.ple_all_n,
+                li * ple_dim as usize,
+                &self.ple_gg,
+                ple_dim,
+            )?;
+            barrier()?;
+            block.proj.gemv_postnorm_add_into_bf16_x_scaled(
+                gpu,
+                &self.ple_gg,
+                &self.x,
+                &self.attn_proj,
+                &block.post_norm,
+                eps,
+                layer_scalar,
+            )?;
+        });
+        Ok(())
+    }
+
+    fn embed_x_from_seed(&self, h: usize) -> Result<()> {
         let scale = self.model.embed_scale;
         if let Some(ref hot) = self.model.embed_hot {
             embed_lookup_quant(
@@ -2113,10 +2294,14 @@ impl GpuDecodeSession {
                     layer.layer_scalar,
                 )
             };
-            // True MLX Gemma4 dual residual-norms + layer_scalar: 31B (no PLE).
-            // E4B keeps the prior fused Pre-LN+PLE path so decode tok/s does not regress.
+            // True MLX Gemma4 dual residual-norms + layer_scalar: 31B (no PLE), and E4B whenever
+            // its per-layer input block is loaded (real weights). Graphs without the block
+            // (synthetic) keep the legacy Pre-LN + lookup-residual path unless the flag asks.
+            let ple_full = self.model.layers[li].ple_block.is_some()
+                && self.model.ple_model_proj.is_some()
+                && self.model.ple_q4.is_some();
             let use_gemma4_dual_norm =
-                has_pre_ff && (!has_ple || crate::kernels::e4b_dual_norm_enabled());
+                has_pre_ff && (!has_ple || ple_full || crate::kernels::e4b_dual_norm_enabled());
             let _layer_scope = InferScope::begin(
                 format!("layer[{li}]"),
                 format!(
@@ -2850,7 +3035,9 @@ impl GpuDecodeSession {
                     eprintln!("[layer_probe] after o_proj+resid x finite={} nan={} min={:.4} max={:.4}", xs.finite, xs.nan, xs.min, xs.max);
                 }
 
-                if has_ple {
+                // Legacy E4B lookup-residual (synthetic graphs). With the per-layer input
+                // block loaded, the table is read in `per_layer_input_block` instead.
+                if has_ple && !ple_full {
                     let ple_dim = ple_dim_cfg as u32;
                     let scale = (ple_dim as f32).sqrt();
                     let n_layers = n_layers as u32;
@@ -3202,7 +3389,11 @@ impl GpuDecodeSession {
                             if let Some(ref w) = layer.post_ff_norm {
                                 if fuse_dual_norm_enabled() {
                                     // Fold layer_scalar into the last residual when present.
-                                    let fold_scale = if (layer_scalar - 1.0).abs() > 1e-8 {
+                                    // With a per-layer input block, that block is the last
+                                    // residual, so the scalar is applied after it instead.
+                                    let fold_scale = if !ple_full
+                                        && (layer_scalar - 1.0).abs() > 1e-8
+                                    {
                                         layer_scalar
                                     } else {
                                         1.0
@@ -3246,9 +3437,14 @@ impl GpuDecodeSession {
                     }
                 );
                 } // !use_fuse_gate_down
+                if ple_full {
+                    self.per_layer_input_block(li, layer_scalar)?;
+                }
                 // MLX: layer_scalar multiplies full layer output after both residuals.
-                // Skipped when folded into fused down-proj postnorm (above).
-                let folded = fuse_dual_norm_enabled() && use_gemma4_dual_norm && has_post_ff;
+                // Skipped when folded into the per-layer input block or the fused down-proj
+                // postnorm (above).
+                let folded =
+                    ple_full || (fuse_dual_norm_enabled() && use_gemma4_dual_norm && has_post_ff);
                 if use_gemma4_dual_norm && (layer_scalar - 1.0).abs() > 1e-8 && !folded {
                     if tessl::ab_flags::need_barrier(true) {
                         gpu.barrier()?;
@@ -4079,6 +4275,9 @@ impl GpuDecodeSession {
             "step_verify",
             format!("M={m} pos0={} tokens={tokens:?}", self.pos),
         );
+        // One verify is one step of the scalar arena, as in `step_inner`; without the reset
+        // the cursor only grows, and real E4B exhausted it on the second verify call.
+        self.model.gpu.icb_scalars.reset_step();
         let force_gemv = force_gemv_verify_enabled();
         if m > 1
             && !force_gemv

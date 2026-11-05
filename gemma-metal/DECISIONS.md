@@ -850,3 +850,20 @@ real weights not on disk).
   at fp16, against gemma-metal's 12.0 ms, with less work per layer than gemma-metal. Rejected.
 - **Overturn if:** real-weight E4B tokens differ between `STABLE_SCALARS=0/1` or `FUSE_LAYER=0/1`,
   or real-weight decode does not show the gain.
+
+## D22. E4B per-layer input block on real weights (2026-11-04)
+
+- **Found:** the first real-weight E4B run (`bench/results/real_e4b_20261104`) decoded non-language
+  from token 1. The loader skipped `per_layer_input_gate`, `per_layer_projection` and
+  `per_layer_projection_norm`, and the decode added a raw table row after attention instead of
+  Gemma4's per-layer input block after the FFN. Every earlier E4B figure (D10-D21, random or
+  real) timed that wrong graph.
+- **Decided:** load the block all-or-none (`PleBlock`, `ple_model_proj`), compute every
+  layer's input once per token, run the block after the FFN residual with `layer_scalar` folded
+  into its fused post-norm add, and take the dual-norm path whenever the block is loaded.
+  Decode (T = 1) only; the M-row verify path keeps the stand-in until it is ported.
+- **Evidence:** every layer within rel L2 0.041 of mlx_lm, the same greedy text
+  (`tests/real_e4b_text.rs`, `--ignored`); 75.9-77.6 tok/s at 64 tokens, 0.93x mlx_lm paired.
+  Folding the GELU into the gate GEMV (v3) measured slower and was removed.
+- **Overturn if:** the verify path or MTP needs the block (port it), or a split-K GEMV for the
+  block's 256-row gate makes its ~0.7 ms per token shorter.

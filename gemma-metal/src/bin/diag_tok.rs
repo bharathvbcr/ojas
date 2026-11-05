@@ -1,28 +1,63 @@
 //! Quiet decode health: embed / logits / first tokens.
-//! Usage: diag_tok [embed_scale_override] [e4b|31b]
+//! Usage: diag_tok [embed_scale_override] [e4b|31b] [--model DIR] [--prompt TEXT] [--n N]
+//! `--prompt` encodes TEXT with the model's tokenizer (BOS added), greedy-decodes N tokens
+//! (default 16) and prints them as text: the readable check that real weights give real words.
 use gemma_metal::gpu_model::{GpuDecodeSession, GpuSynthModel};
 use gemma_metal::quant::QuantScheme;
+use gemma_metal::tokenizer::GemmaTokenizer;
 use gemma_metal::weights::{
     load_from_hf_dir, resolve_default_31b_mlx_cache, resolve_default_e4b_mlx_cache, LoadOptions,
 };
+use std::path::PathBuf;
 use std::time::Instant;
 
+fn flag_value(argv: &[String], name: &str) -> Result<Option<String>, String> {
+    match argv.iter().position(|a| a == name) {
+        None => Ok(None),
+        Some(i) => argv
+            .get(i + 1)
+            .cloned()
+            .map(Some)
+            .ok_or_else(|| format!("{name} needs a value")),
+    }
+}
+
 fn main() -> Result<(), String> {
-    let scale_override: Option<f32> = std::env::args().nth(1).and_then(|s| {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    let model_flag = flag_value(&argv, "--model")?.map(PathBuf::from);
+    let text_prompt = flag_value(&argv, "--prompt")?;
+    let gen_n: usize = match flag_value(&argv, "--n")? {
+        Some(s) => s.parse().map_err(|e| format!("--n {s}: {e}"))?,
+        None => 16,
+    };
+    let scale_override: Option<f32> = argv.first().and_then(|s| {
         if s == "e4b" || s == "31b" {
             None
         } else {
             s.parse().ok()
         }
     });
-    let model_kind = std::env::args()
-        .skip(1)
-        .find(|a| a == "e4b" || a == "31b")
+    let model_kind = argv
+        .iter()
+        .find(|a| *a == "e4b" || *a == "31b")
+        .cloned()
         .unwrap_or_else(|| "e4b".into());
-    let dir = if model_kind == "31b" {
+    let dir = if let Some(d) = model_flag {
+        d
+    } else if model_kind == "31b" {
         resolve_default_31b_mlx_cache().ok_or("no 31b cache")?
     } else {
         resolve_default_e4b_mlx_cache().ok_or("no e4b cache")?
+    };
+    let tokenizer = match &text_prompt {
+        Some(_) => {
+            let t = GemmaTokenizer::from_hf_dir(&dir).map_err(|e| e.to_string())?;
+            if !t.is_ready() {
+                return Err(format!("no tokenizer in {}", dir.display()));
+            }
+            Some(t)
+        }
+        None => None,
     };
     println!("model={} dir={}", model_kind, dir.display());
     let t0 = Instant::now();
@@ -50,6 +85,42 @@ fn main() -> Result<(), String> {
         model.softcap
     );
     let mut sess = GpuDecodeSession::new(model).map_err(|e| e.to_string())?;
+
+    // `--dump-hidden FILE`: every layer's output residual at every prompt position, as JSON
+    // `{"argmax": next id, "hidden": [pos][layer][H]}`, for a layer-by-layer diff against a
+    // reference dump of the same prompt.
+    if let Some(path) = flag_value(&argv, "--dump-hidden")? {
+        let prompt = match (&tokenizer, &text_prompt) {
+            (Some(t), Some(text)) => {
+                let mut ids = t.encode(text, true).map_err(|e| e.to_string())?;
+                if ids.first() != Some(&2) {
+                    ids.insert(0, 2);
+                }
+                ids
+            }
+            _ => vec![2u32, 150, 2307],
+        };
+        let n_layers = sess.model.layers.len();
+        let h = sess.model.hidden;
+        sess.enable_hidden_capture((0..n_layers).collect())
+            .map_err(|e| e.to_string())?;
+        for &t in &prompt[..prompt.len() - 1] {
+            sess.step_prefill(t).map_err(|e| e.to_string())?;
+        }
+        let next = sess.step(prompt[prompt.len() - 1]).map_err(|e| e.to_string())?;
+        let (concat, t) = sess.captured_concat().map_err(|e| e.to_string())?;
+        let hidden: Vec<Vec<Vec<f32>>> = (0..t)
+            .map(|p| {
+                (0..n_layers)
+                    .map(|l| concat[(p * n_layers + l) * h..(p * n_layers + l + 1) * h].to_vec())
+                    .collect()
+            })
+            .collect();
+        let out = serde_json::json!({ "prompt": prompt, "argmax": next, "hidden": hidden });
+        std::fs::write(&path, out.to_string()).map_err(|e| format!("{path}: {e}"))?;
+        println!("dumped {t} positions x {n_layers} layers to {path}; next argmax {next}");
+        return Ok(());
+    }
 
     // Hot GEMV smoke: layer0 Q @ ones(hidden) should be non-trivial.
     {
@@ -102,8 +173,18 @@ fn main() -> Result<(), String> {
         emb.finite, emb.nan, emb.min, emb.max
     );
 
-    let prompt = vec![2u32, 150, 2307];
-    let gen_n = 16usize;
+    let prompt = match (&tokenizer, &text_prompt) {
+        (Some(t), Some(text)) => {
+            // tokenizer.json's post-processor does not add Gemma's BOS (id 2); the model needs it.
+            let mut ids = t.encode(text, true).map_err(|e| e.to_string())?;
+            if ids.first() != Some(&2) {
+                ids.insert(0, 2);
+            }
+            ids
+        }
+        _ => vec![2u32, 150, 2307],
+    };
+    println!("prompt ids: {prompt:?}");
     let t1 = Instant::now();
     let out = sess.generate(&prompt, gen_n).map_err(|e| e.to_string())?;
     let dt = t1.elapsed().as_secs_f64();
@@ -117,6 +198,10 @@ fn main() -> Result<(), String> {
         new_toks.len() as f64 / dt.max(1e-9)
     );
     println!("new tokens: {:?}", new_toks);
+    if let Some(t) = &tokenizer {
+        let text = t.decode(new_toks, false).map_err(|e| e.to_string())?;
+        println!("new text: {text:?}");
+    }
     let uniq: std::collections::BTreeSet<_> = new_toks.iter().copied().collect();
     println!(
         "unique={} all_zero={} logits finite={} nan={} min={:.4} max={:.4} argmax={}",
