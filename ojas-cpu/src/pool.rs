@@ -310,10 +310,7 @@ impl Pool {
         drop(task);
         let mut state = lock(&batch.state);
         if let Some(text) = state.panic.take() {
-            return Err(OjasError::Backend {
-                id: BackendId::Cpu,
-                detail: format!("worker task panicked: {text}"),
-            });
+            return Err(task_panic(&text));
         }
         let mut out = Vec::with_capacity(count);
         for slot in state.results.iter_mut() {
@@ -404,10 +401,7 @@ impl<T: Send> Handoff<T> {
         drop(task);
         let mut state = lock(&self.batch.state);
         if let Some(text) = state.panic.take() {
-            return Err(OjasError::Backend {
-                id: BackendId::Cpu,
-                detail: format!("worker task panicked: {text}"),
-            });
+            return Err(task_panic(&text));
         }
         match state.results.first_mut().and_then(Option::take) {
             Some(value) => Ok(value),
@@ -530,6 +524,37 @@ fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
     }
 }
 
+/// The one error a panicking task becomes, whichever thread ran it and
+/// whether it ran inline, on a pool worker or on a scoped thread.
+pub(crate) fn task_panic(text: &str) -> OjasError {
+    OjasError::Backend {
+        id: BackendId::Cpu,
+        detail: format!("worker task panicked: {text}"),
+    }
+}
+
+/// [`task_panic`] for a payload caught by `catch_unwind` or a thread join.
+pub(crate) fn panic_error(payload: &(dyn std::any::Any + Send)) -> OjasError {
+    task_panic(&panic_text(payload))
+}
+
+/// Run `f` and turn a panic in it into [`OjasError::Backend`] carrying the
+/// panic text, so an inline branch reports a panicking task exactly as the
+/// threaded paths do instead of unwinding into the caller.
+///
+/// `AssertUnwindSafe` is sound here because the closure's state is only
+/// observable after a panic through values the caller owns: on `Err` the
+/// caller propagates the error and discards every output buffer and
+/// partial result the closure was filling, and no pool lock is held while a
+/// task runs (the pool's own `lock` also tolerates poison), so the next op
+/// starts from a consistent pool.
+pub(crate) fn guarded<T>(f: impl FnOnce() -> Result<T, OjasError>) -> Result<T, OjasError> {
+    match catch_unwind(AssertUnwindSafe(f)) {
+        Ok(result) => result,
+        Err(payload) => Err(panic_error(payload.as_ref())),
+    }
+}
+
 /// Pool and arithmetic contract one op runs under.
 #[derive(Clone, Copy)]
 pub(crate) struct Exec<'a> {
@@ -561,7 +586,7 @@ impl Exec<'_> {
         if count > 1 && self.pool.threads() > 1 && work >= min_work {
             self.pool.run(count, task)
         } else {
-            Ok((0..count).map(task).collect())
+            guarded(|| Ok((0..count).map(task).collect()))
         }
     }
 }
@@ -585,6 +610,12 @@ pub(crate) fn ranges(len: usize, pieces: usize) -> Vec<Range<usize>> {
     }
     out
 }
+
+#[cfg(test)]
+mod guard_bench;
+
+#[cfg(test)]
+mod panic_tests;
 
 #[cfg(test)]
 mod tests {

@@ -24,7 +24,7 @@ use std::ops::Range;
 use ojas_core::{exp_exact, log_sum_exp_exact, sdpa_scale, Budget, Numerics, OjasError, SdpaDims};
 
 use crate::exp::exp_sub_store;
-use crate::pool::{scoped, Exec};
+use crate::pool::{guarded, scoped, Exec};
 use crate::validate::{nonfinite, product, room_for, shape};
 
 mod flash;
@@ -140,11 +140,13 @@ where
     if work >= 2 * TASK_WORK {
         scoped::fill_parts(exec, parts, task)
     } else {
-        parts
-            .into_iter()
-            .enumerate()
-            .map(|(i, part)| task(i, part))
-            .collect()
+        guarded(|| {
+            parts
+                .into_iter()
+                .enumerate()
+                .map(|(i, part)| task(i, part))
+                .collect()
+        })
     }
 }
 
