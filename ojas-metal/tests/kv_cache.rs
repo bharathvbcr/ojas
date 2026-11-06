@@ -7,7 +7,7 @@ mod common;
 use std::sync::Arc;
 
 use common::*;
-use ojas_core::{sdpa_scale, Backend, OjasError, Tensor};
+use ojas_core::{sdpa_scale, BackendCore, BackendFloat, BackendModule, OjasError, Tensor};
 
 fn bits(t: &Tensor) -> Vec<u32> {
     down(t).iter().map(|x| x.to_bits()).collect()

@@ -8,7 +8,7 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use ojas_core::{Backend, Budget, Tensor};
+use ojas_core::{BackendCore, Budget, Tensor};
 
 struct Counting;
 

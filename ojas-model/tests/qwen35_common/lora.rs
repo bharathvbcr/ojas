@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 
 use ojas_autograd::Tape;
-use ojas_core::{AdamWConfig, Backend, Tensor};
+use ojas_core::{AdamWConfig, Backend, BackendModule, Tensor};
 use ojas_data::CounterRng;
 use ojas_io::SafeTensors;
 use ojas_model::lora::{LoraConfig, LoraSite};

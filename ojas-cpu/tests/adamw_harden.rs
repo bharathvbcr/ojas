@@ -10,7 +10,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use ojas_core::{check_adamw, AdamWConfig, Backend, Budget, Numerics, OjasError, Tensor};
+use ojas_core::{check_adamw, AdamWConfig, BackendModule, Budget, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 
 const THREADS: [usize; 2] = [1, 6];

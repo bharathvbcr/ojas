@@ -21,7 +21,7 @@ mod probe {
     use std::process::Command;
     use std::time::Instant;
 
-    use ojas_core::{AttentionOpts, Backend, Budget, Tensor};
+    use ojas_core::{AttentionOpts, BackendCore, BackendModule, Budget, Tensor};
     use ojas_metal::MetalBackend;
 
     /// The flash forward's pipelines at head dim 32 (the bf16 entry exists only

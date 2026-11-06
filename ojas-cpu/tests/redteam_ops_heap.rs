@@ -37,7 +37,8 @@ use std::sync::Mutex;
 
 use common::SplitMix64;
 use ojas_core::{
-    AdamWConfig, Backend, Budget, GdnInputs, MuonNs5Config, Numerics, OjasError, Tensor,
+    AdamWConfig, BackendFloat, BackendModule, Budget, GdnInputs, MuonNs5Config, Numerics,
+    OjasError, Tensor,
 };
 use ojas_cpu::CpuBackend;
 

@@ -8,7 +8,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use common::{snapshot, token_bin, Fault, Probe, Resident, TempBin, TempDir};
-use ojas_core::{Backend, Budget, DataCursor, Numerics, OjasError, Tensor, READBACK_CHUNK_BYTES};
+use ojas_core::{
+    Backend, BackendCore, Budget, DataCursor, Numerics, OjasError, Tensor, READBACK_CHUNK_BYTES,
+};
 use ojas_cpu::{CosineSchedule, CpuBackend, LrSchedule};
 use ojas_data::{SamplerRngState, TokenBin};
 use ojas_io::{

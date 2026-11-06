@@ -40,12 +40,19 @@ fn arena_scalars_commit_once_per_token_and_match_the_stable_pool() {
     // The arena path adds the GPU store of `pos_buf` (replacing the stable
     // path's host write) and runs each of the 3 layers' attention as tessl's
     // split-KV decode, a partial and a reduce dispatch where the tiled kernel
-    // was one. The stable path keeps the tiled kernel: the decode binds its
-    // live values as constants, which a replay cannot rewrite.
+    // was one, unless every live key fits one chunk and the single-pass kernel
+    // takes it (one dispatch, as here: the prompt is 4 tokens). The stable path
+    // keeps the tiled kernel: the decode binds its live values as constants,
+    // which a replay cannot rewrite.
     let layers = 3;
+    let split_kv_extra = if gemma_metal::kernels::decode_attn_single_pass_enabled() {
+        0
+    } else {
+        layers
+    };
     assert_eq!(
         arena_tok.dispatches,
-        stable_tok.dispatches + 1 + layers,
+        stable_tok.dispatches + 1 + split_kv_extra,
         "the scalar path changed what was dispatched"
     );
     // The reference arm still shows the cost being removed, so this test

@@ -3,7 +3,7 @@
 mod common;
 
 use common::{down, fresh, gpu, host_u32, up};
-use ojas_core::{round_f32_to_bf16, Backend, Budget, DType, OjasError, Tensor};
+use ojas_core::{round_f32_to_bf16, BackendCore, Budget, DType, OjasError, Tensor};
 
 fn patterns() -> Vec<f32> {
     let mut out = Vec::with_capacity(65536 * 2 + 8);

@@ -7,7 +7,7 @@
 
 #![allow(dead_code)]
 
-use ojas_core::{window_merge, window_partition, Backend, OjasError, Tensor};
+use ojas_core::{window_merge, window_partition, Backend, BackendCore, OjasError, Tensor};
 
 /// A backend, and how to move host values on and off it.
 pub trait Rig {

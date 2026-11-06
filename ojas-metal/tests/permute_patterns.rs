@@ -13,7 +13,7 @@ mod common;
 use std::collections::BTreeSet;
 
 use common::*;
-use ojas_core::{Backend, Tensor};
+use ojas_core::{Backend, BackendCore, BackendFloat, Tensor};
 use ojas_metal::MetalBackend;
 
 /// Row-major strides of `shape`, in elements.

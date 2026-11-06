@@ -9,9 +9,10 @@
 use std::sync::Mutex;
 
 use ojas_core::{
-    with_backend_methods, AdamWConfig, AttentionOpts, AutocastMode, Backend, BackendId, Budget,
-    CeChunk, CeGrads, Conv2dParams, ConvTranspose2dParams, DType, GdnInputs, MuonNs5Config,
-    Numerics, OjasError, OptimizerKind, Tensor,
+    with_backend_methods, AdamWConfig, AttentionOpts, AutocastMode, Backend, BackendCore,
+    BackendFloat, BackendId, BackendInt, BackendModule, Budget, CeChunk, CeGrads, Conv2dParams,
+    ConvTranspose2dParams, DType, GdnInputs, MuonNs5Config, Numerics, OjasError, OptimizerKind,
+    Tensor,
 };
 
 /// Every `Backend` op, answered with its own name.
@@ -62,13 +63,17 @@ macro_rules! reach_method {
 }
 
 macro_rules! reach_methods {
-    ({ $s:ident } $($kind:ident fn $name:ident(&self $(, $arg:ident : $ty:ty)*) -> $ret:ty;)*) => {
-        $( reach_method!($kind, $s, $name, [$($arg : $ty),*], $ret); )*
+    ({ $s:ident, $group:ident } $($kind:ident fn $name:ident(&self $(, $arg:ident : $ty:ty)*) -> $ret:ty;)*) => {
+        $(
+            ojas_core::emit_in_group!($group, $name,
+                reach_method!($kind, $s, $name, [$($arg : $ty),*], $ret);
+            );
+        )*
     };
 }
 
-impl Backend for Reach {
-    with_backend_methods!(reach_methods, { self });
+impl BackendCore for Reach {
+    with_backend_methods!(reach_methods, { self, core});
     fn id(&self) -> BackendId {
         BackendId::Cpu
     }
@@ -89,6 +94,18 @@ impl Backend for Reach {
     fn bf16_operands(&self) -> bool {
         false
     }
+}
+
+impl BackendFloat for Reach {
+    with_backend_methods!(reach_methods, { self, float});
+}
+
+impl BackendInt for Reach {
+    with_backend_methods!(reach_methods, { self, int});
+}
+
+impl BackendModule for Reach {
+    with_backend_methods!(reach_methods, { self, module});
 }
 
 /// Call op `name` on `b` with minimal operands. `None` when the table has no

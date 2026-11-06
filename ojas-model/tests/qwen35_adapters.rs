@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use ojas_core::Budget;
+use ojas_core::{BackendCore, Budget};
 use ojas_io::{write_safetensors, SafeTensors, StDtype, TensorOut};
 use ojas_model::lora::LoraConfig;
 use ojas_model::qwen35::adapters::{
@@ -956,7 +956,6 @@ fn entries_move_to_and_from_tensors_exactly() {
 #[cfg(target_os = "macos")]
 mod metal {
     use super::*;
-    use ojas_core::Backend;
     use ojas_metal::MetalBackend;
 
     /// Device tensors are read back to host entries bit for bit, and the

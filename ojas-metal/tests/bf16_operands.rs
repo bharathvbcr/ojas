@@ -8,7 +8,9 @@
 mod common;
 
 use common::{down, host, metal, ok, rand, up, values, GIB};
-use ojas_core::{bf16_to_f32, f32_to_bf16, Backend, Budget, DType, OjasError, Tensor};
+use ojas_core::{
+    bf16_to_f32, f32_to_bf16, BackendCore, BackendModule, Budget, DType, OjasError, Tensor,
+};
 use ojas_metal::MetalBackend;
 
 fn bits(t: &Tensor) -> Vec<u32> {

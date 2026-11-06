@@ -48,9 +48,15 @@
 //! probe is read ([`MetalBackend::memory`]); the rounding, the slab and the
 //! last command's own are not in that figure.
 //!
-//! Numerics are [`Numerics::Fast`]: GEMMs are tessl TensorOps with their own
-//! reduction order, and reductions are threadgroup trees, not ascending f32.
-//! A linear GEMM whose two operands are both [`Tensor::bf16_exact`] (what
+//! Numerics default to [`Numerics::Fast`]: GEMMs are tessl TensorOps with
+//! their own reduction order, and reductions are threadgroup trees, not
+//! ascending f32. [`MetalBackend::with_numerics`]`(Numerics::Exact)` selects
+//! tessl's fixed-order f32 GEMM for linear products (`matmul_fixed_order_*_f32`):
+//! one output per thread, ascending k, a precise multiply then a precise add.
+//! That path is not TensorOps and not split-K. It is what
+//! [`ojas_core::GemmProvider::TesslFixedOrder`] names, and the bf16-accumulation
+//! flag does not redirect it.
+//! A Fast linear GEMM whose two operands are both [`Tensor::bf16_exact`] (what
 //! [`ojas_core::Autocast`] hands this backend in a bf16 region) runs on
 //! tessl's bf16 lane, the 4-simdgroup cooperative kernels, instead of the
 //! exact-f32 1-simdgroup tile, on a device with TensorOps
@@ -105,12 +111,12 @@ use ojas_core::{
     scale_forward_dims, sigmoid_backward_dims, sigmoid_forward_dims, silu_backward_dims,
     silu_forward_dims, slice_dims, softmax_forward_dims, topk_rows_dims,
     value_residual_blend_backward_dims, value_residual_blend_forward_dims, AdamWConfig,
-    AdamWScalars, AttentionDims, AttentionOpts, Backend, BackendId, BroadcastDims, Budget,
-    BudgetTrimHandler, CeChunk, CeGrads, Conv1dDims, Conv2dDims, Conv2dParams, ConvGrad,
-    ConvTranspose2dDims, ConvTranspose2dParams, DType, DeviceBuffer, GateDims, GatedRmsGrad,
-    GdnDecayGrad, GdnDims, GdnForward, GdnGrad, GdnInputs, InterleavedRopeDims, LinearCe,
-    MuonNs5Config, Ns5Precision, Numerics, OjasError, OptimizerKind, PartialRopeDims,
-    PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
+    AdamWScalars, AttentionDims, AttentionOpts, BackendCore, BackendFloat, BackendId, BackendInt,
+    BackendModule, BroadcastDims, Budget, BudgetTrimHandler, CeChunk, CeGrads, Conv1dDims,
+    Conv2dDims, Conv2dParams, ConvGrad, ConvTranspose2dDims, ConvTranspose2dParams, DType,
+    DeviceBuffer, GateDims, GatedRmsGrad, GdnDecayGrad, GdnDims, GdnForward, GdnGrad, GdnInputs,
+    InterleavedRopeDims, LinearCe, MuonNs5Config, Ns5Precision, Numerics, OjasError, OptimizerKind,
+    PartialRopeDims, PerHeadGateGrad, Reservation, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
     ValueResidualGrad, MAX_PERMUTE_RANK, METAL_MAX_HEAD_DIM,
 };
 
@@ -198,12 +204,14 @@ impl DeviceBuffer for MetalBuffer {
 pub struct MetalBackend {
     link: Arc<Link>,
     budget: Budget,
+    numerics: Numerics,
 }
 
 impl fmt::Debug for MetalBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MetalBackend")
             .field("device", &self.link.device_name())
+            .field("numerics", &self.numerics)
             .field("bf16_accum", &self.bf16_accumulation())
             .finish()
     }
@@ -252,7 +260,21 @@ impl MetalBackend {
         });
         budget.set_trim_handler(trim_handler);
 
-        Ok(Self { link, budget })
+        Ok(Self {
+            link,
+            budget,
+            numerics: Numerics::Fast,
+        })
+    }
+
+    /// Same device and budget, different arithmetic contract.
+    ///
+    /// [`Numerics::Exact`] sends linear GEMMs through tessl's fixed-order
+    /// kernels. The choice stays on this handle: clones share the device
+    /// thread, and a Fast handle is not changed by an Exact one.
+    pub fn with_numerics(mut self, numerics: Numerics) -> Self {
+        self.numerics = numerics;
+        self
     }
 
     /// Configure this backend's device to run matmul, linear, convolution,
@@ -291,6 +313,9 @@ impl MetalBackend {
     }
 
     fn lane_of(&self, a: &Tensor, b: &Tensor) -> Lane {
+        if self.numerics == Numerics::Exact {
+            return Lane::FixedOrder;
+        }
         if self.bf16_accumulation() {
             Lane::Bf16Accum
         } else {
@@ -825,10 +850,12 @@ impl MetalBackend {
     /// budget the device plan cuts below the caller's is rebound to the
     /// smaller budget (`model::open`). Tests use it to hold operands on one
     /// budget and run an op under another (`tests/shape_first.rs`).
+    /// The numerics mode stays the caller's.
     pub fn with_budget(&self, budget: Budget) -> Self {
         Self {
             link: Arc::clone(&self.link),
             budget,
+            numerics: self.numerics,
         }
     }
 
@@ -2194,7 +2221,7 @@ impl MetalBackend {
     }
 }
 
-impl Backend for MetalBackend {
+impl BackendCore for MetalBackend {
     fn id(&self) -> BackendId {
         BackendId::Metal
     }
@@ -2204,7 +2231,7 @@ impl Backend for MetalBackend {
     }
 
     fn numerics(&self) -> Numerics {
-        Numerics::Fast
+        self.numerics
     }
 
     /// Wait for every op recorded on this backend (by any clone, on any
@@ -2292,6 +2319,92 @@ impl Backend for MetalBackend {
         Tensor::from_device_reserved(buf, tensor.shape(), tensor.dtype(), reservation)
     }
 
+    fn cast_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "cast_bf16";
+        let x = self.f32(OP, tensor)?;
+        self.one(OP, tensor.shape(), 0, Cmd::RoundBf16 { x })
+    }
+
+    /// The matmul-class ops widen each `Bf16` operand on the device into
+    /// an `F32` copy charged for the call, then run their `f32` kernels: a
+    /// resident `Bf16` weight costs 2 bytes per element, and its widened
+    /// copy exists only while one op runs. The tied table is read in place:
+    /// the gather widens each picked value, and the fused head one weight
+    /// tile at a time into its staged tile.
+    fn bf16_operands(&self) -> bool {
+        true
+    }
+
+    /// Rounded on the device. A host tensor is [`OjasError::Placement`], as
+    /// for every Metal op; nothing is downloaded.
+    fn to_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "to_bf16";
+        match tensor.dtype() {
+            DType::Bf16 => return Ok(tensor.clone()),
+            DType::F32 => {}
+            got => {
+                return Err(OjasError::Dtype {
+                    op: OP,
+                    expected: DType::F32,
+                    got,
+                })
+            }
+        }
+        let x = self.f32(OP, tensor)?;
+        let bytes = x.n.checked_mul(2).ok_or_else(|| overflow(OP))?;
+        let reservation = self.budget.try_reserve(bytes as u64)?;
+        let nb = match self.link.call(Cmd::ToBf16 { x })? {
+            Reply::Bufs(mut v) if v.len() == 1 => v.remove(0),
+            other => return Err(metal_err(format!("{OP}: device returned {other:?}"))),
+        };
+        let buf: Arc<dyn DeviceBuffer> = Arc::new(MetalBuffer {
+            id: nb.id,
+            len: nb.bytes,
+            link: Arc::clone(&self.link),
+            ids: None,
+        });
+        Tensor::from_device_reserved(buf, tensor.shape(), DType::Bf16, reservation)
+    }
+
+    /// Widened exactly on the device. A host tensor is
+    /// [`OjasError::Placement`], as for every Metal op.
+    fn to_f32(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "to_f32";
+        match tensor.dtype() {
+            DType::F32 => return Ok(tensor.clone()),
+            DType::Bf16 => {}
+            got => {
+                return Err(OjasError::Dtype {
+                    op: OP,
+                    expected: DType::Bf16,
+                    got,
+                })
+            }
+        }
+        let x = self.arg(OP, tensor, DType::Bf16)?;
+        self.one(OP, tensor.shape(), 0, Cmd::ToF32 { x })
+    }
+
+    /// AdamW runs in place with no scratch; Muon reserves
+    /// `muon_scratch_elems` f32 values, the figure its step charges.
+    fn optimizer_scratch_bytes(
+        &self,
+        kind: OptimizerKind,
+        rows: usize,
+        cols: usize,
+    ) -> Result<Option<u64>, OjasError> {
+        const OP: &str = "optimizer_scratch_bytes";
+        match kind {
+            OptimizerKind::AdamW => Ok(Some(0)),
+            OptimizerKind::MuonNs5 => muon_scratch_elems(OP, rows, cols)?
+                .checked_mul(4)
+                .map(|b| Some(b as u64))
+                .ok_or_else(|| overflow(OP)),
+        }
+    }
+}
+
+impl BackendFloat for MetalBackend {
     /// A bit-exact device copy. As on the CPU reference, a NaN or infinity
     /// in the input is [`OjasError::NonFinite`], at the next sync point as
     /// for every Metal op. Unlike the CPU, an input
@@ -2302,29 +2415,399 @@ impl Backend for MetalBackend {
         self.one("permute", &out, 0, cmd)
     }
 
-    fn embedding_forward(&self, table: &Tensor, token_ids: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "embedding_forward";
-        let dims = embedding_forward_dims(table, token_ids)?;
-        let half = table.dtype() == DType::Bf16;
-        let t = self.arg(OP, table, table.dtype())?;
-        self.arg(OP, token_ids, DType::U32)?;
-        let (vocab, dim) = (u32_dim(OP, dims.vocab)?, u32_dim(OP, dims.dim)?);
+    /// A bit copy of every input into place along `axis`, one dispatch per
+    /// input; a non-finite input is a deferred fault under `concat`. The
+    /// output is the only charge.
+    fn concat(&self, inputs: &[&Tensor], axis: usize) -> Result<Tensor, OjasError> {
+        const OP: &str = "concat";
+        let dims = concat_dims(inputs, axis)?;
+        let xs = inputs
+            .iter()
+            .map(|t| self.f32(OP, t))
+            .collect::<Res<Vec<Arg>>>()?;
         u32_dim(OP, product(OP, &dims.out_shape)?)?;
-        let (ids, _) = self.ids(OP, token_ids, vocab, None)?;
-        self.one(
-            OP,
-            &dims.out_shape,
-            0,
-            Cmd::Embed {
-                table: t,
-                half,
-                ids,
-                vocab,
-                dim,
-            },
-        )
+        let cmd = Cmd::Concat {
+            xs,
+            outer: u32_dim(OP, dims.outer)?,
+            inner: u32_dim(OP, dims.inner)?,
+            axis_lens: dims
+                .axis_lens
+                .iter()
+                .map(|&l| u32_dim(OP, l))
+                .collect::<Res<Vec<u32>>>()?,
+        };
+        self.one(OP, &dims.out_shape, 0, cmd)
     }
 
+    /// A bit copy of rows `start..start + len` of `axis`; a non-finite element
+    /// anywhere in the input is a deferred fault under `slice`, as the CPU
+    /// refuses it. The output is the only charge.
+    fn slice(
+        &self,
+        input: &Tensor,
+        axis: usize,
+        start: usize,
+        len: usize,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "slice";
+        let dims = slice_dims(input, axis, start, len)?;
+        let x = self.f32(OP, input)?;
+        u32_dim(OP, product(OP, &dims.out_shape)?)?;
+        let cmd = Cmd::Slice {
+            x,
+            outer: u32_dim(OP, dims.outer)?,
+            inner: u32_dim(OP, dims.inner)?,
+            axis_len: u32_dim(OP, dims.axis_len)?,
+            start: u32_dim(OP, dims.start)?,
+            len: u32_dim(OP, dims.len)?,
+        };
+        self.one(OP, &dims.out_shape, 0, cmd)
+    }
+
+    /// A buffer filled on the device (no host buffer is uploaded): `F32` and
+    /// `U32` store the value, `Bf16` its pattern. The output is the only
+    /// charge.
+    fn fill(&self, shape: &[usize], dtype: DType, value: f32) -> Result<Tensor, OjasError> {
+        const OP: &str = "fill";
+        let n = fill_dims(shape, dtype, value)?;
+        let bytes = n.checked_mul(dtype.size()).ok_or_else(|| overflow(OP))?;
+        u32_dim(OP, bytes.div_ceil(4))?;
+        let word = match dtype {
+            DType::F32 => value.to_bits(),
+            // The value is exactly a bf16: its high half is the pattern.
+            DType::Bf16 => {
+                let half = value.to_bits() >> 16;
+                half | (half << 16)
+            }
+            // An integer in 0..2^32 (fill_dims), so the cast is exact.
+            DType::U32 => value as u32,
+            other => {
+                return Err(OjasError::Dtype {
+                    op: OP,
+                    expected: DType::F32,
+                    got: other,
+                })
+            }
+        };
+        let reservation = self.budget.try_reserve(bytes as u64)?;
+        let nb = match self.link.call(Cmd::Fill { bytes, word })? {
+            Reply::Bufs(mut v) if v.len() == 1 => v.remove(0),
+            other => return Err(metal_err(format!("{OP}: device returned {other:?}"))),
+        };
+        // A filled U32 tensor can feed an embedding or a cross-entropy as ids:
+        // every value is `word`, so all are below `word + 1`. `fill_dims`
+        // takes an integer a f32 holds in `0..2^32`, at most 4294967040, so
+        // the bound cannot overflow.
+        let ids = (dtype == DType::U32).then_some(Ids::Below(word + 1));
+        let buf: Arc<dyn DeviceBuffer> = Arc::new(MetalBuffer {
+            id: nb.id,
+            len: nb.bytes,
+            link: Arc::clone(&self.link),
+            ids,
+        });
+        Tensor::from_device_reserved(buf, shape, dtype, reservation)
+    }
+
+    fn relu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "relu_forward";
+        relu_forward_dims(input)?;
+        let x = self.f32(OP, input)?;
+        self.one(OP, input.shape(), 0, Cmd::Relu { x })
+    }
+
+    fn sigmoid_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "sigmoid_forward";
+        sigmoid_forward_dims(input)?;
+        let x = self.f32(OP, input)?;
+        self.one(OP, input.shape(), 0, Cmd::Sigmoid { x })
+    }
+
+    fn sigmoid_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "sigmoid_backward";
+        sigmoid_backward_dims(input, grad_output)?;
+        let x = self.f32(OP, input)?;
+        let gy = self.f32(OP, grad_output)?;
+        self.one(OP, input.shape(), 0, Cmd::SigmoidBwd { x, gy })
+    }
+
+    fn silu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "silu_forward";
+        silu_forward_dims(input)?;
+        let x = self.f32(OP, input)?;
+        self.one(OP, input.shape(), 0, Cmd::Silu { x })
+    }
+
+    fn silu_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "silu_backward";
+        silu_backward_dims(input, grad_output)?;
+        let x = self.f32(OP, input)?;
+        let gy = self.f32(OP, grad_output)?;
+        self.one(OP, input.shape(), 0, Cmd::SiluBwd { x, gy })
+    }
+
+    fn mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "mul_forward";
+        mul_forward_dims(a, b)?;
+        let (aa, ba) = (self.f32(OP, a)?, self.f32(OP, b)?);
+        self.one(OP, a.shape(), 0, Cmd::Mul { a: aa, b: ba })
+    }
+
+    fn mul_backward(
+        &self,
+        a: &Tensor,
+        b: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        const OP: &str = "mul_backward";
+        mul_backward_dims(a, b, grad_output)?;
+        let (aa, ba) = (self.f32(OP, a)?, self.f32(OP, b)?);
+        let gy = self.f32(OP, grad_output)?;
+        self.two(OP, a.shape(), b.shape(), Cmd::MulBwd { a: aa, b: ba, gy })
+    }
+
+    fn residual_add_forward(&self, x: &Tensor, y: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "residual_add_forward";
+        residual_add_forward_dims(x, y)?;
+        let (xa, ya) = (self.f32(OP, x)?, self.f32(OP, y)?);
+        self.one(OP, x.shape(), 0, Cmd::Add { x: xa, y: ya })
+    }
+
+    fn residual_add_backward(
+        &self,
+        x: &Tensor,
+        y: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        const OP: &str = "residual_add_backward";
+        residual_add_backward_dims(x, y, grad_output)?;
+        let (xa, ya) = (self.f32(OP, x)?, self.f32(OP, y)?);
+        let gy = self.f32(OP, grad_output)?;
+        self.two(OP, x.shape(), y.shape(), Cmd::AddBwd { x: xa, y: ya, gy })
+    }
+
+    /// tessl's `bert::bias_gelu_erf` with a zero bias.
+    fn gelu_erf_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "gelu_erf_forward";
+        gelu_erf_forward_dims(input)?;
+        let x = self.f32(OP, input)?;
+        u32_dim(OP, x.n)?;
+        // The one-element zero bias.
+        self.one(OP, input.shape(), 1, Cmd::GeluErf { x })
+    }
+
+    /// The derivative of the forward's own erfc fit, one element per thread.
+    fn gelu_erf_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        self.enc_gelu_erf_backward(input, grad_output)
+    }
+
+    /// torch's `gelu(approximate="tanh")` as tessl's `tessl_gelu_pytorch_tanh`
+    /// (`kernels/gemma_ops.metal`), one element a thread in `f32`: a few ulps
+    /// from the CPU's `f64` evaluation, not bit-identical to it
+    /// (`backend/gemma_host.rs`).
+    fn gelu_tanh_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        self.gemma_gelu_tanh_forward(input)
+    }
+
+    /// The derivative of the forward's own bounded evaluation, one element a
+    /// thread.
+    fn gelu_tanh_backward(
+        &self,
+        input: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        self.gemma_gelu_tanh_backward(input, grad_output)
+    }
+
+    fn broadcast_add_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "broadcast_add_forward";
+        let dims = broadcast_add_forward_dims(a, b)?;
+        self.broadcast(OP, false, a, b, &dims)
+    }
+
+    fn broadcast_add_backward(
+        &self,
+        a: &Tensor,
+        b: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        self.enc_broadcast_add_backward(a, b, grad_output)
+    }
+
+    fn broadcast_mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "broadcast_mul_forward";
+        let dims = broadcast_mul_forward_dims(a, b)?;
+        self.broadcast(OP, true, a, b, &dims)
+    }
+
+    fn broadcast_mul_backward(
+        &self,
+        a: &Tensor,
+        b: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        self.enc_broadcast_mul_backward(a, b, grad_output)
+    }
+
+    fn scale_forward(&self, input: &Tensor, scale: f32) -> Result<Tensor, OjasError> {
+        const OP: &str = "scale_forward";
+        scale_forward_dims(input, scale)?;
+        let x = self.f32(OP, input)?;
+        u32_dim(OP, x.n)?;
+        self.one(OP, input.shape(), 0, Cmd::ScaleFwd { x, scale })
+    }
+
+    fn softmax_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "softmax_forward";
+        let dims = softmax_forward_dims(input)?;
+        let x = self.f32(OP, input)?;
+        let (rows, dim) = gated_rms_geom(OP, &dims)?;
+        self.one(OP, input.shape(), 0, Cmd::Softmax { x, rows, dim })
+    }
+
+    /// From the forward's output `y`, a double-single dot per row.
+    fn softmax_backward(&self, output: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        self.enc_softmax_backward(output, grad_output)
+    }
+
+    /// The masked mean over time on tessl's `segment_mean_rows`, the row
+    /// ranges built on the device from `key_lens` (no readback). An `f32`
+    /// sequential sum: within its rounding of the CPU's `f64` result.
+    fn seq_mean_forward(&self, x: &Tensor, key_lens: &Tensor) -> Result<Tensor, OjasError> {
+        self.gemma_seq_mean_forward(x, key_lens)
+    }
+
+    /// ojas's own `ojas_seq_mean_bwd`: tessl has no backward for
+    /// `segment_mean_rows`.
+    fn seq_mean_backward(
+        &self,
+        x: &Tensor,
+        key_lens: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        self.gemma_seq_mean_backward(x, key_lens, grad_output)
+    }
+
+    /// tessl's `l2_normalize_rows`, whose epsilon is `1e-12`: any other eps
+    /// is `Unsupported`, not ignored.
+    fn l2_normalize_forward(&self, x: &Tensor, eps: f32) -> Result<Tensor, OjasError> {
+        self.gemma_l2_normalize_forward(x, eps)
+    }
+
+    /// ojas's own `ojas_l2_normalize_bwd`, for the forward's `1e-12` only:
+    /// tessl has no backward for `l2_normalize_rows`.
+    fn l2_normalize_backward(
+        &self,
+        x: &Tensor,
+        grad_output: &Tensor,
+        eps: f32,
+    ) -> Result<Tensor, OjasError> {
+        self.gemma_l2_normalize_backward(x, grad_output, eps)
+    }
+
+    fn clip_grad_norm(&self, grads: &mut [Tensor], max_norm: f32) -> Result<f32, OjasError> {
+        const OP: &str = "clip_grad_norm";
+        clip_grad_norm_dims(grads)?;
+        let args = grads
+            .iter()
+            .map(|g| self.f32(OP, g))
+            .collect::<Res<Vec<_>>>()?;
+        // tessl's sq_norm scratch, reserved before the worker builds the plan:
+        // a 10-word slot per gradient, the parts buffer (two words, sum and
+        // shift, per piece: `SqNormPlan::parts_words`, which the worker
+        // allocates by), and the six result words.
+        let pieces = args.iter().map(|a| norm_chunks(a.n)).sum::<usize>();
+        let _stats = self.reserve(OP, 10 * args.len() + 2 * pieces + SQ_OUT_WORDS)?;
+        let norm = match self.link.call(Cmd::ClipNorm {
+            grads: args.clone(),
+        })? {
+            Reply::Norm(n) => n,
+            other => return Err(metal_err(format!("{OP}: device returned {other:?}"))),
+        };
+        if !norm.is_finite() {
+            return Err(OjasError::NonFinite { op: OP });
+        }
+        let scale = clip_scale(max_norm, norm)?;
+        if scale < 1.0 {
+            for g in grads.iter_mut() {
+                self.unique(OP, g)?;
+            }
+            match self.link.call(Cmd::Scale {
+                op: OP,
+                grads: args,
+                scale,
+            })? {
+                Reply::Done => {}
+                other => return Err(metal_err(format!("{OP}: device returned {other:?}"))),
+            }
+        }
+        Ok(norm)
+    }
+
+    /// In place, with no new memory, when `acc` solely owns its buffer;
+    /// otherwise the sum goes to a new buffer that replaces `acc`, and the
+    /// other handles keep the old values. Either way the device decides
+    /// whether every input and sum is finite before it writes anything: a
+    /// non-finite one leaves `acc`'s values unchanged (a shared `acc` still
+    /// gets its new buffer, holding them) and is [`OjasError::NonFinite`] at
+    /// the next sync point.
+    fn accumulate_grad(&self, acc: &mut Tensor, grad: &Tensor) -> Result<(), OjasError> {
+        const OP: &str = "accumulate_grad";
+        accumulate_grad_dims(acc, grad)?;
+        let a = self.f32(OP, acc)?;
+        let g = self.f32(OP, grad)?;
+        if self.unique(OP, acc).is_ok() {
+            return match self.call(Cmd::Accumulate {
+                acc: a,
+                g,
+                in_place: true,
+            })? {
+                Reply::Done => Ok(()),
+                other => Err(metal_err(format!("{OP}: device returned {other:?}"))),
+            };
+        }
+        let sum = self.one(
+            OP,
+            acc.shape(),
+            0,
+            Cmd::Accumulate {
+                acc: a,
+                g,
+                in_place: false,
+            },
+        )?;
+        *acc = sum;
+        Ok(())
+    }
+
+    /// In place on the device when `grad` solely owns its buffer, so a
+    /// frozen buffer is refused ([`Self::freeze_checked`]); a shared `grad`
+    /// is replaced by the product, as the trait default does, and the buffer
+    /// it shared is not written.
+    fn scale_grad(&self, grad: &mut Tensor, scale: f32) -> Result<(), OjasError> {
+        const OP: &str = "scale_grad";
+        if !scale.is_finite() {
+            return Err(OjasError::NonFinite { op: OP });
+        }
+        let g = self.f32(OP, grad)?;
+        if self.unique(OP, grad).is_ok() {
+            return match self.link.call(Cmd::Scale {
+                op: OP,
+                grads: vec![g],
+                scale,
+            })? {
+                Reply::Done => Ok(()),
+                other => Err(metal_err(format!("{OP}: device returned {other:?}"))),
+            };
+        }
+        let host = Tensor::from_f32(&[scale], &[1], self.budget())?;
+        let scalar = self.upload(&host)?;
+        let full = ojas_core::broadcast_scalar(self, &scalar, grad.shape())?;
+        *grad = self.mul_forward(grad, &full)?;
+        Ok(())
+    }
+}
+
+impl BackendInt for MetalBackend {
     /// `ojas_argmax_rows`: one threadgroup per row. A non-finite input is a
     /// deferred fault, reported at the next sync. The result stays on the
     /// device and carries `Ids::Below(cols)`, so it can feed
@@ -2416,6 +2899,31 @@ impl Backend for MetalBackend {
         let values = Tensor::from_device_reserved(value_buf, &[rows, k], DType::F32, value_charge)?;
         let ids = Tensor::from_device_reserved(id_buf, &[rows, k], DType::U32, id_charge)?;
         Ok((values, ids))
+    }
+}
+
+impl BackendModule for MetalBackend {
+    fn embedding_forward(&self, table: &Tensor, token_ids: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "embedding_forward";
+        let dims = embedding_forward_dims(table, token_ids)?;
+        let half = table.dtype() == DType::Bf16;
+        let t = self.arg(OP, table, table.dtype())?;
+        self.arg(OP, token_ids, DType::U32)?;
+        let (vocab, dim) = (u32_dim(OP, dims.vocab)?, u32_dim(OP, dims.dim)?);
+        u32_dim(OP, product(OP, &dims.out_shape)?)?;
+        let (ids, _) = self.ids(OP, token_ids, vocab, None)?;
+        self.one(
+            OP,
+            &dims.out_shape,
+            0,
+            Cmd::Embed {
+                table: t,
+                half,
+                ids,
+                vocab,
+                dim,
+            },
+        )
     }
 
     fn embedding_backward(
@@ -3286,121 +3794,6 @@ impl Backend for MetalBackend {
         )
     }
 
-    /// A bit copy of every input into place along `axis`, one dispatch per
-    /// input; a non-finite input is a deferred fault under `concat`. The
-    /// output is the only charge.
-    fn concat(&self, inputs: &[&Tensor], axis: usize) -> Result<Tensor, OjasError> {
-        const OP: &str = "concat";
-        let dims = concat_dims(inputs, axis)?;
-        let xs = inputs
-            .iter()
-            .map(|t| self.f32(OP, t))
-            .collect::<Res<Vec<Arg>>>()?;
-        u32_dim(OP, product(OP, &dims.out_shape)?)?;
-        let cmd = Cmd::Concat {
-            xs,
-            outer: u32_dim(OP, dims.outer)?,
-            inner: u32_dim(OP, dims.inner)?,
-            axis_lens: dims
-                .axis_lens
-                .iter()
-                .map(|&l| u32_dim(OP, l))
-                .collect::<Res<Vec<u32>>>()?,
-        };
-        self.one(OP, &dims.out_shape, 0, cmd)
-    }
-
-    /// A bit copy of rows `start..start + len` of `axis`; a non-finite element
-    /// anywhere in the input is a deferred fault under `slice`, as the CPU
-    /// refuses it. The output is the only charge.
-    fn slice(
-        &self,
-        input: &Tensor,
-        axis: usize,
-        start: usize,
-        len: usize,
-    ) -> Result<Tensor, OjasError> {
-        const OP: &str = "slice";
-        let dims = slice_dims(input, axis, start, len)?;
-        let x = self.f32(OP, input)?;
-        u32_dim(OP, product(OP, &dims.out_shape)?)?;
-        let cmd = Cmd::Slice {
-            x,
-            outer: u32_dim(OP, dims.outer)?,
-            inner: u32_dim(OP, dims.inner)?,
-            axis_len: u32_dim(OP, dims.axis_len)?,
-            start: u32_dim(OP, dims.start)?,
-            len: u32_dim(OP, dims.len)?,
-        };
-        self.one(OP, &dims.out_shape, 0, cmd)
-    }
-
-    /// A buffer filled on the device (no host buffer is uploaded): `F32` and
-    /// `U32` store the value, `Bf16` its pattern. The output is the only
-    /// charge.
-    fn fill(&self, shape: &[usize], dtype: DType, value: f32) -> Result<Tensor, OjasError> {
-        const OP: &str = "fill";
-        let n = fill_dims(shape, dtype, value)?;
-        let bytes = n.checked_mul(dtype.size()).ok_or_else(|| overflow(OP))?;
-        u32_dim(OP, bytes.div_ceil(4))?;
-        let word = match dtype {
-            DType::F32 => value.to_bits(),
-            // The value is exactly a bf16: its high half is the pattern.
-            DType::Bf16 => {
-                let half = value.to_bits() >> 16;
-                half | (half << 16)
-            }
-            // An integer in 0..2^32 (fill_dims), so the cast is exact.
-            DType::U32 => value as u32,
-            other => {
-                return Err(OjasError::Dtype {
-                    op: OP,
-                    expected: DType::F32,
-                    got: other,
-                })
-            }
-        };
-        let reservation = self.budget.try_reserve(bytes as u64)?;
-        let nb = match self.link.call(Cmd::Fill { bytes, word })? {
-            Reply::Bufs(mut v) if v.len() == 1 => v.remove(0),
-            other => return Err(metal_err(format!("{OP}: device returned {other:?}"))),
-        };
-        // A filled U32 tensor can feed an embedding or a cross-entropy as ids:
-        // every value is `word`, so all are below `word + 1`. `fill_dims`
-        // takes an integer a f32 holds in `0..2^32`, at most 4294967040, so
-        // the bound cannot overflow.
-        let ids = (dtype == DType::U32).then_some(Ids::Below(word + 1));
-        let buf: Arc<dyn DeviceBuffer> = Arc::new(MetalBuffer {
-            id: nb.id,
-            len: nb.bytes,
-            link: Arc::clone(&self.link),
-            ids,
-        });
-        Tensor::from_device_reserved(buf, shape, dtype, reservation)
-    }
-
-    fn relu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "relu_forward";
-        relu_forward_dims(input)?;
-        let x = self.f32(OP, input)?;
-        self.one(OP, input.shape(), 0, Cmd::Relu { x })
-    }
-
-    fn sigmoid_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "sigmoid_forward";
-        sigmoid_forward_dims(input)?;
-        let x = self.f32(OP, input)?;
-        self.one(OP, input.shape(), 0, Cmd::Sigmoid { x })
-    }
-
-    fn sigmoid_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "sigmoid_backward";
-        sigmoid_backward_dims(input, grad_output)?;
-        let x = self.f32(OP, input)?;
-        let gy = self.f32(OP, grad_output)?;
-        self.one(OP, input.shape(), 0, Cmd::SigmoidBwd { x, gy })
-    }
-
     fn gdn_log_decay_forward(
         &self,
         a: &Tensor,
@@ -3497,127 +3890,6 @@ impl Backend for MetalBackend {
         }
     }
 
-    fn cast_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "cast_bf16";
-        let x = self.f32(OP, tensor)?;
-        self.one(OP, tensor.shape(), 0, Cmd::RoundBf16 { x })
-    }
-
-    /// The matmul-class ops widen each `Bf16` operand on the device into
-    /// an `F32` copy charged for the call, then run their `f32` kernels: a
-    /// resident `Bf16` weight costs 2 bytes per element, and its widened
-    /// copy exists only while one op runs. The tied table is read in place:
-    /// the gather widens each picked value, and the fused head one weight
-    /// tile at a time into its staged tile.
-    fn bf16_operands(&self) -> bool {
-        true
-    }
-
-    /// Rounded on the device. A host tensor is [`OjasError::Placement`], as
-    /// for every Metal op; nothing is downloaded.
-    fn to_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "to_bf16";
-        match tensor.dtype() {
-            DType::Bf16 => return Ok(tensor.clone()),
-            DType::F32 => {}
-            got => {
-                return Err(OjasError::Dtype {
-                    op: OP,
-                    expected: DType::F32,
-                    got,
-                })
-            }
-        }
-        let x = self.f32(OP, tensor)?;
-        let bytes = x.n.checked_mul(2).ok_or_else(|| overflow(OP))?;
-        let reservation = self.budget.try_reserve(bytes as u64)?;
-        let nb = match self.link.call(Cmd::ToBf16 { x })? {
-            Reply::Bufs(mut v) if v.len() == 1 => v.remove(0),
-            other => return Err(metal_err(format!("{OP}: device returned {other:?}"))),
-        };
-        let buf: Arc<dyn DeviceBuffer> = Arc::new(MetalBuffer {
-            id: nb.id,
-            len: nb.bytes,
-            link: Arc::clone(&self.link),
-            ids: None,
-        });
-        Tensor::from_device_reserved(buf, tensor.shape(), DType::Bf16, reservation)
-    }
-
-    /// Widened exactly on the device. A host tensor is
-    /// [`OjasError::Placement`], as for every Metal op.
-    fn to_f32(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "to_f32";
-        match tensor.dtype() {
-            DType::F32 => return Ok(tensor.clone()),
-            DType::Bf16 => {}
-            got => {
-                return Err(OjasError::Dtype {
-                    op: OP,
-                    expected: DType::Bf16,
-                    got,
-                })
-            }
-        }
-        let x = self.arg(OP, tensor, DType::Bf16)?;
-        self.one(OP, tensor.shape(), 0, Cmd::ToF32 { x })
-    }
-
-    fn silu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "silu_forward";
-        silu_forward_dims(input)?;
-        let x = self.f32(OP, input)?;
-        self.one(OP, input.shape(), 0, Cmd::Silu { x })
-    }
-
-    fn silu_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "silu_backward";
-        silu_backward_dims(input, grad_output)?;
-        let x = self.f32(OP, input)?;
-        let gy = self.f32(OP, grad_output)?;
-        self.one(OP, input.shape(), 0, Cmd::SiluBwd { x, gy })
-    }
-
-    fn mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "mul_forward";
-        mul_forward_dims(a, b)?;
-        let (aa, ba) = (self.f32(OP, a)?, self.f32(OP, b)?);
-        self.one(OP, a.shape(), 0, Cmd::Mul { a: aa, b: ba })
-    }
-
-    fn mul_backward(
-        &self,
-        a: &Tensor,
-        b: &Tensor,
-        grad_output: &Tensor,
-    ) -> Result<(Tensor, Tensor), OjasError> {
-        const OP: &str = "mul_backward";
-        mul_backward_dims(a, b, grad_output)?;
-        let (aa, ba) = (self.f32(OP, a)?, self.f32(OP, b)?);
-        let gy = self.f32(OP, grad_output)?;
-        self.two(OP, a.shape(), b.shape(), Cmd::MulBwd { a: aa, b: ba, gy })
-    }
-
-    fn residual_add_forward(&self, x: &Tensor, y: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "residual_add_forward";
-        residual_add_forward_dims(x, y)?;
-        let (xa, ya) = (self.f32(OP, x)?, self.f32(OP, y)?);
-        self.one(OP, x.shape(), 0, Cmd::Add { x: xa, y: ya })
-    }
-
-    fn residual_add_backward(
-        &self,
-        x: &Tensor,
-        y: &Tensor,
-        grad_output: &Tensor,
-    ) -> Result<(Tensor, Tensor), OjasError> {
-        const OP: &str = "residual_add_backward";
-        residual_add_backward_dims(x, y, grad_output)?;
-        let (xa, ya) = (self.f32(OP, x)?, self.f32(OP, y)?);
-        let gy = self.f32(OP, grad_output)?;
-        self.two(OP, x.shape(), y.shape(), Cmd::AddBwd { x: xa, y: ya, gy })
-    }
-
     /// tessl's `bert::layer_norm`, which needs `eps > 0` (the CPU also takes
     /// 0 for a row with variance).
     fn layer_norm_forward(
@@ -3707,39 +3979,6 @@ impl Backend for MetalBackend {
         self.enc_channel_layer_norm_backward(input, weight, bias, grad_output, eps)
     }
 
-    /// tessl's `bert::bias_gelu_erf` with a zero bias.
-    fn gelu_erf_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "gelu_erf_forward";
-        gelu_erf_forward_dims(input)?;
-        let x = self.f32(OP, input)?;
-        u32_dim(OP, x.n)?;
-        // The one-element zero bias.
-        self.one(OP, input.shape(), 1, Cmd::GeluErf { x })
-    }
-
-    /// The derivative of the forward's own erfc fit, one element per thread.
-    fn gelu_erf_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
-        self.enc_gelu_erf_backward(input, grad_output)
-    }
-
-    /// torch's `gelu(approximate="tanh")` as tessl's `tessl_gelu_pytorch_tanh`
-    /// (`kernels/gemma_ops.metal`), one element a thread in `f32`: a few ulps
-    /// from the CPU's `f64` evaluation, not bit-identical to it
-    /// (`backend/gemma_host.rs`).
-    fn gelu_tanh_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
-        self.gemma_gelu_tanh_forward(input)
-    }
-
-    /// The derivative of the forward's own bounded evaluation, one element a
-    /// thread.
-    fn gelu_tanh_backward(
-        &self,
-        input: &Tensor,
-        grad_output: &Tensor,
-    ) -> Result<Tensor, OjasError> {
-        self.gemma_gelu_tanh_backward(input, grad_output)
-    }
-
     /// Fused `x @ W^T + bias` for a `[out]` bias: on
     /// `matmul2d_tensorops_nt_bf16_f32_bias` when running on TensorOps under
     /// Bf16 lane, on `ojas_gemm_bf16_accum` when running with bf16
@@ -3799,92 +4038,6 @@ impl Backend for MetalBackend {
         self.enc_linear_bias_backward(input, weight, bias, grad_output)
     }
 
-    fn broadcast_add_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "broadcast_add_forward";
-        let dims = broadcast_add_forward_dims(a, b)?;
-        self.broadcast(OP, false, a, b, &dims)
-    }
-
-    fn broadcast_add_backward(
-        &self,
-        a: &Tensor,
-        b: &Tensor,
-        grad_output: &Tensor,
-    ) -> Result<(Tensor, Tensor), OjasError> {
-        self.enc_broadcast_add_backward(a, b, grad_output)
-    }
-
-    fn broadcast_mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "broadcast_mul_forward";
-        let dims = broadcast_mul_forward_dims(a, b)?;
-        self.broadcast(OP, true, a, b, &dims)
-    }
-
-    fn broadcast_mul_backward(
-        &self,
-        a: &Tensor,
-        b: &Tensor,
-        grad_output: &Tensor,
-    ) -> Result<(Tensor, Tensor), OjasError> {
-        self.enc_broadcast_mul_backward(a, b, grad_output)
-    }
-
-    fn scale_forward(&self, input: &Tensor, scale: f32) -> Result<Tensor, OjasError> {
-        const OP: &str = "scale_forward";
-        scale_forward_dims(input, scale)?;
-        let x = self.f32(OP, input)?;
-        u32_dim(OP, x.n)?;
-        self.one(OP, input.shape(), 0, Cmd::ScaleFwd { x, scale })
-    }
-
-    fn softmax_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "softmax_forward";
-        let dims = softmax_forward_dims(input)?;
-        let x = self.f32(OP, input)?;
-        let (rows, dim) = gated_rms_geom(OP, &dims)?;
-        self.one(OP, input.shape(), 0, Cmd::Softmax { x, rows, dim })
-    }
-
-    /// From the forward's output `y`, a double-single dot per row.
-    fn softmax_backward(&self, output: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
-        self.enc_softmax_backward(output, grad_output)
-    }
-
-    /// The masked mean over time on tessl's `segment_mean_rows`, the row
-    /// ranges built on the device from `key_lens` (no readback). An `f32`
-    /// sequential sum: within its rounding of the CPU's `f64` result.
-    fn seq_mean_forward(&self, x: &Tensor, key_lens: &Tensor) -> Result<Tensor, OjasError> {
-        self.gemma_seq_mean_forward(x, key_lens)
-    }
-
-    /// ojas's own `ojas_seq_mean_bwd`: tessl has no backward for
-    /// `segment_mean_rows`.
-    fn seq_mean_backward(
-        &self,
-        x: &Tensor,
-        key_lens: &Tensor,
-        grad_output: &Tensor,
-    ) -> Result<Tensor, OjasError> {
-        self.gemma_seq_mean_backward(x, key_lens, grad_output)
-    }
-
-    /// tessl's `l2_normalize_rows`, whose epsilon is `1e-12`: any other eps
-    /// is `Unsupported`, not ignored.
-    fn l2_normalize_forward(&self, x: &Tensor, eps: f32) -> Result<Tensor, OjasError> {
-        self.gemma_l2_normalize_forward(x, eps)
-    }
-
-    /// ojas's own `ojas_l2_normalize_bwd`, for the forward's `1e-12` only:
-    /// tessl has no backward for `l2_normalize_rows`.
-    fn l2_normalize_backward(
-        &self,
-        x: &Tensor,
-        grad_output: &Tensor,
-        eps: f32,
-    ) -> Result<Tensor, OjasError> {
-        self.gemma_l2_normalize_backward(x, grad_output, eps)
-    }
-
     fn cross_entropy_mean_forward(
         &self,
         logits: &Tensor,
@@ -3903,45 +4056,6 @@ impl Backend for MetalBackend {
     ) -> Result<Tensor, OjasError> {
         const OP: &str = "cross_entropy_mean_backward";
         ce(self, OP, logits, targets, ignore_index, true)
-    }
-
-    fn clip_grad_norm(&self, grads: &mut [Tensor], max_norm: f32) -> Result<f32, OjasError> {
-        const OP: &str = "clip_grad_norm";
-        clip_grad_norm_dims(grads)?;
-        let args = grads
-            .iter()
-            .map(|g| self.f32(OP, g))
-            .collect::<Res<Vec<_>>>()?;
-        // tessl's sq_norm scratch, reserved before the worker builds the plan:
-        // a 10-word slot per gradient, the parts buffer (two words, sum and
-        // shift, per piece: `SqNormPlan::parts_words`, which the worker
-        // allocates by), and the six result words.
-        let pieces = args.iter().map(|a| norm_chunks(a.n)).sum::<usize>();
-        let _stats = self.reserve(OP, 10 * args.len() + 2 * pieces + SQ_OUT_WORDS)?;
-        let norm = match self.link.call(Cmd::ClipNorm {
-            grads: args.clone(),
-        })? {
-            Reply::Norm(n) => n,
-            other => return Err(metal_err(format!("{OP}: device returned {other:?}"))),
-        };
-        if !norm.is_finite() {
-            return Err(OjasError::NonFinite { op: OP });
-        }
-        let scale = clip_scale(max_norm, norm)?;
-        if scale < 1.0 {
-            for g in grads.iter_mut() {
-                self.unique(OP, g)?;
-            }
-            match self.link.call(Cmd::Scale {
-                op: OP,
-                grads: args,
-                scale,
-            })? {
-                Reply::Done => {}
-                other => return Err(metal_err(format!("{OP}: device returned {other:?}"))),
-            }
-        }
-        Ok(norm)
     }
 
     /// One command: tessl GEMMs make each `[rows, cols]` logits tile, and
@@ -4098,69 +4212,6 @@ impl Backend for MetalBackend {
         }
     }
 
-    /// In place, with no new memory, when `acc` solely owns its buffer;
-    /// otherwise the sum goes to a new buffer that replaces `acc`, and the
-    /// other handles keep the old values. Either way the device decides
-    /// whether every input and sum is finite before it writes anything: a
-    /// non-finite one leaves `acc`'s values unchanged (a shared `acc` still
-    /// gets its new buffer, holding them) and is [`OjasError::NonFinite`] at
-    /// the next sync point.
-    fn accumulate_grad(&self, acc: &mut Tensor, grad: &Tensor) -> Result<(), OjasError> {
-        const OP: &str = "accumulate_grad";
-        accumulate_grad_dims(acc, grad)?;
-        let a = self.f32(OP, acc)?;
-        let g = self.f32(OP, grad)?;
-        if self.unique(OP, acc).is_ok() {
-            return match self.call(Cmd::Accumulate {
-                acc: a,
-                g,
-                in_place: true,
-            })? {
-                Reply::Done => Ok(()),
-                other => Err(metal_err(format!("{OP}: device returned {other:?}"))),
-            };
-        }
-        let sum = self.one(
-            OP,
-            acc.shape(),
-            0,
-            Cmd::Accumulate {
-                acc: a,
-                g,
-                in_place: false,
-            },
-        )?;
-        *acc = sum;
-        Ok(())
-    }
-
-    /// In place on the device when `grad` solely owns its buffer, so a
-    /// frozen buffer is refused ([`Self::freeze_checked`]); a shared `grad`
-    /// is replaced by the product, as the trait default does, and the buffer
-    /// it shared is not written.
-    fn scale_grad(&self, grad: &mut Tensor, scale: f32) -> Result<(), OjasError> {
-        const OP: &str = "scale_grad";
-        if !scale.is_finite() {
-            return Err(OjasError::NonFinite { op: OP });
-        }
-        let g = self.f32(OP, grad)?;
-        if self.unique(OP, grad).is_ok() {
-            return match self.link.call(Cmd::Scale {
-                op: OP,
-                grads: vec![g],
-                scale,
-            })? {
-                Reply::Done => Ok(()),
-                other => Err(metal_err(format!("{OP}: device returned {other:?}"))),
-            };
-        }
-        let host = Tensor::from_f32(&[scale], &[1], self.budget())?;
-        let scalar = self.upload(&host)?;
-        let full = ojas_core::broadcast_scalar(self, &scalar, grad.shape())?;
-        *grad = self.mul_forward(grad, &full)?;
-        Ok(())
-    }
-
     fn adamw_step(
         &self,
         param: &mut Tensor,
@@ -4195,24 +4246,6 @@ impl Backend for MetalBackend {
         })? {
             Reply::Done => Ok(()),
             other => Err(metal_err(format!("{OP}: device returned {other:?}"))),
-        }
-    }
-
-    /// AdamW runs in place with no scratch; Muon reserves
-    /// `muon_scratch_elems` f32 values, the figure its step charges.
-    fn optimizer_scratch_bytes(
-        &self,
-        kind: OptimizerKind,
-        rows: usize,
-        cols: usize,
-    ) -> Result<Option<u64>, OjasError> {
-        const OP: &str = "optimizer_scratch_bytes";
-        match kind {
-            OptimizerKind::AdamW => Ok(Some(0)),
-            OptimizerKind::MuonNs5 => muon_scratch_elems(OP, rows, cols)?
-                .checked_mul(4)
-                .map(|b| Some(b as u64))
-                .ok_or_else(|| overflow(OP)),
         }
     }
 

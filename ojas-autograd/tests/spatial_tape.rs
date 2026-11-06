@@ -6,7 +6,7 @@
 //! f64 adjoints in `ojas-cpu/tests/spatial.rs`.
 
 use ojas_autograd::{Tape, Var};
-use ojas_core::{Backend, Budget, Conv2dParams, ConvTranspose2dParams, Numerics, Tensor};
+use ojas_core::{BackendModule, Budget, Conv2dParams, ConvTranspose2dParams, Numerics, Tensor};
 use ojas_cpu::CpuBackend;
 
 const N: usize = 2;

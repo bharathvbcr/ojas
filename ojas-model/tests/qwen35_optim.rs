@@ -4,7 +4,7 @@
 //! the CPU half shows the per-tensor loop is not all or nothing, which is
 //! why the two passes exist.
 
-use ojas_core::{AdamWConfig, Backend, Budget, DType, Numerics, Tensor};
+use ojas_core::{AdamWConfig, BackendCore, BackendModule, Budget, DType, Numerics, Tensor};
 use ojas_cpu::CpuBackend;
 use ojas_model::qwen35::optim::{adamw_all_or_nothing, AdamWEntry, OptimError, GRAD_ABS_LIMIT};
 

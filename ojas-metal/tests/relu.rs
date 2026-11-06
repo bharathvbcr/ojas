@@ -9,7 +9,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{relu_forward_dims, Autocast, Backend, Tensor};
+use ojas_core::{relu_forward_dims, Autocast, BackendCore, BackendFloat, Tensor};
 
 #[test]
 fn detector_ffn_shapes_match_cpu_bitwise() {

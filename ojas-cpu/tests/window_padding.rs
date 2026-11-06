@@ -13,8 +13,8 @@ mod window_padding_suite;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use ojas_core::{
-    forward_backend_methods, window_merge, window_partition, Backend, BackendId, Budget, DType,
-    Numerics, OjasError, Tensor,
+    forward_backend_methods, window_merge, window_partition, BackendCore, BackendFloat, BackendId,
+    BackendInt, BackendModule, Budget, DType, Numerics, OjasError, Tensor,
 };
 use ojas_cpu::CpuBackend;
 use window_padding_suite as suite;
@@ -97,10 +97,17 @@ fn unsupported(op: &'static str) -> OjasError {
     }
 }
 
-impl Backend for Gate {
+impl BackendCore for Gate {
     ojas_core::with_backend_methods!(
         forward_backend_methods,
-        { self, self.inner, none, all_but_pad_ops }
+        { self, self.inner, none, all_but_pad_ops, core}
+    );
+}
+
+impl BackendFloat for Gate {
+    ojas_core::with_backend_methods!(
+        forward_backend_methods,
+        { self, self.inner, none, all_but_pad_ops, float}
     );
 
     fn fill(&self, shape: &[usize], dtype: DType, value: f32) -> Result<Tensor, OjasError> {
@@ -132,6 +139,20 @@ impl Backend for Gate {
         }
         self.inner.slice(input, axis, start, len)
     }
+}
+
+impl BackendInt for Gate {
+    ojas_core::with_backend_methods!(
+        forward_backend_methods,
+        { self, self.inner, none, all_but_pad_ops, int}
+    );
+}
+
+impl BackendModule for Gate {
+    ojas_core::with_backend_methods!(
+        forward_backend_methods,
+        { self, self.inner, none, all_but_pad_ops, module}
+    );
 }
 
 impl Gate {

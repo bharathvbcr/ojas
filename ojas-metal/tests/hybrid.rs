@@ -11,7 +11,10 @@
 mod common;
 
 use common::*;
-use ojas_core::{mrope_text_tables, Backend, Budget, MropeSection, OjasError, Tensor};
+use ojas_core::{
+    mrope_text_tables, BackendCore, BackendFloat, BackendModule, Budget, MropeSection, OjasError,
+    Tensor,
+};
 
 /// `max |metal - cpu| / max |cpu|` per tensor.
 const BOUND: f32 = 1e-5;

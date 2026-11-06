@@ -6,7 +6,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{Backend, Tensor};
+use ojas_core::{BackendCore, BackendModule, Tensor};
 
 fn bits(t: &Tensor) -> Vec<u32> {
     down(t).iter().map(|v| v.to_bits()).collect()

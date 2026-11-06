@@ -11,7 +11,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{conv2d_forward_dims, Backend, Conv2dParams, OjasError, Tensor};
+use ojas_core::{conv2d_forward_dims, BackendCore, BackendModule, Conv2dParams, OjasError, Tensor};
 use ojas_metal::MetalBackend;
 
 /// Bound for the one case that is not on the direct kernel (see `check`).

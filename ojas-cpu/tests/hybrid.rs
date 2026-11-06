@@ -10,7 +10,7 @@
 mod common;
 
 use common::{assert_capacity, assert_nonfinite, assert_shape, bits};
-use ojas_core::{Backend, Budget, Numerics, OjasError, Tensor};
+use ojas_core::{BackendFloat, BackendModule, Budget, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 
 fn cpu(threads: usize, numerics: Numerics) -> CpuBackend {

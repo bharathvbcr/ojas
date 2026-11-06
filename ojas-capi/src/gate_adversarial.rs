@@ -6,7 +6,10 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use ojas_core::{forward_backend_methods, Autocast, Backend, BackendId, Budget, OjasError, Tensor};
+use ojas_core::{
+    forward_backend_methods, Autocast, Backend, BackendCore, BackendFloat, BackendId, BackendInt,
+    BackendModule, Budget, OjasError, Tensor,
+};
 use ojas_cpu::CpuBackend;
 
 use crate::gate::{CancelSlot, Gated};
@@ -35,10 +38,31 @@ impl Spy {
     }
 }
 
-impl Backend for Spy {
+impl BackendCore for Spy {
     ojas_core::with_backend_methods!(
         forward_backend_methods,
-        { self, self.inner, none, all_but_linear_backward }
+        { self, self.inner, none, all_but_linear_backward, core}
+    );
+}
+
+impl BackendFloat for Spy {
+    ojas_core::with_backend_methods!(
+        forward_backend_methods,
+        { self, self.inner, none, all_but_linear_backward, float}
+    );
+}
+
+impl BackendInt for Spy {
+    ojas_core::with_backend_methods!(
+        forward_backend_methods,
+        { self, self.inner, none, all_but_linear_backward, int}
+    );
+}
+
+impl BackendModule for Spy {
+    ojas_core::with_backend_methods!(
+        forward_backend_methods,
+        { self, self.inner, none, all_but_linear_backward, module}
     );
     fn linear_backward(
         &self,
@@ -110,10 +134,31 @@ struct Recompute {
     calls: AtomicUsize,
 }
 
-impl Backend for Recompute {
+impl BackendCore for Recompute {
     ojas_core::with_backend_methods!(
         forward_backend_methods,
-        { self, self.inner, none, all_but_recompute }
+        { self, self.inner, none, all_but_recompute, core}
+    );
+}
+
+impl BackendFloat for Recompute {
+    ojas_core::with_backend_methods!(
+        forward_backend_methods,
+        { self, self.inner, none, all_but_recompute, float}
+    );
+}
+
+impl BackendInt for Recompute {
+    ojas_core::with_backend_methods!(
+        forward_backend_methods,
+        { self, self.inner, none, all_but_recompute, int}
+    );
+}
+
+impl BackendModule for Recompute {
+    ojas_core::with_backend_methods!(
+        forward_backend_methods,
+        { self, self.inner, none, all_but_recompute, module}
     );
     fn causal_sdpa_backward_recompute(
         &self,

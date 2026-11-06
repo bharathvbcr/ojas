@@ -13,7 +13,7 @@
 
 mod qwen35_common;
 
-use ojas_core::{Backend, Budget, DType, Tensor};
+use ojas_core::{BackendCore, Budget, DType, Tensor};
 use ojas_metal::MetalBackend;
 use ojas_model::qwen35::Qwen35Params;
 use ojas_model::ActivationCheckpoint;

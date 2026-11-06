@@ -6,7 +6,7 @@
 //! check, so these reach `Shape` by that rule; the layout check itself is
 //! pinned by `shapes::tests::attention_layout_refuses_zero_head_counts_without_dividing`.
 
-use ojas_core::{AttentionOpts, Backend, Budget, Tensor};
+use ojas_core::{AttentionOpts, BackendModule, Budget, Tensor};
 use ojas_cpu::CpuBackend;
 
 mod common;

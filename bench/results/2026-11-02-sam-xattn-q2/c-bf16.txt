@@ -1,0 +1,18 @@
+# load_start 10.21 13.50 12.32
+row	arm	p10_ms	median_ms	p90_ms	median_ms_A'	gap_ms	spread_ms	pair	note
+control fc1 [5184,1024]x[4736,1024]	fc1 linear f32 (control)	33.973	40.928	42.690	42.840	1.913	14.450	ok	1.23 TFLOP/s
+# control 1.23 TFLOP/s outside 6.11 to 6.49
+# bf16 sam xattn bf16 Tk=36400 | bf16-accum flash vs f32 flash: out max abs 1.610e-2 mean abs 8.929e-4 rel to peak 1.351e0; lse max abs 7.434e-1 mean abs 2.899e-1; kernels encoded Ran { flash: 1, scalar: 0, part: 0, combine: 0 }
+# bf16 sam xattn bf16 Tk=36400 | first head plane against the CPU (exact f32): bf16-accum out max abs 1.427e-2 rel to peak 1.531e0, lse max abs 7.028e-1; f32 dispatcher out max abs 1.406e-7, lse max abs 1.049e-5
+# observable sam xattn bf16 Tk=36400 | the flash kernel ran if the dispatcher's call is at least 3x faster than the same call forced onto the scalar kernel: dispatcher 59.60 ms, forced scalar 2639.67 ms, ratio 44.3x -> confirmed
+sam xattn bf16 Tk=36400	flash (forced)	60.321	62.589	64.324	66.598	4.009	16.274	ok	3.09 TFLOP/s on the useful work
+sam xattn bf16 Tk=36400	split-K	336.626	377.407	394.200	351.809	25.598	57.574	ok	0.51 TFLOP/s on the useful work
+sam xattn bf16 Tk=36400	dispatcher	56.239	75.614	77.691	72.615	2.999	21.452	ok	2.56 TFLOP/s on the useful work
+sam xattn bf16 Tk=36400	flash bf16-accum (forced)	1336.573	1428.334	1546.971	1472.270	43.936	210.397	ok	0.14 TFLOP/s on the useful work
+# checks sam xattn bf16 Tk=36400 | dispatcher-vs-splitK max abs out 1.24e-7 lse 6.68e-6 vs scalar out 1.03e-7 lse 1.24e-5 forced-flash-vs-splitK out 1.24e-7 lse 6.68e-6 dispatches dispatcher 6 split-K 7 scalar 6; kernels dispatcher Ran { flash: 1, scalar: 0, part: 0, combine: 0 } split-K Ran { flash: 0, scalar: 0, part: 1, combine: 1 } scalar Ran { flash: 0, scalar: 1, part: 0, combine: 0 } forced flash 6 Ran { flash: 1, scalar: 0, part: 0, combine: 0 } flash-vs-scalar time ratio 44.3x
+# xattn sam xattn bf16 Tk=36400 | groups 1296 | flash 62.589 ms (3.09 TFLOP/s), split-K 377.407 ms (0.51 TFLOP/s), split-K - flash = 314.818 ms (noise bar 57.574): faster flash | dispatcher - flash = 13.025 ms (noise bar 21.452)
+# kernels sam xattn bf16 Tk=36400 | timed rounds encoded Ran { flash: 60, scalar: 0, part: 20, combine: 20 }, expected Ran { flash: 60, scalar: 0, part: 20, combine: 20 } (20 calls per arm)
+# bf16 sam xattn bf16 Tk=36400 | bf16-accum flash 1428.334 ms (0.14 TFLOP/s) against f32 flash 62.589 ms: x22.82
+# load_end 16.08 14.07 12.58
+# noisy_pairs 0
+# verdict repeat

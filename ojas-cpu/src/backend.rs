@@ -15,9 +15,10 @@ use ojas_core::{
     causal_conv1d_silu_backward_dims, causal_conv1d_silu_forward_dims, clip_scale,
     gated_rms_norm_backward_dims, gated_rms_norm_forward_dims, gdn_log_decay_backward_dims,
     gdn_log_decay_forward_dims, rope_partial_backward_dims, rope_partial_forward_dims,
-    sigmoid_backward_dims, sigmoid_forward_dims, AdamWConfig, Backend, BackendId, Budget, DType,
-    GatedRmsGrad, GdnDecayGrad, GdnForward, GdnGrad, GdnInputs, MuonNs5Config, Numerics, OjasError,
-    OptimizerKind, PerHeadGateGrad, Tensor, ValueResidualGrad,
+    sigmoid_backward_dims, sigmoid_forward_dims, AdamWConfig, BackendCore, BackendFloat, BackendId,
+    BackendInt, BackendModule, Budget, DType, GatedRmsGrad, GdnDecayGrad, GdnForward, GdnGrad,
+    GdnInputs, MuonNs5Config, Numerics, OjasError, OptimizerKind, PerHeadGateGrad, Tensor,
+    ValueResidualGrad,
 };
 // Every op below runs its `ojas_core::shapes` validator before it checks
 // values, copies an input or charges the budget (docs/shape-contract.md).
@@ -513,7 +514,7 @@ fn gdn_operands<'t>(
     })
 }
 
-impl Backend for CpuBackend {
+impl BackendCore for CpuBackend {
     fn id(&self) -> BackendId {
         BackendId::Cpu
     }
@@ -535,10 +536,345 @@ impl Backend for CpuBackend {
         true
     }
 
+    /// AdamW updates in place and charges nothing beyond its operands; Muon
+    /// charges `CpuBackend::muon_headroom`, the figure its step reserves.
+    fn optimizer_scratch_bytes(
+        &self,
+        kind: OptimizerKind,
+        rows: usize,
+        cols: usize,
+    ) -> Result<Option<u64>, OjasError> {
+        match kind {
+            OptimizerKind::AdamW => Ok(Some(0)),
+            OptimizerKind::MuonNs5 => self
+                .muon_headroom("optimizer_scratch_bytes", rows, cols)
+                .map(Some),
+        }
+    }
+}
+
+impl BackendFloat for CpuBackend {
     fn permute(&self, input: &Tensor, dims: &[usize]) -> Result<Tensor, OjasError> {
         permute("permute", &self.budget, self.exec(), input, dims)
     }
 
+    fn sigmoid_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "sigmoid_forward";
+        sigmoid_forward_dims(input)?;
+        let exec = self.exec();
+        let [x] = f32_operands(OP, exec, [input])?;
+        sigmoid_forward(OP, &self.budget, exec, x, input.shape())
+    }
+
+    fn sigmoid_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "sigmoid_backward";
+        sigmoid_backward_dims(input, grad_output)?;
+        let exec = self.exec();
+        let [x, gy] = f32_operands(OP, exec, [input, grad_output])?;
+        sigmoid_backward(OP, &self.budget, exec, x, gy, input.shape())
+    }
+
+    fn silu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "silu_forward";
+        silu_forward_dims(input)?;
+        let exec = self.exec();
+        let [x] = f32_operands(OP, exec, [input])?;
+        silu_forward(OP, &self.budget, exec, x, input.shape())
+    }
+
+    fn silu_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "silu_backward";
+        silu_backward_dims(input, grad_output)?;
+        let exec = self.exec();
+        let [x, gy] = f32_operands(OP, exec, [input, grad_output])?;
+        silu_backward(OP, &self.budget, exec, x, gy, input.shape())
+    }
+
+    fn mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "mul_forward";
+        mul_forward_dims(a, b)?;
+        let [av, bv] = f32_operands(OP, self.exec(), [a, b])?;
+        mul_forward(OP, &self.budget, self.exec(), av, bv, a.shape())
+    }
+
+    fn mul_backward(
+        &self,
+        a: &Tensor,
+        b: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        const OP: &str = "mul_backward";
+        mul_backward_dims(a, b, grad_output)?;
+        let [av, bv, gy] = f32_operands(OP, self.exec(), [a, b, grad_output])?;
+        mul_backward(
+            OP,
+            &self.budget,
+            self.exec(),
+            av,
+            bv,
+            gy,
+            a.shape(),
+            b.shape(),
+        )
+    }
+
+    fn residual_add_forward(&self, x: &Tensor, y: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "residual_add_forward";
+        residual_add_forward_dims(x, y)?;
+        let [xv, yv] = f32_operands(OP, self.exec(), [x, y])?;
+        add_forward(OP, &self.budget, self.exec(), xv, yv, x.shape())
+    }
+
+    fn residual_add_backward(
+        &self,
+        x: &Tensor,
+        y: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        // Checked in place and copied byte for byte into two charged
+        // tensors (pointwise.rs `add_backward`); nothing is decoded.
+        residual_add_backward_dims(x, y, grad_output)?;
+        add_backward("residual_add_backward", &self.budget, x, y, grad_output)
+    }
+
+    fn gelu_erf_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "gelu_erf_forward";
+        gelu_erf_forward_dims(input)?;
+        let [x] = f32_operands(OP, self.exec(), [input])?;
+        gelu_erf_forward(OP, &self.budget, self.exec(), x, input.shape())
+    }
+
+    fn gelu_erf_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "gelu_erf_backward";
+        gelu_erf_backward_dims(input, grad_output)?;
+        let [x, gy] = f32_operands(OP, self.exec(), [input, grad_output])?;
+        gelu_erf_backward(OP, &self.budget, self.exec(), x, gy, input.shape())
+    }
+
+    fn relu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "relu_forward";
+        relu_forward_dims(input)?;
+        let [x] = f32_operands(OP, self.exec(), [input])?;
+        relu_forward(OP, &self.budget, self.exec(), x, input.shape())
+    }
+
+    fn relu_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "relu_backward";
+        relu_backward_dims(input, grad_output)?;
+        let [x, gy] = f32_operands(OP, self.exec(), [input, grad_output])?;
+        relu_backward(OP, &self.budget, self.exec(), x, gy, input.shape())
+    }
+
+    fn concat(&self, inputs: &[&Tensor], axis: usize) -> Result<Tensor, OjasError> {
+        let dims = concat_dims(inputs, axis)?;
+        concat("concat", &self.budget, self.exec(), inputs, dims)
+    }
+
+    fn slice(
+        &self,
+        input: &Tensor,
+        axis: usize,
+        start: usize,
+        len: usize,
+    ) -> Result<Tensor, OjasError> {
+        let dims = slice_dims(input, axis, start, len)?;
+        slice("slice", &self.budget, self.exec(), input, dims)
+    }
+
+    fn slice_backward(
+        &self,
+        grad_output: &Tensor,
+        in_shape: &[usize],
+        axis: usize,
+        start: usize,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "slice_backward";
+        let dims = slice_backward_dims(grad_output, in_shape, axis, start)?;
+        slice_backward(OP, &self.budget, self.exec(), grad_output, dims)
+    }
+
+    fn fill(&self, shape: &[usize], dtype: DType, value: f32) -> Result<Tensor, OjasError> {
+        fill_dims(shape, dtype, value)?;
+        fill("fill", &self.budget, shape, dtype, value)
+    }
+
+    fn broadcast_add_backward(
+        &self,
+        a: &Tensor,
+        b: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        const OP: &str = "broadcast_add_backward";
+        let dims = broadcast_add_backward_dims(a, b, grad_output)?;
+        let exec = self.exec();
+        // The operands' values are not read, but they are scanned as every
+        // operand is.
+        let [_, _, gy] = f32_operands(OP, exec, [a, b, grad_output])?;
+        let budget = &self.budget;
+        let ga = broadcast_grad(OP, budget, exec, &dims, Operand::A, gy, None, a.shape())?;
+        let gb = broadcast_grad(OP, budget, exec, &dims, Operand::B, gy, None, b.shape())?;
+        Ok((ga, gb))
+    }
+
+    fn broadcast_mul_backward(
+        &self,
+        a: &Tensor,
+        b: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        const OP: &str = "broadcast_mul_backward";
+        let dims = broadcast_mul_backward_dims(a, b, grad_output)?;
+        let exec = self.exec();
+        let [av, bv, gy] = f32_operands(OP, exec, [a, b, grad_output])?;
+        let budget = &self.budget;
+        let ga = broadcast_grad(OP, budget, exec, &dims, Operand::A, gy, Some(bv), a.shape())?;
+        let gb = broadcast_grad(OP, budget, exec, &dims, Operand::B, gy, Some(av), b.shape())?;
+        Ok((ga, gb))
+    }
+
+    fn broadcast_add_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "broadcast_add_forward";
+        let dims = broadcast_add_forward_dims(a, b)?;
+        let [av, bv] = f32_operands(OP, self.exec(), [a, b])?;
+        broadcast_zip(OP, &self.budget, self.exec(), av, bv, &dims, |x, y| x + y)
+    }
+
+    fn broadcast_mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "broadcast_mul_forward";
+        let dims = broadcast_mul_forward_dims(a, b)?;
+        let [av, bv] = f32_operands(OP, self.exec(), [a, b])?;
+        broadcast_zip(OP, &self.budget, self.exec(), av, bv, &dims, |x, y| x * y)
+    }
+
+    fn scale_forward(&self, input: &Tensor, scale: f32) -> Result<Tensor, OjasError> {
+        const OP: &str = "scale_forward";
+        scale_forward_dims(input, scale)?;
+        let [x] = f32_operands(OP, self.exec(), [input])?;
+        scale_forward(OP, &self.budget, self.exec(), x, scale, input.shape())
+    }
+
+    fn softmax_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "softmax_forward";
+        let dims = softmax_forward_dims(input)?;
+        let [x] = f32_operands(OP, self.exec(), [input])?;
+        softmax_forward(OP, &self.budget, self.exec(), x, dims, input.shape())
+    }
+
+    fn softmax_backward(&self, output: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "softmax_backward";
+        let dims = softmax_backward_dims(output, grad_output)?;
+        let [y, gy] = f32_operands(OP, self.exec(), [output, grad_output])?;
+        softmax_backward(OP, &self.budget, self.exec(), y, gy, dims, output.shape())
+    }
+
+    fn clip_grad_norm(&self, grads: &mut [Tensor], max_norm: f32) -> Result<f32, OjasError> {
+        const OP: &str = "clip_grad_norm";
+        clip_grad_norm_dims(grads)?;
+        // Layouts in argument order, then the norm, read in place. The norm
+        // pass is also the NaN scan (optim.rs `grad_norm`); a layout refusal
+        // of gradient `i` first scans gradients `0..i`, so an earlier NaN
+        // still outranks it, as checking each gradient in turn would.
+        let mut parts = Vec::with_capacity(grads.len());
+        for (i, grad) in grads.iter().enumerate() {
+            match f32_values(OP, grad) {
+                Ok(words) => parts.push(words),
+                Err(err) => {
+                    let refs: Vec<&Tensor> = grads[..i].iter().collect();
+                    check_f32s(OP, self.exec(), &refs)?;
+                    return Err(err);
+                }
+            }
+        }
+        let norm = grad_norm(OP, self.exec(), &parts)?;
+        drop(parts);
+        let scale = clip_scale(max_norm, norm)?;
+        if scale < 1.0 {
+            scale_in_place(self.exec(), grads, scale)?;
+        }
+        Ok(norm)
+    }
+
+    fn accumulate_grad(&self, acc: &mut Tensor, grad: &Tensor) -> Result<(), OjasError> {
+        crate::accum::accumulate_grad("accumulate_grad", &self.budget, self.exec(), acc, grad)
+    }
+
+    fn scale_grad(&self, grad: &mut Tensor, scale: f32) -> Result<(), OjasError> {
+        crate::accum::scale_grad("scale_grad", &self.budget, self.exec(), grad, scale)
+    }
+
+    fn gelu_tanh_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "gelu_tanh_forward";
+        gelu_tanh_forward_dims(input)?;
+        let [x] = f32_operands(OP, self.exec(), [input])?;
+        gemma_ops::gelu_tanh_forward(OP, &self.budget, self.exec(), x, input.shape())
+    }
+
+    fn gelu_tanh_backward(
+        &self,
+        input: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "gelu_tanh_backward";
+        gelu_tanh_backward_dims(input, grad_output)?;
+        let [x, gy] = f32_operands(OP, self.exec(), [input, grad_output])?;
+        gemma_ops::gelu_tanh_backward(OP, &self.budget, self.exec(), x, gy, input.shape())
+    }
+
+    fn seq_mean_forward(&self, x: &Tensor, key_lens: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "seq_mean_forward";
+        let dims = seq_mean_forward_dims(x, key_lens)?;
+        let [values] = f32_operands(OP, self.exec(), [x])?;
+        let lens = u32_values(OP, key_lens)?;
+        gemma_ops::seq_mean_forward(OP, &self.budget, self.exec(), values, lens, dims)
+    }
+
+    /// The backward reads the gradient and the lengths, never `x`'s values,
+    /// so only the gradient is scanned for a non-finite value.
+    fn seq_mean_backward(
+        &self,
+        x: &Tensor,
+        key_lens: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "seq_mean_backward";
+        let dims = seq_mean_backward_dims(x, key_lens, grad_output)?;
+        let [grad] = f32_operands(OP, self.exec(), [grad_output])?;
+        let lens = u32_values(OP, key_lens)?;
+        gemma_ops::seq_mean_backward(OP, &self.budget, self.exec(), grad, lens, dims, x.shape())
+    }
+
+    fn l2_normalize_forward(&self, x: &Tensor, eps: f32) -> Result<Tensor, OjasError> {
+        const OP: &str = "l2_normalize_forward";
+        let dims = l2_normalize_forward_dims(x, eps)?;
+        let [values] = f32_operands(OP, self.exec(), [x])?;
+        gemma_ops::l2_normalize_forward(OP, &self.budget, self.exec(), values, dims, eps, x.shape())
+    }
+
+    fn l2_normalize_backward(
+        &self,
+        x: &Tensor,
+        grad_output: &Tensor,
+        eps: f32,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "l2_normalize_backward";
+        let dims = l2_normalize_backward_dims(x, grad_output, eps)?;
+        let [values, grad] = f32_operands(OP, self.exec(), [x, grad_output])?;
+        gemma_ops::l2_normalize_backward(
+            OP,
+            &self.budget,
+            self.exec(),
+            values,
+            grad,
+            dims,
+            eps,
+            x.shape(),
+        )
+    }
+}
+
+impl BackendInt for CpuBackend {}
+
+impl BackendModule for CpuBackend {
     fn embedding_forward(&self, table: &Tensor, token_ids: &Tensor) -> Result<Tensor, OjasError> {
         const OP: &str = "embedding_forward";
         let dims = embedding_forward_dims(table, token_ids)?;
@@ -1128,22 +1464,6 @@ impl Backend for CpuBackend {
         rope_partial(OP, &self.budget, exec, dims, ins, Turn::Backward, shape)
     }
 
-    fn sigmoid_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "sigmoid_forward";
-        sigmoid_forward_dims(input)?;
-        let exec = self.exec();
-        let [x] = f32_operands(OP, exec, [input])?;
-        sigmoid_forward(OP, &self.budget, exec, x, input.shape())
-    }
-
-    fn sigmoid_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "sigmoid_backward";
-        sigmoid_backward_dims(input, grad_output)?;
-        let exec = self.exec();
-        let [x, gy] = f32_operands(OP, exec, [input, grad_output])?;
-        sigmoid_backward(OP, &self.budget, exec, x, gy, input.shape())
-    }
-
     fn gdn_log_decay_forward(
         &self,
         a: &Tensor,
@@ -1328,69 +1648,6 @@ impl Backend for CpuBackend {
         )
     }
 
-    fn silu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "silu_forward";
-        silu_forward_dims(input)?;
-        let exec = self.exec();
-        let [x] = f32_operands(OP, exec, [input])?;
-        silu_forward(OP, &self.budget, exec, x, input.shape())
-    }
-
-    fn silu_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "silu_backward";
-        silu_backward_dims(input, grad_output)?;
-        let exec = self.exec();
-        let [x, gy] = f32_operands(OP, exec, [input, grad_output])?;
-        silu_backward(OP, &self.budget, exec, x, gy, input.shape())
-    }
-
-    fn mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "mul_forward";
-        mul_forward_dims(a, b)?;
-        let [av, bv] = f32_operands(OP, self.exec(), [a, b])?;
-        mul_forward(OP, &self.budget, self.exec(), av, bv, a.shape())
-    }
-
-    fn mul_backward(
-        &self,
-        a: &Tensor,
-        b: &Tensor,
-        grad_output: &Tensor,
-    ) -> Result<(Tensor, Tensor), OjasError> {
-        const OP: &str = "mul_backward";
-        mul_backward_dims(a, b, grad_output)?;
-        let [av, bv, gy] = f32_operands(OP, self.exec(), [a, b, grad_output])?;
-        mul_backward(
-            OP,
-            &self.budget,
-            self.exec(),
-            av,
-            bv,
-            gy,
-            a.shape(),
-            b.shape(),
-        )
-    }
-
-    fn residual_add_forward(&self, x: &Tensor, y: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "residual_add_forward";
-        residual_add_forward_dims(x, y)?;
-        let [xv, yv] = f32_operands(OP, self.exec(), [x, y])?;
-        add_forward(OP, &self.budget, self.exec(), xv, yv, x.shape())
-    }
-
-    fn residual_add_backward(
-        &self,
-        x: &Tensor,
-        y: &Tensor,
-        grad_output: &Tensor,
-    ) -> Result<(Tensor, Tensor), OjasError> {
-        // Checked in place and copied byte for byte into two charged
-        // tensors (pointwise.rs `add_backward`); nothing is decoded.
-        residual_add_backward_dims(x, y, grad_output)?;
-        add_backward("residual_add_backward", &self.budget, x, y, grad_output)
-    }
-
     fn layer_norm_forward(
         &self,
         input: &Tensor,
@@ -1533,67 +1790,6 @@ impl Backend for CpuBackend {
         })
     }
 
-    fn gelu_erf_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "gelu_erf_forward";
-        gelu_erf_forward_dims(input)?;
-        let [x] = f32_operands(OP, self.exec(), [input])?;
-        gelu_erf_forward(OP, &self.budget, self.exec(), x, input.shape())
-    }
-
-    fn gelu_erf_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "gelu_erf_backward";
-        gelu_erf_backward_dims(input, grad_output)?;
-        let [x, gy] = f32_operands(OP, self.exec(), [input, grad_output])?;
-        gelu_erf_backward(OP, &self.budget, self.exec(), x, gy, input.shape())
-    }
-
-    fn relu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "relu_forward";
-        relu_forward_dims(input)?;
-        let [x] = f32_operands(OP, self.exec(), [input])?;
-        relu_forward(OP, &self.budget, self.exec(), x, input.shape())
-    }
-
-    fn relu_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "relu_backward";
-        relu_backward_dims(input, grad_output)?;
-        let [x, gy] = f32_operands(OP, self.exec(), [input, grad_output])?;
-        relu_backward(OP, &self.budget, self.exec(), x, gy, input.shape())
-    }
-
-    fn concat(&self, inputs: &[&Tensor], axis: usize) -> Result<Tensor, OjasError> {
-        let dims = concat_dims(inputs, axis)?;
-        concat("concat", &self.budget, self.exec(), inputs, dims)
-    }
-
-    fn slice(
-        &self,
-        input: &Tensor,
-        axis: usize,
-        start: usize,
-        len: usize,
-    ) -> Result<Tensor, OjasError> {
-        let dims = slice_dims(input, axis, start, len)?;
-        slice("slice", &self.budget, self.exec(), input, dims)
-    }
-
-    fn slice_backward(
-        &self,
-        grad_output: &Tensor,
-        in_shape: &[usize],
-        axis: usize,
-        start: usize,
-    ) -> Result<Tensor, OjasError> {
-        const OP: &str = "slice_backward";
-        let dims = slice_backward_dims(grad_output, in_shape, axis, start)?;
-        slice_backward(OP, &self.budget, self.exec(), grad_output, dims)
-    }
-
-    fn fill(&self, shape: &[usize], dtype: DType, value: f32) -> Result<Tensor, OjasError> {
-        fill_dims(shape, dtype, value)?;
-        fill("fill", &self.budget, shape, dtype, value)
-    }
-
     fn linear_bias_forward(
         &self,
         input: &Tensor,
@@ -1634,75 +1830,6 @@ impl Backend for CpuBackend {
         })
     }
 
-    fn broadcast_add_backward(
-        &self,
-        a: &Tensor,
-        b: &Tensor,
-        grad_output: &Tensor,
-    ) -> Result<(Tensor, Tensor), OjasError> {
-        const OP: &str = "broadcast_add_backward";
-        let dims = broadcast_add_backward_dims(a, b, grad_output)?;
-        let exec = self.exec();
-        // The operands' values are not read, but they are scanned as every
-        // operand is.
-        let [_, _, gy] = f32_operands(OP, exec, [a, b, grad_output])?;
-        let budget = &self.budget;
-        let ga = broadcast_grad(OP, budget, exec, &dims, Operand::A, gy, None, a.shape())?;
-        let gb = broadcast_grad(OP, budget, exec, &dims, Operand::B, gy, None, b.shape())?;
-        Ok((ga, gb))
-    }
-
-    fn broadcast_mul_backward(
-        &self,
-        a: &Tensor,
-        b: &Tensor,
-        grad_output: &Tensor,
-    ) -> Result<(Tensor, Tensor), OjasError> {
-        const OP: &str = "broadcast_mul_backward";
-        let dims = broadcast_mul_backward_dims(a, b, grad_output)?;
-        let exec = self.exec();
-        let [av, bv, gy] = f32_operands(OP, exec, [a, b, grad_output])?;
-        let budget = &self.budget;
-        let ga = broadcast_grad(OP, budget, exec, &dims, Operand::A, gy, Some(bv), a.shape())?;
-        let gb = broadcast_grad(OP, budget, exec, &dims, Operand::B, gy, Some(av), b.shape())?;
-        Ok((ga, gb))
-    }
-
-    fn broadcast_add_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "broadcast_add_forward";
-        let dims = broadcast_add_forward_dims(a, b)?;
-        let [av, bv] = f32_operands(OP, self.exec(), [a, b])?;
-        broadcast_zip(OP, &self.budget, self.exec(), av, bv, &dims, |x, y| x + y)
-    }
-
-    fn broadcast_mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "broadcast_mul_forward";
-        let dims = broadcast_mul_forward_dims(a, b)?;
-        let [av, bv] = f32_operands(OP, self.exec(), [a, b])?;
-        broadcast_zip(OP, &self.budget, self.exec(), av, bv, &dims, |x, y| x * y)
-    }
-
-    fn scale_forward(&self, input: &Tensor, scale: f32) -> Result<Tensor, OjasError> {
-        const OP: &str = "scale_forward";
-        scale_forward_dims(input, scale)?;
-        let [x] = f32_operands(OP, self.exec(), [input])?;
-        scale_forward(OP, &self.budget, self.exec(), x, scale, input.shape())
-    }
-
-    fn softmax_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "softmax_forward";
-        let dims = softmax_forward_dims(input)?;
-        let [x] = f32_operands(OP, self.exec(), [input])?;
-        softmax_forward(OP, &self.budget, self.exec(), x, dims, input.shape())
-    }
-
-    fn softmax_backward(&self, output: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "softmax_backward";
-        let dims = softmax_backward_dims(output, grad_output)?;
-        let [y, gy] = f32_operands(OP, self.exec(), [output, grad_output])?;
-        softmax_backward(OP, &self.budget, self.exec(), y, gy, dims, output.shape())
-    }
-
     fn cross_entropy_mean_forward(
         &self,
         logits: &Tensor,
@@ -1740,33 +1867,6 @@ impl Backend for CpuBackend {
         cross_entropy_grad(OP, exec, input, out, logits.shape())
     }
 
-    fn clip_grad_norm(&self, grads: &mut [Tensor], max_norm: f32) -> Result<f32, OjasError> {
-        const OP: &str = "clip_grad_norm";
-        clip_grad_norm_dims(grads)?;
-        // Layouts in argument order, then the norm, read in place. The norm
-        // pass is also the NaN scan (optim.rs `grad_norm`); a layout refusal
-        // of gradient `i` first scans gradients `0..i`, so an earlier NaN
-        // still outranks it, as checking each gradient in turn would.
-        let mut parts = Vec::with_capacity(grads.len());
-        for (i, grad) in grads.iter().enumerate() {
-            match f32_values(OP, grad) {
-                Ok(words) => parts.push(words),
-                Err(err) => {
-                    let refs: Vec<&Tensor> = grads[..i].iter().collect();
-                    check_f32s(OP, self.exec(), &refs)?;
-                    return Err(err);
-                }
-            }
-        }
-        let norm = grad_norm(OP, self.exec(), &parts)?;
-        drop(parts);
-        let scale = clip_scale(max_norm, norm)?;
-        if scale < 1.0 {
-            scale_in_place(self.exec(), grads, scale)?;
-        }
-        Ok(norm)
-    }
-
     fn adamw_step(
         &self,
         param: &mut Tensor,
@@ -1787,22 +1887,6 @@ impl Backend for CpuBackend {
         let coeffs =
             AdamCoeffs::new(config, step).map_err(|err| nonfinite_first(OP, exec, &inputs, err))?;
         adamw_in_place(OP, exec, param, grad, moment1, moment2, coeffs)
-    }
-
-    /// AdamW updates in place and charges nothing beyond its operands; Muon
-    /// charges `CpuBackend::muon_headroom`, the figure its step reserves.
-    fn optimizer_scratch_bytes(
-        &self,
-        kind: OptimizerKind,
-        rows: usize,
-        cols: usize,
-    ) -> Result<Option<u64>, OjasError> {
-        match kind {
-            OptimizerKind::AdamW => Ok(Some(0)),
-            OptimizerKind::MuonNs5 => self
-                .muon_headroom("optimizer_scratch_bytes", rows, cols)
-                .map(Some),
-        }
     }
 
     fn muon_ns5_step(
@@ -1841,14 +1925,6 @@ impl Backend for CpuBackend {
         }
         momentum.write_f32(&new_m)?;
         Ok(())
-    }
-
-    fn accumulate_grad(&self, acc: &mut Tensor, grad: &Tensor) -> Result<(), OjasError> {
-        crate::accum::accumulate_grad("accumulate_grad", &self.budget, self.exec(), acc, grad)
-    }
-
-    fn scale_grad(&self, grad: &mut Tensor, scale: f32) -> Result<(), OjasError> {
-        crate::accum::scale_grad("scale_grad", &self.budget, self.exec(), grad, scale)
     }
 
     fn linear_cross_entropy_mean(
@@ -1893,74 +1969,5 @@ impl Backend for CpuBackend {
 
     fn kv_cache_write(&self, cache: &mut Tensor, src: &Tensor, at: usize) -> Result<(), OjasError> {
         crate::kv::kv_cache_write("kv_cache_write", cache, src, at)
-    }
-
-    fn gelu_tanh_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "gelu_tanh_forward";
-        gelu_tanh_forward_dims(input)?;
-        let [x] = f32_operands(OP, self.exec(), [input])?;
-        gemma_ops::gelu_tanh_forward(OP, &self.budget, self.exec(), x, input.shape())
-    }
-
-    fn gelu_tanh_backward(
-        &self,
-        input: &Tensor,
-        grad_output: &Tensor,
-    ) -> Result<Tensor, OjasError> {
-        const OP: &str = "gelu_tanh_backward";
-        gelu_tanh_backward_dims(input, grad_output)?;
-        let [x, gy] = f32_operands(OP, self.exec(), [input, grad_output])?;
-        gemma_ops::gelu_tanh_backward(OP, &self.budget, self.exec(), x, gy, input.shape())
-    }
-
-    fn seq_mean_forward(&self, x: &Tensor, key_lens: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "seq_mean_forward";
-        let dims = seq_mean_forward_dims(x, key_lens)?;
-        let [values] = f32_operands(OP, self.exec(), [x])?;
-        let lens = u32_values(OP, key_lens)?;
-        gemma_ops::seq_mean_forward(OP, &self.budget, self.exec(), values, lens, dims)
-    }
-
-    /// The backward reads the gradient and the lengths, never `x`'s values,
-    /// so only the gradient is scanned for a non-finite value.
-    fn seq_mean_backward(
-        &self,
-        x: &Tensor,
-        key_lens: &Tensor,
-        grad_output: &Tensor,
-    ) -> Result<Tensor, OjasError> {
-        const OP: &str = "seq_mean_backward";
-        let dims = seq_mean_backward_dims(x, key_lens, grad_output)?;
-        let [grad] = f32_operands(OP, self.exec(), [grad_output])?;
-        let lens = u32_values(OP, key_lens)?;
-        gemma_ops::seq_mean_backward(OP, &self.budget, self.exec(), grad, lens, dims, x.shape())
-    }
-
-    fn l2_normalize_forward(&self, x: &Tensor, eps: f32) -> Result<Tensor, OjasError> {
-        const OP: &str = "l2_normalize_forward";
-        let dims = l2_normalize_forward_dims(x, eps)?;
-        let [values] = f32_operands(OP, self.exec(), [x])?;
-        gemma_ops::l2_normalize_forward(OP, &self.budget, self.exec(), values, dims, eps, x.shape())
-    }
-
-    fn l2_normalize_backward(
-        &self,
-        x: &Tensor,
-        grad_output: &Tensor,
-        eps: f32,
-    ) -> Result<Tensor, OjasError> {
-        const OP: &str = "l2_normalize_backward";
-        let dims = l2_normalize_backward_dims(x, grad_output, eps)?;
-        let [values, grad] = f32_operands(OP, self.exec(), [x, grad_output])?;
-        gemma_ops::l2_normalize_backward(
-            OP,
-            &self.budget,
-            self.exec(),
-            values,
-            grad,
-            dims,
-            eps,
-            x.shape(),
-        )
     }
 }

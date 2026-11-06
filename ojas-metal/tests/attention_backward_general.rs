@@ -18,7 +18,9 @@
 mod common;
 
 use common::*;
-use ojas_core::{AttentionGrad, AttentionOpts, Backend, BackendId, Budget, OjasError, Tensor};
+use ojas_core::{
+    AttentionGrad, AttentionOpts, BackendCore, BackendId, BackendModule, Budget, OjasError, Tensor,
+};
 use ojas_metal::MetalBackend;
 
 #[derive(Clone, Debug)]

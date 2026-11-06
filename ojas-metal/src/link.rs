@@ -188,8 +188,13 @@ pub(crate) enum ReadAs {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Lane {
     /// tessl `GemmOperands::ExactF32`: f32 operands, exact products, the
-    /// 1-simdgroup tile.
+    /// 1-simdgroup tile. Fast untagged f32 uses this. It is not the
+    /// ascending-k contract.
     ExactF32,
+    /// [`Numerics::Exact`](ojas_core::Numerics::Exact) linear products:
+    /// tessl `gemm_fixed_order_*`, one output per thread, ascending k.
+    /// Not TensorOps, and not stolen by the bf16-accumulation flag.
+    FixedOrder,
     /// Both operands bf16-exact (`Tensor::bf16_exact`, what `Autocast`
     /// hands its inner backend): tessl `GemmOperands::Bf16`, the
     /// 4-simdgroup cooperative TensorOps kernels (128×64 or 64×64 NN, the
@@ -219,7 +224,7 @@ impl Lane {
     /// [`Lane::Bf16Accum`]. `None` on overflow.
     pub(crate) fn copies(self, a: usize, b: usize) -> Option<usize> {
         match self {
-            Self::ExactF32 | Self::Bf16Accum => Some(0),
+            Self::ExactF32 | Self::Bf16Accum | Self::FixedOrder => Some(0),
             Self::Bf16 => a.div_ceil(2).checked_add(b.div_ceil(2)),
         }
     }

@@ -16,7 +16,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{group_norm_forward_dims, Backend, Budget, OjasError, Tensor};
+use ojas_core::{group_norm_forward_dims, BackendCore, BackendModule, Budget, OjasError, Tensor};
 use ojas_metal::MetalBackend;
 
 const EPS: f32 = 1e-5;

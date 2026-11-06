@@ -3,7 +3,7 @@
 //! `ojas_core::rank_logits` has it), then column ascending, against a full
 //! sort of the row by the same order.
 
-use ojas_core::{Backend, Budget, DType, OjasError, Tensor};
+use ojas_core::{BackendInt, BackendModule, Budget, DType, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 
 mod common;

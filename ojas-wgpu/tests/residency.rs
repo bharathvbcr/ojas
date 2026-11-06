@@ -9,7 +9,10 @@ mod common;
 use std::sync::Mutex;
 
 use common::*;
-use ojas_core::{AdamWConfig, Backend, BackendId, DType, Tensor, RMS_NORM_EPS};
+use ojas_core::{
+    AdamWConfig, Backend, BackendCore, BackendFloat, BackendId, BackendModule, DType, Tensor,
+    RMS_NORM_EPS,
+};
 
 static SERIAL: Mutex<()> = Mutex::new(());
 

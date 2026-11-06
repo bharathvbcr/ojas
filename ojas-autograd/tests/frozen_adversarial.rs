@@ -6,7 +6,7 @@ mod common;
 
 use common::{bits, data};
 use ojas_autograd::Tape;
-use ojas_core::{Backend, Budget, CeChunk, Numerics, Tensor};
+use ojas_core::{BackendModule, Budget, CeChunk, Numerics, Tensor};
 use ojas_cpu::CpuBackend;
 
 const BIG: u64 = 1 << 30;

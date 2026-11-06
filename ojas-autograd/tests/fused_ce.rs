@@ -11,7 +11,7 @@ mod common;
 
 use common::{bits, ce, data, lin, Fused, Resident, Rng};
 use ojas_autograd::{central_diff, gradients_match, Tape, Var};
-use ojas_core::{Backend, BackendId, Budget, CeChunk, Numerics, OjasError, Tensor};
+use ojas_core::{Backend, BackendCore, BackendId, Budget, CeChunk, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 
 const CHUNK: CeChunk = CeChunk { rows: 2, cols: 3 };

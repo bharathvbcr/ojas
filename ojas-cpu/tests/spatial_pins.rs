@@ -5,7 +5,7 @@
 
 mod common;
 
-use ojas_core::{Backend, Budget, Conv2dParams, ConvTranspose2dParams, Numerics, Tensor};
+use ojas_core::{BackendModule, Budget, Conv2dParams, ConvTranspose2dParams, Numerics, Tensor};
 use ojas_cpu::CpuBackend;
 
 fn cpu() -> CpuBackend {

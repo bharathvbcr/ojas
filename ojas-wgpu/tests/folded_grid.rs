@@ -14,7 +14,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{Backend, Tensor};
+use ojas_core::{BackendCore, BackendFloat, BackendModule, Tensor};
 use ojas_wgpu::WgpuBackend;
 
 const CHUNK: usize = 4096;

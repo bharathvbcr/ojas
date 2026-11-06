@@ -9,7 +9,7 @@ mod common;
 
 use common::{bits, data};
 use ojas_autograd::Tape;
-use ojas_core::{Backend, Budget, Numerics, Tensor};
+use ojas_core::{BackendCore, BackendModule, Budget, Numerics, Tensor};
 use ojas_cpu::CpuBackend;
 
 const BIG: u64 = 1 << 28;

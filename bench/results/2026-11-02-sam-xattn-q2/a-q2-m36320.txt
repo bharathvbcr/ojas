@@ -1,0 +1,14 @@
+# load_start 5.80 6.97 6.97
+row	arm	p10_ms	median_ms	p90_ms	median_ms_A'	gap_ms	spread_ms	pair	note
+control fc1 [5184,1024]x[4736,1024]	fc1 linear f32 (control)	8.037	8.306	8.788	8.348	0.042	0.942	ok	6.05 TFLOP/s
+# control 6.05 TFLOP/s outside 6.11 to 6.49
+# observable memory cross m=36320 | the flash kernel ran if the dispatcher's call is at least 3x faster than the same call forced onto the scalar kernel: dispatcher 48.82 ms, forced scalar 2106.55 ms, ratio 43.2x -> confirmed
+memory cross m=36320	flash	50.290	52.600	54.846	52.227	0.373	5.219	ok	3.67 TFLOP/s on the useful work
+memory cross m=36320	split-K	286.067	294.016	304.881	294.884	0.868	18.814	ok	0.66 TFLOP/s on the useful work
+memory cross m=36320	pad-q	284.482	294.838	303.810	294.240	0.598	19.550	ok	0.65 TFLOP/s on the useful work
+# row memory cross m=36320 | dispatcher-vs-splitK max abs out 1.54e-7 lse 6.68e-6 vs scalar out 1.33e-7 lse 1.34e-5 vs pad-q 2.79e-8 dispatches dispatcher 6 split-K 7 scalar 6; kernels dispatcher Ran { flash: 1, scalar: 0, part: 0, combine: 0 } split-K Ran { flash: 0, scalar: 0, part: 1, combine: 1 } scalar Ran { flash: 0, scalar: 1, part: 0, combine: 0 } forced flash 6 Ran { flash: 1, scalar: 0, part: 0, combine: 0 } flash-vs-scalar time ratio 43.2x | dispatcher - splitK = -241.416 ms (noise bar 18.814) no regression
+# row memory cross m=36320 | pad-q - dispatcher = 242.238 ms (noise bar 19.328), dispatcher faster in 50/50 paired samples; better of split-K and pad-q = 294.016 ms
+# stand-in memory cross m=36320 | dispatcher / pad-q = 0.178 x quiet pad-q 281.832 ms = 50.28 ms (gate 45 ms: missed); pad-q arm 294.84 ms against its quiet anchor 281.83 ms (x1.05)
+# load_end 6.76 7.03 6.99
+# noisy_pairs 0
+# verdict repeat

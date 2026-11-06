@@ -8,7 +8,7 @@ mod qwen35_common;
 
 use std::panic::catch_unwind;
 
-use ojas_core::{Backend, OjasError, Tensor};
+use ojas_core::{Backend, BackendCore, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 use ojas_model::qwen35::{bind, forward_hidden, gather_rows, Qwen35Tables, RightPadded};
 use ojas_model::{ActivationCheckpoint, Eval, Graph};

@@ -19,7 +19,8 @@
 use ojas_core::{
     adamw_step_dims, clip_grad_norm_dims, cross_entropy_mean_backward_dims,
     cross_entropy_mean_forward_dims, embedding_backward_dims, embedding_forward_dims,
-    muon_ns5_step_dims, AdamWConfig, Backend, Budget, MuonNs5Config, OjasError, Tensor,
+    muon_ns5_step_dims, AdamWConfig, BackendFloat, BackendModule, Budget, MuonNs5Config, OjasError,
+    Tensor,
 };
 use ojas_cpu::CpuBackend;
 

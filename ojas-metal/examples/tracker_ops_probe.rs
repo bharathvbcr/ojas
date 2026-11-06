@@ -29,7 +29,7 @@ mod probe {
     use std::process::Command;
     use std::time::Instant;
 
-    use ojas_core::{Backend, Budget, Tensor};
+    use ojas_core::{BackendCore, BackendFloat, BackendModule, Budget, Tensor};
     use ojas_metal::MetalBackend;
 
     const KERNELS: [&str; 4] = [

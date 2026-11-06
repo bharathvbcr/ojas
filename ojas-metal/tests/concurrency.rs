@@ -14,7 +14,7 @@ use std::thread;
 use std::time::Duration;
 
 use common::*;
-use ojas_core::{AdamWConfig, Backend, Tensor};
+use ojas_core::{AdamWConfig, BackendFloat, BackendModule, Tensor};
 use ojas_metal::MetalBackend;
 
 const WATCHDOG: Duration = Duration::from_secs(300);

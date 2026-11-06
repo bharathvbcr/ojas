@@ -11,7 +11,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{Backend, OjasError};
+use ojas_core::{BackendCore, BackendFloat, BackendModule, OjasError};
 
 const EPS: f32 = 1e-5;
 

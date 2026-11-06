@@ -32,7 +32,7 @@
 //! was recorded, and a macOS update that changes `ln` would move it.
 //! Elsewhere its thread-count check still runs.
 
-use ojas_core::{AdamWConfig, Backend, Budget, MuonNs5Config, Numerics, Tensor};
+use ojas_core::{AdamWConfig, BackendModule, Budget, MuonNs5Config, Numerics, Tensor};
 use ojas_cpu::CpuBackend;
 
 mod common;

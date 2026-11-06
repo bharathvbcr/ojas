@@ -26,7 +26,7 @@
 use ojas_core::{
     broadcast_add_backward_dims, broadcast_mul_backward_dims, broadcast_shapes,
     channel_layer_norm_backward_dims, gelu_erf_backward_dims, layer_norm_backward_dims,
-    linear_bias_backward_dims, softmax_backward_dims, AffineGrad, Backend, BroadcastDims,
+    linear_bias_backward_dims, softmax_backward_dims, AffineGrad, BackendModule, BroadcastDims,
     OjasError, Tensor,
 };
 
@@ -108,7 +108,7 @@ impl MetalBackend {
             let shape = [dims.batch, dims.channels];
             let flat = input.reshape(&shape)?;
             let gy = grad_output.reshape(&shape)?;
-            let g = Backend::layer_norm_backward(self, &flat, weight, bias, &gy, eps)?;
+            let g = self.layer_norm_backward(&flat, weight, bias, &gy, eps)?;
             return Ok(AffineGrad {
                 input: g.input.reshape(input.shape())?,
                 ..g
@@ -236,7 +236,7 @@ impl MetalBackend {
     ) -> Res<AffineGrad> {
         const OP: &str = "linear_bias_backward";
         let dims = linear_bias_backward_dims(input, weight, bias, grad_output)?;
-        let (gx, gw) = Backend::linear_backward(self, input, weight, grad_output)?;
+        let (gx, gw) = self.linear_backward(input, weight, grad_output)?;
         let gy = self.widened(grad_output)?;
         let rows = gy.reshape(&[dims.rows, dims.out_features])?;
         let (g, bias_arg) = (self.f32(OP, &rows)?, self.f32(OP, bias)?);

@@ -6,7 +6,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use ojas_core::{Backend, Budget, OjasError, CPU_THREAD_CEILING, RMS_NORM_EPS};
+use ojas_core::{BackendModule, Budget, OjasError, CPU_THREAD_CEILING, RMS_NORM_EPS};
 use ojas_cpu::{CpuBackend, GradAccumulator};
 
 fn bits(v: &[f32]) -> Vec<u32> {

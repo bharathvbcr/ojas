@@ -20,7 +20,10 @@
 mod common;
 
 use common::{bits, down, host, metal, ok, rand, up};
-use ojas_core::{bf16_to_f32, f32_to_bf16, Autocast, AutocastMode, Backend, OjasError, Tensor};
+use ojas_core::{
+    bf16_to_f32, f32_to_bf16, Autocast, AutocastMode, BackendCore, BackendFloat, BackendModule,
+    OjasError, Tensor,
+};
 use ojas_metal::MetalBackend;
 
 /// The fc1 shape's ragged neighbour: rows and `n` off every tile edge, `k`

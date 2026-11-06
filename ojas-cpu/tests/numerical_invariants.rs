@@ -11,8 +11,8 @@ mod common;
 
 use common::{f32t, u32t, SplitMix64};
 use ojas_core::{
-    round_f32_to_bf16, AttentionOpts, Autocast, AutocastMode, Backend, Budget, GdnInputs,
-    MuonNs5Config, Numerics, OjasError, Tensor, GDN_CHECKPOINT_TOKENS,
+    round_f32_to_bf16, AttentionOpts, Autocast, AutocastMode, BackendCore, BackendModule, Budget,
+    GdnInputs, MuonNs5Config, Numerics, OjasError, Tensor, GDN_CHECKPOINT_TOKENS,
 };
 use ojas_cpu::{
     causal_sdpa_backward_gauge_projected, check_i8_accumulator_bound,

@@ -8,7 +8,9 @@
 mod common;
 
 use common::*;
-use ojas_core::{inverse_permutation, Backend, BackendId, Budget, DType, OjasError, Tensor};
+use ojas_core::{
+    inverse_permutation, BackendCore, BackendFloat, BackendId, Budget, DType, OjasError, Tensor,
+};
 use ojas_wgpu::WgpuBackend;
 
 /// Bit patterns arithmetic would disturb: quiet and signalling NaN payloads,

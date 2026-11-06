@@ -7,7 +7,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{Backend, Budget, OjasError};
+use ojas_core::{BackendCore, BackendFloat, BackendModule, Budget, OjasError};
 use ojas_metal::{MetalBackend, WaitCounts};
 
 /// Open `m` with nothing recorded, so the next wait is the one under test.

@@ -6,7 +6,7 @@
 //! not change bits. A duplicate id copies the same row twice on the forward
 //! path and adds in token order on the backward path.
 
-use ojas_core::{Backend, Budget, DType, Tensor};
+use ojas_core::{BackendModule, Budget, DType, Tensor};
 use ojas_cpu::CpuBackend;
 
 mod common;

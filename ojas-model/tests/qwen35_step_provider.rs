@@ -31,7 +31,10 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
-use ojas_core::{forward_backend_methods, Backend, BackendId, DType, Numerics, Tensor};
+use ojas_core::{
+    forward_backend_methods, BackendCore, BackendFloat, BackendId, BackendInt, BackendModule,
+    DType, Numerics, Tensor,
+};
 use ojas_cpu::CpuBackend;
 use ojas_io::sha256::open_sha256_hex;
 use ojas_io::SafeTensors;
@@ -712,12 +715,24 @@ macro_rules! all_but_id {
     };
 }
 
-impl Backend for DeviceLike {
-    ojas_core::with_backend_methods!(forward_backend_methods, { self, self.0, none, all_but_id });
+impl BackendCore for DeviceLike {
+    ojas_core::with_backend_methods!(forward_backend_methods, { self, self.0, none, all_but_id, core});
 
     fn id(&self) -> BackendId {
         BackendId::Metal
     }
+}
+
+impl BackendFloat for DeviceLike {
+    ojas_core::with_backend_methods!(forward_backend_methods, { self, self.0, none, all_but_id, float});
+}
+
+impl BackendInt for DeviceLike {
+    ojas_core::with_backend_methods!(forward_backend_methods, { self, self.0, none, all_but_id, int});
+}
+
+impl BackendModule for DeviceLike {
+    ojas_core::with_backend_methods!(forward_backend_methods, { self, self.0, none, all_but_id, module});
 }
 
 fn device_like() -> DeviceLike {

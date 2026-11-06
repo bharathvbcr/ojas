@@ -12,7 +12,7 @@ mod common;
 
 use common::{bits, on, record, serial, Resident};
 use ojas_autograd::Tape;
-use ojas_core::{Backend, BackendId, Budget, Numerics, OjasError, Tensor};
+use ojas_core::{BackendCore, BackendId, Budget, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 
 fn reference(doubled: bool) -> (Vec<u32>, [Vec<u32>; 3]) {

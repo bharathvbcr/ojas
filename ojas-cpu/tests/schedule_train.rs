@@ -1,7 +1,7 @@
 //! Cosine multiplier, accumulation, and the Muon/AdamW split.
 //! These assertions do not compile against a crate that only has bare AdamW and Muon steps.
 
-use ojas_core::{AdamWConfig, Backend, Budget, MuonNs5Config, OjasError, Tensor};
+use ojas_core::{AdamWConfig, BackendModule, Budget, MuonNs5Config, OjasError, Tensor};
 use ojas_cpu::{
     clip_grads, mean_micrograds, optim_group, scaled_lr, CosineSchedule, CpuBackend,
     GradAccumulator, HybridOptimizer, HybridParam, OptimGroup, ADAM_HYBRID_WEIGHT_DECAY,

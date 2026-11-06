@@ -20,8 +20,9 @@ use crate::kernels::{
     icb_tape_note_commit_shared_sliding, icb_tape_note_commit_sliding, icb_tape_set_kv_ctx_global,
     icb_tape_set_kv_ctx_shared_global, icb_tape_set_kv_ctx_shared_sliding,
     icb_tape_set_kv_ctx_sliding, kv_ring_densify, kv_store_timestep_pair_off, mlp_gelu_tanh,
-    mlp_gelu_tanh_bf16, mlp_gelu_tanh_bf16_up_at, ple_lookup, ple_lookup_q4_mlx,
-    ple_lookup_q4_mlx_residual, ple_residual_add,
+    emit_bf16_tail_enabled, mlp_gelu_tanh_bf16, mlp_gelu_tanh_bf16_up_at, ple_lookup,
+    ple_lookup_q4_mlx,
+    ple_lookup_q4_mlx_residual, ple_residual_add, rms_norm_residual_add_f32_scaled,
     fuse_ple_residual_enabled, fuse_rope_kv_enabled, persistent_interp_enabled,
     persistent_interp_fa_o_proj, persistent_interp_fa_o_proj_program, persistent_interp_gate_down,
     persistent_interp_gate_down_program, persistent_interp_gate_down_q4, prepare_act_bf16,
@@ -675,15 +676,29 @@ impl GpuKvSlot {
 
     /// FA-ready K/V handles.
     ///
-    /// Sliding rings **always** densify into scratch (even before wrap) so Binder
-    /// tape / IcbScalarPool cursor shape matches across ring wrap. Non-ring
-    /// slots return live buffers (no densify cmds).
+    /// Sliding rings densify into scratch only when the live window does not start
+    /// at physical row 0, except under decode ICB replay, which always densifies so
+    /// the Binder tape / IcbScalarPool cursor shape matches across ring wrap.
+    /// Non-ring slots return live buffers (no densify cmds).
     fn fa_buffers(
         &self,
         gpu: &GemmaGpu,
         k_scratch: &GpuBuffer,
         v_scratch: &GpuBuffer,
         tkv_limit: u32,
+    ) -> Result<(GpuBuffer, GpuBuffer, u32, u32)> {
+        let in_place_ok = !(crate::kernels::encode_once_enabled() && tessl::decode_icb_enabled());
+        self.fa_buffers_with(gpu, k_scratch, v_scratch, tkv_limit, in_place_ok)
+    }
+
+    /// [`Self::fa_buffers`] with the decode-ICB choice made by the caller.
+    fn fa_buffers_with(
+        &self,
+        gpu: &GemmaGpu,
+        k_scratch: &GpuBuffer,
+        v_scratch: &GpuBuffer,
+        tkv_limit: u32,
+        in_place_ok: bool,
     ) -> Result<(GpuBuffer, GpuBuffer, u32, u32)> {
         let filled = self.live_len_u32()?;
         if filled == 0 {
@@ -701,6 +716,12 @@ impl GpuKvSlot {
         } else {
             0
         };
+        // A window that starts at physical row 0 is already the dense [tkv] prefix the
+        // densify would copy out, in the same order: read the ring in place. Decode ICB
+        // replay keeps the copy so its tape has one shape on both sides of a wrap.
+        if start == 0 && in_place_ok {
+            return Ok((self.k.clone(), self.v.clone(), kv_pos_offset, tkv));
+        }
         let storage_capacity = self.storage_capacity_u32();
         let tkv_usize = usize::try_from(tkv)
             .map_err(|_| Error::Kv("GPU KV densify length exceeds usize".into()))?;
@@ -1690,10 +1711,11 @@ impl GpuDecodeSession {
             k_dense: alloc(max_kv_elems)?,
             v_dense: alloc(max_kv_elems)?,
             ple_out: alloc(ple_dim * vm_act)?,
-            ple_all: alloc(ple_dim * cfg.num_hidden_layers.max(1))?,
-            ple_all_n: alloc(ple_dim * cfg.num_hidden_layers.max(1))?,
-            ple_g: alloc(ple_dim)?,
-            ple_gg: alloc(ple_dim)?,
+            // One row per token of a verify block (decode uses row 0).
+            ple_all: alloc(ple_dim * cfg.num_hidden_layers.max(1) * vm_act)?,
+            ple_all_n: alloc(ple_dim * cfg.num_hidden_layers.max(1) * vm_act)?,
+            ple_g: alloc(ple_dim * vm_act)?,
+            ple_gg: alloc(ple_dim * vm_act)?,
             seed_tok: model.gpu.rt.alloc_buffer(4).map_err(Error::Metal)?,
             argmax_tok: model.gpu.rt.alloc_buffer(4).map_err(Error::Metal)?,
             pos_buf: model.gpu.rt.alloc_buffer(4).map_err(Error::Metal)?,
@@ -1936,7 +1958,15 @@ impl GpuDecodeSession {
     /// folded in: `x = layer_scalar * (x + post_per_layer_input_norm(per_layer_projection(
     /// gelu_tanh(per_layer_input_gate(x)) * ple[li])))`, `ple` from
     /// [`Self::project_per_layer_inputs`].
-    fn per_layer_input_block(&self, li: usize, layer_scalar: f32) -> Result<()> {
+    /// `x_bf16_ready`: the FFN residual tail already wrote bf16(x) into the activation
+    /// scratch. `next_input_norm`: also write the next layer's normed bf16 input there.
+    fn per_layer_input_block(
+        &self,
+        li: usize,
+        layer_scalar: f32,
+        x_bf16_ready: bool,
+        next_input_norm: Option<&GpuBuffer>,
+    ) -> Result<()> {
         let gpu = &self.model.gpu;
         let block = self.model.layers[li]
             .ple_block
@@ -1953,30 +1983,161 @@ impl GpuDecodeSession {
         crate::trace_op!("ple_block", format!("layer={li} ple_dim={ple_dim}"), {
             // RAW on x (FFN residual) before the gate reads it.
             barrier()?;
-            block.gate.gemv(gpu, &self.x, &self.ple_g)?;
+            if x_bf16_ready {
+                let x_bf16 = gpu.act_bf16_scratch(self.model.hidden)?;
+                block.gate.gemv_bf16_x(gpu, &x_bf16, &self.ple_g)?;
+            } else {
+                block.gate.gemv(gpu, &self.x, &self.ple_g)?;
+            }
             barrier()?;
             // gelu(gate) * ple[li] as bf16 (`ple_gg` holds ple_dim bf16 in its f32 capacity).
             // Folding this into the gate GEMV's epilogue measured slower (README, v3).
             mlp_gelu_tanh_bf16_up_at(
                 gpu,
                 &self.ple_g,
+                0,
                 &self.ple_all_n,
                 li * ple_dim as usize,
                 &self.ple_gg,
+                0,
                 ple_dim,
             )?;
             barrier()?;
-            block.proj.gemv_postnorm_add_into_bf16_x_scaled(
-                gpu,
-                &self.ple_gg,
-                &self.x,
-                &self.attn_proj,
-                &block.post_norm,
-                eps,
-                layer_scalar,
-            )?;
+            if let Some(next_norm) = next_input_norm {
+                block.proj.gemv_postnorm_add_emit_bf16(
+                    gpu,
+                    &self.ple_gg,
+                    &self.x,
+                    &self.attn_proj,
+                    &block.post_norm,
+                    Some(next_norm),
+                    &gpu.act_bf16_scratch(self.model.hidden)?,
+                    eps,
+                    layer_scalar,
+                )?;
+            } else {
+                block.proj.gemv_postnorm_add_into_bf16_x_scaled(
+                    gpu,
+                    &self.ple_gg,
+                    &self.x,
+                    &self.attn_proj,
+                    &block.post_norm,
+                    eps,
+                    layer_scalar,
+                )?;
+            }
         });
         Ok(())
+    }
+
+    /// [`Self::project_per_layer_inputs`] for the `m` tokens of a verify block (`x` rows
+    /// and `verify_seeds`): row `mi` of `ple_all_n` is `[L * ple_dim]` for token `mi`.
+    fn project_per_layer_inputs_m(&self, m: usize) -> Result<()> {
+        let (Some((proj, norm)), Some(table)) = (&self.model.ple_model_proj, &self.model.ple_q4)
+        else {
+            return Err(Error::Config(
+                "verify per-layer inputs need the projection and table".into(),
+            ));
+        };
+        let gpu = &self.model.gpu;
+        let ple_dim = self.model.cfg.hidden_size_per_layer_input as u32;
+        let n_layers = self.model.layers.len() as u32;
+        let m_u = m as u32;
+        let barrier = || -> Result<()> {
+            if tessl::ab_flags::need_barrier(true) {
+                gpu.barrier()?;
+            }
+            Ok(())
+        };
+        barrier()?;
+        let x_bf16 = prepare_act_bf16(gpu, &self.x, m_u * self.model.hidden as u32)?;
+        barrier()?;
+        proj.gemm_bf16_x(gpu, &x_bf16, &self.ple_all, m_u)?;
+        barrier()?;
+        rms_norm_f32(
+            gpu,
+            &self.ple_all,
+            norm,
+            &self.ple_all_n,
+            m_u * n_layers,
+            ple_dim,
+            self.model.eps,
+        )?;
+        barrier()?;
+        ple_lookup_q4_mlx(
+            gpu,
+            &self.verify_seeds,
+            &table.packed,
+            &table.scales,
+            &table.zeros,
+            &self.ple_all,
+            n_layers * ple_dim,
+            self.model.vocab as u32,
+            m_u,
+            (ple_dim as f32).sqrt(),
+            0,
+            1,
+            table.group_size,
+        )?;
+        barrier()?;
+        ple_residual_add(
+            gpu,
+            &self.ple_all_n,
+            &self.ple_all,
+            1.0,
+            m_u * n_layers * ple_dim,
+        )
+    }
+
+    /// [`Self::per_layer_input_block`] over the `m` rows of a verify block, with the same
+    /// arithmetic in separate dispatches: `x = layer_scalar * (x + post_norm(proj(
+    /// gelu_tanh(gate(x)) * ple[mi, li])))`.
+    fn per_layer_input_block_m(&self, li: usize, layer_scalar: f32, m: usize) -> Result<()> {
+        let gpu = &self.model.gpu;
+        let block = self.model.layers[li]
+            .ple_block
+            .as_ref()
+            .ok_or_else(|| Error::Config(format!("layer {li}: no per-layer input block")))?;
+        let ple_dim = self.model.cfg.hidden_size_per_layer_input;
+        let n_layers = self.model.layers.len();
+        let hidden = self.model.hidden as u32;
+        let m_u = m as u32;
+        let barrier = || -> Result<()> {
+            if tessl::ab_flags::need_barrier(true) {
+                gpu.barrier()?;
+            }
+            Ok(())
+        };
+        barrier()?;
+        let x_bf16 = prepare_act_bf16(gpu, &self.x, m_u * hidden)?;
+        barrier()?;
+        block.gate.gemm_bf16_x(gpu, &x_bf16, &self.ple_g, m_u)?;
+        barrier()?;
+        crate::kernels::gelu_mul_rows_bf16(
+            gpu,
+            &self.ple_g,
+            &self.ple_all_n,
+            li * ple_dim,
+            n_layers * ple_dim,
+            &self.ple_gg,
+            ple_dim as u32,
+            m_u,
+        )?;
+        barrier()?;
+        block
+            .proj
+            .gemm_bf16_x(gpu, &self.ple_gg, &self.attn_proj, m_u)?;
+        barrier()?;
+        rms_norm_residual_add_f32_scaled(
+            gpu,
+            &self.attn_proj,
+            &block.post_norm,
+            &self.x,
+            m_u,
+            hidden,
+            self.model.eps,
+            layer_scalar,
+        )
     }
 
     fn embed_x_from_seed(&self, h: usize) -> Result<()> {
@@ -2260,6 +2421,9 @@ impl GpuDecodeSession {
         } else {
             0..n_layers
         };
+        // Set when the previous layer's residual tail already wrote this layer's normed bf16
+        // input (`rms_norm_residual_add_emit_bf16`), so `rms_input` is skipped.
+        let mut input_bf16_ready = false;
         for li in layer_iter {
             tessl::dispatch_stamps::set_stamp_layer(li as i32);
             let (
@@ -2302,6 +2466,14 @@ impl GpuDecodeSession {
                 && self.model.ple_q4.is_some();
             let use_gemma4_dual_norm =
                 has_pre_ff && (!has_ple || ple_full || crate::kernels::e4b_dual_norm_enabled());
+            // Residual tails also write the next GEMV's bf16 input (dual-norm decode with the
+            // per-layer input block; the legacy lookup-residual sits between o_proj and the MLP).
+            let emit_tail = emit_bf16_tail_enabled()
+                && fuse_bf16_rms()
+                && fuse_dual_norm_enabled()
+                && use_gemma4_dual_norm
+                && ple_full;
+            let input_ready = std::mem::take(&mut input_bf16_ready);
             let _layer_scope = InferScope::begin(
                 format!("layer[{li}]"),
                 format!(
@@ -2330,7 +2502,9 @@ impl GpuDecodeSession {
                     "rms_input",
                     format!("layer={li} pos={pos} hidden={hidden} bytes≈{}", diag::fmt_bytes((hidden as u64) * 4)),
                     {
-                        if fuse_bf16_rms() {
+                        if input_ready {
+                            // Written by the previous layer's residual tail.
+                        } else if fuse_bf16_rms() {
                             let _ = rms_norm_to_act_bf16(
                                 gpu,
                                 &self.x,
@@ -2990,7 +3164,22 @@ impl GpuDecodeSession {
                     {
                         if use_gemma4_dual_norm {
                             // MLX Gemma4: o = post_attention_ln(o_proj); x += o
-                            if fuse_dual_norm_enabled() {
+                            if emit_tail {
+                                // ... and write the pre-FFN normed input (`rms_pre_ff`).
+                                let mlp_in_norm =
+                                    layer.pre_ff_norm.as_ref().unwrap_or(&layer.post_attn_norm);
+                                layer.o_proj.gemv_postnorm_add_emit_bf16(
+                                    gpu,
+                                    &o_bf16,
+                                    &self.x,
+                                    &self.attn_proj,
+                                    &layer.post_attn_norm,
+                                    Some(mlp_in_norm),
+                                    &gpu.act_bf16_scratch(hidden as usize)?,
+                                    eps,
+                                    1.0,
+                                )?;
+                            } else if fuse_dual_norm_enabled() {
                                 layer.o_proj.gemv_postnorm_add_into_bf16_x(
                                     gpu,
                                     &o_bf16,
@@ -3167,7 +3356,9 @@ impl GpuDecodeSession {
                     "rms_pre_ff",
                     format!("layer={li} hidden={hidden} gemma4={has_pre_ff}"),
                     {
-                        if fuse_bf16_rms() {
+                        if emit_tail {
+                            // Written by the o_proj residual tail.
+                        } else if fuse_bf16_rms() {
                             let _ = rms_norm_to_act_bf16(
                                 gpu,
                                 &self.x,
@@ -3398,15 +3589,30 @@ impl GpuDecodeSession {
                                     } else {
                                         1.0
                                     };
-                                    layer.down_proj.gemv_postnorm_add_into_bf16_x_scaled(
-                                        gpu,
-                                        &mid_bf16,
-                                        &self.x,
-                                        &self.down,
-                                        w,
-                                        eps,
-                                        fold_scale,
-                                    )?;
+                                    if emit_tail {
+                                        // ... and write bf16(x) for the per-layer gate.
+                                        layer.down_proj.gemv_postnorm_add_emit_bf16(
+                                            gpu,
+                                            &mid_bf16,
+                                            &self.x,
+                                            &self.down,
+                                            w,
+                                            None,
+                                            &gpu.act_bf16_scratch(hidden as usize)?,
+                                            eps,
+                                            fold_scale,
+                                        )?;
+                                    } else {
+                                        layer.down_proj.gemv_postnorm_add_into_bf16_x_scaled(
+                                            gpu,
+                                            &mid_bf16,
+                                            &self.x,
+                                            &self.down,
+                                            w,
+                                            eps,
+                                            fold_scale,
+                                        )?;
+                                    }
                                 } else {
                                     layer.down_proj.gemv_bf16_x(gpu, &mid_bf16, &self.down)?;
                                     if tessl::ab_flags::need_barrier(true) {
@@ -3438,7 +3644,18 @@ impl GpuDecodeSession {
                 );
                 } // !use_fuse_gate_down
                 if ple_full {
-                    self.per_layer_input_block(li, layer_scalar)?;
+                    let next_input_norm = if emit_tail && li + 1 < n_layers {
+                        Some(self.model.layers[li + 1].input_norm.clone())
+                    } else {
+                        None
+                    };
+                    self.per_layer_input_block(
+                        li,
+                        layer_scalar,
+                        emit_tail,
+                        next_input_norm.as_ref(),
+                    )?;
+                    input_bf16_ready = next_input_norm.is_some();
                 }
                 // MLX: layer_scalar multiplies full layer output after both residuals.
                 // Skipped when folded into the per-layer input block or the fused down-proj
@@ -4409,6 +4626,10 @@ impl GpuDecodeSession {
             self.verify_seeds.write_u32(&slot);
         }
         self.embed_verify_tokens(m, h_usz)?;
+        let ple_full_model = self.model.ple_model_proj.is_some() && self.model.ple_q4.is_some();
+        if ple_full_model {
+            self.project_per_layer_inputs_m(m)?;
+        }
 
         // Device capture staging: M rows × n_cap × H (no mid-layer host sync —
         // matches M=1 `copy_f32` path; prior synchronize+read_f32 was exactness-toxic).
@@ -4463,8 +4684,11 @@ impl GpuDecodeSession {
             // Must match `step_inner`: Gemma4 dual residual-norms + layer_scalar
             // when pre_ff exists and the layer has no PLE (31B Hot). E4B/PLE keeps
             // the fused Pre-LN add-into path so GEMM verify stays bit-aligned with M=1.
+            // As in `step_inner`: the real per-layer input block runs after the FFN, so the
+            // layer takes Gemma4's dual norms; without it, the legacy lookup stand-in.
+            let ple_full = ple_full_model && self.model.layers[li].ple_block.is_some();
             let use_gemma4_dual_norm =
-                has_pre_ff && (!has_ple || crate::kernels::e4b_dual_norm_enabled());
+                has_pre_ff && (!has_ple || ple_full || crate::kernels::e4b_dual_norm_enabled());
 
             {
                 let gpu = &self.model.gpu;
@@ -4686,7 +4910,7 @@ impl GpuDecodeSession {
                         .gemm_add_into_bf16_x(gpu, &o_bf16, &self.x, m_u)?;
                 }
 
-                if has_ple {
+                if has_ple && !ple_full {
                     // PLE is per-token; fall back to M× lookups into x rows.
                     let ple_dim = ple_dim_cfg as u32;
                     let scale = (ple_dim as f32).sqrt();
@@ -4824,7 +5048,9 @@ impl GpuDecodeSession {
                     // MLX Gemma4: h = post_ff_ln(down); x += h
                     if let Some(ref w) = layer.post_ff_norm {
                         if fuse_dual_norm_enabled() {
-                            let fold_scale = if (layer_scalar - 1.0).abs() > 1e-8 {
+                            // The per-layer input block, when present, is the last residual
+                            // and takes the scalar instead.
+                            let fold_scale = if !ple_full && (layer_scalar - 1.0).abs() > 1e-8 {
                                 layer_scalar
                             } else {
                                 1.0
@@ -4863,8 +5089,12 @@ impl GpuDecodeSession {
                     }
                 }
 
+                if ple_full {
+                    self.per_layer_input_block_m(li, layer_scalar, m)?;
+                }
                 // MLX: layer_scalar multiplies full layer output after both residuals.
-                let folded = fuse_dual_norm_enabled() && use_gemma4_dual_norm && has_post_ff;
+                let folded =
+                    ple_full || (fuse_dual_norm_enabled() && use_gemma4_dual_norm && has_post_ff);
                 if use_gemma4_dual_norm && (layer_scalar - 1.0).abs() > 1e-8 && !folded {
                     if tessl::ab_flags::need_barrier(true) {
                         gpu.barrier()?;
@@ -5088,6 +5318,17 @@ impl GpuDecodeSession {
         Ok(t0.elapsed().as_secs_f64() * 1e3 / iters.max(1) as f64)
     }
 
+    /// Row `row` of the raw logits (before softcap) of the last `step` (row 0) or
+    /// `step_verify` (diagnostics: near-tie checks).
+    pub fn logits_row_f32(&self, row: usize) -> Result<Vec<f32>> {
+        self.model.gpu.synchronize()?;
+        let v = self.model.vocab;
+        let all = self.logits.read_f32();
+        all.get(row * v..(row + 1) * v)
+            .map(<[f32]>::to_vec)
+            .ok_or_else(|| Error::Config(format!("logits row {row} out of range")))
+    }
+
     /// Host readout of `logits` buffer after a decode step (diagnostics).
     pub fn debug_logits_stats(&self) -> LogitsStats {
         Self::stats_f32(&self.logits.read_f32())
@@ -5216,26 +5457,19 @@ impl GpuDecodeSession {
         let global_elems = self
             .shared_global
             .elements_for_positions(gt, "MTP global KV sync")?;
-        let sk = if st > 0 {
-            self.shared_sliding.k.read_f32()[..sliding_elems].to_vec()
-        } else {
-            Vec::new()
+        // Map rather than `read_f32`, which copies the whole capacity: only the live rows
+        // are copied out (one mapping at a time; the runtime allows one).
+        let live = |b: &GpuBuffer, n: usize| -> Result<Vec<f32>> {
+            Ok(b.try_contents_f32().map_err(Error::Metal)?[..n].to_vec())
         };
-        let sv = if st > 0 {
-            self.shared_sliding.v.read_f32()[..sliding_elems].to_vec()
-        } else {
-            Vec::new()
-        };
-        let gk = if gt > 0 {
-            self.shared_global.k.read_f32()[..global_elems].to_vec()
-        } else {
-            Vec::new()
-        };
-        let gv = if gt > 0 {
-            self.shared_global.v.read_f32()[..global_elems].to_vec()
-        } else {
-            Vec::new()
-        };
+        let (sk, sv) = (
+            live(&self.shared_sliding.k, sliding_elems)?,
+            live(&self.shared_sliding.v, sliding_elems)?,
+        );
+        let (gk, gv) = (
+            live(&self.shared_global.k, global_elems)?,
+            live(&self.shared_global.v, global_elems)?,
+        );
         mtp.cross_kv
             .replace_from_densified(&sk, &sv, st, &gk, &gv, gt)?;
         mtp.last_shared_sliding_t = st;
@@ -5243,11 +5477,85 @@ impl GpuDecodeSession {
         Ok(())
     }
 
-    /// MTP smoke: draft from clustered head (+ cross-KV when synced), verify vs backbone.
+    /// The target's final-normed hidden state of the last `step` (what the LM head
+    /// read, so bf16-rounded when the fused bf16 norm is on).
+    pub fn final_hidden_f32(&self) -> Result<Vec<f32>> {
+        self.final_hidden_row_f32(0)
+    }
+
+    /// Row `row` of the final-normed hidden states the last `step_verify` (or row 0 after
+    /// `step`) fed the LM head. Read before any other dispatch reuses the scratch.
+    pub fn final_hidden_row_f32(&self, row: usize) -> Result<Vec<f32>> {
+        self.model.gpu.synchronize()?;
+        let h = self.model.hidden;
+        if fuse_bf16_rms() {
+            let words = self.model.gpu.act_bf16_scratch((row + 1) * h)?.read_f32();
+            Ok(words[row * h / 2..(row + 1) * h / 2]
+                .iter()
+                .flat_map(|w| {
+                    let b = w.to_bits();
+                    [f32::from_bits(b << 16), f32::from_bits(b & 0xffff_0000)]
+                })
+                .collect())
+        } else {
+            Ok(self.normed.read_f32()[row * h..(row + 1) * h].to_vec())
+        }
+    }
+
+    /// The target's scaled input embedding of `token`. For a row-major MLX Q4 table it is
+    /// dequantized on the host from the mapped buffer (`embed_lookup_q4_mlx`'s formula, then
+    /// the embed scale), with no GPU round trip; otherwise the GPU lookup writes `x` and it
+    /// is read back (clobbering `x` and the seed).
+    pub fn target_embed_row(&mut self, token: u32) -> Result<Vec<f32>> {
+        if let Some(ref hot) = self.model.embed_hot {
+            if matches!(hot.scheme, crate::quant::QuantScheme::Q4Mlx { .. })
+                && hot.layout == crate::kernels::HotGemvLayout::RowMajor
+            {
+                let (h, gs) = (self.model.hidden, hot.group_size as usize);
+                if token as usize >= self.model.vocab || gs == 0 || h % gs != 0 {
+                    return Err(Error::Config(format!("target_embed_row: token {token}")));
+                }
+                // One host mapping may be live at a time: copy each row out, then release.
+                let (t, row_bytes, gpr) = (token as usize, h / 2, h / gs);
+                let bytes = hot.packed.try_contents_u8().map_err(Error::Metal)?
+                    [t * row_bytes..(t + 1) * row_bytes]
+                    .to_vec();
+                let sbs = hot.scales.try_contents_u16().map_err(Error::Metal)?
+                    [t * gpr * 2..(t + 1) * gpr * 2]
+                    .to_vec();
+                let bf = |b: u16| f32::from_bits((b as u32) << 16);
+                let scale = self.model.embed_scale;
+                return Ok((0..h)
+                    .map(|d| {
+                        let byte = bytes[d / 2];
+                        let q = if d % 2 == 0 { byte & 0x0f } else { byte >> 4 };
+                        let g = d / gs;
+                        (bf(sbs[2 * g]) * q as f32 + bf(sbs[2 * g + 1])) * scale
+                    })
+                    .collect());
+            }
+        }
+        self.target_embed_row_gpu(token)
+    }
+
+    /// [`Self::target_embed_row`] through the GPU lookup (clobbers `x` and the seed).
+    pub fn target_embed_row_gpu(&mut self, token: u32) -> Result<Vec<f32>> {
+        self.seed_tok.write_u32(&[token]);
+        self.embed_x_from_seed(self.model.hidden)?;
+        self.model.gpu.synchronize()?;
+        Ok(self.x.read_f32()[..self.model.hidden].to_vec())
+    }
+
+    /// Speculative decode with the assistant drafter and sequential T = 1 verification:
+    /// each round drafts `draft_len` tokens after the last target token (HF
+    /// `Gemma4AssistantCandidateGenerator` inputs), then steps the target through
+    /// them until the first mismatch, plus a bonus token when all match. The output
+    /// is plain greedy decode whatever the drafts are; the rounds give the accept rate.
     pub fn generate_mtp_smoke(
         &mut self,
         prompt: &[u32],
         max_new: usize,
+        draft_len: usize,
         mtp: &mut MtpSession,
     ) -> Result<(Vec<u32>, Vec<VerifyResult>)> {
         self.reset();
@@ -5260,7 +5568,6 @@ impl GpuDecodeSession {
             let _ = self.step(t)?;
         }
         let mut next = self.step(prompt[prompt.len() - 1])?;
-        let backbone = mtp.assistant.backbone_hidden_size;
         while out.len() - prompt.len() < max_new {
             out.push(next);
             if let Some(eos) = self.model.cfg.eos_token_id.as_ref() {
@@ -5268,14 +5575,14 @@ impl GpuDecodeSession {
                     break;
                 }
             }
-            // Pull latest shared sliding / global KV into MTP, then draft.
+            let hidden = self.final_hidden_f32()?;
             self.sync_mtp_cross_kv(mtp)?;
-            let mut h = self.normed.read_f32();
-            h.resize(backbone, 0.0);
-            let draft = mtp.draft_from_hidden(&h)?;
+            let pos = self.pos;
+            let draft = mtp.draft(next, &hidden, pos, draft_len, &mut |t| {
+                self.target_embed_row(t)
+            })?;
             let mut target = Vec::with_capacity(draft.len().saturating_add(1));
             let mut tok = next;
-            // Early-reject: stop verifying after first mismatch (saves wasted steps).
             let mut rejected = false;
             for &d in &draft {
                 if out.len() - prompt.len() >= max_new {
@@ -5295,10 +5602,82 @@ impl GpuDecodeSession {
                 next = bonus;
             } else {
                 next = *target.last().unwrap_or(&tok);
+                // `next` was pushed with the last verified token; do not push it twice.
+                if rejected {
+                    out.pop();
+                }
             }
             verifies.push(mtp.verify_and_adapt(&draft, &target));
         }
+        out.truncate(prompt.len() + max_new);
         Ok((out, verifies))
+    }
+
+    /// Greedy decode with the assistant drafting `draft_len` tokens per round and one
+    /// `step_verify` checking `[next, drafts]`: the longest matching prefix of the drafts
+    /// is kept plus the target's own next token, and the rejected KV rows are trimmed.
+    /// Returns the tokens (prompt included), the drafts accepted per round, and the seconds
+    /// spent after the first generated token (the span [`Self::bench_decode_tok_s`] times).
+    pub fn generate_speculative(
+        &mut self,
+        prompt: &[u32],
+        max_new: usize,
+        draft_len: usize,
+        mtp: &mut MtpSession,
+    ) -> Result<(Vec<u32>, Vec<usize>, f64)> {
+        if prompt.is_empty() {
+            return Err(Error::Config("empty prompt".into()));
+        }
+        if draft_len == 0 || draft_len + 1 > VERIFY_MAX_M {
+            return Err(Error::Config(format!(
+                "generate_speculative: draft_len {draft_len} outside 1..{VERIFY_MAX_M}"
+            )));
+        }
+        self.reset();
+        for &t in &prompt[..prompt.len() - 1] {
+            let _ = self.step(t)?;
+        }
+        let mut next = self.step(prompt[prompt.len() - 1])?;
+        let mut hidden = self.final_hidden_f32()?;
+        let t0 = std::time::Instant::now();
+        let mut out = prompt.to_vec();
+        let mut accepted_per_round = Vec::new();
+        let eos = self.model.cfg.eos_token_id.clone();
+        let is_eos = |t: u32| eos.as_ref().is_some_and(|e| e.as_slice().contains(&t));
+        loop {
+            out.push(next);
+            if out.len() - prompt.len() >= max_new || is_eos(next) {
+                break;
+            }
+            self.sync_mtp_cross_kv(mtp)?;
+            let pos = self.pos;
+            let k = draft_len.min(max_new - (out.len() - prompt.len()));
+            let drafts = mtp.draft(next, &hidden, pos, k, &mut |t| self.target_embed_row(t))?;
+            let mut block = Vec::with_capacity(k + 1);
+            block.push(next);
+            block.extend_from_slice(&drafts);
+            let v = self.step_verify(&block)?;
+            let mut n = 0;
+            while n < k && drafts[n] == v.next_tokens[n] {
+                n += 1;
+            }
+            hidden = self.final_hidden_row_f32(n)?;
+            self.commit_verify(k + 1, n + 1)?;
+            accepted_per_round.push(n);
+            let mut stop = false;
+            for &d in &drafts[..n] {
+                out.push(d);
+                if out.len() - prompt.len() >= max_new || is_eos(d) {
+                    stop = true;
+                    break;
+                }
+            }
+            if stop {
+                break;
+            }
+            next = v.next_tokens[n];
+        }
+        Ok((out, accepted_per_round, t0.elapsed().as_secs_f64()))
     }
 
     /// Reset, prefill `prompt[..len-1]`, and run the first generated token so a
@@ -5351,6 +5730,45 @@ impl GpuDecodeSession {
         } else {
             None
         };
+        Ok(TokenProfile {
+            host_encode_ms: (t1 - t0).as_secs_f64() * 1e3,
+            sync_ms: (t2 - t1).as_secs_f64() * 1e3,
+            dispatches: counts.dispatches,
+            barriers: counts.barriers,
+            commits: counts.commits,
+            stamps: batch,
+        })
+    }
+
+    /// [`Self::profile_decode_token`] for one `step_verify(tokens)` block, which is then
+    /// trimmed so the context is unchanged. Stamps cover every command buffer the
+    /// block commits (`dropped_batches` in the batch says if any were lost).
+    pub fn profile_verify_block(&mut self, tokens: &[u32], stamps: bool) -> Result<TokenProfile> {
+        self.model.gpu.synchronize()?;
+        tessl::ab_flags::set_dispatch_stamps(stamps);
+        let _ = self.model.gpu.rt.take_dispatch_stamps();
+        tessl::infer_trace::set_enabled(true);
+        let before = tessl::infer_trace::snapshot();
+        let t0 = std::time::Instant::now();
+        let run = self.step_verify(tokens);
+        let t1 = std::time::Instant::now();
+        let sync = run.and_then(|_| self.model.gpu.synchronize());
+        let t2 = std::time::Instant::now();
+        let counts = tessl::infer_trace::snapshot().since(&before);
+        tessl::infer_trace::set_enabled(false);
+        tessl::ab_flags::set_dispatch_stamps(false);
+        sync?;
+        let batch = match (stamps, self.model.gpu.rt.take_dispatch_stamps()) {
+            (false, _) => None,
+            (true, Some(Ok(b))) => Some(b),
+            (true, Some(Err(e))) => return Err(Error::Metal(format!("dispatch stamps: {e}"))),
+            (true, None) => {
+                return Err(Error::Metal(
+                    "dispatch stamps requested but none armed".into(),
+                ))
+            }
+        };
+        self.trim_kv(tokens.len())?;
         Ok(TokenProfile {
             host_encode_ms: (t1 - t0).as_secs_f64() * 1e3,
             sync_ms: (t2 - t1).as_secs_f64() * 1e3,
@@ -5768,6 +6186,77 @@ mod tests {
     }
 
     #[test]
+    fn sliding_fa_buffers_read_in_place_until_the_window_leaves_row_zero() {
+        let gpu = GemmaGpu::new().expect("Metal runtime for sliding-KV FA buffers");
+        let mut slot = GpuKvSlot::new(&gpu, 4, 1, 1, true).expect("four-row sliding slot");
+        let storage = slot.storage_capacity;
+        let src_k = gpu.rt.alloc_buffer(32 * 4).expect("K source");
+        let src_v = gpu.rt.alloc_buffer(32 * 4).expect("V source");
+        let rows: Vec<f32> = (0..32).map(|r| r as f32).collect();
+        src_k.write_f32(&rows);
+        src_v.write_f32(&rows.iter().map(|r| r + 100.0).collect::<Vec<_>>());
+        let k_scratch = gpu.rt.alloc_buffer(storage * 4).expect("K scratch");
+        let v_scratch = gpu.rt.alloc_buffer(storage * 4).expect("V scratch");
+        let sentinel = vec![-1.0f32; storage];
+
+        for row in 0..3 {
+            slot.append_from_offset(&gpu, &src_k, &src_v, row)
+                .expect("fill below capacity");
+        }
+        // Decode ICB replay keeps the copy at every position.
+        k_scratch.write_f32(&sentinel);
+        let (k, _, off, tkv) = slot
+            .fa_buffers_with(&gpu, &k_scratch, &v_scratch, 4, false)
+            .expect("ICB FA buffers");
+        gpu.synchronize().expect("ICB FA buffers complete");
+        assert_eq!((off, tkv), (0, 3));
+        assert_eq!(&k_scratch.read_f32()[..4], &[0.0, 1.0, 2.0, -1.0]);
+        assert_eq!(&k.read_f32()[..3], &[0.0, 1.0, 2.0]);
+
+        k_scratch.write_f32(&sentinel);
+        v_scratch.write_f32(&sentinel);
+        let (k, v, off, tkv) = slot
+            .fa_buffers_with(&gpu, &k_scratch, &v_scratch, 4, true)
+            .expect("unwrapped FA buffers");
+        gpu.synchronize().expect("unwrapped FA buffers complete");
+        assert_eq!((off, tkv), (0, 3));
+        assert_eq!(&k.read_f32()[..3], &[0.0, 1.0, 2.0]);
+        assert_eq!(&v.read_f32()[..3], &[100.0, 101.0, 102.0]);
+        assert_eq!(
+            k_scratch.read_f32(),
+            sentinel,
+            "unwrapped window must not be copied"
+        );
+        assert_eq!(
+            v_scratch.read_f32(),
+            sentinel,
+            "unwrapped window must not be copied"
+        );
+
+        // Past capacity the live window starts at a later physical row: densify.
+        for row in 3..(storage as u32 + 2) {
+            slot.append_from_offset(&gpu, &src_k, &src_v, row)
+                .expect("fill past capacity");
+        }
+        assert_ne!(slot.ring_start_u32().expect("ring start"), 0);
+        let seq = storage + 2;
+        let (k, v, off, tkv) = slot
+            .fa_buffers_with(&gpu, &k_scratch, &v_scratch, 4, true)
+            .expect("wrapped FA buffers");
+        gpu.synchronize().expect("wrapped FA buffers complete");
+        let want: Vec<f32> = ((seq - 4)..seq).map(|r| r as f32).collect();
+        assert_eq!((off as usize, tkv), (seq - 4, 4));
+        assert_eq!(&k.read_f32()[..4], want.as_slice());
+        assert_eq!(
+            &v.read_f32()[..4],
+            want.iter()
+                .map(|r| r + 100.0)
+                .collect::<Vec<_>>()
+                .as_slice()
+        );
+    }
+
+    #[test]
     fn sliding_kv_trim_fails_closed_beyond_retained_history() {
         let gpu = GemmaGpu::new().expect("Metal runtime for sliding-KV retention regression");
         let mut slot = GpuKvSlot::new(&gpu, 4, 1, 1, true).expect("four-row sliding slot");
@@ -6071,7 +6560,7 @@ mod tests {
         let mut sess = GpuDecodeSession::new(model).unwrap();
         let prompt = [2u32, 105, 4368, 1246];
         let t0 = std::time::Instant::now();
-        let Ok((out, verifies)) = sess.generate_mtp_smoke(&prompt, 8, &mut mtp) else {
+        let Ok((out, verifies)) = sess.generate_mtp_smoke(&prompt, 8, 3, &mut mtp) else {
             eprintln!("skip: mtp generate failed");
             return;
         };
@@ -6097,32 +6586,6 @@ mod tests {
             mtp.last_shared_global_t,
             mtp.draft_layers.len()
         );
-    }
-
-    #[test]
-    fn gpu_mtp_smoke_draft_verify() {
-        let Ok(host) = SyntheticE4bGraph::mini_parity() else {
-            return;
-        };
-        let kv = host.kv.clone();
-        let hidden = host.cfg.hidden_size;
-        let Ok(model) = GpuSynthModel::from_synthetic(host, QuantScheme::q4_default()) else {
-            eprintln!("skip: no GPU/metallib");
-            return;
-        };
-        if !metal_ready(&model) {
-            eprintln!("skip: Metal pipeline unavailable");
-            return;
-        }
-        let mut mtp = MtpSession::mini_synthetic(&kv, hidden).unwrap();
-        let mut sess = GpuDecodeSession::new(model).unwrap();
-        let Ok((out, verifies)) = sess.generate_mtp_smoke(&[1, 2], 4, &mut mtp) else {
-            eprintln!("skip: mtp smoke failed");
-            return;
-        };
-        assert!(out.len() > 2);
-        assert!(!verifies.is_empty());
-        assert!(verifies.iter().any(|v| v.drafted > 0));
     }
 
     #[test]

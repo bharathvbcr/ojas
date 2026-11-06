@@ -13,8 +13,8 @@ mod common;
 
 use common::{assert_nonfinite, assert_range, assert_shape, bits};
 use ojas_core::{
-    axial_rope_2d_tables, pixel_shuffle, pixel_unshuffle, window_merge, window_partition, Backend,
-    Budget, Conv2dParams, ConvTranspose2dParams, Numerics, Tensor,
+    axial_rope_2d_tables, pixel_shuffle, pixel_unshuffle, window_merge, window_partition,
+    BackendModule, Budget, Conv2dParams, ConvTranspose2dParams, Numerics, Tensor,
 };
 use ojas_cpu::CpuBackend;
 

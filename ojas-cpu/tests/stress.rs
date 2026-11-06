@@ -5,7 +5,10 @@
 use std::sync::mpsc;
 use std::time::Duration;
 
-use ojas_core::{AdamWConfig, Backend, Budget, MuonNs5Config, OjasError, Tensor, RMS_NORM_EPS};
+use ojas_core::{
+    AdamWConfig, BackendFloat, BackendModule, Budget, MuonNs5Config, OjasError, Tensor,
+    RMS_NORM_EPS,
+};
 use ojas_cpu::CpuBackend;
 
 mod common;

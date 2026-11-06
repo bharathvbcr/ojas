@@ -10,7 +10,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{Backend, OjasError};
+use ojas_core::{BackendCore, BackendFloat, BackendModule, OjasError};
 use ojas_metal::MetalBackend;
 
 #[test]

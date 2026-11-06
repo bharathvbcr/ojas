@@ -20,7 +20,10 @@
 //!   fit, an overflowing gradient and an over-budget output are refused with
 //!   the variant every op uses, naming the backward.
 
-use ojas_core::{erf_f64, AffineGrad, Backend, Budget, DType, Numerics, OjasError, Tensor};
+use ojas_core::{
+    erf_f64, AffineGrad, BackendCore, BackendFloat, BackendModule, Budget, DType, Numerics,
+    OjasError, Tensor,
+};
 use ojas_cpu::CpuBackend;
 
 const THREADS: [usize; 4] = [1, 2, 7, 18];

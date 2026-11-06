@@ -5,7 +5,7 @@
 //! The reference is an f64 forward written in this file (output and
 //! log-sum-exp); the gradients at these dims are not re-derived here.
 
-use ojas_core::{AttentionOpts, Backend, Budget, Numerics, Tensor};
+use ojas_core::{AttentionOpts, BackendModule, Budget, Numerics, Tensor};
 use ojas_cpu::CpuBackend;
 
 fn backend(threads: usize) -> CpuBackend {

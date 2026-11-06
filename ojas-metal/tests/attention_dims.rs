@@ -12,7 +12,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{AttentionOpts, Backend, Tensor};
+use ojas_core::{AttentionOpts, BackendModule, Tensor};
 use ojas_metal::MetalBackend;
 
 #[derive(Clone, Debug)]

@@ -3,7 +3,10 @@
 //! not by scanning `common/mod.rs`: a method compiled out with `#[cfg]`
 //! leaves a wrapper that builds and silently runs the trait default.
 
-use ojas_core::{forward_backend_methods, Backend, Budget, Tensor};
+use ojas_core::{
+    forward_backend_methods, Backend, BackendCore, BackendFloat, BackendInt, BackendModule, Budget,
+    Tensor,
+};
 use ojas_cpu::CpuBackend;
 
 /// A compiled demonstration of the same class: an excluded name whose
@@ -16,15 +19,36 @@ fn a_cfg_erased_override_silently_runs_the_trait_default() {
         ($name:ident, { $($item:tt)* }) => { $($item)* };
     }
     struct Erased<B>(B);
-    impl<B: Backend> Backend for Erased<B> {
+    impl<B: Backend> BackendCore for Erased<B> {
         ojas_core::with_backend_methods!(
             forward_backend_methods,
-            { self, self.0, none, all_but_sigmoid }
+            { self, self.0, none, all_but_sigmoid, core}
+        );
+    }
+
+    impl<B: Backend> BackendFloat for Erased<B> {
+        ojas_core::with_backend_methods!(
+            forward_backend_methods,
+            { self, self.0, none, all_but_sigmoid, float}
         );
         #[cfg(any())]
         fn sigmoid_forward(&self, x: &Tensor) -> Result<Tensor, ojas_core::OjasError> {
             self.0.sigmoid_forward(x)
         }
+    }
+
+    impl<B: Backend> BackendInt for Erased<B> {
+        ojas_core::with_backend_methods!(
+            forward_backend_methods,
+            { self, self.0, none, all_but_sigmoid, int}
+        );
+    }
+
+    impl<B: Backend> BackendModule for Erased<B> {
+        ojas_core::with_backend_methods!(
+            forward_backend_methods,
+            { self, self.0, none, all_but_sigmoid, module}
+        );
     }
     let cpu = CpuBackend::new(Budget::new(1 << 20));
     let x = Tensor::from_f32(&[0.0, 1.0], &[2], cpu.budget()).unwrap();

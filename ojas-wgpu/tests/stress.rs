@@ -8,7 +8,9 @@ use std::sync::mpsc;
 use std::sync::{Arc, Barrier};
 use std::time::{Duration, Instant};
 
-use ojas_core::{AdamWConfig, Backend, Budget, OjasError, Tensor, RMS_NORM_EPS};
+use ojas_core::{
+    AdamWConfig, BackendCore, BackendFloat, BackendModule, Budget, OjasError, Tensor, RMS_NORM_EPS,
+};
 use ojas_wgpu::WgpuBackend;
 
 const WATCHDOG: Duration = Duration::from_secs(300);

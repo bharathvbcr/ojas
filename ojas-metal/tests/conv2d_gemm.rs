@@ -12,7 +12,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{conv2d_forward_dims, Backend, Conv2dParams, OjasError, Tensor};
+use ojas_core::{conv2d_forward_dims, BackendCore, BackendModule, Conv2dParams, OjasError, Tensor};
 use ojas_metal::MetalBackend;
 
 const ATOL: f32 = 1e-5;

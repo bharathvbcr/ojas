@@ -11,8 +11,8 @@ mod common;
 
 use common::{bits, SplitMix64};
 use ojas_core::{
-    f32_to_bf16, round_f32_to_bf16, Backend, Budget, CeChunk, CeGrads, DType, Numerics, OjasError,
-    Tensor,
+    f32_to_bf16, round_f32_to_bf16, BackendModule, Budget, CeChunk, CeGrads, DType, Numerics,
+    OjasError, Tensor,
 };
 use ojas_cpu::CpuBackend;
 

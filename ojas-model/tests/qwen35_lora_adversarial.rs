@@ -13,8 +13,8 @@ use std::sync::Arc;
 
 use ojas_autograd::Tape;
 use ojas_core::{
-    f32_to_bf16, forward_backend_methods, AdamWConfig, Autocast, AutocastMode, Backend, DType,
-    OjasError, Tensor,
+    f32_to_bf16, forward_backend_methods, AdamWConfig, Autocast, AutocastMode, BackendCore,
+    BackendFloat, BackendInt, BackendModule, DType, OjasError, Tensor,
 };
 use ojas_cpu::CpuBackend;
 use ojas_data::CounterRng;
@@ -41,10 +41,31 @@ struct Spy {
     full: Arc<AtomicUsize>,
 }
 
-impl Backend for Spy {
+impl BackendCore for Spy {
     ojas_core::with_backend_methods!(
         forward_backend_methods,
-        { self, self.inner, none, all_but_linear_backward }
+        { self, self.inner, none, all_but_linear_backward, core}
+    );
+}
+
+impl BackendFloat for Spy {
+    ojas_core::with_backend_methods!(
+        forward_backend_methods,
+        { self, self.inner, none, all_but_linear_backward, float}
+    );
+}
+
+impl BackendInt for Spy {
+    ojas_core::with_backend_methods!(
+        forward_backend_methods,
+        { self, self.inner, none, all_but_linear_backward, int}
+    );
+}
+
+impl BackendModule for Spy {
+    ojas_core::with_backend_methods!(
+        forward_backend_methods,
+        { self, self.inner, none, all_but_linear_backward, module}
     );
     fn linear_backward(
         &self,

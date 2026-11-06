@@ -35,7 +35,7 @@
 mod common;
 
 use common::{bits, f32t, SplitMix64};
-use ojas_core::{Backend, Budget, Numerics};
+use ojas_core::{BackendCore, BackendModule, Budget, Numerics};
 use ojas_cpu::{CpuBackend, FAST_WHOLE_CALL_MACS};
 
 /// Whether this build's packed kernel, `gemv_into` and lane dots fuse the

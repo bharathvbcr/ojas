@@ -105,7 +105,7 @@ Today each `Cmd` ends with `rt.synchronize()`, which is `commit(true)` in tessl 
 
 A command buffer is committed at four triggers:
 1. **A sync point or a read.** A waited commit (`commit(true)`), then the status scan (§4.2).
-2. **An overlap cap**, every `OVERLAP_DISPATCHES` dispatches (initial value 256).
+2. **An overlap cap**, every `OVERLAP_DISPATCHES` dispatches (initial value 256; `MetalBackend::set_overlap_dispatches` moves it for every handle on the device, and zero is refused).
    - This is an unwaited `commit(false)`, so the GPU runs while the host keeps recording.
    - tessl alternates two command allocators, and a commit with both in flight waits for one (`runtime.rs:1361-1380`) (I: read, not exercised). That bounds the work in flight.
 3. **A memory cap**, a waited commit with no report, when either of these exceeds its cap:

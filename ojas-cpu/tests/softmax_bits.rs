@@ -13,7 +13,7 @@
 //! The fixtures include the rows that could tell a different row maximum
 //! apart: all-equal rows and rows whose maximum is `+0.0` or `-0.0`.
 
-use ojas_core::{AttentionOpts, Backend, Budget, Numerics, Tensor};
+use ojas_core::{AttentionOpts, BackendFloat, BackendModule, Budget, Numerics, Tensor};
 use ojas_cpu::CpuBackend;
 
 mod common;

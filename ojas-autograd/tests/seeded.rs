@@ -12,7 +12,7 @@ mod common;
 
 use common::{bits, data, gate_g6, grads, host_bits, record, Resident};
 use ojas_autograd::{Tape, Var};
-use ojas_core::{Backend, BackendId, Budget, CeChunk, Numerics, OjasError, Tensor};
+use ojas_core::{BackendFloat, BackendId, Budget, CeChunk, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 
 fn cpu_exact() -> CpuBackend {

@@ -4,7 +4,7 @@
 mod common;
 
 use common::{down, host, host_u32, metal, ok, up};
-use ojas_core::{round_f32_to_bf16, Backend, OjasError};
+use ojas_core::{round_f32_to_bf16, BackendCore, OjasError};
 
 fn patterns() -> Vec<f32> {
     let mut out = Vec::with_capacity(65536 * 2 + 8);

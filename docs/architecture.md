@@ -87,7 +87,7 @@ On Apple Silicon, one authoritative root ledger (`ojas_core::Budget`) manages un
 - **No sparse primitives duplicated in ojas.** Sparse representations (CSR/CSC), deterministic SpMV, and affine scans live strictly in `sparsl`.
 - **No tessl or sparsl copy of ojas types.** Neither tessl nor sparsl grows its own `Budget`, typed error, or `Tape`. Conversely ojas does not grow Metal runtime code.
 
-What stays separate on purpose: ojas's CPU reference and the `Numerics::Exact` contract (CPU only, never blurred with Fast-tier GPU bits), the wgpu, CUDA and HIP backends, tessl's inference-specific kernels, and sparsl's event-driven sparse kernels.
+What stays separate on purpose: the CPU reference for every op, the wgpu, CUDA and HIP backends, tessl's inference engines, and sparsl's event-driven sparse kernels. On Metal, `Numerics::Exact` is opt-in and covers linear products and the grouped conv2d GEMM: `ojas-metal` calls tessl `gemm_fixed_order_{nn,nt,tn}` (one thread per output, ascending `k`, contraction off), so those products match the CPU fold bit for bit. The default stays `Numerics::Fast` (TensorOps, its own reduction order). The bf16-accumulation flag does not redirect the Exact path. Depthwise conv, attention, and the other reductions stay on their existing kernels.
 
 ---
 

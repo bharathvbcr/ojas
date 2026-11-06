@@ -8,7 +8,7 @@
 mod common;
 
 use common::{host, metal, ok, up};
-use ojas_core::{Backend, DType, OjasError, Tensor};
+use ojas_core::{BackendCore, BackendInt, BackendModule, DType, OjasError, Tensor};
 use ojas_metal::{MetalBackend, METAL_TOPK_MAX_K};
 
 /// Qwen's vocabulary.

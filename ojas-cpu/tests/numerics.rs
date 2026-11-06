@@ -9,8 +9,8 @@ use std::any::Any;
 use std::sync::Arc;
 
 use ojas_core::{
-    AdamWConfig, Backend, BackendId, Budget, DType, DeviceBuffer, MuonNs5Config, Numerics,
-    OjasError, Tensor,
+    AdamWConfig, Backend, BackendCore, BackendFloat, BackendId, BackendModule, Budget, DType,
+    DeviceBuffer, MuonNs5Config, Numerics, OjasError, Tensor,
 };
 use ojas_cpu::CpuBackend;
 

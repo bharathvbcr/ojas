@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use ojas_core::{Backend, Budget, Numerics, Tensor};
+use ojas_core::{BackendCore, Budget, Numerics, Tensor};
 use ojas_cpu::CpuBackend;
 use ojas_io::{encode_safetensors, StDtype, TensorOut};
 use ojas_model::{param_table, ModelSpec, SPEC_METADATA_KEY};

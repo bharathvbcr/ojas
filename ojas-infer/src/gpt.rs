@@ -1,7 +1,7 @@
 use crate::cache::{append, run_pieces, Kv, Ring};
 use crate::decode::{self, check_token, Forward};
 use crate::sample::GenerateConfig;
-use ojas_core::{Backend, Budget, DType, Numerics, OjasError, Tensor};
+use ojas_core::{BackendCore, Budget, DType, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 use ojas_model::{param_table, BlockParams, Eval, ModelParams, ModelSpec, Rope};
 
@@ -263,7 +263,7 @@ impl CpuGpt {
         for tensor in weights.clone().into_flat() {
             tensor.f32_slice()?;
         }
-        let rope = Rope::new(cfg, cfg.max_seq, Backend::budget(&cpu))?;
+        let rope = Rope::new(cfg, cfg.max_seq, cpu.budget())?;
         Ok(Self {
             spec: *cfg,
             cpu,
@@ -505,7 +505,7 @@ pub fn argmax_token(logits: &[f32]) -> Result<u32, OjasError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ojas_core::Budget;
+    use ojas_core::{BackendModule, Budget};
 
     fn tensor(data: &[f32], shape: &[usize], budget: &Budget) -> Tensor {
         Tensor::from_f32(data, shape, budget).unwrap()

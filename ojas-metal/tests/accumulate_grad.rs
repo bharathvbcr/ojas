@@ -8,7 +8,7 @@ mod common;
 use std::sync::Arc;
 
 use common::*;
-use ojas_core::{Backend, Budget, OjasError, Tensor};
+use ojas_core::{BackendCore, BackendFloat, Budget, OjasError, Tensor};
 use ojas_metal::MetalBackend;
 
 const OP: &str = "accumulate_grad";

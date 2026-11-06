@@ -3,7 +3,7 @@
 
 use std::sync::OnceLock;
 
-use ojas_core::{Backend, BackendId, Budget, DType, Numerics, Tensor};
+use ojas_core::{Backend, BackendCore, BackendId, Budget, DType, Numerics, Tensor};
 use ojas_cpu::CpuBackend;
 use ojas_wgpu::{WgpuBackend, WgpuContext};
 

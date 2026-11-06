@@ -8,7 +8,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{Backend, OjasError, Tensor};
+use ojas_core::{BackendCore, BackendModule, OjasError, Tensor};
 
 const V: usize = 50304;
 

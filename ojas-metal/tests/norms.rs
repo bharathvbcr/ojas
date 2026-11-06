@@ -7,7 +7,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{Backend, OjasError, Tensor};
+use ojas_core::{BackendCore, BackendModule, OjasError, Tensor};
 
 const EPS: f32 = 1e-6;
 const PW_ATOL: f32 = 1e-6;

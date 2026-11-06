@@ -12,7 +12,7 @@
 
 use ojas_autograd::{Tape, Var};
 use ojas_core::{
-    mrope_text_tables, Backend, Budget, MropeSection, Numerics, OjasError, Tensor,
+    mrope_text_tables, Backend, BackendCore, Budget, MropeSection, Numerics, OjasError, Tensor,
     METAL_GDN_KEY_DIM,
 };
 use ojas_cpu::CpuBackend;

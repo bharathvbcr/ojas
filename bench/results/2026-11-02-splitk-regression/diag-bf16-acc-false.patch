@@ -1,0 +1,13 @@
+diff --git a/ojas-metal/kernels/ojas_backend.metal b/ojas-metal/kernels/ojas_backend.metal
+index b9fa21f..cc14fe7 100644
+--- a/ojas-metal/kernels/ojas_backend.metal
++++ b/ojas-metal/kernels/ojas_backend.metal
+@@ -3574,7 +3574,7 @@ kernel void ojas_xattn_part_d##DD(
+     const uint h = bh - b * H;                                                  \
+     const uint row = tg.x * XA_ROWS + tid;                                      \
+     const bool live = row < Tq;                                                 \
+-    const bool bf16_acc = (flags & 32u) != 0u;                                  \
++    const bool bf16_acc = false;                                                 \
+     const ulong kv_base = ((ulong)b * (H / rep) + h / rep) * Tk * DD;           \
+     uint hi = Tk;                                                               \
+     if ((flags & 4u) != 0u) hi = min(hi, lens[b]);                              \

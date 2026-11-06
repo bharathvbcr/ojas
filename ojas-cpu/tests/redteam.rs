@@ -2,8 +2,8 @@
 //! behavior the op must have; a failure here is a logic bug.
 
 use ojas_core::{
-    next_step, AdamWConfig, Backend, Budget, DType, GdnInputs, MuonNs5Config, OjasError, Tensor,
-    CLIP_GRAD_NORM_EPS, MUON_NS5_A, MUON_NS5_B, MUON_NS5_C, MUON_NS_EPS,
+    next_step, AdamWConfig, BackendFloat, BackendModule, Budget, DType, GdnInputs, MuonNs5Config,
+    OjasError, Tensor, CLIP_GRAD_NORM_EPS, MUON_NS5_A, MUON_NS5_B, MUON_NS5_C, MUON_NS_EPS,
 };
 use ojas_cpu::CpuBackend;
 

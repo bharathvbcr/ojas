@@ -6,7 +6,7 @@
 mod common;
 
 use common::*;
-use ojas_core::Backend;
+use ojas_core::BackendModule;
 
 fn linear(rows: usize, kin: usize, nout: usize, seed: u64) {
     let c = cpu();

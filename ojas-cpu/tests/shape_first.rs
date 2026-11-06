@@ -23,8 +23,8 @@ use ojas_core::{
     rms_qk_norm_backward_dims, rms_qk_norm_forward_dims, rope_half_split_backward_dims,
     rope_half_split_forward_dims, rope_partial_backward_dims, rope_partial_forward_dims,
     sigmoid_backward_dims, sigmoid_forward_dims, silu_backward_dims, silu_forward_dims,
-    value_residual_blend_backward_dims, value_residual_blend_forward_dims, AttentionOpts, Backend,
-    Budget, CeChunk, CeGrads, DType, GdnInputs, OjasError, Tensor,
+    value_residual_blend_backward_dims, value_residual_blend_forward_dims, AttentionOpts,
+    BackendFloat, BackendModule, Budget, CeChunk, CeGrads, DType, GdnInputs, OjasError, Tensor,
 };
 use ojas_cpu::CpuBackend;
 

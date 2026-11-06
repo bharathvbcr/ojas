@@ -294,7 +294,7 @@
 <ol>
 <li><strong>A sync point or a read.</strong> A waited commit (<code>commit(true)</code>), then the status scan (§4.2).
 </li>
-<li><strong>An overlap cap</strong>, every <code>OVERLAP_DISPATCHES</code> dispatches (initial value 256).
+<li><strong>An overlap cap</strong>, every <code>OVERLAP_DISPATCHES</code> dispatches (initial value 256; <code>MetalBackend::set_overlap_dispatches</code> moves it for every handle on the device, and zero is refused).
 <ul>
 <li>This is an unwaited <code>commit(false)</code>, so the GPU runs while the host keeps recording.
 </li>

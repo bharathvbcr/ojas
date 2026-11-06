@@ -2394,8 +2394,21 @@ impl Worker {
     fn gemm_lane(&self, lane: Lane) -> GemmOperands {
         match lane {
             Lane::Bf16 if self.rt.has_tensorops() => GemmOperands::Bf16,
-            Lane::Bf16 | Lane::ExactF32 | Lane::Bf16Accum => GemmOperands::ExactF32,
+            // FixedOrder is dispatched by `fixed_order` before this match.
+            // A caller that still asks maps to the f32 operand lane only so
+            // the match stays total; `gemm_nn` / `gemm_nt` / `gemm_tn` do
+            // not reach here for it.
+            Lane::Bf16 | Lane::ExactF32 | Lane::Bf16Accum | Lane::FixedOrder => {
+                GemmOperands::ExactF32
+            }
         }
+    }
+
+    /// One fixed-order GEMM. `note` is the kernel the closure encodes.
+    fn fixed_order(&self, note: &str, encode: impl FnOnce() -> Res<()>) -> Res<()> {
+        encode()?;
+        self.waits.note_kernel(note);
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2440,6 +2453,19 @@ impl Worker {
         k: usize,
         n: usize,
     ) -> Res<()> {
+        if lane == Lane::FixedOrder {
+            if m == 0 || n == 0 {
+                return Ok(());
+            }
+            return self.fixed_order("matmul_fixed_order_nt_f32", || {
+                tessl::gemm::gemm_fixed_order_nt(
+                    &self.mat(a, m, k)?,
+                    &self.mat(b, n, k)?,
+                    &self.tt(c, &[m, n])?,
+                )
+                .map_err(metal_err)
+            });
+        }
         if lane == Lane::Bf16Accum || self.bf16_accum() {
             return self.gemm_bf16_accum(a, b, None, c, m, n, k, 2);
         }
@@ -2464,6 +2490,19 @@ impl Worker {
         k: usize,
         n: usize,
     ) -> Res<()> {
+        if lane == Lane::FixedOrder {
+            if m == 0 || n == 0 {
+                return Ok(());
+            }
+            return self.fixed_order("matmul_fixed_order_nn_f32", || {
+                tessl::gemm::gemm_fixed_order_nn(
+                    &self.mat(a, m, k)?,
+                    &self.mat(b, k, n)?,
+                    &self.tt(c, &[m, n])?,
+                )
+                .map_err(metal_err)
+            });
+        }
         if lane == Lane::Bf16Accum || self.bf16_accum() {
             return self.gemm_bf16_accum(a, b, None, c, m, n, k, 0);
         }
@@ -2488,6 +2527,19 @@ impl Worker {
         k: usize,
         n: usize,
     ) -> Res<()> {
+        if lane == Lane::FixedOrder {
+            if m == 0 || n == 0 {
+                return Ok(());
+            }
+            return self.fixed_order("matmul_fixed_order_tn_f32", || {
+                tessl::gemm::gemm_fixed_order_tn(
+                    &self.mat(a, k, m)?,
+                    &self.mat(b, k, n)?,
+                    &self.tt(c, &[m, n])?,
+                )
+                .map_err(metal_err)
+            });
+        }
         if lane == Lane::Bf16Accum || self.bf16_accum() {
             return self.gemm_bf16_accum(a, b, None, c, m, n, k, 1);
         }
@@ -2541,7 +2593,7 @@ impl Worker {
         self.check(&st, &xv, ST_IN)?;
         self.check_operand(&st, w, &wv, ST_IN)?;
         self.check_operand(&st, bias, &bv, ST_IN)?;
-        if lane == Lane::Bf16Accum || self.bf16_accum() {
+        if lane != Lane::FixedOrder && (lane == Lane::Bf16Accum || self.bf16_accum()) {
             self.gemm_bf16_accum(&xv, &wv, Some(&bv), &y, rows, nout, kin, 2)?;
         } else if lane == Lane::Bf16 && self.rt.has_tensorops() {
             let a = self.mat(&xv, rows, kin)?;
@@ -2590,7 +2642,14 @@ impl Worker {
         self.check(&st, &xv, ST_IN)?;
         self.check_operand(&st, w, &wv, ST_IN)?;
         self.check(&st, &gv, ST_IN)?;
-        if gx_lane == Lane::Bf16Accum || gw_lane == Lane::Bf16Accum || self.bf16_accum() {
+        // FixedOrder is checked inside gemm_nn / gemm_tn, ahead of the
+        // bf16-accumulation flag, so an Exact handle does not take TensorOps.
+        if gx_lane == Lane::FixedOrder
+            || gw_lane == Lane::FixedOrder
+            || gx_lane == Lane::Bf16Accum
+            || gw_lane == Lane::Bf16Accum
+            || self.bf16_accum()
+        {
             self.gemm_nn(gx_lane, &gv, &wv, &gx, rows, nout, kin)?;
             self.gemm_tn(gw_lane, &gv, &xv, &gw, nout, rows, kin)?;
         } else {
@@ -3333,7 +3392,7 @@ impl Worker {
         if let (Some(a), Some(b)) = (bias, bv.as_ref()) {
             self.check_operand(&st, a, b, ST_IN)?;
         }
-        if lane == Lane::Bf16Accum || self.bf16_accum() {
+        if lane == Lane::FixedOrder || lane == Lane::Bf16Accum || self.bf16_accum() {
             for image in 0..batch {
                 let input = V {
                     buf: xv.buf.clone(),
@@ -5688,7 +5747,7 @@ mod gemma_dev;
 mod tests {
     use super::*;
 
-    use ojas_core::{Backend, Budget, Tensor};
+    use ojas_core::{BackendModule, Budget, Tensor};
 
     /// The bias-gradient grid is one SIMD-group per head, and a head count
     /// whose grid does not fit `usize` is refused, not wrapped.

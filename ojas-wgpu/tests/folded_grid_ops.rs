@@ -33,7 +33,10 @@
 mod common;
 
 use common::*;
-use ojas_core::{AdamWConfig, Backend, CeChunk, CeGrads, DType, MuonNs5Config, Tensor};
+use ojas_core::{
+    AdamWConfig, Backend, BackendCore, BackendFloat, BackendInt, BackendModule, CeChunk, CeGrads,
+    DType, MuonNs5Config, Tensor,
+};
 
 /// Element counts around each group boundary of a cap-2 grid (at most 1,024).
 const LANES: [usize; 11] = [1, 255, 256, 257, 511, 512, 513, 767, 768, 769, 1024];

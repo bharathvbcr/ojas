@@ -80,10 +80,11 @@ use ojas_core::{
     rms_norm_forward_dims, rms_qk_norm_backward_dims, rms_qk_norm_forward_dims,
     rope_half_split_backward_dims, rope_half_split_forward_dims, scale_grad_dims, sdpa_scale,
     silu_backward_dims, silu_forward_dims, topk_rows_dims, value_residual_blend_backward_dims,
-    value_residual_blend_forward_dims, AdamWConfig, AdamWScalars, Backend, BackendId, Budget,
-    CeChunk, CeGrads, DType, LinearCe, MuonNs5Config, Ns5Precision, Numerics, OjasError,
-    OptimizerKind, PerHeadGateGrad, RmsDims, RopeDims, RopeLayout, SdpaDims, Tensor,
-    ValueResidualGrad, MUON_NS5_A, MUON_NS5_B, MUON_NS5_C, MUON_NS_EPS,
+    value_residual_blend_forward_dims, AdamWConfig, AdamWScalars, BackendCore, BackendFloat,
+    BackendId, BackendInt, BackendModule, Budget, CeChunk, CeGrads, DType, LinearCe, MuonNs5Config,
+    Ns5Precision, Numerics, OjasError, OptimizerKind, PerHeadGateGrad, RmsDims, RopeDims,
+    RopeLayout, SdpaDims, Tensor, ValueResidualGrad, MUON_NS5_A, MUON_NS5_B, MUON_NS5_C,
+    MUON_NS_EPS,
 };
 use ojas_device::DeviceError;
 use ojas_kernels::{
@@ -1686,7 +1687,7 @@ fn optimizer_scratch(kind: OptimizerKind, rows: usize, cols: usize) -> Result<u6
     }
 }
 
-impl Backend for WgpuBackend {
+impl BackendCore for WgpuBackend {
     fn id(&self) -> BackendId {
         BackendId::Wgpu
     }
@@ -1849,6 +1850,100 @@ impl Backend for WgpuBackend {
         Ok(host)
     }
 
+    /// Device round under its own fault bit (`CAST`, in the high mask
+    /// word). `round_bf16` never raises: a NaN stays a value, as the CPU's
+    /// cast keeps it. A host tensor is [`OjasError::Placement`].
+    fn cast_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "cast_bf16";
+        let placement = |found| OjasError::Placement {
+            op: OP,
+            expected: Some(BackendId::Wgpu),
+            found,
+        };
+        let dev = tensor.device_buffer().ok_or_else(|| placement(None))?;
+        let buf = dev
+            .as_any()
+            .downcast_ref::<WgpuBuffer>()
+            .ok_or_else(|| placement(Some(dev.backend())))?;
+        if !self.ctx.same(buf.context()) {
+            return Err(placement(Some(BackendId::Wgpu)));
+        }
+        if tensor.dtype() != DType::F32 {
+            return Err(OjasError::Dtype {
+                op: OP,
+                expected: DType::F32,
+                got: tensor.dtype(),
+            });
+        }
+        if !tensor.is_contiguous()? {
+            return Err(OjasError::Shape {
+                op: OP,
+                detail: "non-contiguous view is not supported".to_string(),
+            });
+        }
+        let elems = tensor.num_elements()?;
+        if elems == 0 || tensor.shape().contains(&0) {
+            return Err(OjasError::Shape {
+                op: OP,
+                detail: "empty tensor".to_string(),
+            });
+        }
+        let n = u32::try_from(elems).map_err(|_| OjasError::OutOfRange {
+            op: OP,
+            detail: format!("{elems} does not fit in u32"),
+        })?;
+        let bytes = (elems as u64)
+            .checked_mul(4)
+            .ok_or_else(|| OjasError::OutOfRange {
+                op: OP,
+                detail: "byte length overflows".to_string(),
+            })?;
+        self.ctx.check_bytes(bytes, &self.budget)?;
+        let charge = self.budget.try_reserve(bytes)?;
+        let wb = self
+            .ctx
+            .tensor_buffer(bytes)
+            .map_err(|e| self.refused(e, bytes))?;
+        let raw_out = wb.raw()?.clone();
+        let out = Tensor::from_device_reserved(Arc::new(wb), tensor.shape(), DType::F32, charge)?;
+        let mut job = self.job(CAST);
+        let off = tensor.byte_offset();
+        if !off.is_multiple_of(4) {
+            return Err(OjasError::Shape {
+                op: OP,
+                detail: format!("byte_offset {off} is not 4-byte aligned"),
+            });
+        }
+        let src = view_at(&mut job, buf.raw()?, off as u64, elems)?;
+        let groups = elems.div_ceil(256);
+        let (gx, gy) = fold_grid(
+            groups as u64,
+            self.ctx.limits().max_compute_workgroups_per_dimension,
+        )
+        .map_err(|err| match err {
+            OjasError::OutOfRange { detail, .. } => OjasError::OutOfRange { op: OP, detail },
+            other => other,
+        })?;
+        job.dispatch(&ROUND_BF16, &[n], &[&src, &raw_out], (gx, gy, 1))
+            .map_err(|err| match err {
+                OjasError::OutOfRange { detail, .. } => OjasError::OutOfRange { op: OP, detail },
+                other => other,
+            })?;
+        job.commit()?;
+        Ok(out)
+    }
+
+    fn optimizer_scratch_bytes(
+        &self,
+        kind: OptimizerKind,
+        rows: usize,
+        cols: usize,
+    ) -> Result<Option<u64>, OjasError> {
+        optimizer_scratch(kind, rows, cols).map(Some)
+    }
+}
+
+impl BackendFloat for WgpuBackend {
     /// Device to device, bit-exact. F32 only: a U32 tensor's host copy of its
     /// ids could not follow the move without a readback. A non-finite input
     /// is moved unchanged and reported as [`OjasError::NonFinite`] naming
@@ -1866,33 +1961,197 @@ impl Backend for WgpuBackend {
         Ok(y)
     }
 
-    fn embedding_forward(&self, table: &Tensor, token_ids: &Tensor) -> Result<Tensor, OjasError> {
-        let op = EMBED_F;
-        let d = embedding_forward_dims(table, token_ids)?;
-        // No bf16 table lane here: a Bf16 table is refused before its
-        // 2-byte elements could be bound as f32.
-        refuse_bf16_table(op.name(), table)?;
-        let tv = self.placed(op, table)?;
-        let iv = self.placed(op, token_ids)?;
-        self.check_ids_in(op, &iv, d.vocab)?;
-        let n = product(op, &[d.tokens, d.dim])?;
-        let dim = d.dim;
-        let grid = self.lanes(n)?;
-        let (y, yb) = self.out(op, &d.out_shape)?;
-        let mut job = self.job(op);
-        let tb = bind(op, &mut job, &tv)?;
-        let ib = bind(op, &mut job, &iv)?;
-        self.check_finite(op, &mut job, &tb, tv.elems)?;
-        job.dispatch(
-            &EMBED_FWD,
-            &[u(op, n)?, u(op, dim)?],
-            &[&tb, &ib, &yb],
-            grid,
-        )?;
-        job.commit()?;
-        Ok(y)
+    fn silu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        let op = SILU_F;
+        silu_forward_dims(input)?;
+        let x = self.placed(op, input)?;
+        let mut out = self.pointwise(op, &SILU_FWD, &[&x], 1, &[])?;
+        out.pop().ok_or_else(|| shape(op, "no output"))
     }
 
+    fn silu_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        let op = SILU_B;
+        silu_backward_dims(input, grad_output)?;
+        let x = self.placed(op, input)?;
+        let gy = self.placed(op, grad_output)?;
+        let mut out = self.pointwise(op, &SILU_BWD, &[&x, &gy], 1, &[])?;
+        out.pop().ok_or_else(|| shape(op, "no output"))
+    }
+
+    fn mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
+        let op = MUL_F;
+        mul_forward_dims(a, b)?;
+        let av = self.placed(op, a)?;
+        let bv = self.placed(op, b)?;
+        let mut out = self.pointwise(op, &MUL_FWD, &[&av, &bv], 1, &[])?;
+        out.pop().ok_or_else(|| shape(op, "no output"))
+    }
+
+    fn mul_backward(
+        &self,
+        a: &Tensor,
+        b: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        let op = MUL_B;
+        mul_backward_dims(a, b, grad_output)?;
+        let av = self.placed(op, a)?;
+        let bv = self.placed(op, b)?;
+        let gy = self.placed(op, grad_output)?;
+        let mut out = self.pointwise(op, &MUL_BWD, &[&av, &bv, &gy], 2, &[])?;
+        let gb = out.pop().ok_or_else(|| shape(op, "no output"))?;
+        let ga = out.pop().ok_or_else(|| shape(op, "no output"))?;
+        Ok((ga, gb))
+    }
+
+    fn residual_add_forward(&self, x: &Tensor, y: &Tensor) -> Result<Tensor, OjasError> {
+        let op = ADD_F;
+        residual_add_forward_dims(x, y)?;
+        let xv = self.placed(op, x)?;
+        let yv = self.placed(op, y)?;
+        let mut out = self.pointwise(op, &ADD_FWD, &[&xv, &yv], 1, &[])?;
+        out.pop().ok_or_else(|| shape(op, "no output"))
+    }
+
+    /// Two fresh copies of `grad_output`, so each can be clipped in place,
+    /// written by one kernel that also scans `x` and `y` for non-finite
+    /// values, as the CPU does.
+    fn residual_add_backward(
+        &self,
+        x: &Tensor,
+        y: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        let op = ADD_B;
+        residual_add_backward_dims(x, y, grad_output)?;
+        let xv = self.placed(op, x)?;
+        let yv = self.placed(op, y)?;
+        let gy = self.placed(op, grad_output)?;
+        let mut out = self.pointwise(op, &ADD_BWD, &[&xv, &yv, &gy], 2, &[])?;
+        let gyy = out.pop().ok_or_else(|| shape(op, "no output"))?;
+        let gx = out.pop().ok_or_else(|| shape(op, "no output"))?;
+        Ok((gx, gyy))
+    }
+
+    /// The global norm in one read of every gradient (`Self::global_norm`:
+    /// `ceil(len / k)` fused dispatches and a finish), then four words read
+    /// back (the norm and a non-finite flag), then, when the norm is over
+    /// `max_norm`, every gradient scaled in place in `ceil(len / k)` more
+    /// dispatches. Any fault deferred by an earlier op is reported here,
+    /// before anything is scaled. `max_norm` is checked after the norm, by
+    /// [`clip_scale`], as the CPU and Metal do (shape contract D13):
+    /// non-finite gradients outrank a bad `max_norm`.
+    fn clip_grad_norm(&self, grads: &mut [Tensor], max_norm: f32) -> Result<f32, OjasError> {
+        let op = CLIP;
+        clip_grad_norm_dims(grads)?;
+        let mut sizes = Vec::with_capacity(grads.len());
+        for g in grads.iter() {
+            sizes.push(self.placed(op, g)?.elems);
+        }
+        let (_, chunks) = self.clip_table(op, &sizes)?;
+        self.groups(chunks)?;
+        self.fits(op, 2 * chunks)?;
+        // The status words are read in a later submission. Job scratch goes
+        // back to the pool at the next submit by any thread, where another
+        // caller could take and overwrite it before that read; a tensor's
+        // buffer is held until `_held` drops, after the read.
+        let (_held, status) = self.out(op, &[4])?;
+        {
+            let mut job = self.job(op);
+            let mut bound = Vec::with_capacity(grads.len());
+            for g in grads.iter() {
+                let gv = self.placed(op, g)?;
+                bound.push(bind(op, &mut job, &gv)?);
+            }
+            let parts: Vec<(&dyn Binding, usize)> = bound
+                .iter()
+                .map(|b| b as &dyn Binding)
+                .zip(sizes.iter().copied())
+                .collect();
+            self.global_norm(op, &mut job, &parts, &status)?;
+            job.commit()?;
+        }
+        let words = self.ctx.read(&status, 0, 8)?;
+        self.faults()?;
+        let word = |i: usize| -> Result<u32, OjasError> {
+            let bytes = words
+                .get(i * 4..i * 4 + 4)
+                .ok_or_else(|| shape(op, "short status read"))?;
+            let mut raw = [0u8; 4];
+            raw.copy_from_slice(bytes);
+            Ok(u32::from_le_bytes(raw))
+        };
+        let norm = f32::from_bits(word(0)?);
+        if word(1)? != 0 {
+            return Err(OjasError::NonFinite { op: op.name() });
+        }
+        let scale = clip_scale(max_norm, norm)?;
+        if scale < 1.0 {
+            let mut raws = Vec::with_capacity(grads.len());
+            for g in grads.iter_mut() {
+                raws.push(exclusive(op, g)?);
+            }
+            self.scale_multi(op, &raws, &sizes, scale)?;
+        }
+        Ok(norm)
+    }
+
+    /// In place on the device when `grad` solely owns its buffer from byte
+    /// 0; a shared `grad` (or a view further in) is replaced by the product,
+    /// as the trait default does, and the buffer it shared is not written.
+    /// A non-finite product surfaces as `NonFinite` naming `scale_grad` at
+    /// the next sync point.
+    fn scale_grad(&self, grad: &mut Tensor, scale: f32) -> Result<(), OjasError> {
+        let op = SCALE;
+        if !scale.is_finite() {
+            return Err(OjasError::NonFinite { op: op.name() });
+        }
+        let n = scale_grad_dims(grad)?;
+        self.placed(op, grad)?;
+        if grad.byte_offset() == 0 && grad.device_buffer_mut().is_ok() {
+            let raw = exclusive(op, grad)?;
+            return self.scale_multi(op, &[raw], &[n], scale);
+        }
+        let mut out = {
+            let gv = self.placed(op, grad)?;
+            self.pointwise(op, &SCALE_K, &[&gv], 1, &[scale.to_bits()])?
+        };
+        *grad = out.pop().ok_or_else(|| shape(op, "no output"))?;
+        Ok(())
+    }
+
+    /// `acc += grad` in `acc`'s own buffer when `acc` solely owns it from
+    /// byte 0; otherwise the sum goes to a new buffer that replaces `acc`
+    /// (other handles keep the old values). A non-finite sum is deferred like
+    /// every wgpu fault: `Ok` here, `NonFinite` naming this op at the next
+    /// sync point, and `acc` is then invalid (the trait's rule for a
+    /// deferring backend). Shape, dtype and placement are refused first.
+    fn accumulate_grad(&self, acc: &mut Tensor, grad: &Tensor) -> Result<(), OjasError> {
+        let op = ACC;
+        let n = accumulate_grad_dims(acc, grad)?;
+        self.placed(op, acc)?;
+        let gv = self.placed(op, grad)?;
+        let grid = self.lanes(n)?;
+        match exclusive(op, acc) {
+            Ok(ab) => {
+                let mut job = self.job(op);
+                let gb = bind(op, &mut job, &gv)?;
+                job.dispatch(&ADD_INPLACE, &[u(op, n)?], &[&gb, &ab], grid)?;
+                job.commit()
+            }
+            // Shared, or a view that does not start at byte 0.
+            Err(OjasError::Shape { .. }) => {
+                let av = self.placed(op, acc)?;
+                let mut out = self.pointwise(op, &ADD_FWD, &[&av, &gv], 1, &[])?;
+                *acc = out.pop().ok_or_else(|| shape(op, "no output"))?;
+                Ok(())
+            }
+            Err(other) => Err(other),
+        }
+    }
+}
+
+impl BackendInt for WgpuBackend {
     /// `argmax_rows` in `reduce.wgsl`: one workgroup per row, the grid
     /// folded past the per-dimension limit. A non-finite input raises
     /// `ARGMAX`'s fault bit, reported at the next sync. The result has no
@@ -1977,6 +2236,35 @@ impl Backend for WgpuBackend {
         job.dispatch(&TOPK_ROWS, &words, &[&xb, &v_raw, &i_raw], grid)?;
         job.commit()?;
         Ok((values, ids))
+    }
+}
+
+impl BackendModule for WgpuBackend {
+    fn embedding_forward(&self, table: &Tensor, token_ids: &Tensor) -> Result<Tensor, OjasError> {
+        let op = EMBED_F;
+        let d = embedding_forward_dims(table, token_ids)?;
+        // No bf16 table lane here: a Bf16 table is refused before its
+        // 2-byte elements could be bound as f32.
+        refuse_bf16_table(op.name(), table)?;
+        let tv = self.placed(op, table)?;
+        let iv = self.placed(op, token_ids)?;
+        self.check_ids_in(op, &iv, d.vocab)?;
+        let n = product(op, &[d.tokens, d.dim])?;
+        let dim = d.dim;
+        let grid = self.lanes(n)?;
+        let (y, yb) = self.out(op, &d.out_shape)?;
+        let mut job = self.job(op);
+        let tb = bind(op, &mut job, &tv)?;
+        let ib = bind(op, &mut job, &iv)?;
+        self.check_finite(op, &mut job, &tb, tv.elems)?;
+        job.dispatch(
+            &EMBED_FWD,
+            &[u(op, n)?, u(op, dim)?],
+            &[&tb, &ib, &yb],
+            grid,
+        )?;
+        job.commit()?;
+        Ok(y)
     }
 
     fn embedding_backward(
@@ -2307,161 +2595,6 @@ impl Backend for WgpuBackend {
         })
     }
 
-    /// Device round under its own fault bit (`CAST`, in the high mask
-    /// word). `round_bf16` never raises: a NaN stays a value, as the CPU's
-    /// cast keeps it. A host tensor is [`OjasError::Placement`].
-    fn cast_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "cast_bf16";
-        let placement = |found| OjasError::Placement {
-            op: OP,
-            expected: Some(BackendId::Wgpu),
-            found,
-        };
-        let dev = tensor.device_buffer().ok_or_else(|| placement(None))?;
-        let buf = dev
-            .as_any()
-            .downcast_ref::<WgpuBuffer>()
-            .ok_or_else(|| placement(Some(dev.backend())))?;
-        if !self.ctx.same(buf.context()) {
-            return Err(placement(Some(BackendId::Wgpu)));
-        }
-        if tensor.dtype() != DType::F32 {
-            return Err(OjasError::Dtype {
-                op: OP,
-                expected: DType::F32,
-                got: tensor.dtype(),
-            });
-        }
-        if !tensor.is_contiguous()? {
-            return Err(OjasError::Shape {
-                op: OP,
-                detail: "non-contiguous view is not supported".to_string(),
-            });
-        }
-        let elems = tensor.num_elements()?;
-        if elems == 0 || tensor.shape().contains(&0) {
-            return Err(OjasError::Shape {
-                op: OP,
-                detail: "empty tensor".to_string(),
-            });
-        }
-        let n = u32::try_from(elems).map_err(|_| OjasError::OutOfRange {
-            op: OP,
-            detail: format!("{elems} does not fit in u32"),
-        })?;
-        let bytes = (elems as u64)
-            .checked_mul(4)
-            .ok_or_else(|| OjasError::OutOfRange {
-                op: OP,
-                detail: "byte length overflows".to_string(),
-            })?;
-        self.ctx.check_bytes(bytes, &self.budget)?;
-        let charge = self.budget.try_reserve(bytes)?;
-        let wb = self
-            .ctx
-            .tensor_buffer(bytes)
-            .map_err(|e| self.refused(e, bytes))?;
-        let raw_out = wb.raw()?.clone();
-        let out = Tensor::from_device_reserved(Arc::new(wb), tensor.shape(), DType::F32, charge)?;
-        let mut job = self.job(CAST);
-        let off = tensor.byte_offset();
-        if !off.is_multiple_of(4) {
-            return Err(OjasError::Shape {
-                op: OP,
-                detail: format!("byte_offset {off} is not 4-byte aligned"),
-            });
-        }
-        let src = view_at(&mut job, buf.raw()?, off as u64, elems)?;
-        let groups = elems.div_ceil(256);
-        let (gx, gy) = fold_grid(
-            groups as u64,
-            self.ctx.limits().max_compute_workgroups_per_dimension,
-        )
-        .map_err(|err| match err {
-            OjasError::OutOfRange { detail, .. } => OjasError::OutOfRange { op: OP, detail },
-            other => other,
-        })?;
-        job.dispatch(&ROUND_BF16, &[n], &[&src, &raw_out], (gx, gy, 1))
-            .map_err(|err| match err {
-                OjasError::OutOfRange { detail, .. } => OjasError::OutOfRange { op: OP, detail },
-                other => other,
-            })?;
-        job.commit()?;
-        Ok(out)
-    }
-
-    fn silu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
-        let op = SILU_F;
-        silu_forward_dims(input)?;
-        let x = self.placed(op, input)?;
-        let mut out = self.pointwise(op, &SILU_FWD, &[&x], 1, &[])?;
-        out.pop().ok_or_else(|| shape(op, "no output"))
-    }
-
-    fn silu_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
-        let op = SILU_B;
-        silu_backward_dims(input, grad_output)?;
-        let x = self.placed(op, input)?;
-        let gy = self.placed(op, grad_output)?;
-        let mut out = self.pointwise(op, &SILU_BWD, &[&x, &gy], 1, &[])?;
-        out.pop().ok_or_else(|| shape(op, "no output"))
-    }
-
-    fn mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
-        let op = MUL_F;
-        mul_forward_dims(a, b)?;
-        let av = self.placed(op, a)?;
-        let bv = self.placed(op, b)?;
-        let mut out = self.pointwise(op, &MUL_FWD, &[&av, &bv], 1, &[])?;
-        out.pop().ok_or_else(|| shape(op, "no output"))
-    }
-
-    fn mul_backward(
-        &self,
-        a: &Tensor,
-        b: &Tensor,
-        grad_output: &Tensor,
-    ) -> Result<(Tensor, Tensor), OjasError> {
-        let op = MUL_B;
-        mul_backward_dims(a, b, grad_output)?;
-        let av = self.placed(op, a)?;
-        let bv = self.placed(op, b)?;
-        let gy = self.placed(op, grad_output)?;
-        let mut out = self.pointwise(op, &MUL_BWD, &[&av, &bv, &gy], 2, &[])?;
-        let gb = out.pop().ok_or_else(|| shape(op, "no output"))?;
-        let ga = out.pop().ok_or_else(|| shape(op, "no output"))?;
-        Ok((ga, gb))
-    }
-
-    fn residual_add_forward(&self, x: &Tensor, y: &Tensor) -> Result<Tensor, OjasError> {
-        let op = ADD_F;
-        residual_add_forward_dims(x, y)?;
-        let xv = self.placed(op, x)?;
-        let yv = self.placed(op, y)?;
-        let mut out = self.pointwise(op, &ADD_FWD, &[&xv, &yv], 1, &[])?;
-        out.pop().ok_or_else(|| shape(op, "no output"))
-    }
-
-    /// Two fresh copies of `grad_output`, so each can be clipped in place,
-    /// written by one kernel that also scans `x` and `y` for non-finite
-    /// values, as the CPU does.
-    fn residual_add_backward(
-        &self,
-        x: &Tensor,
-        y: &Tensor,
-        grad_output: &Tensor,
-    ) -> Result<(Tensor, Tensor), OjasError> {
-        let op = ADD_B;
-        residual_add_backward_dims(x, y, grad_output)?;
-        let xv = self.placed(op, x)?;
-        let yv = self.placed(op, y)?;
-        let gy = self.placed(op, grad_output)?;
-        let mut out = self.pointwise(op, &ADD_BWD, &[&xv, &yv, &gy], 2, &[])?;
-        let gyy = out.pop().ok_or_else(|| shape(op, "no output"))?;
-        let gx = out.pop().ok_or_else(|| shape(op, "no output"))?;
-        Ok((gx, gyy))
-    }
-
     fn cross_entropy_mean_forward(
         &self,
         logits: &Tensor,
@@ -2545,102 +2678,6 @@ impl Backend for WgpuBackend {
         )?;
         job.commit()?;
         Ok(y)
-    }
-
-    /// The global norm in one read of every gradient (`Self::global_norm`:
-    /// `ceil(len / k)` fused dispatches and a finish), then four words read
-    /// back (the norm and a non-finite flag), then, when the norm is over
-    /// `max_norm`, every gradient scaled in place in `ceil(len / k)` more
-    /// dispatches. Any fault deferred by an earlier op is reported here,
-    /// before anything is scaled. `max_norm` is checked after the norm, by
-    /// [`clip_scale`], as the CPU and Metal do (shape contract D13):
-    /// non-finite gradients outrank a bad `max_norm`.
-    fn clip_grad_norm(&self, grads: &mut [Tensor], max_norm: f32) -> Result<f32, OjasError> {
-        let op = CLIP;
-        clip_grad_norm_dims(grads)?;
-        let mut sizes = Vec::with_capacity(grads.len());
-        for g in grads.iter() {
-            sizes.push(self.placed(op, g)?.elems);
-        }
-        let (_, chunks) = self.clip_table(op, &sizes)?;
-        self.groups(chunks)?;
-        self.fits(op, 2 * chunks)?;
-        // The status words are read in a later submission. Job scratch goes
-        // back to the pool at the next submit by any thread, where another
-        // caller could take and overwrite it before that read; a tensor's
-        // buffer is held until `_held` drops, after the read.
-        let (_held, status) = self.out(op, &[4])?;
-        {
-            let mut job = self.job(op);
-            let mut bound = Vec::with_capacity(grads.len());
-            for g in grads.iter() {
-                let gv = self.placed(op, g)?;
-                bound.push(bind(op, &mut job, &gv)?);
-            }
-            let parts: Vec<(&dyn Binding, usize)> = bound
-                .iter()
-                .map(|b| b as &dyn Binding)
-                .zip(sizes.iter().copied())
-                .collect();
-            self.global_norm(op, &mut job, &parts, &status)?;
-            job.commit()?;
-        }
-        let words = self.ctx.read(&status, 0, 8)?;
-        self.faults()?;
-        let word = |i: usize| -> Result<u32, OjasError> {
-            let bytes = words
-                .get(i * 4..i * 4 + 4)
-                .ok_or_else(|| shape(op, "short status read"))?;
-            let mut raw = [0u8; 4];
-            raw.copy_from_slice(bytes);
-            Ok(u32::from_le_bytes(raw))
-        };
-        let norm = f32::from_bits(word(0)?);
-        if word(1)? != 0 {
-            return Err(OjasError::NonFinite { op: op.name() });
-        }
-        let scale = clip_scale(max_norm, norm)?;
-        if scale < 1.0 {
-            let mut raws = Vec::with_capacity(grads.len());
-            for g in grads.iter_mut() {
-                raws.push(exclusive(op, g)?);
-            }
-            self.scale_multi(op, &raws, &sizes, scale)?;
-        }
-        Ok(norm)
-    }
-
-    /// In place on the device when `grad` solely owns its buffer from byte
-    /// 0; a shared `grad` (or a view further in) is replaced by the product,
-    /// as the trait default does, and the buffer it shared is not written.
-    /// A non-finite product surfaces as `NonFinite` naming `scale_grad` at
-    /// the next sync point.
-    fn scale_grad(&self, grad: &mut Tensor, scale: f32) -> Result<(), OjasError> {
-        let op = SCALE;
-        if !scale.is_finite() {
-            return Err(OjasError::NonFinite { op: op.name() });
-        }
-        let n = scale_grad_dims(grad)?;
-        self.placed(op, grad)?;
-        if grad.byte_offset() == 0 && grad.device_buffer_mut().is_ok() {
-            let raw = exclusive(op, grad)?;
-            return self.scale_multi(op, &[raw], &[n], scale);
-        }
-        let mut out = {
-            let gv = self.placed(op, grad)?;
-            self.pointwise(op, &SCALE_K, &[&gv], 1, &[scale.to_bits()])?
-        };
-        *grad = out.pop().ok_or_else(|| shape(op, "no output"))?;
-        Ok(())
-    }
-
-    fn optimizer_scratch_bytes(
-        &self,
-        kind: OptimizerKind,
-        rows: usize,
-        cols: usize,
-    ) -> Result<Option<u64>, OjasError> {
-        optimizer_scratch(kind, rows, cols).map(Some)
     }
 
     /// In place on `param`, `moment1` and `moment2`, which must each be the
@@ -2856,36 +2893,6 @@ impl Backend for WgpuBackend {
             grid,
         )?;
         job.commit()
-    }
-
-    /// `acc += grad` in `acc`'s own buffer when `acc` solely owns it from
-    /// byte 0; otherwise the sum goes to a new buffer that replaces `acc`
-    /// (other handles keep the old values). A non-finite sum is deferred like
-    /// every wgpu fault: `Ok` here, `NonFinite` naming this op at the next
-    /// sync point, and `acc` is then invalid (the trait's rule for a
-    /// deferring backend). Shape, dtype and placement are refused first.
-    fn accumulate_grad(&self, acc: &mut Tensor, grad: &Tensor) -> Result<(), OjasError> {
-        let op = ACC;
-        let n = accumulate_grad_dims(acc, grad)?;
-        self.placed(op, acc)?;
-        let gv = self.placed(op, grad)?;
-        let grid = self.lanes(n)?;
-        match exclusive(op, acc) {
-            Ok(ab) => {
-                let mut job = self.job(op);
-                let gb = bind(op, &mut job, &gv)?;
-                job.dispatch(&ADD_INPLACE, &[u(op, n)?], &[&gb, &ab], grid)?;
-                job.commit()
-            }
-            // Shared, or a view that does not start at byte 0.
-            Err(OjasError::Shape { .. }) => {
-                let av = self.placed(op, acc)?;
-                let mut out = self.pointwise(op, &ADD_FWD, &[&av, &gv], 1, &[])?;
-                *acc = out.pop().ok_or_else(|| shape(op, "no output"))?;
-                Ok(())
-            }
-            Err(other) => Err(other),
-        }
     }
 
     /// Copy `src` `[B, Tn, Hkv, D]` into the ring `cache` `[B, Tcap, Hkv,

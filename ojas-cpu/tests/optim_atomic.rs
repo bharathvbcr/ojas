@@ -5,7 +5,9 @@
 //! narrowed view) must be found before the first write, so a refused step
 //! leaves every tensor bit-identical: no moved parameter beside stale moments.
 
-use ojas_core::{AdamWConfig, Backend, Budget, MuonNs5Config, OjasError, Tensor};
+use ojas_core::{
+    AdamWConfig, BackendFloat, BackendModule, Budget, MuonNs5Config, OjasError, Tensor,
+};
 use ojas_cpu::CpuBackend;
 
 mod common;

@@ -11,7 +11,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{Backend, Budget, CeChunk, CeGrads, OjasError, Tensor};
+use ojas_core::{BackendCore, BackendModule, Budget, CeChunk, CeGrads, OjasError, Tensor};
 use ojas_wgpu::WgpuBackend;
 
 struct Problem {

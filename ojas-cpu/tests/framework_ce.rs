@@ -12,7 +12,10 @@
 mod common;
 
 use common::{assert_capacity, assert_nonfinite, assert_range, assert_shape, bits, SplitMix64};
-use ojas_core::{Backend, Budget, CeChunk, CeGrads, DType, LinearCe, Numerics, OjasError, Tensor};
+use ojas_core::{
+    BackendCore, BackendModule, Budget, CeChunk, CeGrads, DType, LinearCe, Numerics, OjasError,
+    Tensor,
+};
 use ojas_cpu::CpuBackend;
 
 /// Fast mode: the composed GEMM over all of V can be one Accelerate call

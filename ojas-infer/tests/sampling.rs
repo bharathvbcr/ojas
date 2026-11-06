@@ -1,6 +1,6 @@
 //! Temperature / top-k / top-p sampling and the shared decode loop.
 
-use ojas_core::{exp_exact, Backend, Budget, Numerics, OjasError, Tensor};
+use ojas_core::{exp_exact, BackendInt, Budget, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 use ojas_infer::{
     argmax_token, sample_token, BlockWeights, CpuGpt, DeviceDecoder, GenerateConfig, GptConfig,

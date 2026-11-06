@@ -12,7 +12,7 @@ use std::sync::{mpsc, Arc};
 use std::thread::{self, ThreadId};
 
 use common::*;
-use ojas_core::{Backend, OjasError, Tensor};
+use ojas_core::{BackendCore, OjasError, Tensor};
 use ojas_metal::MetalBackend;
 
 /// The address of the runtime the closure was handed, and the thread it ran

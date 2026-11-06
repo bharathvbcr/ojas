@@ -29,8 +29,8 @@ mod bench {
     use std::time::Instant;
 
     use ojas_core::{
-        AttentionOpts, Autocast, AutocastMode, Backend, Budget, Conv2dParams,
-        ConvTranspose2dParams, Tensor,
+        AttentionOpts, Autocast, AutocastMode, BackendCore, BackendFloat, BackendModule, Budget,
+        Conv2dParams, ConvTranspose2dParams, Tensor,
     };
     use ojas_metal::MetalBackend;
 

@@ -20,7 +20,7 @@
 //!   commit before this change, by running this file there. They are bit
 //!   comparisons, not a recompute.
 
-use ojas_core::{exp_exact, Backend, Budget, CeChunk, CeGrads, Numerics, Tensor};
+use ojas_core::{exp_exact, BackendModule, Budget, CeChunk, CeGrads, Numerics, Tensor};
 use ojas_cpu::CpuBackend;
 
 mod common;

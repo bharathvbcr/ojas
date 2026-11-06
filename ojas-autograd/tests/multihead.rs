@@ -8,7 +8,7 @@
 //! Same harness as `gradcheck.rs`: `central_diff` and `gradients_match`.
 
 use ojas_autograd::{central_diff, gradients_match, Tape, Var};
-use ojas_core::{inverse_permutation, Backend, Budget, OjasError, Tensor};
+use ojas_core::{inverse_permutation, BackendFloat, Budget, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 
 const H_STEP: f64 = 1e-3;

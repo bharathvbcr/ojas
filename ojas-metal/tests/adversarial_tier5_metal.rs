@@ -19,8 +19,8 @@ use std::time::Duration;
 
 use common::*;
 use ojas_core::{
-    Backend, BackendId, Budget, ConvTranspose2dParams, DType, DeviceBuffer, FenceError,
-    MappedBuffer, OjasError, Tensor,
+    BackendCore, BackendFloat, BackendId, BackendModule, Budget, ConvTranspose2dParams, DType,
+    DeviceBuffer, FenceError, MappedBuffer, OjasError, Tensor,
 };
 use ojas_metal::BudgetLedger;
 use tessl::shared_buf::{GpuRole, HostAccessError, SharedAlloc};

@@ -9,7 +9,10 @@
 mod common;
 
 use common::*;
-use ojas_core::{Autocast, Backend, OjasError, MAX_BROADCAST_RANK, MAX_PERMUTE_RANK};
+use ojas_core::{
+    Autocast, BackendCore, BackendFloat, BackendModule, OjasError, MAX_BROADCAST_RANK,
+    MAX_PERMUTE_RANK,
+};
 
 /// `Cmd::Bcast` sizes its shape and stride arrays by MAX_PERMUTE_RANK and
 /// `MetalBackend::broadcast` indexes them up to the broadcast rank, so the

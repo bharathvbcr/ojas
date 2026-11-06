@@ -12,7 +12,7 @@ mod common;
 use std::sync::Arc;
 
 use common::*;
-use ojas_core::{Backend, OjasError, Tensor};
+use ojas_core::{BackendCore, BackendFloat, BackendModule, OjasError, Tensor};
 use ojas_wgpu::WgpuBackend;
 
 fn bits(g: &WgpuBackend, t: &Tensor) -> Vec<u32> {

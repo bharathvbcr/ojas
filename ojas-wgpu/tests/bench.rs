@@ -12,7 +12,7 @@ mod common;
 use std::time::{Duration, Instant};
 
 use common::host;
-use ojas_core::{Backend, Budget, Tensor};
+use ojas_core::{BackendCore, BackendModule, Budget, Tensor};
 use ojas_cpu::CpuBackend;
 use ojas_wgpu::WgpuBackend;
 

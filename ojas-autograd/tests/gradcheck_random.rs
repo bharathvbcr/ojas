@@ -7,7 +7,7 @@ mod common;
 
 use common::{ce, lin, Rng};
 use ojas_autograd::{central_diff, gradients_match, Tape, Var};
-use ojas_core::{Backend, Budget, OjasError, Tensor, RMS_NORM_EPS};
+use ojas_core::{BackendFloat, BackendModule, Budget, OjasError, Tensor, RMS_NORM_EPS};
 use ojas_cpu::CpuBackend;
 
 const H: f64 = 1e-4;

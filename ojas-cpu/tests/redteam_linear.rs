@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use common::SplitMix64;
 use ojas_core::{
-    Backend, BackendId, Budget, DType, DeviceBuffer, Numerics, OjasError, Scratch, Tensor,
+    BackendId, BackendModule, Budget, DType, DeviceBuffer, Numerics, OjasError, Scratch, Tensor,
 };
 use ojas_cpu::CpuBackend;
 

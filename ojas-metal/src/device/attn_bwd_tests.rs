@@ -7,7 +7,7 @@
 
 use super::*;
 use crate::link::Waits;
-use ojas_core::{sdpa_scale, AttentionOpts, Backend, Budget, Numerics, Tensor};
+use ojas_core::{sdpa_scale, AttentionOpts, BackendModule, Budget, Numerics, Tensor};
 use std::sync::Arc;
 
 const B: usize = 2;

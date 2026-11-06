@@ -1,7 +1,7 @@
 //! The tiled linear kernel: remainder widths, a 1x1 product, empty axes,
 //! NaN, and a shape that is large enough to take the parallel tiles.
 
-use ojas_core::{Backend, Budget, DType, Numerics, OjasError, Tensor};
+use ojas_core::{BackendModule, Budget, DType, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 
 mod common;

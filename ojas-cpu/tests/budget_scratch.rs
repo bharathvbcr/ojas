@@ -4,7 +4,8 @@
 //! used by the linear inner loop has to refuse.
 
 use ojas_core::{
-    AdamWConfig, Backend, Budget, MuonNs5Config, Numerics, OjasError, OptimizerKind, Tensor,
+    AdamWConfig, BackendCore, BackendModule, Budget, MuonNs5Config, Numerics, OjasError,
+    OptimizerKind, Tensor,
 };
 use ojas_cpu::CpuBackend;
 

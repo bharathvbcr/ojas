@@ -10,7 +10,10 @@
 mod common;
 
 use common::*;
-use ojas_core::{concat_dims, fill_dims, slice_dims, Backend, Budget, DType, OjasError, Tensor};
+use ojas_core::{
+    concat_dims, fill_dims, slice_dims, BackendCore, BackendFloat, BackendModule, Budget, DType,
+    OjasError, Tensor,
+};
 use ojas_metal::MetalBackend;
 
 fn bytes(t: &Tensor) -> Vec<u8> {

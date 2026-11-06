@@ -1,0 +1,40 @@
+[package]
+name = "burn"
+version = "0.21.0"
+edition = "2021"
+publish = false
+description = "Local Burn 0.21 facade for arch02-burn: ndarray, autodiff, and Metal only"
+
+# The crates.io `burn` meta-crate keeps optional LibTorch (`burn-tch` / `tch` /
+# `torch-sys`) and Candle (`burn-candle`) backends in this lockfile. Those edges
+# are what pin zip 0.6.6 and, through burn-candle, zip 7.2.0. This package
+# re-exports only the backends arch02-burn enables, so those crates leave the
+# resolve. It is not a new third-party dependency: burn-core, burn-nn,
+# burn-optim, burn-std, burn-autodiff, burn-ndarray, and burn-wgpu are already
+# the crates the 0.21 meta-crate forwards.
+
+[features]
+default = []
+std = [
+    "burn-core/std",
+    "burn-nn/std",
+    "burn-optim/std",
+    "burn-std/std",
+    "burn-autodiff?/std",
+    "burn-wgpu?/std",
+    "burn-ndarray?/std",
+]
+autodiff = ["dep:burn-autodiff"]
+ndarray = ["dep:burn-ndarray"]
+metal = ["dep:burn-wgpu", "burn-wgpu/metal"]
+fusion = ["burn-wgpu?/fusion"]
+autotune = ["burn-wgpu?/autotune"]
+
+[dependencies]
+burn-core = { version = "0.21.0", default-features = false }
+burn-nn = { version = "0.21.0", default-features = false }
+burn-optim = { version = "0.21.0", default-features = false }
+burn-std = { version = "0.21.0", default-features = false }
+burn-autodiff = { version = "0.21.0", optional = true, default-features = false }
+burn-ndarray = { version = "0.21.0", optional = true, default-features = false }
+burn-wgpu = { version = "0.21.0", optional = true, default-features = false }

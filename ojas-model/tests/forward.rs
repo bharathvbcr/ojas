@@ -4,7 +4,7 @@
 //! loader's name rules.
 
 use ojas_autograd::{central_diff, gradients_match, Tape};
-use ojas_core::{Backend, Budget, CeChunk, Numerics, OjasError, Tensor};
+use ojas_core::{BackendModule, Budget, CeChunk, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 use ojas_io::{encode_safetensors, SafeTensors, StDtype, TensorOut};
 use ojas_model::{

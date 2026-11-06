@@ -20,7 +20,7 @@ mod qwen35_common;
 use std::time::Instant;
 
 use ojas_autograd::Tape;
-use ojas_core::{Backend, Tensor};
+use ojas_core::{Backend, BackendCore, Tensor};
 use ojas_io::SafeTensors;
 use ojas_model::qwen35::{bind, forward_loss, load_hf, Qwen35Tables};
 use ojas_model::{ActivationCheckpoint, DEFAULT_CE_CHUNK};

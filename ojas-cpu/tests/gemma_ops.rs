@@ -10,7 +10,7 @@
 //! and under both `Numerics`, and to the refusals under each op's own name.
 //! The torch goldens are in `gemma_ops_golden.rs`; nothing here needs torch.
 
-use ojas_core::{Backend, Budget, DType, Numerics, OjasError, Tensor};
+use ojas_core::{BackendFloat, BackendModule, Budget, DType, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 
 mod common;

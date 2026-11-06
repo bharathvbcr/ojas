@@ -17,7 +17,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{Backend, CeChunk, CeGrads, Tensor};
+use ojas_core::{BackendModule, CeChunk, CeGrads, Tensor};
 
 /// `|got - want|` in units of the f32 spacing at `want`.
 fn ulps(got: f32, want: f64) -> f64 {

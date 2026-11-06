@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use ojas_core::{Backend, Budget, Numerics, OjasError, Tensor};
+use ojas_core::{BackendCore, Budget, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 use ojas_metal::MetalBackend;
 

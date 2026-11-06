@@ -6,7 +6,7 @@
 
 use super::*;
 use crate::WgpuBackend;
-use ojas_core::{Backend, Budget, OjasError, Tensor};
+use ojas_core::{BackendCore, Budget, OjasError, Tensor};
 
 fn host(n: usize, budget: &Budget) -> Tensor {
     Tensor::from_f32(&vec![1.0; n], &[n], budget).expect("host tensor")

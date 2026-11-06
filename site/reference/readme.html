@@ -400,7 +400,7 @@ License:         MIT OR Apache-2.0</code></pre></div>
 </li>
 <li><strong>SIMD (<code>ojas-simd</code>):</strong> Fast-tier GEMM kernels including ARM64 NEON (~110 GFLOP/s single thread), x86_64 AVX2+FMA, portable FMA fallback, and Apple Accelerate wrapper.
 </li>
-<li><strong>Metal (<code>ojas-metal</code>):</strong> <code>MetalBackend</code> implements every <code>Backend</code> op on device tensors through <code>tessl</code> GEMM and its own <code>.metal</code> kernels. Causal attention is a tiled TensorOps forward plus a FlashAttention-2-style backward, with no <code>T×T</code> scores stored, at head dims up to 256. Grouped-query training repeats KV heads, runs that kernel, and sums the KV gradients. Numerics <code>Fast</code> (<code>f32</code> accumulation by default; opt-in step-by-step <code>bf16</code> accumulation via <code>with_bf16_accumulation(true)</code> / <code>set_bf16_accumulation(true)</code>).
+<li><strong>Metal (<code>ojas-metal</code>):</strong> <code>MetalBackend</code> implements every <code>Backend</code> op on device tensors through <code>tessl</code> GEMM and its own <code>.metal</code> kernels. Causal attention is a tiled TensorOps forward plus a FlashAttention-2-style backward, with no <code>T×T</code> scores stored, at head dims up to 256. Grouped-query training repeats KV heads, runs that kernel, and sums the KV gradients. Numerics default to <code>Fast</code> (<code>f32</code> accumulation; opt-in step-by-step <code>bf16</code> accumulation via <code>with_bf16_accumulation(true)</code> / <code>set_bf16_accumulation(true)</code>). <code>with_numerics(Numerics::Exact)</code> sends linear products and the grouped conv2d GEMM through tessl <code>gemm_fixed_order_*</code> (ascending <code>k</code>, contraction off). That flag does not redirect attention or the other reductions, and bf16 accumulation does not take the Exact GEMM.
 </li>
 <li><strong>wgpu (<code>ojas-wgpu</code>):</strong> <code>WgpuBackend</code> keeps tensors device-resident and executes portable WGSL compute shaders. Numerics <code>Fast</code>, tolerance 1e-4 relative against CPU. Muon NS5 runs in f32 and is checked against <code>CpuBackend</code> (<code>ojas-wgpu/tests/muon.rs</code>). A non-finite result is reported at the next <code>sync</code>, <code>download</code> or <code>clip_grad_norm</code>, naming the first op that produced it (<code>ojas-wgpu/tests/faults.rs</code>).
 </li>
@@ -436,7 +436,7 @@ License:         MIT OR Apache-2.0</code></pre></div>
 </li>
 <li><strong>Authoritative Budgeting:</strong> <code>ojas_core::Budget</code> governs memory consumption; <code>BudgetTrimHandler</code> automatically flushes tessl&#39;s buffer pool freelist under pressure before allocations fail.
 </li>
-<li><strong>Kernels:</strong> MPP TensorOps <code>matmul2d</code>, cooperative register accumulation, flash cross-attention, KV-cache managers, MLX Q4/Q8 quantization, and EmbeddingGemma 2 multimodal towers.
+<li><strong>Kernels:</strong> MPP TensorOps <code>matmul2d</code>, cooperative register accumulation, flash cross-attention, KV-cache managers, MLX Q4 GEMV/GEMM, Q8 GEMV and a per-group matmul2d, int8 and W4A8 GEMM, decode-only grouped-query attention, a fixed-order f32 GEMM for <code>Numerics::Exact</code> linear products and the grouped conv2d GEMM, and EmbeddingGemma 2 multimodal towers.
 </li>
 </ul>
 </li>

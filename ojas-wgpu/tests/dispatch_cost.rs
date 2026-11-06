@@ -10,7 +10,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{Backend, Tensor};
+use ojas_core::{BackendCore, BackendFloat, BackendModule, Tensor};
 
 #[test]
 fn a_steady_dispatch_creates_nothing_and_pops_no_error_scope() {

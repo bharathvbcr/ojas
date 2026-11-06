@@ -12,7 +12,10 @@ use std::sync::{Arc, Barrier};
 use std::thread;
 
 use common::*;
-use ojas_core::{AdamWConfig, Backend, Budget, CeChunk, CeGrads, MuonNs5Config, OjasError, Tensor};
+use ojas_core::{
+    AdamWConfig, BackendCore, BackendFloat, BackendModule, Budget, CeChunk, CeGrads, MuonNs5Config,
+    OjasError, Tensor,
+};
 use ojas_metal::MetalBackend;
 
 /// The status slab's slot count (`SLAB_SLOTS` in `device.rs`).

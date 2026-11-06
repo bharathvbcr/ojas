@@ -1,0 +1,177 @@
+0	11f5091	789a132	10-27 06:21	Merge gp/78-ledger2: frame ledger filled to 156 of 167 rows (Lane B2)
+1	170b22d	789a132	10-27 06:40	Merge gp/78-permute: permute plans row copies and a transpose tile (Lane A)
+2	a4fac37	789a132	10-27 17:03	Merge gp/78-attn2: bench results for attention stage 2 (missed its gate; kernel parked, never merges) and the transpose re-time (Lane A)
+3	a3165cf	789a132	10-27 17:03	Merge gp/78-reconcile: cbd5565 frame profile reconciled against the ledger, row by row (Lane B2)
+4	081a20e	789a132	10-27 17:03	Merge gp/78-ledger3: interpolate bench rows and rules for the frame ledger, not yet timed clean (Lane B2)
+5	6abdb31	789a132	10-27 17:03	Merge gp/78-alloc: alloc_bench and its rules for ft-580e6c40, including Fable's addendum; no timing yet (Lane B2)
+6	8b88328	789a132	10-28 00:09	Merge gp/78-attn-mpp: TensorOps flash cross-attention for D32 with no bias or lens (Lane A)
+7	e2e7a5e	789a132	10-28 01:14	Merge gp/78-gauge: one test-only lock for the device-wide allocation figure (Lane C, ft-bd5d290e)
+8	2318ccb	789a132	10-28 07:06	build: lock gusset 0.0.3 and libc 0.2.191
+9	99ebd6f	eda85c4	10-28 07:10	Merge gp/w14-unverified: commit-policy note in CONTRIBUTING.md and the wave 14 report
+10	095f17b	eda85c4	10-28 07:10	Merge gp/w17-tape-shape: Tape::acc refuses a gradient whose shape is not the forward value's
+11	c2c8d50	eda85c4	10-28 07:10	Merge gp/w16-oracle-nan: the oracle parity gates reject a NaN or infinite torch reference
+12	ec44fae	eda85c4	10-28 07:10	Merge gp/w18-lora-draw: lora_adapter_layout returns adapters in the canonical LoRA-A draw order
+13	291affb	eda85c4	10-28 07:11	Merge gp/w20-gated-rstd: gated RMSNorm backward writes its per-row rstd into the charged buffer
+14	8587e10	eda85c4	10-28 07:11	Merge gp/w15-cuda-syntax: the macOS host-C++ syntax check covers all twelve production CUDA modules
+15	cb6a426	eda85c4	10-28 07:11	Merge gp/w19-audit-baseline: GENERATE argmax with and without the pressure probe, audit-baseline benches and results
+16	c3e4fd8	eda85c4	10-28 07:11	Merge gp/w13-scratch: wgpu scratch held until submit no longer stacks across ops (partial: build-config hunks dropped)
+17	3a36c57	eda85c4	10-28 07:12	Merge gitpulse/repair-softmax-collapse-in-the-logit-los-4c0e0a2a (8638447): target-excluded cross-entropy
+18	74efa03	e80c464	10-28 07:29	fix(cpu): encoder softmax passes no skip index to exp_sub_store
+19	fdea0f3	e80c464	10-28 07:30	docs(metal,cuda): say which cross-entropy paths are ojas's target-excluded kernels, and drop 'the algorithm is tessl's'
+20	d4987ec	e80c464	10-28 07:30	test(cpu): hold the Exact CE reference against textbook f64 where the bit test sits
+21	b87f001	e80c464	10-28 07:31	test(cpu): check the target-excluded CE against standard f64 up to margin 18, at targets in every lane position
+22	efcf625	e80c464	10-28 07:32	fix(cpu): a one-class cross-entropy row writes +0.0 for the target gradient, as the GPUs do
+23	2ac4f07	e80c464	10-28 07:33	fix(wgpu): an output reservation submits pending scratch and retries, so the original dispatch_cost cap passes (ft-81e49280)
+24	5f405f7	e80c464	10-28 07:33	fix(capi,bench): generate_argmax is hidden and shared with op_generate; the audit-baseline README stops overclaiming (ft-2dc2dc696fec8a4fbc0503e4057b9762, ft-bd6373d2)
+25	e8bed4e	e80c464	10-28 07:34	chore(cpu): rename redteam_ops_heap's broken_cases; correct wave 20's gusset version
+26	2cc5009	b5796d3	10-28 09:09	fix(oracle): spell the NaN-rejecting gates so clippy -D warnings passes (ft-09edeb325bef2537a7d72e212befdd16)
+27	c8e43e7	b5796d3	10-28 09:11	fix(train): un-nest the draw_position digit check so clippy -D warnings passes (ft-30dd709ee6b761de3bb096e6f02fc561)
+28	f1a7e86	b5796d3	10-28 09:11	fix(cuda,metal): spell the empty-excluded-sum tests without a negated float comparison
+29	5c24a0c	c9adc87	10-28 11:27	perf(cpu): keep the CE skip out of the Fast exp loops except in the target's chunk
+30	9126bc1	c9adc87	10-28 11:29	Revert "perf(cpu): keep the CE skip out of the Fast exp loops except in the target's chunk"
+31	0ae26ff	c9adc87	10-28 11:29	Revert "fix(cuda,metal): spell the empty-excluded-sum tests without a negated float comparison"
+32	e170659	c9adc87	10-28 11:29	Revert "fix(cpu): a one-class cross-entropy row writes +0.0 for the target gradient, as the GPUs do"
+33	b08ebbc	c9adc87	10-28 11:29	Revert "test(cpu): check the target-excluded CE against standard f64 up to margin 18, at targets in every lane position"
+34	7eec70a	c9adc87	10-28 11:29	Revert "test(cpu): hold the Exact CE reference against textbook f64 where the bit test sits"
+35	f5b6352	c9adc87	10-28 11:29	Revert "docs(metal,cuda): say which cross-entropy paths are ojas's target-excluded kernels, and drop 'the algorithm is tessl's'"
+36	f477778	c9adc87	10-28 11:29	Revert "fix(cpu): encoder softmax passes no skip index to exp_sub_store"
+37	cbffba9	c9adc87	10-28 11:29	Revert "Merge gitpulse/repair-softmax-collapse-in-the-logit-los-4c0e0a2a (8638447): target-excluded cross-entropy"
+38	b4a92af	c9adc87	10-28 12:05	Merge gp/78-samdedup: one rank4 helper, one refusal helper, one softmax row kernel, and the SAM ops' Autocast policy in one test (Lane D, ft-8d3aa337)
+39	0c13755	c9adc87	10-28 12:05	Merge gp/78-alloc: MetalBackend::set_mem_cap, the alloc_bench b7 reading and its rules (Lane B2, ft-580e6c40)
+40	116fb21	c9adc87	10-28 12:05	Merge gp/78-ledger3: the interpolate ledger rows measured clean (Lane B2)
+41	d3e0e81	c9adc87	10-28 13:28	docs(site): regenerate dtype-policy.html for 8bd1ef0's dtype-policy.md edit
+42	7fd9fc3	c9adc87	10-28 15:32	style(core): order the SAM policy re-export where rustfmt puts it
+43	f9588b1	c9adc87	10-28 20:10	Merge gp/78-smfix: softmax_row's row max vectorizes again (Lane S, ft-8d3aa337 criterion 4)
+44	ac323a9	c9adc87	10-28 22:43	Merge gp/78-bf16w: pin the pre-cast weight route under Autocast (Lane O1w, ft-73a0631d)
+45	ea3cf39	c9adc87	10-28 23:48	Merge gp/78-memcap: the plan sets aside the Metal memory caps; set_mem_cap is documented API (Lane M)
+46	1b85c2b	c9adc87	10-29 08:55	Merge gp/78-samaudit: SAM ops' wgpu and CUDA status pinned and documented (Lane G, ft-8d3aa337 criteria 1 and 6)
+47	274ab7c	c9adc87	10-29 08:55	Merge gp/78-hygiene: workspace rustdoc passes with -D warnings; the SpikeTrack bench example needs the metal feature (Lane H, ft-94bc9147, ft-bce8a198)
+48	f8549e7	c9adc87	10-29 13:11	Merge gp/78-winpad: window_partition pads and window_merge crops sizes the window does not divide (Lane P, ft-8d3aa337 criterion 2)
+49	430c277	c9adc87	10-29 13:11	docs(site): regenerate op-coverage for the padded window row (ft-8d3aa337)
+50	74aa2b2	c9adc87	10-29 16:11	Merge gp/f9-spatial-backward: CPU backward for conv2d, conv_transpose2d and max_pool2d, with Tape ops (ojas-f9)
+51	c1f2def	c9adc87	10-29 16:11	Merge gp/f9-adamw-fold: tiny_train_step refuses a bad AdamW config through check_adamw (ojas-f9)
+52	471aa6b	c9adc87	10-29 16:11	Merge gp/f9-housekeeping: cargo-deny and an MSRV job; AGENTS.md and CITATION.cff (ojas-f9)
+53	b0facbe	c9adc87	10-29 16:12	test(wgpu),docs: the three CPU-only backwards join the SAM refusal pin and op-coverage
+54	af8bd9c	c9adc87	10-29 16:12	docs(site): regenerate op-coverage for the CPU backward rows and the 25-op note
+55	40fab62	c9adc87	10-29 22:02	Merge gp/78-xattn-bench: the scalar kernel is timed beside the tiled one at the detector shape (Lane K)
+56	ab380a0	c9adc87	10-29 22:02	docs: op-coverage quotes the measured tiled vs scalar attention time at the detector shape
+57	a5c6bc9	c9adc87	10-29 22:03	docs(site): regenerate op-coverage for the measured attention timing
+58	f8ef7fd	c9adc87	10-30 05:15	Merge gp/78-softmax-narrow: rows whose standard target gradient rounds to 0 take the target-excluded cross-entropy form on every backend (Lane X)
+59	26c9b4d	c9adc87	10-30 05:15	docs(site): regenerate op-coverage for the softmax collapse rows
+60	e93fc5c	c9adc87	10-30 06:24	fix: the bf16 tied-table budget test counts four LCE stats a row; log1p_exact's doc names ln_wide without a private link
+61	e224419	c9adc87	10-30 10:33	docs: status, crate READMEs and shape contract describe the vision, spatial and SAM 3.1 stack (Oct 25-27)
+62	12f3f60	c9adc87	10-30 11:13	Stop Claude Code from adding commit and PR attribution.
+63	2e15abe	574904b	10-30 13:02	Merge gp/78-ce-tiers: Fast fused cross-entropy uses the unfused path's exponentials, and the Fast GEMM chain is pinned per target (wave 8 Lane 3)
+64	0b0df79	574904b	10-30 15:03	Merge gp/78-ci-parity: CI drops its no-op tessl steps, ignores say why, readbacks count per budget, autograd runs G6 on Metal (wave 8 Lane 4)
+65	6999e94	574904b	10-30 15:06	docs: readbacks are counted per budget tree; autograd runs G6 on Metal
+66	667c89b	574904b	10-30 15:06	Merge gp/78-encoder-bwd: CPU backward and Tape ops for LayerNorm, LayerNorm2d, exact GELU, linear bias, broadcast add/mul and softmax (wave 8 Lane 2)
+67	0631e56	574904b	10-30 16:24	docs(op-coverage): the SAM autocast policy has 32 ops after the encoder backwards
+68	86efb70	574904b	10-30 16:29	Merge gp/78-gemm-class: Metal conv2d takes the bf16 lane on bf16-exact operands, and a 1x1 stride-1 unpadded conv skips im2col (wave 8 Lane 1)
+69	571dc7d	574904b	10-30 16:30	bench(metal): conv2d 1x1 route and bf16 lane results; the bench labels the conv arms by their route
+70	3d709be	574904b	10-30 21:34	fix(arch02): train propagates the set_wired_fraction error
+71	a1e1a47	574904b	10-30 21:34	docs: waves 6-8 in status, crate READMEs and the parity plan; site regenerated
+72	dbaf1ca	574904b	10-30 21:35	chore(gitignore): ignore all GitPulse and DevMap state, root-level wave reports, docs scratch and lane clutter
+73	c389342	c9539a1	10-30 21:37	docs(reports): session ojas-78 build report and its three SAM task cards
+74	6c0f087	4bd4c9d	10-31 11:32	Merge gp/ug-hal-traits into main (ug sprint wave 2, Fable-cleared)
+75	9fb9f82	4bd4c9d	10-31 11:33	Merge gp/ug-step-provider into main (ug sprint wave 2, Fable-cleared)
+76	4db0add	4bd4c9d	10-31 11:34	Merge gp/ug-cuda-formats into main (ug sprint wave 2, Fable-cleared)
+77	4fa6986	4bd4c9d	10-31 11:52	fix(core): the step module's declaration comment is a plain comment, so rustdoc resolves step.rs's links
+78	0e1c6bc	3c1f338	10-31 14:10	feat(core,io): HAL traits, zero-copy mapped tensor, budget trim ladder, and unified readers (M2)
+79	91bdd6f	3c1f338	10-31 14:10	chore: save site, docs and e2e test files before M2 branch merges
+80	0bde8bc	3c1f338	10-31 14:10	Merge branch 'gp/ug-alloc-error' into main (M2)
+81	0259526	3c1f338	10-31 14:11	Merge branch 'gp/ug-bucket-dedup' into main (M2)
+82	9e02b21	3c1f338	10-31 14:11	Merge branch 'gp/ug-const-dedup' into main (M2)
+83	296c369	3c1f338	10-31 14:11	Merge branch 'gp/ug-adamw-scalars' into main (M2)
+84	e197e62	3c1f338	10-31 14:12	Merge branch 'gp/ug-adamw-msl' into main (M2)
+85	efd7755	3c1f338	10-31 14:12	Merge branch 'gp/ug-pool-ledger' into main (M2)
+86	bbbbb8b	3c1f338	10-31 14:12	Merge branch 'gp/ug-sharedbuf' into main (M2)
+87	2ed3a67	3c1f338	10-31 14:13	Merge branch 'gp/ug-readback-clean' into main (M2)
+88	900dd05	3c1f338	10-31 14:13	Merge branch 'gp/ug-io-sink' into main (M2)
+89	b8fafb1	3c1f338	10-31 14:14	Merge branch 'gp/ug-tiny-step' into main (M2: retire duplicate gpu.rs)
+90	49b2692	3c1f338	10-31 14:15	fix(metal): pack 8 scalars with grad_scale = 1.0 for Qwen35AdamW
+91	3ac4428	3c1f338	10-31 14:21	style: apply rustfmt and update sitegen documentation
+92	a969213	37e686c	10-31 17:05	feat(metal,core): wire BudgetTrimHandler, SlabSink, and pool ledger (M2)
+93	5f34923	48937fb	10-31 17:06	Merge gp/ug-cpu-sam: GroupNorm & Bilinear backward with Tape records (M3: Features 19 & 20)
+94	f7c5378	48937fb	10-31 17:07	Merge gp/ug-metal-maxpool: Metal max_pool2d forward and backward (M3: Feature 13)
+95	632c886	48937fb	10-31 17:08	Merge gp/ug-metal-spatial-bwd: Metal conv2d and conv_transpose2d backward (M3: Feature 14)
+96	2788ae8	48937fb	10-31 17:10	Merge gp/ug-metal-encoder-bwd: Double-single Metal encoder backwards (M3: Feature 18)
+97	d2a8fdc	48937fb	10-31 17:16	Merge gp/ug-metal-attn-bwd: FlashAttention-2 Metal general backward (M3: Features 15 & 16)
+98	bf100ea	48937fb	10-31 17:17	feat(metal): wire fused linear_bias_forward and extend head dims for M3
+99	eba1e29	48937fb	10-31 17:32	feat(autograd): wire relu, slice, concat, rope_interleaved tape ops and backwards
+100	f2c126d	48937fb	10-31 17:33	chore(oracle): commit generated PyTorch 2.15 golden fixtures for max_pool, conv_bwd, sam_bwd
+101	610921b	48937fb	10-31 17:41	fix(metal): allow D=32,64,128,256 in flash cross-attn device check and fix test same_bits down_host
+102	0cb8b83	48937fb	10-31 17:50	fix(metal): use double-single mean and two-product residuals in layer norm backward kernels
+103	1800f55	48937fb	10-31 17:51	fix(oracle): update AttentionOpts initializers with Default in e2e_tier4_production
+104	7b22ed6	48937fb	10-31 17:56	style: rustfmt and AttentionOpts updates across ojas-oracle and ojas-metal
+105	c390a68	48937fb	10-31 18:04	test(capi): update gate_w11_adversarial op counts for relu_backward and slice_backward
+106	3236f92	48937fb	10-31 18:08	test(cpu): add relu_backward and slice_backward to autocast_sam_policy test
+107	c3e0db5	48937fb	10-31 18:10	fix(cpu): correct tensor shape test data length in spatial_backward test
+108	c8e2f96	48937fb	10-31 18:14	test: update attention routing unit test for head_dim 256
+109	4d7785f	48937fb	10-31 18:20	test: host download reference tensor in attention_dims test
+110	a81b486	48937fb	10-31 18:20	style: format attention_dims test
+111	5fdeb30	48937fb	10-31 18:29	test: update unrouted head dim in attention_flash test to d48
+112	dba7b58	48937fb	10-31 18:32	test: include head_dim 256 in routes_to_encoder_attn in attention_general test
+113	3c3362e	48937fb	10-31 18:39	test: add relu_backward and slice_backward to sam_ops_refused test
+114	e23ab3a	48937fb	10-31 18:44	docs: escape bracket characters in group_norm_backward docstring
+115	faf2d1b	48937fb	10-31 19:34	test(autograd,metal): add adversarial vision tape and encoder backward tests
+116	15ffe43	48937fb	10-31 23:29	feat(sam,gemma): implement SAM and Gemma embedding kernels with PyTorch parity and tier-5 adversarial tests
+117	21db079	3b817c7	10-31 23:55	bench(qwen35): integrate paired A/B provider harness
+118	5cee742	3b817c7	10-31 23:55	docs: integrate framework direction and architecture roles
+119	495a9be	3b817c7	10-31 23:55	docs(plan): integrate ojas and tessl unification plan
+120	f0325e1	3b817c7	10-31 23:56	docs(bench): update bench plots
+121	d12734a	3b817c7	10-31 23:56	refactor(qwen35): retire tessl whole-step shell in ojas-qwen35
+122	f37de18	3b817c7	10-31 23:57	refactor(geometry): deduplicate shape products and launch geometry
+123	d0bbabf	3b817c7	10-31 23:59	feat(metal): integrate MetalBackend::with_runtime provider execution
+124	51825fd	3b817c7	11-01 00:02	chore: remove retired whole-step ab harness and clean up unused imports
+125	74c31dd	ed044e0	11-01 00:14	docs: update crate READMEs, status, test-runs.json, and regenerate site
+126	3ff3eb9	e86748a	11-01 00:23	fix(clippy): factor out RunFn type alias to resolve type complexity warning
+127	3766c82	f0f8b2c	11-01 06:54	chore(gitignore): exclude .agents/ coordination directory
+128	dac0b5b	e967e99	11-01 08:27	docs: frame tessl and sparsl as modular compute extensions
+129	4a30be6	a00521f	11-01 16:34	ci: name the real cause when a sibling checkout is missing or this is a worktree
+130	46fb0ec	a00521f	11-01 16:39	ci: report every failing test crate, not just the first
+131	a918eca	a00521f	11-01 16:48	ci: make the pinned-digest question measurable on Linux and on amd64
+132	6577c1a	a00521f	11-01 16:52	fix(ci): check_siblings read fewer manifests than it claimed
+133	be9e31a	a00521f	11-01 17:35	fix(ci): check_siblings claimed a coverage check that could not fail
+134	0e85481	a00521f	11-01 17:54	test(ci): pin check_siblings, and fix the manifest path it skipped
+135	6baaf85	a00521f	11-01 18:09	feat(gemma): backward for seq_mean, l2_normalize and rms_qkv_norm, and fix the oracle divisor
+136	5bf8548	a00521f	11-01 18:47	fix(gemma): divide by the tokens actually summed, and derive the count the gate checks
+137	b09cdba	a00521f	11-01 18:47	test(ci): parse single-quoted TOML, and test the guard on its own terms
+138	9c5e784	a00521f	11-01 19:19	fix(io): hold a single-file checkpoint to the payload budget it was given
+139	b2dd967	a00521f	11-01 19:29	test(oracle): assert the encoder fixture's case count exactly, and per op
+140	db934da	a00521f	11-01 20:10	fix(io): hold every read to the payload budget, and to the file the header was read from
+141	3e45c70	a00521f	11-01 20:16	feat(io): own the bytes, read the integer dtypes, and bound the index before reading it
+142	cb8dbe5	a00521f	11-01 20:38	fix(io): accept an empty tensor however its dimensions are ordered
+143	ea2376c	a00521f	11-01 20:44	fix(io): refuse a checkpoint that names a FIFO instead of hanging on it
+144	8776c41	a00521f	11-01 21:02	fix(io): name the index in its own refusals, and keep the widen test with the code it covers
+145	f486537	a00521f	11-01 21:02	refactor(qwen35): open checkpoints through ojas-io, not through tessl's reader
+146	4bb16e0	a00521f	11-01 21:28	fix(io): give the safetensors header its own JSON profile, and measure what its budget refuses
+147	df788b9	2913ca8	11-01 21:37	fix(io): let the header profile's second limit be its own paragraph
+148	137f36b	2913ca8	11-01 21:38	docs(io): record that ojas owns safetensors IO, and what tessl's adapter keeps
+149	90c58dc	89cb5e7	11-01 21:49	style(io): run the repo's own formatter over the files this work added
+150	dbe84d1	89cb5e7	11-01 22:04	docs(io): put the measured counts in the record, and name the run that did not finish
+151	7087da0	8f66cc0	11-01 22:34	fix(core): make to_host on a mapped buffer actually wait for the device
+152	32e4642	8f66cc0	11-01 22:45	test(cpu): pin Fast softmax bits per architecture, and state the tolerance it does promise
+153	c681f92	8f66cc0	11-01 22:49	docs: correct two claims tonight's measurements falsified
+154	ef27528	8f66cc0	11-01 22:51	docs(io): record the owner's answer on the header amplification bound
+155	a83badf	07c2e23	11-01 22:55	docs(io): correct a claim about the Dtype alias that does not hold
+156	8a3df56	07c2e23	11-01 22:58	test(capi): pin the two ops 6baaf85 added, and say how their admission was checked
+157	0300578	07c2e23	11-01 22:58	style(core): run the formatter over the test added in 7087da0
+158	1bb4410	4327007	11-01 23:10	docs(io): record that this does not land one repository at a time
+159	374258f	e984003	11-01 23:12	docs(io): the push ordering is ojas before the adapter, not before the CI branch
+160	01c466a	abcab95	11-01 23:19	docs(io): the last check ran — tessl's whole suite, 2,252 passed over 206 binaries
+161	28edc3d	abcab95	11-01 23:24	fix(metal): form the gelu_tanh derivative from the sigmoid, not from 1 - t^2
+162	689900a	ef6eb69	11-01 23:35	docs(io): the ojas half of this is public now, so stop saying it is not
+163	09e5ea9	ef6eb69	11-01 23:37	fix(autograd): seed the by-hand gradient from a const array, not a heap vec
+164	c244554	ef6eb69	11-02 00:13	fix(cpu): gate the Fast digests on the platform that recorded them, not on index parity
+165	777542b	ef6eb69	11-02 10:25	fix(core): recompute the f32 attention output instead of reading the rounded one under autocast
+166	12d4208	d2c3ea8	11-02 12:47	feat(io): stream and validate .npy headers, and give tessl the reader surface it re-exports
+167	1f97685	d2c3ea8	11-02 12:47	feat(cpu): exact-margin CE backward, gauge-projected SDPA backward, int8 and 2:4 sparse weights
+168	fcad865	d2c3ea8	11-02 12:47	perf(wgpu): hold GEMM and flash-attention accumulators in explicit vec4 registers
+169	d92a2e7	d2c3ea8	11-02 12:47	feat(metal): opt-in bf16 accumulation, pool-ledger refusal, flash bias and cross-attention, in-kernel finiteness
+170	96c8412	d2c3ea8	11-02 12:47	test(core): zero-copy unified-memory payloads across host and device
+171	5138105	d2c3ea8	11-02 12:47	bench(nanolab): A/B the three TrainConfig levers on the 124M Metal step
+172	9ccc127	d2c3ea8	11-02 12:47	build(deps): refresh arch02/burn-port's lockfile
+173	98a67b4	d2c3ea8	11-02 12:47	docs: describe Metal bf16 accumulation, wgpu vec4 accumulators and the io handover; regenerate the site
+174	d74f0d8	d2c3ea8	11-02 12:47	Merge branch 'claude/sam-xattn-bias-keylens-tiled-47a0a6': pre-stated SAM cross-attention routing measurement and its result
+175	a1819b3	d2c3ea8	11-02 12:47	docs(bench): list the merged sam-xattn-route results folder in bench-plots; regenerate the site
+176	286a444	e0ea9a0	11-02 12:59	Merge branch 'claude/docs-match-code-2026-11-01-eb0573': docs corrected against the code

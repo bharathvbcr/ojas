@@ -6,7 +6,9 @@
 //! own numerics are checked in `ojas-cpu/tests/hybrid.rs`.
 
 use ojas_autograd::{Tape, Var};
-use ojas_core::{mrope_text_tables, Backend, Budget, MropeSection, Numerics, Tensor};
+use ojas_core::{
+    mrope_text_tables, BackendFloat, BackendModule, Budget, MropeSection, Numerics, Tensor,
+};
 use ojas_cpu::CpuBackend;
 
 const B: usize = 2;

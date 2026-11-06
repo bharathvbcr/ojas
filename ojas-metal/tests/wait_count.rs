@@ -7,7 +7,7 @@
 mod common;
 
 use common::*;
-use ojas_core::Backend;
+use ojas_core::{BackendCore, BackendFloat};
 use tessl::infer_trace;
 
 #[test]

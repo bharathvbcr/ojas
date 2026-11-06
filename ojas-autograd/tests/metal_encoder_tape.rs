@@ -17,7 +17,7 @@
 #![cfg(target_os = "macos")]
 
 use ojas_autograd::{Tape, Var};
-use ojas_core::{Backend, BackendId, Budget, Numerics, Tensor};
+use ojas_core::{Backend, BackendCore, BackendId, Budget, Numerics, Tensor};
 use ojas_cpu::CpuBackend;
 use ojas_metal::MetalBackend;
 

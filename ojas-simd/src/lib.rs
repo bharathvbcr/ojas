@@ -433,7 +433,9 @@ pub fn sgemm_tile_with(
 /// (the tests check this).
 ///
 /// Determinism: Accelerate chooses its own blocking, summation order, kernel
-/// (NEON, AMX or SME) and internal thread count. For a fixed problem on one
+/// (NEON, AMX or SME) and internal thread count. This is a non-exact GEMM:
+/// callers must not select it under an exact numerics contract. For a fixed
+/// problem on one
 /// machine and OS build the tests observe bit-identical repeats. The order is
 /// not specified and can change across macOS releases. The result depends on
 /// the whole `(m, n, k)` shape, so it is **not** tile-partition invariant and
