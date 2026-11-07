@@ -36,7 +36,8 @@ fn check_bank(op: &str, table: &AdamwTable, bufs: &[(&str, usize)]) -> Result<()
 /// One AdamW step on the device over every active entry of `bank`'s table,
 /// then the step counts committed. Queues the launches and returns; nothing
 /// waits. On an error part-way the buffers are partly stepped and the counts
-/// are not committed: the bank is dead (see [`AdamwBank`]).
+/// are not committed: the bank is dead, and a later step on it is refused
+/// before any launch is queued (see [`AdamwBank`]).
 #[allow(clippy::too_many_arguments)]
 pub fn adamw_step(
     rt: &CudaRuntime,
@@ -59,13 +60,10 @@ pub fn adamw_step(
             ("v", v.len()),
         ],
     )?;
-    let plan = bank.plan_step(h, active)?;
-    let s = plan.shared;
     let f = rt.function(&K11, &STRICT_SM90, E)?;
-    for (e, sc) in bank.table().entries().iter().zip(&plan.per_entry) {
-        let Some(sc) = sc else { continue };
+    bank.run_step(h, active, |e, sc, s| {
         let (off, n) = (len_u64(e.offset), len_u64(e.len));
-        let Some(l) = grid_1d(n) else { continue };
+        let Some(l) = grid_1d(n) else { return Ok(()) };
         let cfg = LaunchConfig {
             grid_dim: l.grid,
             block_dim: l.block,
@@ -93,8 +91,8 @@ pub fn adamw_step(
         // grid-stride loop touches is in bounds. p, m and v are distinct
         // `&mut` borrows and g a shared one, so no output aliases an input.
         unsafe { b.launch(cfg) }.map_err(|err| driver_error(E, err))?;
-    }
-    bank.commit(plan.next)
+        Ok(())
+    })
 }
 
 /// The squared norm of `g` over the table's active entries: every active
