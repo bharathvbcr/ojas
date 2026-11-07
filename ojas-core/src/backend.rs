@@ -2560,9 +2560,9 @@ impl<T: BackendFloat + BackendInt + BackendModule> Backend for T {}
 /// `kind` is `op` (a computation, which an admission hook may gate) or `pure`
 /// (an accessor or size query that is never gated).
 ///
-/// `backend.rs`'s `trait_and_method_list_agree` test reads this trait's
-/// source and fails when a method here is missing from the list, or the list
-/// names a method the trait does not have.
+/// `backend.rs`'s `the_method_list_names_every_trait_method` test reads the
+/// capability traits' source and fails when a method there is missing from
+/// the list, or the list names a method no trait has.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! with_backend_methods {
