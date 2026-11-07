@@ -18,13 +18,22 @@ pub const BOUND: Duration = Duration::from_secs(30);
 /// [`BOUND`], so a deadlock is a failure and not a stuck run. A hung helper
 /// is left behind; the process exit reaps it.
 pub fn bounded<T: Send + 'static>(what: &str, f: impl FnOnce() -> T + Send + 'static) -> T {
+    bounded_within(what, BOUND, f)
+}
+
+/// [`bounded`] with the bound the caller picks.
+pub fn bounded_within<T: Send + 'static>(
+    what: &str,
+    bound: Duration,
+    f: impl FnOnce() -> T + Send + 'static,
+) -> T {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let _ = tx.send(f());
     });
-    match rx.recv_timeout(BOUND) {
+    match rx.recv_timeout(bound) {
         Ok(v) => v,
-        Err(mpsc::RecvTimeoutError::Timeout) => panic!("{what}: no result in {BOUND:?}; it hung"),
+        Err(mpsc::RecvTimeoutError::Timeout) => panic!("{what}: no result in {bound:?}; it hung"),
         Err(mpsc::RecvTimeoutError::Disconnected) => panic!("{what}: the helper thread panicked"),
     }
 }

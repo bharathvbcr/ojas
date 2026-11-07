@@ -379,6 +379,7 @@ fn spawn_with(
     let handle = thread::Builder::new()
         .name("ojas-metal-device".to_string())
         .spawn(move || {
+            crate::link::mark_device_thread();
             #[cfg(test)]
             acting.enter();
             let opened = catch_unwind(AssertUnwindSafe(open))
@@ -393,7 +394,6 @@ fn spawn_with(
             let _ = ready_tx.send(Ok(DeviceInfo {
                 name: worker.rt.device_name(),
                 tensorops: worker.rt.has_tensorops(),
-                thread: thread::current().id(),
             }));
             drop(ready_tx);
             worker.serve(rx);

@@ -1415,9 +1415,26 @@ pub(crate) struct DeviceInfo {
     pub(crate) name: String,
     /// The device runs tessl's cooperative TensorOps kernels.
     pub(crate) tensorops: bool,
-    /// The device thread. A command sent from it can never be answered: the
-    /// thread would have to read its own channel while blocked on the reply.
-    pub(crate) thread: std::thread::ThreadId,
+}
+
+thread_local! {
+    /// Set on every Metal device thread, for its whole life
+    /// ([`mark_device_thread`]). A device thread is the only reader of its
+    /// own channel and is busy while it runs a command, so a blocking
+    /// [`Link::call_with`] from one can wait on a reply that never comes:
+    /// on its own link, or on another backend's whose device thread is
+    /// waiting back (a cycle).
+    static ON_DEVICE_THREAD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Mark the calling thread as a Metal device thread. The device thread calls
+/// this first thing, before its runtime opens.
+pub(crate) fn mark_device_thread() {
+    ON_DEVICE_THREAD.with(|flag| flag.set(true));
+}
+
+fn on_device_thread() -> bool {
+    ON_DEVICE_THREAD.with(std::cell::Cell::get)
 }
 
 impl Link {
@@ -1495,15 +1512,20 @@ impl Link {
 
     /// Run `cmd` on the device thread with an explicit `bf16_accum` flag.
     ///
-    /// Refused, before anything is sent, when called on the device thread
-    /// itself (a `with_runtime` closure that runs an op, `sync`, `trim_pool`,
-    /// or a budget trim): that thread is the only reader of the channel, so
-    /// the wait for the reply would never end.
+    /// Refused, before anything is sent, when called on any Metal device
+    /// thread, this link's or another backend's (a `with_runtime` closure
+    /// that runs an op, `sync`, `trim_pool`, or a budget trim it triggers).
+    /// On this link's own thread the wait could never end, because that
+    /// thread is the only reader of the channel. On another backend's it
+    /// ends only if that thread is not itself waiting back on this one, and
+    /// two closures that each call the other's backend are exactly that
+    /// cycle. [`Link::post`] never waits and stays allowed.
     pub(crate) fn call_with(&self, cmd: Cmd, bf16_accum: bool) -> Res<Reply> {
-        if std::thread::current().id() == self.device.thread {
+        if on_device_thread() {
             return Err(metal_err(
                 "device-thread re-entry refused: a with_runtime closure (or a budget trim it triggered) \
-                 called back into the backend whose device thread it is running on",
+                 made a blocking call into a Metal backend from a device thread; calls into the \
+                 backend it runs on, and cross-backend waits, are refused",
             ));
         }
         let (reply, rx) = mpsc::sync_channel(1);

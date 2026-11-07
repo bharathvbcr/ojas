@@ -217,6 +217,13 @@ impl fmt::Debug for MetalBackend {
     }
 }
 
+/// Trims this backend's pool when a [`Budget`] it is registered on misses.
+///
+/// The trim is a blocking call to the device thread, so it is refused, and
+/// frees 0, when the reserving thread is itself a Metal device thread (a
+/// `with_runtime` closure, of this backend or another): waiting there could
+/// deadlock. The reservation then fails closed with `CapacityExceeded`
+/// instead of hanging.
 pub(crate) struct MetalTrimHandler {
     link: Weak<Link>,
 }
@@ -386,6 +393,14 @@ impl MetalBackend {
     /// waited idle after; see `Worker::run_provider`. A panic in `f`
     /// poisons this backend like any device-thread panic. Other ops queue
     /// behind `f` for as long as it runs.
+    ///
+    /// `f` may use the `MTLDevice` and queue objects directly, but it must
+    /// not make a blocking call into any ojas Metal backend, its own or
+    /// another's (an op, `sync`, `trim_pool`, `download`, or a budget
+    /// reservation whose trim would call one): it runs on a device thread,
+    /// and such a call is refused with an error, since two closures waiting
+    /// on each other's backends would never return. Dropping a tensor (a
+    /// free) is allowed, because it never waits.
     #[cfg(all(target_os = "macos", feature = "metal"))]
     pub fn with_runtime<F>(&self, f: F) -> Result<(), OjasError>
     where
@@ -868,8 +883,8 @@ impl MetalBackend {
     /// Pressure on `budget` trims this backend's pool: a handler for this
     /// link is registered on it unless it already has one, directly or from
     /// an ancestor. The trim runs on the thread that reserves; reserved from
-    /// a `with_runtime` closure it is refused (the device thread cannot call
-    /// its own link) and the reservation is `CapacityExceeded`. If the
+    /// a `with_runtime` closure (any Metal device thread) it is refused and
+    /// the reservation is `CapacityExceeded`. If the
     /// budget's handler lock is poisoned the handler is not installed, so a
     /// capacity miss there never reaches this link.
     pub fn with_budget(&self, budget: Budget) -> Self {

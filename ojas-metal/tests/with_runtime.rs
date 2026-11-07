@@ -8,8 +8,9 @@
 
 mod common;
 
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, Barrier};
 use std::thread::{self, ThreadId};
+use std::time::Duration;
 
 use common::*;
 use ojas_core::{BackendCore, BackendFloat, Budget, OjasError, Tensor};
@@ -230,4 +231,123 @@ fn an_op_after_a_closure_panic_is_poisoned() {
     let _ = m.with_runtime(|_| panic!("provider panic, injected by the test"));
     assert!(matches!(m.silu_forward(&t), Err(OjasError::Poisoned)));
     assert!(matches!(m.trim_pool(), Err(OjasError::Poisoned)));
+}
+
+/// How long the cross-backend scenarios get. A healthy run takes
+/// milliseconds; the old wait cycle never returned.
+const CYCLE_BOUND: Duration = Duration::from_secs(10);
+
+/// Run `fa` inside a `with_runtime` closure of `a` and `fb` inside one of
+/// `b`, each handed a barrier both closures wait on, so the two device
+/// threads are inside their closures together. Returns what each produced.
+fn in_both_closures<T: Send + 'static>(
+    a: MetalBackend,
+    b: MetalBackend,
+    fa: impl FnOnce(&Barrier) -> T + Send + 'static,
+    fb: impl FnOnce(&Barrier) -> T + Send + 'static,
+) -> (T, T) {
+    bounded_within("closures on two backends", CYCLE_BOUND, move || {
+        let barrier = Arc::new(Barrier::new(2));
+        let (txa, rxa) = mpsc::channel();
+        let (txb, rxb) = mpsc::channel();
+        let (ba, bb) = (Arc::clone(&barrier), barrier);
+        let ha = thread::spawn(move || {
+            ok(
+                "with_runtime a",
+                a.with_runtime(move |_| {
+                    let _ = txa.send(fa(&ba));
+                    Ok(())
+                }),
+            )
+        });
+        let hb = thread::spawn(move || {
+            ok(
+                "with_runtime b",
+                b.with_runtime(move |_| {
+                    let _ = txb.send(fb(&bb));
+                    Ok(())
+                }),
+            )
+        });
+        ha.join().expect("a's caller");
+        hb.join().expect("b's caller");
+        (
+            rxa.recv().expect("a's closure ran"),
+            rxb.recv().expect("b's closure ran"),
+        )
+    })
+}
+
+/// Two backends on one budget, both inside closures, both reserving past
+/// capacity: each budget trim would call the other backend's device thread,
+/// which is busy making the same call back. Both reservations are refused
+/// (`CapacityExceeded`), neither hangs, and both backends serve afterwards
+/// with the budget back where it started (ft-44871303).
+#[test]
+fn two_backends_reserving_past_capacity_in_their_closures_do_not_deadlock() {
+    let budget = Budget::new(CAP);
+    let a = ok("a", MetalBackend::new(budget.clone()));
+    let b = ok("b", MetalBackend::new(budget.clone()));
+    let _held = ok("reserve", budget.try_reserve(CAP - 64));
+    let start = ok("live", budget.live_bytes());
+
+    let reserve = |budget: Budget| {
+        move |barrier: &Barrier| {
+            barrier.wait();
+            budget.try_reserve(4096).map(|_| ())
+        }
+    };
+    let (ra, rb) = in_both_closures(
+        a.clone(),
+        b.clone(),
+        reserve(budget.clone()),
+        reserve(budget.clone()),
+    );
+    for r in [ra, rb] {
+        assert!(
+            matches!(r, Err(OjasError::CapacityExceeded { .. })),
+            "{r:?}"
+        );
+    }
+
+    let (a2, b2) = (a.clone(), b.clone());
+    bounded_within("serve after the cycle", CYCLE_BOUND, move || {
+        ok("sync a", a2.sync());
+        ok("sync b", b2.sync());
+        let t = probe(&a2, &[1.0, 2.0]);
+        assert_eq!(down(&t), vec![1.0, 2.0]);
+        let u = probe(&b2, &[3.0]);
+        assert_eq!(down(&u), vec![3.0]);
+    });
+    assert_eq!(ok("live", budget.live_bytes()), start);
+}
+
+/// The ABBA shape without a budget: A's closure calls `B.sync()` while B's
+/// closure calls `A.sync()`. Both calls are refused, within the bound.
+#[test]
+fn two_closures_syncing_each_others_backend_are_refused_not_hung() {
+    let a = metal();
+    let b = metal();
+    let sync_other = |other: MetalBackend| {
+        move |barrier: &Barrier| {
+            barrier.wait();
+            other.sync()
+        }
+    };
+    let (ra, rb) = in_both_closures(
+        a.clone(),
+        b.clone(),
+        sync_other(b.clone()),
+        sync_other(a.clone()),
+    );
+    for (name, r) in [("a calling b", ra), ("b calling a", rb)] {
+        match r {
+            Err(OjasError::Backend { detail, .. }) => {
+                assert!(detail.contains("cross-backend"), "{name}: {detail}")
+            }
+            other => panic!("{name}: {other:?}"),
+        }
+    }
+    ok("sync a", a.sync());
+    ok("sync b", b.sync());
 }
