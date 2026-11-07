@@ -393,6 +393,7 @@ fn spawn_with(
             let _ = ready_tx.send(Ok(DeviceInfo {
                 name: worker.rt.device_name(),
                 tensorops: worker.rt.has_tensorops(),
+                thread: thread::current().id(),
             }));
             drop(ready_tx);
             worker.serve(rx);

@@ -1,10 +1,35 @@
 #![allow(dead_code)]
 
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
+
 use ojas_core::{BackendCore, Budget, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 use ojas_metal::MetalBackend;
 
 pub const GIB: u64 = 1 << 30;
+
+/// How long a call that may hang gets before the test fails. A healthy call
+/// takes milliseconds; the old deadlock never returned.
+pub const BOUND: Duration = Duration::from_secs(30);
+
+/// Run `f` on a helper thread and fail the test if it has not returned in
+/// [`BOUND`], so a deadlock is a failure and not a stuck run. A hung helper
+/// is left behind; the process exit reaps it.
+pub fn bounded<T: Send + 'static>(what: &str, f: impl FnOnce() -> T + Send + 'static) -> T {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    match rx.recv_timeout(BOUND) {
+        Ok(v) => v,
+        Err(mpsc::RecvTimeoutError::Timeout) => panic!("{what}: no result in {BOUND:?}; it hung"),
+        Err(mpsc::RecvTimeoutError::Disconnected) => panic!("{what}: the helper thread panicked"),
+    }
+}
+
+pub const CAP: u64 = 16 << 20;
 
 pub fn metal() -> MetalBackend {
     match MetalBackend::new(Budget::new(8 * GIB)) {

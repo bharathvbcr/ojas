@@ -12,7 +12,7 @@ use std::sync::{mpsc, Arc};
 use std::thread::{self, ThreadId};
 
 use common::*;
-use ojas_core::{BackendCore, OjasError, Tensor};
+use ojas_core::{BackendCore, BackendFloat, Budget, OjasError, Tensor};
 use ojas_metal::MetalBackend;
 
 /// The address of the runtime the closure was handed, and the thread it ran
@@ -105,4 +105,129 @@ fn a_panicking_closure_poisons_the_backend() {
         m.with_runtime(|_| Ok(())),
         Err(OjasError::Poisoned)
     ));
+}
+
+/// A closure that calls back into its own backend (`sync`, an op, `trim_pool`)
+/// gets an error, not a wait for a reply only its own thread could send
+/// (ft-44871303).
+#[test]
+fn a_closure_that_calls_back_into_its_backend_is_refused_not_hung() {
+    let m = metal();
+    let t = probe(&m, &[1.0, 2.0]);
+    let inner = m.clone();
+    let seen = bounded("with_runtime re-entry", move || {
+        let (tx, rx) = mpsc::channel();
+        let ran = m.with_runtime(move |_| {
+            let _ = tx.send((
+                inner.sync(),
+                inner.silu_forward(&t).map(|_| ()),
+                inner.trim_pool(),
+            ));
+            Ok(())
+        });
+        (ran, rx.recv().expect("the closure ran"))
+    });
+    let (ran, (sync, op, trim)) = seen;
+    ok("with_runtime", ran);
+    for (name, r) in [("sync", sync), ("silu_forward", op), ("trim_pool", trim)] {
+        match r {
+            Err(OjasError::Backend { detail, .. }) => {
+                assert!(detail.contains("re-entry"), "{name}: {detail}")
+            }
+            other => panic!("{name} from the device thread: {other:?}"),
+        }
+    }
+}
+
+/// The refusal leaves the backend serving: the next op from a host thread works.
+#[test]
+fn the_backend_serves_after_a_refused_re_entry() {
+    let m = metal();
+    let inner = m.clone();
+    bounded("re-entry", move || {
+        ok(
+            "with_runtime",
+            m.with_runtime(move |_| {
+                assert!(inner.sync().is_err());
+                Ok(())
+            }),
+        );
+        ok("sync", m.sync());
+        let t = probe(&m, &[3.0]);
+        assert_eq!(down(&t), vec![3.0]);
+    });
+}
+
+/// A reservation that does not fit, made inside the closure on a budget that
+/// holds this backend's trim handler, and on a child that inherits it, is
+/// `CapacityExceeded`: the handler's trim would call the link from the device
+/// thread.
+#[test]
+fn a_reservation_inside_the_closure_that_does_not_fit_is_capacity_exceeded() {
+    let budget = Budget::new(CAP);
+    let m = ok("new", MetalBackend::new(budget.clone()));
+    let _held = ok("reserve", budget.try_reserve(CAP - 64));
+    let child = budget.child(CAP);
+    let (b, c) = (budget.clone(), child.clone());
+    let (own, inherited) = bounded("reserve in with_runtime", move || {
+        let (tx, rx) = mpsc::channel();
+        ok(
+            "with_runtime",
+            m.with_runtime(move |_| {
+                let _ = tx.send((
+                    b.try_reserve(4096).map(|_| ()),
+                    c.try_reserve(4096).map(|_| ()),
+                ));
+                Ok(())
+            }),
+        );
+        rx.recv().expect("the closure ran")
+    });
+    assert!(
+        matches!(own, Err(OjasError::CapacityExceeded { .. })),
+        "{own:?}"
+    );
+    assert!(
+        matches!(inherited, Err(OjasError::CapacityExceeded { .. })),
+        "{inherited:?}"
+    );
+}
+
+/// Pressure inside the closure on the budget `with_budget` was given is
+/// `CapacityExceeded` without blocking.
+#[test]
+fn pressure_on_a_with_budget_budget_inside_the_closure_does_not_block() {
+    let m = metal();
+    let other = Budget::new(CAP);
+    let shared = m.with_budget(other.clone());
+
+    let _held = ok("reserve", other.try_reserve(CAP - 64));
+    let o = other.clone();
+    let r = bounded("with_budget pressure", move || {
+        let (tx, rx) = mpsc::channel();
+        ok(
+            "with_runtime",
+            shared.with_runtime(move |_| {
+                let _ = tx.send(o.try_reserve(4096).map(|_| ()));
+                Ok(())
+            }),
+        );
+        rx.recv().expect("the closure ran")
+    });
+    assert!(
+        matches!(r, Err(OjasError::CapacityExceeded { .. })),
+        "{r:?}"
+    );
+}
+
+/// After a closure panic the backend is poisoned and the next op is refused
+/// before it dispatches: nothing the device does can run on a runtime left
+/// with `async_encode` off.
+#[test]
+fn an_op_after_a_closure_panic_is_poisoned() {
+    let m = metal();
+    let t = probe(&m, &[1.0, 2.0]);
+    let _ = m.with_runtime(|_| panic!("provider panic, injected by the test"));
+    assert!(matches!(m.silu_forward(&t), Err(OjasError::Poisoned)));
+    assert!(matches!(m.trim_pool(), Err(OjasError::Poisoned)));
 }

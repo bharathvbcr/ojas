@@ -1415,6 +1415,9 @@ pub(crate) struct DeviceInfo {
     pub(crate) name: String,
     /// The device runs tessl's cooperative TensorOps kernels.
     pub(crate) tensorops: bool,
+    /// The device thread. A command sent from it can never be answered: the
+    /// thread would have to read its own channel while blocked on the reply.
+    pub(crate) thread: std::thread::ThreadId,
 }
 
 impl Link {
@@ -1491,7 +1494,18 @@ impl Link {
     }
 
     /// Run `cmd` on the device thread with an explicit `bf16_accum` flag.
+    ///
+    /// Refused, before anything is sent, when called on the device thread
+    /// itself (a `with_runtime` closure that runs an op, `sync`, `trim_pool`,
+    /// or a budget trim): that thread is the only reader of the channel, so
+    /// the wait for the reply would never end.
     pub(crate) fn call_with(&self, cmd: Cmd, bf16_accum: bool) -> Res<Reply> {
+        if std::thread::current().id() == self.device.thread {
+            return Err(metal_err(
+                "device-thread re-entry refused: a with_runtime closure (or a budget trim it triggered) \
+                 called back into the backend whose device thread it is running on",
+            ));
+        }
         let (reply, rx) = mpsc::sync_channel(1);
         self.tx
             .send(Msg {
