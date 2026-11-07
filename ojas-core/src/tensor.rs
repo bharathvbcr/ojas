@@ -317,6 +317,59 @@ impl HostLease for HostSliceLease {
     }
 }
 
+/// A [`HostLease`] narrowed to `start..end` of the lease it wraps. The inner
+/// lease stays alive, so its fence is held for as long as this one lives.
+struct WindowedLease {
+    inner: Box<dyn HostLease>,
+    start: usize,
+    end: usize,
+}
+
+impl WindowedLease {
+    /// The element range of `size`-byte words this window covers, refused
+    /// when the window does not begin and end on a word boundary.
+    fn words(&self, op: &'static str, size: usize) -> Result<std::ops::Range<usize>, OjasError> {
+        if !self.start.is_multiple_of(size) || !self.end.is_multiple_of(size) {
+            return Err(OjasError::Shape {
+                op,
+                detail: format!(
+                    "window {}..{} is not aligned to {size}-byte words",
+                    self.start, self.end
+                ),
+            });
+        }
+        Ok(self.start / size..self.end / size)
+    }
+}
+
+impl HostLease for WindowedLease {
+    fn as_bytes(&self) -> &[u8] {
+        &self.inner.as_bytes()[self.start..self.end]
+    }
+
+    fn as_f32(&self) -> Result<&[f32], OjasError> {
+        let range = self.words("HostLease::as_f32", 4)?;
+        self.inner
+            .as_f32()?
+            .get(range)
+            .ok_or_else(|| OjasError::Shape {
+                op: "HostLease::as_f32",
+                detail: "window lies outside the leased f32 view".to_string(),
+            })
+    }
+
+    fn as_u32(&self) -> Result<&[u32], OjasError> {
+        let range = self.words("HostLease::as_u32", 4)?;
+        self.inner
+            .as_u32()?
+            .get(range)
+            .ok_or_else(|| OjasError::Shape {
+                op: "HostLease::as_u32",
+                detail: "window lies outside the leased u32 view".to_string(),
+            })
+    }
+}
+
 impl Tensor {
     /// Zero-filled contiguous allocation. `byte_offset` is 0.
     pub fn zeros(shape: &[usize], dtype: DType, budget: &Budget) -> Result<Self, OjasError> {
@@ -1129,9 +1182,50 @@ impl Tensor {
     }
 
     /// Acquire a shared read lease over mapped or host memory.
+    ///
+    /// The lease covers this view's window, not the base allocation. A mapped
+    /// tensor's lease is the zero-copy borrow [`MappedBuffer::host_read`]
+    /// gives (it waits for the device's last write and holds the buffer's
+    /// fence while it lives), narrowed to the view's `byte_offset` and
+    /// contiguous length; no bytes are copied and no budget is charged. A
+    /// non-contiguous mapped view is [`OjasError::Shape`]: its window is not
+    /// one run of bytes, so [`Tensor::to_host`] is the way to read it.
     pub fn host_view(&self) -> Result<Box<dyn HostLease>, OjasError> {
         match &self.storage.payload {
-            Payload::Mapped(mbuf) => mbuf.host_read().map_err(|e| e.into_ojas(mbuf.backend())),
+            Payload::Mapped(mbuf) => {
+                const OP: &str = "Tensor::host_view";
+                if !self.is_contiguous()? {
+                    return Err(OjasError::Shape {
+                        op: OP,
+                        detail: "a non-contiguous mapped view is not one run of bytes; \
+                                 use Tensor::to_host for a host snapshot"
+                            .to_string(),
+                    });
+                }
+                let len = contiguous_nbytes(&self.shape, self.dtype)?;
+                let end =
+                    self.byte_offset
+                        .checked_add(len)
+                        .ok_or_else(|| OjasError::OutOfRange {
+                            op: OP,
+                            detail: "window end overflows".to_string(),
+                        })?;
+                let lease = mbuf.host_read().map_err(|e| e.into_ojas(mbuf.backend()))?;
+                if end > lease.as_bytes().len() {
+                    return Err(OjasError::OutOfRange {
+                        op: OP,
+                        detail: format!(
+                            "window {end} exceeds the leased {} bytes",
+                            lease.as_bytes().len()
+                        ),
+                    });
+                }
+                Ok(Box::new(WindowedLease {
+                    inner: lease,
+                    start: self.byte_offset,
+                    end,
+                }))
+            }
             Payload::Host(_) => {
                 let bytes = self.to_ne_bytes()?;
                 let f32s = if self.dtype == DType::F32 {
@@ -1155,43 +1249,61 @@ impl Tensor {
     }
 
     /// Host copy with the same shape. A host tensor is returned as a cheap
-    /// clone that shares storage. A device tensor is read back and counted
-    /// in [`crate::Budget::device_readbacks`] on `budget`. A contiguous view copies only its window; a
-    /// strided one copies the whole allocation and keeps its strides.
+    /// clone that shares storage. A device or mapped tensor is read back into
+    /// a [`Payload::Host`] snapshot and counted in
+    /// [`crate::Budget::device_readbacks`] on `budget`; the result has
+    /// `device() == None` and is unchanged by any later device write. A
+    /// contiguous view copies only its window; a strided one copies the whole
+    /// allocation and keeps its strides.
     ///
-    /// The window is read with [`DeviceBuffer::read_bytes`] in pieces of at
+    /// A mapped tensor is read through [`MappedBuffer::host_read`], the lease
+    /// that waits for the device's last write; the lease is dropped once the
+    /// bytes are copied. The zero-copy borrow is [`Tensor::host_view`].
+    ///
+    /// A device window is read with [`DeviceBuffer::read_bytes`] in pieces of at
     /// most [`READBACK_CHUNK_BYTES`], each decoded straight into the typed
     /// result, which is reserved up front and never zero-filled, so each
     /// result byte is written once. `budget` is charged for the result and
     /// for one piece; the piece's charge is released before this returns, so
-    /// the peak is the window plus one piece, not twice the window. A short
-    /// read is [`OjasError::Backend`] and nothing is kept.
+    /// the peak is the window plus one piece, not twice the window. A mapped
+    /// window is decoded straight from the lease, so only the result is
+    /// charged. A short read is [`OjasError::Backend`] and nothing is kept.
     pub fn to_host(&self, budget: &Budget) -> Result<Self, OjasError> {
         const OP: &str = "Tensor::to_host";
-        let buf = match &self.storage.payload {
+        enum Source<'a> {
+            Device(&'a Arc<dyn DeviceBuffer>),
+            Lease(Box<dyn HostLease>),
+        }
+        let (src, backend, total) = match &self.storage.payload {
             Payload::Host(_) => return Ok(self.clone()),
             Payload::Mapped(mbuf) => {
-                // Take the read lease the HAL defines for exactly this: a
-                // borrow valid only after the device finished its last write.
+                // The read lease the HAL defines for exactly this: a borrow
+                // valid only after the device finished its last write.
                 // Waiting on `Timeline::current_value()` could not provide
                 // that -- it is the value already *completed*, and
                 // `Timeline::wait` returns without blocking on a value already
-                // reached, so the wait was a no-op and a host read could
-                // observe memory the GPU was still writing. The lease is
-                // dropped here because it is the synchronisation that is
-                // wanted, not a lasting borrow; keeping it alive for the
-                // returned tensor is the zero-copy work in `ft-4a8f33de`.
-                drop(mbuf.host_read().map_err(|e| e.into_ojas(mbuf.backend()))?);
-                return Ok(self.clone());
+                // reached.
+                let lease = mbuf.host_read().map_err(|e| e.into_ojas(mbuf.backend()))?;
+                if lease.as_bytes().len() < mbuf.byte_len() {
+                    return Err(OjasError::Backend {
+                        id: mbuf.backend(),
+                        detail: format!(
+                            "host_read lease holds {} bytes, the mapped buffer has {}",
+                            lease.as_bytes().len(),
+                            mbuf.byte_len()
+                        ),
+                    });
+                }
+                (Source::Lease(lease), mbuf.backend(), mbuf.byte_len())
             }
-            Payload::Device(buf) => buf,
+            Payload::Device(buf) => (Source::Device(buf), buf.backend(), buf.byte_len()),
         };
         let (offset, len, strides, byte_offset) = if self.is_contiguous()? {
             let len = contiguous_nbytes(&self.shape, self.dtype)?;
             let strides = self.strides.to_vec();
             (self.byte_offset, len, strides, 0)
         } else {
-            (0, buf.byte_len(), self.strides.to_vec(), self.byte_offset)
+            (0, total, self.strides.to_vec(), self.byte_offset)
         };
         let end = offset
             .checked_add(len)
@@ -1199,15 +1311,15 @@ impl Tensor {
                 op: OP,
                 detail: "window end overflows".to_string(),
             })?;
-        if end > buf.byte_len() {
+        if end > total {
             return Err(OjasError::OutOfRange {
                 op: OP,
-                detail: format!("window {end} exceeds device storage {}", buf.byte_len()),
+                detail: format!("window {end} exceeds device storage {total}"),
             });
         }
         if !len.is_multiple_of(self.dtype.size()) {
             return Err(OjasError::Backend {
-                id: buf.backend(),
+                id: backend,
                 detail: format!(
                     "device allocation of {len} bytes is not a whole number of {:?} elements",
                     self.dtype
@@ -1218,7 +1330,11 @@ impl Tensor {
         let size = self.dtype.size();
         let reservation = budget.try_reserve(len_u64)?;
         let chunk_len = len.min(READBACK_CHUNK_BYTES);
-        let transient = budget.try_reserve(u64_len(chunk_len, OP)?)?;
+        // Only a device read copies through a transient piece.
+        let transient = match &src {
+            Source::Device(_) => Some(budget.try_reserve(u64_len(chunk_len, OP)?)?),
+            Source::Lease(_) => None,
+        };
         // Reserved, not zeroed: the pieces below append every element once.
         let Some(mut data) = HostData::try_with_capacity(self.dtype, len / size) else {
             drop(transient);
@@ -1232,21 +1348,31 @@ impl Tensor {
         let mut done = 0usize;
         while done < len {
             let n = (len - done).min(chunk_len);
-            let bytes = buf.read_bytes(offset + done, n)?;
-            if bytes.len() != n {
-                return Err(OjasError::Backend {
-                    id: buf.backend(),
-                    detail: format!(
-                        "read_bytes returned {} bytes, asked {n} at offset {}",
-                        bytes.len(),
-                        offset + done
-                    ),
-                });
+            match &src {
+                Source::Device(buf) => {
+                    let bytes = buf.read_bytes(offset + done, n)?;
+                    if bytes.len() != n {
+                        return Err(OjasError::Backend {
+                            id: backend,
+                            detail: format!(
+                                "read_bytes returned {} bytes, asked {n} at offset {}",
+                                bytes.len(),
+                                offset + done
+                            ),
+                        });
+                    }
+                    data.extend_decoded(&bytes, Endian::Native);
+                }
+                Source::Lease(lease) => {
+                    // `end <= total <= lease length` was checked above.
+                    let from = offset + done;
+                    data.extend_decoded(&lease.as_bytes()[from..from + n], Endian::Native);
+                }
             }
-            data.extend_decoded(&bytes, Endian::Native);
             done += n;
         }
         drop(transient);
+        drop(src);
         budget.record_readback(len_u64);
         let host = Self {
             storage: Arc::new(Storage::new(Payload::Host(data), reservation)),
@@ -3099,7 +3225,7 @@ mod tests {
     }
 
     #[test]
-    fn mapped_tensor_supports_zero_copy_to_host_and_enforces_fail_closed_placement() {
+    fn mapped_tensor_leases_through_host_view_snapshots_through_to_host_and_fails_closed() {
         let budget = Budget::new(1024);
         let values = [1.0f32, 2.0, 3.0, 4.0];
         let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_ne_bytes()).collect();
@@ -3143,15 +3269,19 @@ mod tests {
         let lease = t.host_view().unwrap();
         assert_eq!(lease.as_f32().unwrap(), &values);
 
-        // to_host is zero-copy: does not charge extra budget, returns clone
+        // to_host is a host snapshot: it charges the window, is CPU-readable,
+        // and is a Host payload rather than the mapped buffer.
         let host = t.to_host(&budget).unwrap();
-        assert_eq!(budget.live_bytes().unwrap(), 16);
-        assert_eq!(host.device(), Some(BackendId::Metal));
+        assert_eq!(budget.live_bytes().unwrap(), 32);
+        assert_eq!(budget.device_readbacks(), (1, 16));
+        assert_eq!(host.device(), None);
+        assert!(host.mapped_buffer().is_none());
+        assert_eq!(host.to_f32_vec().unwrap(), values);
 
         // from_mapped_reserved with matching reservation
         let res = budget.try_reserve(16).unwrap();
         let t2 = Tensor::from_mapped_reserved(mapped, &[4], DType::F32, res).unwrap();
-        assert_eq!(budget.live_bytes().unwrap(), 32);
+        assert_eq!(budget.live_bytes().unwrap(), 48);
         drop((t, t_mut, host, t2));
         assert_eq!(budget.live_bytes().unwrap(), 0);
     }

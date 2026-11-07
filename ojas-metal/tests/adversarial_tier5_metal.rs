@@ -335,9 +335,11 @@ fn test_uma_zero_copy_tensor_placement_and_budget_lifecycle() {
         assert_eq!(v, (i as f32) * 1.5);
     }
 
-    // to_host returns a timeline-fenced clone sharing the mapped storage
-    let host_clone = tensor.to_host(&budget).expect("to_host clone");
-    assert!(host_clone.mapped_buffer().is_some());
+    // to_host returns a timeline-fenced host snapshot, not the mapped storage
+    let host_clone = tensor.to_host(&budget).expect("to_host snapshot");
+    assert_eq!(host_clone.device(), None);
+    assert!(host_clone.mapped_buffer().is_none());
+    assert_eq!(host_clone.to_f32_vec().expect("snapshot f32").len(), 64);
 
     drop(tensor);
     drop(host_clone);
@@ -780,9 +782,11 @@ fn test_uma_strided_mapped_tensor_view() {
     let strided_view = tensor.view(&[4, 4], &[1, 4], 0).expect("strided view");
     assert!(!strided_view.is_contiguous().expect("is_contiguous"));
 
-    // to_host on strided mapped tensor preserves mapped representation
+    // to_host on a strided mapped tensor is a host snapshot that keeps the strides
     let host_mapped = strided_view.to_host(&budget).expect("to_host on mapped");
-    assert!(host_mapped.mapped_buffer().is_some());
+    assert!(host_mapped.mapped_buffer().is_none());
+    assert_eq!(host_mapped.device(), None);
+    assert!(!host_mapped.is_contiguous().expect("is_contiguous"));
 
     // host_view on base tensor gives raw slice
     let host_v = tensor.host_view().expect("host_view");

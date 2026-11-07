@@ -2,14 +2,16 @@
 //!
 //! Validates:
 //! 1. UMA pointer equivalence (`host_ptr == device_ptr`).
-//! 2. `Tensor::to_host` on `Payload::Mapped` over `MappedBuffer` (as implemented
-//!    by `tessl::SharedBuf`) returns `Ok(self.clone())` without copying any bytes.
-//! 3. Copy tracking confirms 0 calls to `DeviceBuffer::read_bytes` and 0 bytes transferred.
-//! 4. Memory budget reservations are preserved without redundant host-device allocations.
+//! 2. `Tensor::host_view` on `Payload::Mapped` is the zero-copy path: a lease over
+//!    the view's window, no budget charge. `Tensor::to_host` is a host snapshot:
+//!    it charges the window, drops the lease, and is unchanged by later device writes.
+//! 3. Copy tracking confirms 0 calls to `DeviceBuffer::read_bytes` (the snapshot reads
+//!    through the fenced lease, not `read_bytes`).
+//! 4. Memory budget reservations are exact: the view is free, the snapshot is charged and released.
 //! 5. Fail-closed placement: direct CPU access is refused with `OjasError::Placement`.
 //! 6. Host access is safely mediated via timeline-fenced zero-copy leases (`Tensor::host_view`).
 //! 7. GPU timeline synchronization drains in-flight device writes before host observation.
-//! 8. Strided and sub-tensor views preserve zero-copy sharing and budget tracking.
+//! 8. Narrow and strided views: the lease is windowed, a strided view is refused, a snapshot keeps strides.
 
 use ojas_core::{
     BackendId, Budget, DType, DeviceBuffer, FenceError, HostLease, HostLeaseMut, MappedBuffer,
@@ -317,45 +319,45 @@ fn test_uma_pointer_equivalence_and_zero_copy_elimination() {
         "Initial budget must reflect mapped buffer length exactly"
     );
 
-    // 3. Programmatic to_host verification
-    // Calling to_host on a Mapped tensor MUST NOT copy any bytes or charge extra budget!
+    // 3. to_host is a host snapshot: a budget-charged copy of the window that
+    // reads through the fenced lease, not DeviceBuffer::read_bytes.
     let host_tensor = tensor.to_host(&budget).expect("to_host on mapped tensor");
-
-    // Assert zero buffer copying
     assert_eq!(
         uma_buf.read_bytes_calls.load(Ordering::SeqCst),
         0,
-        "Tensor::to_host on Payload::Mapped must not invoke DeviceBuffer::read_bytes"
+        "the snapshot reads through the fenced host_read lease"
     );
-    assert_eq!(
-        uma_buf.bytes_copied.load(Ordering::SeqCst),
-        0,
-        "Tensor::to_host on Payload::Mapped must copy exactly 0 bytes"
-    );
-
-    // Assert memory footprint elimination (no double allocation)
+    assert_eq!(uma_buf.host_read_leases.load(Ordering::SeqCst), 1);
+    assert_eq!(host_tensor.device(), None, "a snapshot is a host tensor");
+    assert!(host_tensor.mapped_buffer().is_none());
     assert_eq!(
         budget.live_bytes().unwrap(),
-        256,
-        "Budget must remain exactly 256 bytes without allocating duplicate host copy"
+        512,
+        "the snapshot charges exactly the window's 256 bytes on top of the mapping"
+    );
+    assert_eq!(budget.device_readbacks(), (1, 256));
+    assert_eq!(
+        host_tensor.to_f32_vec().expect("host snapshot reads"),
+        values
     );
 
-    // Assert underlying storage identity (shared Arc<dyn MappedBuffer>)
-    assert!(
-        Arc::ptr_eq(
-            tensor.mapped_buffer().unwrap(),
-            host_tensor.mapped_buffer().unwrap()
-        ),
-        "Returned tensor must share identical MappedBuffer storage"
+    // 4. host_view is the zero-copy path: leasing it charges nothing.
+    let lease = tensor.host_view().expect("host_view");
+    assert_eq!(lease.as_f32().expect("view as f32"), &values[..]);
+    assert_eq!(budget.live_bytes().unwrap(), 512, "a lease is free");
+    assert_eq!(
+        budget.device_readbacks(),
+        (1, 256),
+        "a lease is no readback"
     );
-
-    // 4. Safe data access via host_view
-    let lease = host_tensor.host_view().expect("host_view");
-    let f32_slice = lease.as_f32().expect("view as f32");
-    assert_eq!(f32_slice, &values[..]);
 
     drop(lease);
     drop(host_tensor);
+    assert_eq!(
+        budget.live_bytes().unwrap(),
+        256,
+        "the snapshot is released"
+    );
     drop(tensor);
 
     // 5. Clean teardown
@@ -394,7 +396,7 @@ fn test_comparison_discrete_vs_uma_zero_copy() {
     // Discrete to_host produces a Host payload
     assert_eq!(discrete_host.device(), None);
 
-    // In contrast, UMA Mapped Tensor performs ZERO read_bytes calls and copies ZERO bytes!
+    // In contrast, a UMA mapped tensor snapshots through its fenced lease: ZERO read_bytes calls.
     let uma_buf = Arc::new(UmaMappedBuffer::new(raw_bytes));
     let uma_tensor = Tensor::from_mapped(uma_buf.clone(), &[64], DType::F32, &budget).unwrap();
     let uma_host = uma_tensor.to_host(&budget).expect("uma to_host");
@@ -411,8 +413,14 @@ fn test_comparison_discrete_vs_uma_zero_copy() {
     );
     assert_eq!(
         uma_host.device(),
-        Some(BackendId::Metal),
-        "UMA host tensor remains resident on Metal with zero-copy access"
+        None,
+        "a mapped to_host is a host snapshot, not a mapped clone"
+    );
+    assert_eq!(uma_host.to_f32_vec().expect("snapshot reads"), values);
+    assert_eq!(
+        uma_buf.host_read_leases.load(Ordering::SeqCst),
+        1,
+        "the snapshot is taken through one fenced lease"
     );
 }
 
@@ -489,7 +497,7 @@ fn test_timeline_drain_on_to_host() {
 }
 
 #[test]
-fn test_strided_and_narrow_views_preserve_zero_copy() {
+fn test_narrow_view_snapshot_is_the_window_and_host_view_is_windowed() {
     let budget = Budget::new(4096);
     let values: Vec<f32> = (0..32).map(|i| i as f32 * 1.0).collect();
     let raw_bytes: Vec<u8> = values.iter().flat_map(|v| v.to_ne_bytes()).collect();
@@ -502,25 +510,20 @@ fn test_strided_and_narrow_views_preserve_zero_copy() {
     let narrowed = tensor.narrow(32, &[16], &[1]).expect("narrow view");
     assert_eq!(narrowed.shape(), &[16]);
 
-    // to_host on the narrowed view
+    // to_host copies exactly the window into a host tensor at offset 0.
     let host_narrowed = narrowed.to_host(&budget).expect("narrowed to_host");
-
-    // Zero-copy invariant preserved
     assert_eq!(uma_buf.read_bytes_calls.load(Ordering::SeqCst), 0);
-    assert_eq!(uma_buf.bytes_copied.load(Ordering::SeqCst), 0);
+    assert_eq!(host_narrowed.device(), None);
+    assert_eq!(host_narrowed.byte_offset(), 0);
+    assert_eq!(host_narrowed.to_f32_vec().unwrap(), &values[8..24]);
+    assert_eq!(budget.live_bytes().unwrap(), 128 + 64);
+    assert_eq!(budget.device_readbacks(), (1, 64));
 
-    // Host view reflects the backing shared buffer and window offset
-    let lease = host_narrowed.host_view().expect("narrowed host_view");
-    let f32s = lease.as_f32().expect("slice as f32");
-    assert_eq!(f32s.len(), 32);
-    let window_start = host_narrowed.byte_offset() / std::mem::size_of::<f32>();
-    let window_len = host_narrowed.num_elements().unwrap();
-    assert_eq!(window_start, 8);
-    assert_eq!(window_len, 16);
-    assert_eq!(
-        &f32s[window_start..window_start + window_len],
-        &values[8..24]
-    );
+    // host_view of the mapped view is exactly the window, not the allocation.
+    let lease = narrowed.host_view().expect("narrowed host_view");
+    assert_eq!(lease.as_bytes().len(), 64);
+    assert_eq!(lease.as_f32().expect("window as f32"), &values[8..24]);
+    assert_eq!(budget.live_bytes().unwrap(), 128 + 64, "a lease is free");
 
     drop(lease);
     drop(host_narrowed);
@@ -528,4 +531,253 @@ fn test_strided_and_narrow_views_preserve_zero_copy() {
     drop(tensor);
 
     assert_eq!(budget.live_bytes().unwrap(), 0);
+}
+
+#[test]
+fn test_strided_mapped_view_is_refused_by_host_view_and_snapshotted_by_to_host() {
+    let budget = Budget::new(4096);
+    let values: Vec<f32> = (0..16).map(|i| i as f32).collect();
+    let raw_bytes: Vec<u8> = values.iter().flat_map(|v| v.to_ne_bytes()).collect();
+    let uma_buf = Arc::new(UmaMappedBuffer::new(raw_bytes));
+    let tensor = Tensor::from_mapped(uma_buf.clone(), &[4, 4], DType::F32, &budget).unwrap();
+
+    // Transposed view: strides [1, 4] elements, not one run of bytes.
+    let strided = tensor.view(&[4, 4], &[1, 4], 0).expect("strided view");
+    assert!(!strided.is_contiguous().unwrap());
+
+    let err = strided.host_view().map(|_| ()).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            OjasError::Shape {
+                op: "Tensor::host_view",
+                ..
+            }
+        ),
+        "a non-contiguous mapped view must be refused, got {err:?}"
+    );
+    assert_eq!(
+        uma_buf.host_read_leases.load(Ordering::SeqCst),
+        0,
+        "the refusal happens before any lease is taken"
+    );
+
+    // to_host mirrors the Device branch: the whole allocation, strides kept.
+    let snap = strided.to_host(&budget).expect("strided to_host");
+    assert_eq!(snap.device(), None);
+    assert!(!snap.is_contiguous().unwrap());
+    assert_eq!(snap.strides(), strided.strides());
+    assert_eq!(budget.live_bytes().unwrap(), 64 + 64);
+    assert_eq!(budget.device_readbacks(), (1, 64));
+    drop((snap, strided, tensor));
+    assert_eq!(budget.live_bytes().unwrap(), 0);
+}
+
+/// A mapped buffer whose lease borrows the stored bytes (an `Arc`, so the
+/// address is checkable), counts live leases, and refuses a device write while
+/// one is live, as a real fence does.
+#[derive(Debug)]
+struct ArcMapped {
+    snap: RwLock<Arc<Snap>>,
+    live_leases: Arc<AtomicUsize>,
+    timeline: MockTimeline,
+    /// When set, `host_read` hands back a lease this many bytes short.
+    short_by: usize,
+}
+
+#[derive(Debug)]
+struct Snap {
+    bytes: Vec<u8>,
+    f32s: Vec<f32>,
+}
+
+impl Snap {
+    fn of(values: &[f32]) -> Arc<Self> {
+        Arc::new(Self {
+            bytes: values.iter().flat_map(|v| v.to_ne_bytes()).collect(),
+            f32s: values.to_vec(),
+        })
+    }
+}
+
+struct ArcLease {
+    snap: Arc<Snap>,
+    live: Arc<AtomicUsize>,
+    short_by: usize,
+}
+
+impl HostLease for ArcLease {
+    fn as_bytes(&self) -> &[u8] {
+        &self.snap.bytes[..self.snap.bytes.len() - self.short_by]
+    }
+    fn as_f32(&self) -> Result<&[f32], OjasError> {
+        Ok(&self.snap.f32s)
+    }
+}
+
+impl Drop for ArcLease {
+    fn drop(&mut self) {
+        self.live.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+impl ArcMapped {
+    fn new(values: &[f32]) -> Arc<Self> {
+        Arc::new(Self {
+            snap: RwLock::new(Snap::of(values)),
+            live_leases: Arc::new(AtomicUsize::new(0)),
+            timeline: MockTimeline::new(1, 1),
+            short_by: 0,
+        })
+    }
+
+    fn short(values: &[f32], short_by: usize) -> Arc<Self> {
+        Arc::new(Self {
+            snap: RwLock::new(Snap::of(values)),
+            live_leases: Arc::new(AtomicUsize::new(0)),
+            timeline: MockTimeline::new(1, 1),
+            short_by,
+        })
+    }
+
+    fn base_ptr(&self) -> *const u8 {
+        self.snap.read().unwrap().bytes.as_ptr()
+    }
+
+    /// A GPU write (or bind): refused while a host lease is live.
+    fn device_write(&self, values: &[f32]) -> Result<(), FenceError> {
+        if self.live_leases.load(Ordering::SeqCst) != 0 {
+            return Err(FenceError::Busy {
+                detail: "a host lease is live".to_string(),
+            });
+        }
+        *self.snap.write().unwrap() = Snap::of(values);
+        Ok(())
+    }
+}
+
+impl DeviceBuffer for ArcMapped {
+    fn backend(&self) -> BackendId {
+        BackendId::Metal
+    }
+    fn byte_len(&self) -> usize {
+        self.snap.read().unwrap().bytes.len()
+    }
+    fn read_bytes(&self, _offset: usize, _len: usize) -> Result<Vec<u8>, OjasError> {
+        Err(OjasError::Unsupported {
+            op: "ArcMapped::read_bytes",
+            detail: "this mock is read only through its lease".to_string(),
+        })
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+impl MappedBuffer for ArcMapped {
+    fn timeline(&self) -> &dyn Timeline {
+        &self.timeline
+    }
+    fn host_read(&self) -> Result<Box<dyn HostLease>, FenceError> {
+        self.timeline.wait(self.timeline.submitted()?)?;
+        self.live_leases.fetch_add(1, Ordering::SeqCst);
+        Ok(Box::new(ArcLease {
+            snap: Arc::clone(&self.snap.read().unwrap()),
+            live: Arc::clone(&self.live_leases),
+            short_by: self.short_by,
+        }))
+    }
+}
+
+#[test]
+fn host_view_is_zero_copy_over_the_view_window_and_holds_the_fence() {
+    let budget = Budget::new(4096);
+    let values: Vec<f32> = (0..32).map(|i| i as f32).collect();
+    let buf = ArcMapped::new(&values);
+    let tensor = Tensor::from_mapped(buf.clone(), &[4, 8], DType::F32, &budget).unwrap();
+    assert_eq!(budget.live_bytes().unwrap(), 128);
+
+    // Row 2: byte_offset 64, 8 elements. The lease is that row, at that address.
+    let row = tensor.narrow(64, &[8], &[1]).expect("row view");
+    let lease = row.host_view().expect("row host_view");
+    assert_eq!(
+        lease.as_bytes().len(),
+        32,
+        "exactly the window, not the allocation"
+    );
+    assert_eq!(lease.as_f32().unwrap(), &values[16..24]);
+    assert_eq!(
+        lease.as_bytes().as_ptr(),
+        buf.base_ptr().wrapping_add(64),
+        "zero copy: the window starts inside the base allocation"
+    );
+    assert_eq!(budget.live_bytes().unwrap(), 128, "a lease charges nothing");
+    assert_eq!(budget.device_readbacks(), (0, 0));
+
+    // The lease holds the buffer's fence: a device write is refused until it drops.
+    assert!(matches!(
+        buf.device_write(&values),
+        Err(FenceError::Busy { .. })
+    ));
+    drop(lease);
+    buf.device_write(&values)
+        .expect("write after the lease dropped");
+}
+
+#[test]
+fn to_host_is_a_snapshot_unchanged_by_a_later_device_write_and_released_on_drop() {
+    let budget = Budget::new(4096);
+    let values: Vec<f32> = (0..32).map(|i| i as f32).collect();
+    let buf = ArcMapped::new(&values);
+    let tensor = Tensor::from_mapped(buf.clone(), &[4, 8], DType::F32, &budget).unwrap();
+    let row = tensor.narrow(64, &[8], &[1]).expect("row view");
+
+    let snap = row.to_host(&budget).expect("snapshot");
+    assert_eq!(snap.device(), None);
+    assert_eq!(snap.to_f32_vec().unwrap(), &values[16..24]);
+    assert_eq!(
+        budget.live_bytes().unwrap(),
+        128 + 32,
+        "window only is charged"
+    );
+    assert_eq!(budget.device_readbacks(), (1, 32));
+    assert_eq!(
+        buf.live_leases.load(Ordering::SeqCst),
+        0,
+        "the snapshot drops its lease before returning"
+    );
+
+    // A device write after the snapshot must not show through it.
+    let rewritten: Vec<f32> = values.iter().map(|v| v + 100.0).collect();
+    buf.device_write(&rewritten).expect("device write");
+    assert_eq!(snap.to_f32_vec().unwrap(), &values[16..24]);
+    assert_eq!(
+        row.host_view().unwrap().as_f32().unwrap(),
+        &rewritten[16..24],
+        "the leased view does see the new bytes"
+    );
+
+    drop(snap);
+    assert_eq!(
+        budget.live_bytes().unwrap(),
+        128,
+        "the snapshot's charge is released"
+    );
+    drop((row, tensor));
+    assert_eq!(budget.live_bytes().unwrap(), 0);
+}
+
+#[test]
+fn a_lease_shorter_than_the_buffer_is_a_backend_error_and_charges_nothing() {
+    let budget = Budget::new(4096);
+    let values: Vec<f32> = (0..8).map(|i| i as f32).collect();
+    let buf = ArcMapped::short(&values, 4);
+    let tensor = Tensor::from_mapped(buf, &[8], DType::F32, &budget).unwrap();
+
+    let err = tensor.to_host(&budget).unwrap_err();
+    assert!(matches!(err, OjasError::Backend { .. }), "got {err:?}");
+    assert_eq!(budget.live_bytes().unwrap(), 32, "no snapshot kept");
+    assert_eq!(budget.device_readbacks(), (0, 0));
+    let err = tensor.host_view().map(|_| ()).unwrap_err();
+    assert!(matches!(err, OjasError::OutOfRange { .. }), "got {err:?}");
 }
