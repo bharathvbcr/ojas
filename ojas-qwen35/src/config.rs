@@ -330,10 +330,26 @@ fn require(obj: &JsonValue, key: &str, want: &JsonValue, why: &str) -> Result<()
 }
 
 impl Qwen35TextConfig {
-    /// Read `path` (a snapshot's `config.json`).
+    /// Read `path` (a snapshot's `config.json`). A file over the 16 MiB JSON
+    /// cap, a directory or a FIFO is refused before it is read.
     pub fn from_file(path: &std::path::Path) -> Result<Self> {
-        let text = std::fs::read_to_string(path)
-            .map_err(|e| Qwen35Error::Io(format!("{}: {e}", path.display())))?;
+        // Bounded before it is a String: the HF byte cap is judged on the
+        // file's length, not on text already resident (a refusal names the
+        // path, both numbers and the cap).
+        let text = ojas_io::read_regular_text(
+            path,
+            HF_JSON_LIMITS.max_input_bytes as u64,
+            "JSON input limit",
+        )
+        .map_err(|e| {
+            // A cap or UTF-8 refusal is a config refusal; a file that could not
+            // be opened or read stays `Io`, which callers match on.
+            if e.is_refusal() {
+                Qwen35Error::Config(e.detail().to_string())
+            } else {
+                Qwen35Error::Io(e.detail().to_string())
+            }
+        })?;
         Self::from_json(&text).map_err(|e| match e {
             Qwen35Error::Config(d) => Qwen35Error::Config(format!("{}: {d}", path.display())),
             other => other,

@@ -1005,7 +1005,7 @@ impl CheckpointView {
             Some(d) if !d.as_os_str().is_empty() => d,
             _ => Path::new("."),
         };
-        let text = read_index_text(index_path, &what)?;
+        let text = crate::open::read_regular_text(index_path, MAX_INDEX_BYTES, "index cap")?;
         // Naming the index is not decoration: a refusal like "no weight_map"
         // or "unexpected end at byte 0", in a snapshot directory holding a
         // config, an index and several shards, does not say which file was
@@ -1118,39 +1118,6 @@ fn checked_numel(shape: &[u64]) -> Option<u64> {
 
 /// Largest index accepted: a 9B checkpoint's is about 100 KB.
 const MAX_INDEX_BYTES: u64 = 16 << 20;
-
-/// Read a checkpoint index, bounded before it is allocated.
-///
-/// This used to be `std::fs::read_to_string`, which sizes its allocation from
-/// whatever the file turns out to be: a checkpoint directory could hand the
-/// loader an arbitrarily large `model.safetensors.index.json` and have it read
-/// in full before a single byte was parsed, and a FIFO at that path blocked
-/// instead of being refused. The length is checked first and the read is
-/// capped, so neither depends on the file's cooperation.
-///
-/// Symlinks are followed on purpose: a Hugging Face cache snapshot links its
-/// index and shards into `../../blobs`, and refusing that would refuse every
-/// real snapshot. What is refused is anything that is not a regular file.
-fn read_index_text(index_path: &Path, what: &str) -> Result<String, IoError> {
-    use std::io::Read;
-    // Opening a FIFO for reading blocks until a writer appears, and a
-    // checkpoint directory can name one, so the open goes through the same
-    // owner as the shards': it refuses a non-regular file without blocking.
-    let (f, len) = crate::open::open_regular_file(index_path)
-        .map_err(|e| IoError::new(e.detail().to_string()))?;
-    if len > MAX_INDEX_BYTES {
-        return Err(IoError::new(format!(
-            "{what}: {len} bytes, above the {MAX_INDEX_BYTES}-byte index cap"
-        )));
-    }
-    let mut text = String::new();
-    // Capped again at the read, so a file that grew between the `fstat` and
-    // here cannot get past the bound either.
-    f.take(MAX_INDEX_BYTES)
-        .read_to_string(&mut text)
-        .map_err(|e| IoError::new(format!("{what}: {e}")))?;
-    Ok(text)
-}
 
 fn parse_index(text: &str) -> Result<BTreeMap<String, Vec<String>>, IoError> {
     let val = crate::json::parse_json(text)?;
@@ -2465,6 +2432,22 @@ mod tests {
             "expected the index cap to refuse, got: {}",
             err.detail()
         );
+    }
+
+    /// An index of exactly the cap is read and parsed (it fails later, on the
+    /// missing shard, not on the cap); one byte more is the cap refusal.
+    #[test]
+    fn an_index_at_the_cap_is_read_and_one_past_is_refused() {
+        let dir = tmp_dir("index_at_cap");
+        let index = dir.0.join(INDEX_FILE_NAME);
+        let body = r#"{"weight_map":{"w":"a.safetensors"}}"#;
+        let pad = " ".repeat(MAX_INDEX_BYTES as usize - body.len());
+        std::fs::write(&index, format!("{body}{pad}")).unwrap();
+        let err = CheckpointView::open(&index).unwrap_err();
+        assert!(!err.detail().contains("index cap"), "{}", err.detail());
+        std::fs::write(&index, format!("{body}{pad} ")).unwrap();
+        let err = CheckpointView::open(&index).unwrap_err();
+        assert!(err.detail().contains("index cap"), "{}", err.detail());
     }
 
     /// A shard that is a FIFO is refused instead of hanging the loader.
