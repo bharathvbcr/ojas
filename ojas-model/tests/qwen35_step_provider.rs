@@ -1167,3 +1167,21 @@ fn the_preflight_dry_run_never_uses_a_reserved_token_id() {
         8
     );
 }
+
+#[test]
+fn a_reserved_token_id_as_a_row_target_is_refused_before_any_work() {
+    let mut p = open_limited(None, vec![4243]);
+    let mut bad = job(8, 2, 1.0, false);
+    bad.targets[0] = 4243;
+    // Otherwise valid: the id is in the vocabulary and no token of the sequence is reserved.
+    assert!(!bad.tokens.contains(&4243));
+    refused_before_any_work(&mut p, &bad, "row target 4243");
+    let mut as_target_msg = open_limited(None, vec![4243]);
+    as_target_msg
+        .accumulate(&job(5, 2, 1.0, false).view(), BankMode::Overwrite, None)
+        .unwrap();
+    let err = as_target_msg
+        .accumulate(&bad.view(), BankMode::Add, None)
+        .unwrap_err();
+    assert!(err.to_string().contains("target"), "{err}");
+}

@@ -248,8 +248,9 @@ fn contract(detail: impl Into<String>) -> StepError {
 /// The refusals that depend on the model's config (`Qwen35Spec::reserved_token_ids` and
 /// `max_positions`), the one owner both [`TapeStepProvider::accumulate`]'s path and
 /// [`TapeStepProvider::preflight`]'s dry run go through, before any gather, loss or tape
-/// write: a token id in the reserved set (a text-only run must not embed a vision special
-/// token) and a sequence longer than `max_positions` when the config sets one.
+/// write: a token id in the reserved set, as an input or as a row target (a text-only run
+/// must neither embed a vision special token nor train toward one), and a sequence longer
+/// than `max_positions` when the config sets one.
 fn check_config_limits(spec: &Qwen35Spec, job: &SequenceJob<'_>) -> Result<(), StepError> {
     if let Some(id) = job
         .tokens
@@ -258,6 +259,17 @@ fn check_config_limits(spec: &Qwen35Spec, job: &SequenceJob<'_>) -> Result<(), S
     {
         return Err(contract(format!(
             "token {id} is reserved (a vision special token); a text-only run refuses it"
+        )));
+    }
+    if let Some(id) = job
+        .rows
+        .targets
+        .iter()
+        .find(|id| spec.reserved_token_ids.contains(id))
+    {
+        return Err(contract(format!(
+            "row target {id} is reserved (a vision special token); a text-only run cannot train \
+             toward it"
         )));
     }
     if let Some(max) = spec.max_positions {
