@@ -1,9 +1,13 @@
-//! In-place optimizer steps are all-or-nothing (audit F2).
+//! In-place optimizer steps are all-or-nothing against refusal (audit F2).
 //!
 //! `adamw_step`, `muon_ns5_step` and `clip_grad_norm` write several tensors.
 //! A target that cannot be written (its storage is shared with a clone or a
 //! narrowed view) must be found before the first write, so a refused step
 //! leaves every tensor bit-identical: no moved parameter beside stale moments.
+//!
+//! The guarantee is about refusal. A panic inside a step's tasks returns
+//! `Err(Backend)` after earlier pieces were written, so a step that panicked
+//! leaves its tensors unspecified, not unchanged.
 
 use ojas_core::{AdamWConfig, Backend, Budget, MuonNs5Config, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
