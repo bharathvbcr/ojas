@@ -1024,13 +1024,23 @@ fn refused_before_any_work(p: &mut P, bad: &Job, needle: &str) {
         matches!(err, StepError::Contract(_)) && err.to_string().contains(needle),
         "{err}"
     );
+    // The bank first, on its own: a refusal that wrote the bank (cleared it, or changed a
+    // gradient) without allocating anything must still fail here, before the budget check
+    // below could mask or replace the verdict.
+    assert!(
+        p.bank().is_complete(),
+        "the refused sequence left the bank incomplete"
+    );
+    assert_eq!(
+        bits_all(&p.read_gradients().unwrap()),
+        before,
+        "the refused sequence changed the bank's sum"
+    );
     assert_eq!(
         budget.peak_bytes().saturating_sub(live),
         0,
         "the refused sequence allocated before it was refused"
     );
-    assert!(p.bank().is_complete());
-    assert_eq!(bits_all(&p.read_gradients().unwrap()), before);
 }
 
 #[test]
