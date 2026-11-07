@@ -55,7 +55,11 @@
 //! one output per thread, ascending k, a precise multiply then a precise add.
 //! That path is not TensorOps and not split-K. It is what
 //! [`ojas_core::GemmProvider::TesslFixedOrder`] names, and the bf16-accumulation
-//! flag does not redirect it.
+//! flag does not redirect it. It covers the GEMMs of `linear_forward`,
+//! `linear_backward`, `linear_backward_input`, `linear_bias_forward` and the
+//! im2col and pointwise GEMMs of `conv2d_forward`, and nothing else. Every
+//! other op keeps its fast kernel under `Exact` (see
+//! [`MetalBackend::with_numerics`] for the list).
 //! A Fast linear GEMM whose two operands are both [`Tensor::bf16_exact`] (what
 //! [`ojas_core::Autocast`] hands this backend in a bf16 region) runs on
 //! tessl's bf16 lane, the 4-simdgroup cooperative kernels, instead of the
@@ -269,9 +273,26 @@ impl MetalBackend {
 
     /// Same device and budget, different arithmetic contract.
     ///
-    /// [`Numerics::Exact`] sends linear GEMMs through tessl's fixed-order
-    /// kernels. The choice stays on this handle: clones share the device
-    /// thread, and a Fast handle is not changed by an Exact one.
+    /// [`Numerics::Exact`] sends the GEMMs of `linear_forward`,
+    /// `linear_backward`, `linear_backward_input`, `linear_bias_forward` and
+    /// `conv2d_forward` (its im2col and pointwise routes) through tessl's
+    /// fixed-order kernels, and nothing else.
+    ///
+    /// Not covered, and still on the fast kernels under `Exact`: reductions
+    /// and `softmax`; every attention op (`causal_sdpa_*`, `attention_*`,
+    /// `cached_attention_forward`); the norms (`rms_*`, `layer_norm_*`,
+    /// `channel_layer_norm_*`, `group_norm_*`, `gated_rms_norm_*`);
+    /// `conv_transpose2d_*`, `conv2d_backward` and the depthwise convolution;
+    /// the GDN ops; the losses (`cross_entropy_mean_*`,
+    /// `linear_cross_entropy_mean`); the optimizer steps (`adamw_step`,
+    /// `muon_ns5_step`) and `clip_grad_norm`; and the elementwise, rope,
+    /// gate and embedding ops. `Backend::numerics` still reports `Exact`,
+    /// so a caller that needs bit-exact results from an op outside the first
+    /// list must use the CPU backend. A test pins the covered set
+    /// (`exact_numerics_reaches_only_the_linear_and_conv2d_gemms`).
+    ///
+    /// The choice stays on this handle: clones share the device thread, and a
+    /// Fast handle is not changed by an Exact one.
     pub fn with_numerics(mut self, numerics: Numerics) -> Self {
         self.numerics = numerics;
         self
@@ -4503,6 +4524,47 @@ mod tests {
     use ojas_core::METAL_GDN_KEY_DIM;
 
     use super::*;
+
+    /// `Numerics::Exact` reaches `Lane::FixedOrder` through one seam,
+    /// `MetalBackend::lane_of`, so the ops it covers are the ones that call it.
+    /// This reads this file's own source (as
+    /// `the_method_list_names_every_trait_method` does for the method list)
+    /// and pins both facts: `FixedOrder` is built in exactly one place, and
+    /// exactly these ops ask for a lane. Adding or removing a route fails
+    /// here, which is the cue to update the `with_numerics` and module docs.
+    /// Chosen over a runtime probe because it needs no device and cannot pass
+    /// by luck on a shape that happens to take another route.
+    #[test]
+    fn exact_numerics_reaches_only_the_linear_and_conv2d_gemms() {
+        let source = include_str!("backend.rs");
+        let end = source.find("\nmod tests {").expect("test module marker");
+        let source = &source[..end];
+        let built = source.matches(concat!("Lane::", "FixedOrder")).count();
+        assert_eq!(built, 1, "Lane::FixedOrder must be built only in lane_of");
+        let call = concat!("self.", "lane_of(");
+        let mut ops: Vec<&str> = source
+            .match_indices(call)
+            .map(|(at, _)| {
+                let head = &source[..at];
+                let decl = head.rfind("\n    fn ").expect("enclosing fn") + "\n    fn ".len();
+                let rest = &head[decl..];
+                &rest[..rest.find(['(', '<']).expect("fn name")]
+            })
+            .collect();
+        ops.sort_unstable();
+        ops.dedup();
+        assert_eq!(
+            ops,
+            [
+                "conv2d_routed",
+                "linear_backward",
+                "linear_backward_input",
+                "linear_bias_forward",
+                "linear_forward",
+            ],
+            "the ops that take a GEMM lane changed: update the with_numerics and module docs"
+        );
+    }
 
     /// Run `f` on its own thread; panic if it neither returns nor panics in
     /// time, so a hang is a failure rather than a stuck test run.

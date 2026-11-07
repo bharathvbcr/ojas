@@ -839,11 +839,15 @@ pub trait BackendCore {
     /// Budget this backend charges for outputs and scratch probes.
     fn budget(&self) -> &Budget;
 
-    /// Arithmetic contract of every op on this backend.
+    /// Arithmetic contract this backend reports.
     ///
     /// The default is [`Numerics::Exact`]. A GPU backend whose reductions
     /// are not ascending-index `f32` without fused multiply-add must
-    /// override this to return [`Numerics::Fast`].
+    /// override this to return [`Numerics::Fast`]. A backend may report
+    /// `Exact` for fewer ops than the whole trait: the Metal backend's
+    /// `Exact` covers its linear products and `conv2d_forward` GEMMs only
+    /// (see `MetalBackend::with_numerics`), and every other op still runs
+    /// its fast kernel. Read the backend's own documentation for the set.
     fn numerics(&self) -> Numerics {
         Numerics::Exact
     }
