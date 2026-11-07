@@ -178,6 +178,53 @@ pub fn open_regular_file(path: &Path) -> Result<(File, u64), IoError> {
     Ok((file, after.len()))
 }
 
+/// Read the regular file at `path` as UTF-8 text, refusing one longer than
+/// `max_bytes` before it is allocated. `cap_name` names the cap in the refusal
+/// (`"index cap"`, `"JSON input limit"`).
+///
+/// The open is [`open_regular_file`]'s, so a directory or FIFO is refused
+/// without blocking, and the length it returns is judged against `max_bytes`
+/// before any buffer exists. The read is then bounded to `max_bytes + 1`: a
+/// file that grew after the `fstat` is refused with the same error rather than
+/// truncated, because a truncated JSON document that happens to parse is worse
+/// than a refusal. Invalid UTF-8 is refused. Every refusal names `path`; the
+/// cap refusal also names the observed length (`"at least"` when it came from
+/// the read, not the `fstat`) and `max_bytes`.
+///
+/// Symlinks are followed on purpose: a Hugging Face cache snapshot links its
+/// config, index and shards into `../../blobs`, and refusing that would refuse
+/// every real snapshot. This replaces `std::fs::read_to_string`, which sizes
+/// its allocation from whatever the file turns out to be and blocks on a FIFO.
+pub fn read_regular_text(path: &Path, max_bytes: u64, cap_name: &str) -> Result<String, IoError> {
+    use std::io::Read;
+    let what = path.display();
+    let (file, len) = open_regular_file(path)?;
+    if len > max_bytes {
+        return Err(IoError::refusal(format!(
+            "{what}: {len} bytes, above the {max_bytes}-byte {cap_name}"
+        )));
+    }
+    // `len` is at most `max_bytes`, so this is a bounded allocation.
+    let mut text = String::with_capacity(usize::try_from(len).unwrap_or(0));
+    file.take(max_bytes.saturating_add(1))
+        .read_to_string(&mut text)
+        .map_err(|e| {
+            let detail = format!("{what}: {e}");
+            if e.kind() == std::io::ErrorKind::InvalidData {
+                IoError::refusal(detail)
+            } else {
+                IoError::new(detail)
+            }
+        })?;
+    if text.len() as u64 > max_bytes {
+        return Err(IoError::refusal(format!(
+            "{what}: at least {} bytes, above the {max_bytes}-byte {cap_name}",
+            text.len()
+        )));
+    }
+    Ok(text)
+}
+
 /// Open `path` read-only, refusing a final-component symlink.
 ///
 /// Three checks: `lstat` refuses a symlink (dangling or not) and anything but
@@ -296,5 +343,58 @@ mod tests {
         let err = open_flagged(&link, flag).unwrap_err();
         assert_eq!(err.raw_os_error(), Some(ELOOP), "{err}");
         assert!(open_flagged(&real, flag).is_ok());
+    }
+
+    fn err_is_refusal(p: &Path) -> bool {
+        read_regular_text(p, 64, "cap").unwrap_err().is_refusal()
+    }
+
+    /// `read_regular_text`: the cap is on bytes, at the cap passes and one past
+    /// it is refused naming the path and both numbers, a directory and a FIFO
+    /// are refused without blocking, and invalid UTF-8 is refused.
+    #[test]
+    fn read_regular_text_is_bounded_and_refuses_non_files() {
+        let dir = tmp_dir("read-text");
+        let at = dir.0.join("at");
+        std::fs::write(&at, "a".repeat(64)).unwrap();
+        assert_eq!(read_regular_text(&at, 64, "cap").unwrap().len(), 64);
+
+        let over = dir.0.join("over");
+        std::fs::write(&over, "a".repeat(65)).unwrap();
+        let err = read_regular_text(&over, 64, "test cap").unwrap_err();
+        let d = err.detail();
+        assert!(
+            d.contains("over") && d.contains("65 bytes") && d.contains("64-byte test cap"),
+            "{d}"
+        );
+
+        let err = read_regular_text(&dir.0, 64, "cap").unwrap_err();
+        assert!(err.detail().contains("not a regular file"), "{err}");
+
+        let bad = dir.0.join("bad");
+        std::fs::write(&bad, [0xff, 0xfe]).unwrap();
+        assert!(read_regular_text(&bad, 64, "cap").unwrap_err().is_refusal());
+        assert!(err_is_refusal(&over));
+        let missing = read_regular_text(&dir.0.join("missing"), 64, "cap").unwrap_err();
+        assert!(!missing.is_refusal(), "{missing}");
+        assert!(!read_regular_text(&dir.0, 64, "cap")
+            .unwrap_err()
+            .is_refusal());
+
+        let fifo = dir.0.join("fifo");
+        let made = std::process::Command::new("/usr/bin/mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let f = fifo.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(read_regular_text(&f, 64, "cap"));
+        });
+        let got = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("a FIFO blocked the reader");
+        assert!(got.unwrap_err().detail().contains("not a regular file"));
     }
 }

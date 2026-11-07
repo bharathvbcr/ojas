@@ -4,6 +4,7 @@ use std::fmt;
 #[derive(Debug)]
 pub struct IoError {
     detail: String,
+    refusal: bool,
 }
 
 impl IoError {
@@ -12,7 +13,24 @@ impl IoError {
     pub fn new(detail: impl Into<String>) -> Self {
         Self {
             detail: detail.into(),
+            refusal: false,
         }
+    }
+
+    /// A refusal of the content or its size (a byte cap, invalid UTF-8), as
+    /// opposed to a failure of the file system. See [`Self::is_refusal`].
+    pub(crate) fn refusal(detail: impl Into<String>) -> Self {
+        Self {
+            detail: detail.into(),
+            refusal: true,
+        }
+    }
+
+    /// Whether a bounded reader ([`crate::read_regular_text`]) refused what it
+    /// found (over the byte cap, or not UTF-8), rather than failing to open or
+    /// read it. A caller maps the two to different error variants.
+    pub fn is_refusal(&self) -> bool {
+        self.refusal
     }
 
     pub fn detail(&self) -> &str {
