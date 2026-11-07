@@ -4,11 +4,12 @@
 
 mod common;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 
 use common::*;
-use ojas_core::{Budget, BudgetTrimHandler, OjasError};
+use ojas_core::{BackendCore, Budget, BudgetTrimHandler};
 use ojas_metal::MetalBackend;
 
 #[test]
@@ -51,35 +52,67 @@ fn two_backends_on_one_budget_register_both_pools() {
 }
 
 /// Panics when asked whether its pool is alive, which `add_trim_handler`
-/// does while holding the handler lock: that panic poisons the lock.
+/// does while holding the handler lock: that panic poisons the lock. It
+/// panics once; afterwards it is an ordinary live handler.
 #[derive(Debug)]
-struct PanicsUnderLock;
+struct PanicsUnderLock(AtomicBool);
+
+impl PanicsUnderLock {
+    fn armed() -> Arc<Self> {
+        Arc::new(Self(AtomicBool::new(true)))
+    }
+}
 
 impl BudgetTrimHandler for PanicsUnderLock {
     fn trim_memory(&self, _needed_bytes: u64) -> u64 {
         0
     }
     fn is_live(&self) -> bool {
-        panic!("poison the handler lock, injected by the test")
+        if self.0.swap(false, Ordering::SeqCst) {
+            panic!("poison the handler lock, injected by the test");
+        }
+        true
     }
 }
 
-/// A poisoned handler lock is an error from `new`, not an `Ok` backend with
-/// no handler installed.
+/// A poisoned handler lock is recovered, not a permanent refusal: a later
+/// `add_trim_handler` installs its handler and `new` on that budget succeeds
+/// with its handler registered (ft-44871303).
 #[test]
-fn new_on_a_budget_with_a_poisoned_handler_lock_is_an_error() {
+fn a_poisoned_handler_lock_does_not_refuse_new_backends() {
     let budget = Budget::new(CAP);
-    ok("add", budget.add_trim_handler(Arc::new(PanicsUnderLock)));
+    budget.add_trim_handler(PanicsUnderLock::armed());
     let b = budget.clone();
     let panicked = thread::spawn(move || {
-        let _ = b.add_trim_handler(Arc::new(PanicsUnderLock));
+        b.add_trim_handler(PanicsUnderLock::armed());
     })
     .join();
     assert!(panicked.is_err(), "the lock was not poisoned");
 
-    match MetalBackend::new(budget) {
-        Err(OjasError::Poisoned) => {}
-        Ok(_) => panic!("new returned Ok with no trim handler installed"),
-        Err(other) => panic!("{other:?}"),
-    }
+    let m = ok("new", MetalBackend::new(budget.clone()));
+    assert!(
+        budget
+            .trim_handlers()
+            .iter()
+            .any(|h| h.pool_key().is_some()),
+        "new returned Ok with no trim handler installed"
+    );
+    let shared = m.with_budget(budget.clone());
+    ok("sync", shared.sync());
+}
+
+/// A dropped backend's handler is not listed, without waiting for the next
+/// registration to prune it.
+#[test]
+fn a_dropped_backend_is_not_listed_as_a_trim_handler() {
+    let budget = Budget::new(CAP);
+    let a = ok("a", MetalBackend::new(budget.clone()));
+    let _b = ok("b", MetalBackend::new(budget.clone()));
+    assert_eq!(budget.trim_handlers().len(), 2);
+    drop(a);
+    assert_eq!(
+        budget.trim_handlers().len(),
+        1,
+        "the dropped backend's handler was still listed"
+    );
 }

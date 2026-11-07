@@ -276,9 +276,8 @@ impl MetalBackend {
             link: Arc::downgrade(&link),
         });
         // Beside any handler another backend put on this budget, so pressure
-        // trims every pool charged to it. A poisoned handler lock is an error:
-        // a backend with no handler would not trim under pressure.
-        budget.add_trim_handler(trim_handler)?;
+        // trims every pool charged to it.
+        budget.add_trim_handler(trim_handler);
 
         Ok(Self {
             link,
@@ -884,17 +883,14 @@ impl MetalBackend {
     /// link is registered on it unless it already has one, directly or from
     /// an ancestor. The trim runs on the thread that reserves; reserved from
     /// a `with_runtime` closure (any Metal device thread) it is refused and
-    /// the reservation is `CapacityExceeded`. If the
-    /// budget's handler lock is poisoned the handler is not installed, so a
-    /// capacity miss there never reaches this link.
+    /// the reservation is `CapacityExceeded`.
     pub fn with_budget(&self, budget: Budget) -> Self {
         let key = Some(Arc::as_ptr(&self.link) as usize);
         if !budget.trim_handlers().iter().any(|h| h.pool_key() == key) {
             let handler = Arc::new(MetalTrimHandler {
                 link: Arc::downgrade(&self.link),
             });
-            // Poisoned: documented above; the budget stays without a handler.
-            let _ = budget.add_trim_handler(handler);
+            budget.add_trim_handler(handler);
         }
         Self {
             link: Arc::clone(&self.link),
