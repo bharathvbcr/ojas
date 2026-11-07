@@ -2454,9 +2454,10 @@ impl Worker {
         n: usize,
     ) -> Res<()> {
         if lane == Lane::FixedOrder {
-            if m == 0 || n == 0 {
-                return Ok(());
-            }
+            // No empty-shape early return: tessl's fixed-order entry runs the
+            // same `validate_gemm` as the exact-f32 lane, so both lanes refuse
+            // the same calls (an empty dimension, a buffer smaller than its
+            // shape).
             return self.fixed_order("matmul_fixed_order_nt_f32", || {
                 tessl::gemm::gemm_fixed_order_nt(
                     &self.mat(a, m, k)?,
@@ -2491,9 +2492,10 @@ impl Worker {
         n: usize,
     ) -> Res<()> {
         if lane == Lane::FixedOrder {
-            if m == 0 || n == 0 {
-                return Ok(());
-            }
+            // No empty-shape early return: tessl's fixed-order entry runs the
+            // same `validate_gemm` as the exact-f32 lane, so both lanes refuse
+            // the same calls (an empty dimension, a buffer smaller than its
+            // shape).
             return self.fixed_order("matmul_fixed_order_nn_f32", || {
                 tessl::gemm::gemm_fixed_order_nn(
                     &self.mat(a, m, k)?,
@@ -2528,9 +2530,10 @@ impl Worker {
         n: usize,
     ) -> Res<()> {
         if lane == Lane::FixedOrder {
-            if m == 0 || n == 0 {
-                return Ok(());
-            }
+            // No empty-shape early return: tessl's fixed-order entry runs the
+            // same `validate_gemm` as the exact-f32 lane, so both lanes refuse
+            // the same calls (an empty dimension, a buffer smaller than its
+            // shape).
             return self.fixed_order("matmul_fixed_order_tn_f32", || {
                 tessl::gemm::gemm_fixed_order_tn(
                     &self.mat(a, k, m)?,
@@ -6022,6 +6025,87 @@ mod tests {
         // A batch that fills the GPU runs one pass and writes no partials.
         assert_eq!(cached_attn_part(96, 1024, 64), Some(0));
         assert_eq!(cached_attn_part(12, 1024, usize::MAX), None);
+    }
+
+    /// The FixedOrder GEMM lane refuses exactly what the exact-f32 (Fast)
+    /// lane refuses. FixedOrder used to return `Ok` for `m == 0 || n == 0`
+    /// before any shape check, so a call whose buffers were smaller than its
+    /// shape, or an empty one, passed there while the Fast lane's tessl
+    /// validation refused it. Both go through tessl's `validate_gemm` now.
+    /// (The backend never sends an empty operand: `MetalBackend::f32` refuses
+    /// it first, so this drives the device thread's commands directly.)
+    /// Each case is `(rows, kin, nout)` over 64-element buffers, so
+    /// `(0, 100, 4)` names a `[4, 100]` weight the buffer cannot hold.
+    #[test]
+    fn the_fixed_order_gemm_lane_refuses_what_the_fast_lane_refuses() {
+        let mut w =
+            Worker::open(Arc::new(Waits::default()), Budget::new(8 << 30)).expect("Metal device");
+        let x = upload(&mut w, &pattern(64, 1));
+        let wt = upload(&mut w, &pattern(64, 2));
+        let gy = upload(&mut w, &pattern(64, 3));
+        // (rows, kin, nout, whether the call is valid)
+        let cases: [(usize, usize, usize, bool); 8] = [
+            (4, 4, 4, true),
+            (4, 1, 4, true),
+            (3, 5, 4, true),
+            (0, 4, 4, false),
+            (4, 4, 0, false),
+            (4, 0, 4, false),
+            (0, 0, 0, false),
+            (0, 100, 4, false),
+        ];
+        for (rows, kin, nout, valid) in cases {
+            for op in ["linear", "linear_bwd_input", "linear_bwd"] {
+                let mut ran = [false; 2];
+                for (i, lane) in [Lane::ExactF32, Lane::FixedOrder].into_iter().enumerate() {
+                    let cmd = match op {
+                        "linear" => Cmd::Linear {
+                            x,
+                            w: wt,
+                            rows,
+                            kin,
+                            nout,
+                            lane,
+                        },
+                        "linear_bwd_input" => Cmd::LinearBwdInput {
+                            x,
+                            w: wt,
+                            gy,
+                            rows,
+                            kin,
+                            nout,
+                            lane,
+                        },
+                        _ => Cmd::LinearBwd {
+                            x,
+                            w: wt,
+                            gy,
+                            rows,
+                            kin,
+                            nout,
+                            gx_lane: lane,
+                            gw_lane: lane,
+                        },
+                    };
+                    ran[i] = w.run(cmd).is_ok();
+                }
+                let case = format!("{op} rows {rows} kin {kin} nout {nout}");
+                assert_eq!(
+                    ran[0], ran[1],
+                    "{case}: Fast {} FixedOrder {}",
+                    ran[0], ran[1]
+                );
+                if valid {
+                    assert!(ran[0], "{case}: a valid call was refused");
+                }
+                if (rows, kin, nout) == (0, 100, 4) {
+                    assert!(
+                        !ran[1],
+                        "{case}: FixedOrder accepted a buffer too small for its shape"
+                    );
+                }
+            }
+        }
     }
 
     fn pattern(n: usize, seed: u64) -> Vec<f32> {
