@@ -2694,6 +2694,26 @@ mod backend_method_names {
 /// Emit `$then` when `$name` belongs to the capability `$group`
 /// (`core`, `float`, `int`, or `module`). Forwarding wrappers pass a
 /// group so each capability trait receives only its own methods.
+///
+/// An unknown group is a compile error:
+///
+/// ```compile_fail
+/// ojas_core::emit_in_group!(flaot, mul_forward, fn never_emitted() {});
+/// ```
+///
+/// A known group emits only its own methods:
+///
+/// ```
+/// ojas_core::emit_in_group!(float, mul_forward, fn emitted() {});
+/// ojas_core::emit_in_group!(module, mul_forward, fn not_emitted() {});
+/// emitted();
+/// ```
+///
+/// The mismatch arms cannot tell a method of another group from a method
+/// that is in no group at all. A listed method with no row here would run
+/// the trait default on every wrapper, so
+/// `the_method_list_names_every_trait_method` checks that each listed
+/// method has exactly one row, in the group of the trait that declares it.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! emit_in_group {
@@ -2803,7 +2823,20 @@ macro_rules! emit_in_group {
     (module, linear_cross_entropy_mean, $($then:tt)*) => { $($then)* };
     (module, cached_attention_forward, $($then:tt)*) => { $($then)* };
     (module, kv_cache_write, $($then:tt)*) => { $($then)* };
-    ($group:ident, $name:ident, $($then:tt)*) => {};
+    // A method of another group emits nothing. One arm per known group, so
+    // a misspelled target group falls through to the `compile_error!` below
+    // instead of silently emitting nothing for every method.
+    (core, $name:ident, $($then:tt)*) => {};
+    (float, $name:ident, $($then:tt)*) => {};
+    (int, $name:ident, $($then:tt)*) => {};
+    (module, $name:ident, $($then:tt)*) => {};
+    ($group:ident, $name:ident, $($then:tt)*) => {
+        compile_error!(concat!(
+            "emit_in_group!: unknown capability group `",
+            stringify!($group),
+            "` (expected core, float, int, or module)"
+        ));
+    };
 }
 
 /// Generates forwarding impls of every [`Backend`] method from
@@ -4030,6 +4063,41 @@ pub(crate) mod tests {
         let mut deduped = listed.clone();
         deduped.dedup();
         assert_eq!(deduped, listed, "a method is listed twice");
+        // Every listed method has exactly one `emit_in_group!` row, in the
+        // group of the trait that declares it. Markers are built at runtime
+        // so this test does not match itself.
+        let macro_start = source
+            .find(concat!("macro_rules! emit_in_", "group {"))
+            .expect("emit_in_group definition");
+        let macro_end = macro_start + source[macro_start..].find("\n}\n").unwrap();
+        let mut rows: Vec<(&str, &str)> = source[macro_start..macro_end]
+            .lines()
+            .filter_map(|line| {
+                let inner = line.trim().strip_prefix('(')?;
+                let (group, rest) = inner.split_once(", ")?;
+                let (name, tail) = rest.split_once(", ")?;
+                tail.starts_with("$($then:tt)*) => { $($then)* };")
+                    .then_some((group, name))
+            })
+            .collect();
+        let mut expected_rows: Vec<(&str, &str)> = Vec::new();
+        for (trait_name, methods) in groups {
+            let group = match *trait_name {
+                "BackendCore" => "core",
+                "BackendFloat" => "float",
+                "BackendInt" => "int",
+                "BackendModule" => "module",
+                other => panic!("no emit_in_group group for {other}"),
+            };
+            expected_rows.extend(methods.iter().map(|m| (group, *m)));
+        }
+        rows.sort_unstable();
+        expected_rows.sort_unstable();
+        assert_eq!(
+            rows, expected_rows,
+            "emit_in_group! rows disagree with the capability traits: a method \
+             with no row is dropped from every wrapper"
+        );
         // Built at runtime so this assertion is not itself a match.
         let bare_backend = concat!("pub trait Backend ", "{");
         assert!(
