@@ -39,7 +39,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use ojas_autograd::Tape;
-use ojas_core::{Backend, Budget, DType, Tensor};
+use ojas_core::{BackendCore, Budget, DType, Tensor};
 use ojas_io::SafeTensors;
 use ojas_metal::MetalBackend;
 use ojas_model::qwen35::{bind, forward_loss, fuse_grads, load_hf, Qwen35Tables};

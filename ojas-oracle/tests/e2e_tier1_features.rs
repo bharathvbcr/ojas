@@ -14,8 +14,8 @@
 use std::sync::Arc;
 
 use ojas_core::{
-    axial_rope_2d_tables, AttentionOpts, Backend, Budget, Conv2dParams, ConvTranspose2dParams,
-    DType, Numerics, OjasError, Tensor,
+    axial_rope_2d_tables, AttentionOpts, BackendCore, BackendFloat, BackendModule, Budget,
+    Conv2dParams, ConvTranspose2dParams, DType, Numerics, OjasError, Tensor,
 };
 use ojas_cpu::CpuBackend;
 use ojas_oracle::sam_fixtures::{compare, Kind, ROPE_TOL};

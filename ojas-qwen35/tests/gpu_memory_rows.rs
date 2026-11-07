@@ -85,7 +85,7 @@ use ojas_model::qwen35::{
 };
 
 use ojas_autograd::{Tape, Var};
-use ojas_core::{Backend, Budget, DType, Tensor};
+use ojas_core::{BackendCore, BackendModule, Budget, DType, Tensor};
 use ojas_io::sha256::open_sha256_hex;
 use ojas_io::SafeTensors;
 use ojas_metal::MetalBackend;

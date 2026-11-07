@@ -1,4 +1,4 @@
-use ojas_core::{Backend, Budget, OjasError, Tensor, RMS_NORM_EPS};
+use ojas_core::{BackendModule, Budget, OjasError, Tensor, RMS_NORM_EPS};
 use ojas_cpu::CpuBackend;
 use ojas_oracle::{parse_rms_norm, rms_norm_fixture};
 

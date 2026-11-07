@@ -3,7 +3,7 @@
 //! (`ojas_oracle::gdn::forward_f64`), and that forward's states at each
 //! checkpoint.
 
-use ojas_core::{Backend, Budget, GdnGrad, GdnInputs, Numerics, OjasError, Tensor};
+use ojas_core::{BackendModule, Budget, GdnGrad, GdnInputs, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 use ojas_oracle::gdn::{forward_f64, golden, Inputs, Shape, GOLDEN_SEQ};
 
