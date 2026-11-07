@@ -51,7 +51,7 @@ use std::sync::Mutex;
 
 use ojas_core::{BackendId, OjasError};
 
-use super::{guarded, panic_error, ranges, Exec, ROW_MIN_ELEMS, WORKER_STACK_BYTES};
+use super::{guarded, payload_text, ranges, task_panic, Exec, ROW_MIN_ELEMS, WORKER_STACK_BYTES};
 
 fn backend(detail: String) -> OjasError {
     OjasError::Backend {
@@ -101,7 +101,7 @@ where
             parts.push(
                 handle
                     .join()
-                    .map_err(|payload| panic_error(payload.as_ref())),
+                    .map_err(|payload| task_panic(&payload_text(payload))),
             );
         }
         for part in parts {

@@ -3,7 +3,9 @@
 //! scoped threads, or on pool workers. It never unwinds into the caller, its
 //! captures are dropped, and the next op on the same pool is unaffected.
 
-use std::sync::Arc;
+use std::panic::panic_any;
+use std::sync::{mpsc, Arc};
+use std::time::Duration;
 
 use ojas_core::{Numerics, OjasError};
 
@@ -111,5 +113,77 @@ fn scoped_fill_parts_and_chunks_into_n_panic_is_backend() {
                 .map(drop)
             });
         }
+    }
+}
+
+/// A panic payload whose `Drop` panics.
+struct DropBomb;
+
+impl Drop for DropBomb {
+    fn drop(&mut self) {
+        panic!("payload dropped");
+    }
+}
+
+/// `f` on a helper thread with a deadline, so a hang fails the test instead
+/// of hanging it. A panic that unwinds out of `f` also fails it.
+fn bounded<T: Send + 'static>(what: &str, f: impl FnOnce() -> T + Send + 'static) -> T {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    match rx.recv_timeout(Duration::from_secs(20)) {
+        Ok(value) => value,
+        Err(error) => panic!("{what}: no result ({error}): hung or unwound"),
+    }
+}
+
+fn detail_of(got: Result<impl std::fmt::Debug, OjasError>) -> String {
+    match got {
+        Err(OjasError::Backend { detail, .. }) => detail,
+        other => format!("not a Backend error: {other:?}"),
+    }
+}
+
+/// A payload whose `Drop` panics must not escape the guard or the scoped
+/// join, and must not kill a pool worker between claiming a task and
+/// counting it finished, which would leave `Pool::run` waiting forever.
+#[test]
+fn a_payload_whose_drop_panics_is_still_a_backend_error_on_every_path() {
+    for threads in [1usize, 4] {
+        let got = bounded("payload drop", move || {
+            let pool = Arc::new(Pool::new(threads).unwrap());
+            let exec = Exec {
+                pool: &pool,
+                numerics: Numerics::Fast,
+            };
+            let scoped = detail_of(scoped::map(exec, 8, |i| {
+                if i == 5 {
+                    panic_any(DropBomb)
+                }
+                Ok(i)
+            }));
+            let inline = detail_of(exec.map(8, 0, 1, |i| {
+                if i == 5 {
+                    panic_any(DropBomb)
+                }
+                i
+            }));
+            let run = detail_of(pool.run(8, |i| {
+                if i == 5 {
+                    panic_any(DropBomb)
+                }
+                i
+            }));
+            let after = pool.run(8, |i| i + 1).unwrap();
+            (scoped, inline, run, after)
+        });
+        for text in [&got.0, &got.1, &got.2] {
+            assert_eq!(
+                text, "worker task panicked: non-string panic payload",
+                "threads {threads}"
+            );
+        }
+        assert_eq!(got.3, (1..=8).collect::<Vec<_>>());
     }
 }

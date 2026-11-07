@@ -84,10 +84,12 @@ impl<T: Send> Work for Batch<T> {
         // not taken the closure. This task's clone is dropped before it counts
         // as finished, so the caller's clone is the last one once all are.
         let task = lock(&self.task).clone();
+        // The payload is read and dropped inside `caught`, before the state
+        // lock is taken, so a payload whose `Drop` panics cannot kill this
+        // worker between claiming the task and counting it finished.
         let outcome = match task {
-            Some(task) => catch_unwind(AssertUnwindSafe(|| task(index))),
-            None => Err(Box::new("batch closure was taken before its task ran")
-                as Box<dyn std::any::Any + Send>),
+            Some(task) => caught(|| task(index)),
+            None => Err("batch closure was taken before its task ran".to_string()),
         };
         let mut state = lock(&self.state);
         match outcome {
@@ -96,9 +98,9 @@ impl<T: Send> Work for Batch<T> {
                     *slot = Some(value);
                 }
             }
-            Err(payload) => {
+            Err(text) => {
                 if state.panic.is_none() {
-                    state.panic = Some(panic_text(payload.as_ref()));
+                    state.panic = Some(text);
                 }
             }
         }
@@ -524,6 +526,19 @@ fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
     }
 }
 
+/// The text of a caught panic payload, which is then dropped here.
+///
+/// A payload is arbitrary user data and its `Drop` can panic. That panic is
+/// caught too, and a second payload that cannot be dropped quietly is leaked
+/// rather than dropped again, so no panic ever leaves this function.
+pub(crate) fn payload_text(payload: Box<dyn std::any::Any + Send>) -> String {
+    let text = panic_text(payload.as_ref());
+    if let Err(second) = catch_unwind(AssertUnwindSafe(move || drop(payload))) {
+        std::mem::forget(second);
+    }
+    text
+}
+
 /// The one error a panicking task becomes, whichever thread ran it and
 /// whether it ran inline, on a pool worker or on a scoped thread.
 pub(crate) fn task_panic(text: &str) -> OjasError {
@@ -533,26 +548,24 @@ pub(crate) fn task_panic(text: &str) -> OjasError {
     }
 }
 
-/// [`task_panic`] for a payload caught by `catch_unwind` or a thread join.
-pub(crate) fn panic_error(payload: &(dyn std::any::Any + Send)) -> OjasError {
-    task_panic(&panic_text(payload))
-}
-
-/// Run `f` and turn a panic in it into [`OjasError::Backend`] carrying the
-/// panic text, so an inline branch reports a panicking task exactly as the
-/// threaded paths do instead of unwinding into the caller.
+/// Run `f`; a panic in it is `Err` carrying its text, whatever its payload.
 ///
-/// `AssertUnwindSafe` is sound here because the closure's state is only
-/// observable after a panic through values the caller owns: on `Err` the
-/// caller propagates the error and discards every output buffer and
-/// partial result the closure was filling, and no pool lock is held while a
+/// `AssertUnwindSafe`: a caller that gets `Err` must treat everything `f`
+/// was writing as unspecified. Owned buffers and partial results are
+/// discarded with the error, but an in-place output the caller passed in may
+/// hold the pieces that ran before the panic. No pool lock is held while a
 /// task runs (the pool's own `lock` also tolerates poison), so the next op
 /// starts from a consistent pool.
+pub(crate) fn caught<T>(f: impl FnOnce() -> T) -> Result<T, String> {
+    catch_unwind(AssertUnwindSafe(f)).map_err(payload_text)
+}
+
+/// [`caught`] for a closure that returns [`OjasError`]: a panic becomes
+/// [`OjasError::Backend`] carrying the panic text, so an inline branch
+/// reports a panicking task exactly as the threaded paths do instead of
+/// unwinding into the caller.
 pub(crate) fn guarded<T>(f: impl FnOnce() -> Result<T, OjasError>) -> Result<T, OjasError> {
-    match catch_unwind(AssertUnwindSafe(f)) {
-        Ok(result) => result,
-        Err(payload) => Err(panic_error(payload.as_ref())),
-    }
+    caught(f).unwrap_or_else(|text| Err(task_panic(&text)))
 }
 
 /// Pool and arithmetic contract one op runs under.
