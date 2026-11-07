@@ -26,8 +26,11 @@
 //!   input (one position stream copied to t, h and w), every rotary
 //!   frequency's angle is `position * inv_freq` whichever stream the section
 //!   assigns it to, interleaved or not, which is the plain partial RoPE tessl
-//!   computes. Text-only is enforced per sequence: the vision special-token ids
-//!   this config declares are refused in input ([`Qwen35TextConfig::reserved_token_ids`]).
+//!   computes. Text-only is enforced per sequence by the Tape provider, which
+//!   refuses a token id in [`Qwen35TextConfig::reserved_token_ids`] and a
+//!   sequence longer than [`Qwen35TextConfig::max_position_embeddings`] before
+//!   any work: [`Qwen35TextConfig::tape_spec`] carries both into
+//!   `Qwen35Spec`, and `TapeStepProvider` reads them from there.
 //!
 //! Then both parsers' shapes are compared field by field; any disagreement is
 //! refused.
@@ -862,6 +865,10 @@ impl Qwen35TextConfig {
             gdn_value_dim: n(self.gdn_value_dim),
             conv_width: n(self.conv_kernel),
             eps: self.rms_norm_eps as f32,
+            max_positions: self
+                .max_position_embeddings
+                .map(|n| usize::try_from(n).unwrap_or(usize::MAX)),
+            reserved_token_ids: self.reserved_token_ids.iter().map(|(_, id)| *id).collect(),
         }
     }
 

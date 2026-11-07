@@ -995,3 +995,93 @@ fn a_failed_preflight_closes_a_gate_an_earlier_pass_opened() {
     p.preflight(&calibration, 8, &[8, 16], 1 << 30, 0).unwrap();
     p.accumulate(&j.view(), BankMode::Overwrite, None).unwrap();
 }
+
+// ---------------------------------------------- sequence refusals (ft-3c6ed4be)
+
+/// A LoRA provider whose spec carries the config-declared sequence limits.
+fn open_limited(max_positions: Option<usize>, reserved: Vec<u32>) -> P {
+    let mut cfg = open_config(16);
+    cfg.spec.max_positions = max_positions;
+    cfg.spec.reserved_token_ids = reserved;
+    TapeStepProvider::open_lora(cpu(), DeviceHooks::default(), cfg, lora_init(true)).unwrap()
+}
+
+/// Run `bad` as an `Add` after a good `Overwrite`: it is refused with a message
+/// holding `needle`, the bank's sum is bit-identical afterwards, and the
+/// backend's budget never rose, so nothing was gathered, scored or put on a tape.
+fn refused_before_any_work(p: &mut P, bad: &Job, needle: &str) {
+    // Short enough for every limit these tests set.
+    p.accumulate(&job(5, 2, 1.0, false).view(), BankMode::Overwrite, None)
+        .unwrap();
+    let before = bits_all(&p.read_gradients().unwrap());
+    let budget = p.backend().budget().clone();
+    let live = budget.live_bytes().unwrap();
+    budget.reset_peak();
+    let err = p
+        .accumulate(&bad.view(), BankMode::Add, None)
+        .expect_err("the sequence was accepted");
+    assert!(
+        matches!(err, StepError::Contract(_)) && err.to_string().contains(needle),
+        "{err}"
+    );
+    assert_eq!(
+        budget.peak_bytes().saturating_sub(live),
+        0,
+        "the refused sequence allocated before it was refused"
+    );
+    assert!(p.bank().is_complete());
+    assert_eq!(bits_all(&p.read_gradients().unwrap()), before);
+}
+
+#[test]
+fn a_reserved_token_id_is_refused_before_any_work_and_names_the_id() {
+    let mut p = open_limited(None, vec![4242, 4243]);
+    let mut bad = job(8, 2, 1.0, false);
+    bad.tokens[3] = 4243;
+    refused_before_any_work(&mut p, &bad, "4243");
+    // The same job without the reserved id runs.
+    p.accumulate(&job(8, 2, 1.0, false).view(), BankMode::Add, None)
+        .unwrap();
+}
+
+#[test]
+fn a_sequence_past_max_position_embeddings_is_refused_before_any_work() {
+    let mut p = open_limited(Some(6), Vec::new());
+    refused_before_any_work(&mut p, &job(8, 2, 1.0, false), "max_position_embeddings 6");
+    // At the limit it runs; and with the field absent only the table width bounds it.
+    p.accumulate(&job(6, 2, 1.0, false).view(), BankMode::Add, None)
+        .unwrap();
+    let mut open_ended = open_limited(None, Vec::new());
+    open_ended
+        .accumulate(&job(16, 2, 1.0, false).view(), BankMode::Overwrite, None)
+        .unwrap();
+    assert!(open_ended
+        .accumulate(&job(17, 2, 1.0, false).view(), BankMode::Add, None)
+        .is_err());
+}
+
+#[test]
+fn a_repeated_row_position_is_refused_before_any_work_and_distinct_ones_run() {
+    let mut p = open(16, true);
+    let mut dup = job(8, 2, 1.0, false);
+    dup.positions = vec![4, 5, 4];
+    dup.targets = vec![1, 2, 3];
+    refused_before_any_work(&mut p, &dup, "row position 4");
+    let mut distinct = job(8, 2, 1.0, false);
+    distinct.positions = vec![4, 5, 6];
+    distinct.targets = vec![1, 2, 3];
+    p.accumulate(&distinct.view(), BankMode::Add, None).unwrap();
+}
+
+#[test]
+fn scale_zero_with_rows_is_not_refused_and_a_bad_scale_still_is() {
+    let mut p = open(16, true);
+    let zero = job(8, 2, 0.0, false);
+    assert!(p
+        .accumulate(&zero.view(), BankMode::Overwrite, None)
+        .is_ok());
+    for bad in [-1.0f32, f32::NAN, f32::INFINITY] {
+        let j = job(8, 2, bad, false);
+        assert!(p.accumulate(&j.view(), BankMode::Overwrite, None).is_err());
+    }
+}

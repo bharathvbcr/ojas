@@ -50,3 +50,35 @@ fn the_shared_checks_refuse_with_the_core_error() {
     let err: core_step::StepError = train_step::refuse_lr_scale(&[0.5], "x").unwrap_err();
     assert!(matches!(err, core_step::StepError::Unsupported(_)));
 }
+
+/// `SequenceJob::validate` refuses a row position scored twice, and the mock's two callers
+/// (`accumulate` and `row_loss`) go through it; scale 0 with rows stays legal.
+#[test]
+fn the_mock_refuses_a_repeated_row_position_through_the_shared_validate() {
+    use ojas_train::lappi::step::{BankMode, RowTargets, SequenceJob, StepProvider};
+
+    let mut p = ToyProvider::new(8, 4, 1, 7).unwrap();
+    let tokens = [1u32, 2, 3, 4];
+    let job = |positions: &'static [u32], scale: f32| SequenceJob {
+        tokens: &tokens,
+        rows: RowTargets {
+            positions,
+            targets: &[5, 6, 7][..positions.len()],
+            scale,
+        },
+        hidden_at: &[],
+    };
+    let dup = job(&[1, 2, 1], 1.0);
+    let err = p.accumulate(&dup, BankMode::Overwrite, None).unwrap_err();
+    assert!(
+        matches!(err, core_step::StepError::Contract(_)) && err.to_string().contains("position 1"),
+        "{err}"
+    );
+    assert!(p.row_loss(&dup).is_err());
+    let distinct = job(&[0, 1, 2], 1.0);
+    assert!(p.row_loss(&distinct).is_ok());
+    assert!(
+        p.accumulate(&job(&[0, 1, 2], 0.0), BankMode::Overwrite, None)
+            .is_ok()
+    );
+}

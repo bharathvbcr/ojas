@@ -847,6 +847,24 @@ impl<B: Backend> TapeStepProvider<B> {
     ) -> Result<f64, StepError> {
         self.require_ready()?;
         job.validate(self.spec.vocab)?;
+        // Config-dependent refusals, before any gather, loss or tape write.
+        if let Some(id) = job
+            .tokens
+            .iter()
+            .find(|id| self.spec.reserved_token_ids.contains(id))
+        {
+            return Err(contract(format!(
+                "token {id} is reserved (a vision special token); a text-only run refuses it"
+            )));
+        }
+        if let Some(max) = self.spec.max_positions {
+            if job.tokens.len() > max {
+                return Err(contract(format!(
+                    "a sequence of {} tokens is longer than max_position_embeddings {max}",
+                    job.tokens.len()
+                )));
+            }
+        }
         if job.tokens.len() > self.widest {
             return Err(contract(format!(
                 "a sequence of {} tokens is wider than the {} the tables were built for",
