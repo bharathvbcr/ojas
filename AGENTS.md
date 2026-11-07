@@ -105,9 +105,29 @@ Sibling checkouts:
 
 ## Commands
 
-These are what CI runs (`.github/workflows/test.yml`).
-`./scripts/ci_local.sh` runs the same gates locally, except the MSRV
-toolchain build (CI's `msrv` job) and the HIP compile check.
+`.github/workflows/test.yml` is what CI runs; `./scripts/ci_local.sh` is a
+local approximation of it, not a copy. They share fmt (`fmt_check.sh`), the
+tracked-targets guard, `cargo clippy --workspace --all-targets`,
+`cargo test --workspace --release --no-fail-fast -- --test-threads=1`,
+`cargo deny check`, the three `ojas-cuda` clippy runs, the `sitegen` and
+`benchreport plots` `-check` runs (CI on Linux only, `:207-213`), and `go test` against `libgusset.a`.
+
+`ci_local.sh` runs, and CI does not: `check_siblings.sh` (`ci_local.sh:15`; CI
+runs only its self-test, `test.yml:89`), `simd_bench.sh` (`:43`), the
+`benchreport` unit test (`:54`), `gotip.sh` (`:63`),
+`RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` (`:77`) and
+`cargo clippy -p ojas-metal --no-default-features --all-targets` (`:80`). It
+runs `go test` once, with a 10 minute timeout, on the local OS (`:59`).
+
+`test.yml` runs, and `ci_local.sh` does not: the tracked-targets self-tests
+(`:76-77`); software Vulkan and `OJAS_WGPU_ALLOW_CPU_ADAPTER=1` for the wgpu
+tests (`:72`, `:110`); the whole `macos` job (`:113-165`: clippy, tests with
+`--exclude ojas-metal` and `OJAS_ALLOW_NO_GPU=1`, and an `ojas-metal`
+`--no-run` build); `go test` on Linux and macOS with a 20 minute timeout
+(`:170-176`, `:221`); `cargo test -p ojas-cuda --features cuda --no-run`
+(`:258`); `cargo check -p ojas-hip --all-targets` (`:263`); and the `msrv` job
+(`:265-298`). On a Mac with a Metal 4 GPU `ci_local.sh` also runs the real
+`ojas-metal` tests, which no CI job runs (Linux builds a stub, macOS excludes it).
 
 ```sh
 ./scripts/fmt_check.sh            # rustfmt over the ojas packages only (--fix to apply)
