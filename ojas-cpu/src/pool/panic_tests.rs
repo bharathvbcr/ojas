@@ -187,3 +187,48 @@ fn a_payload_whose_drop_panics_is_still_a_backend_error_on_every_path() {
         assert_eq!(got.3, (1..=8).collect::<Vec<_>>());
     }
 }
+
+/// The failure an op reports is the one at the lowest task index, whether it
+/// is an `Err` or a panic and whichever thread got there first.
+#[test]
+fn the_lowest_index_failure_wins_at_every_width() {
+    for threads in [1usize, 4] {
+        let pool = Arc::new(Pool::new(threads).unwrap());
+        let exec = Exec {
+            pool: &pool,
+            numerics: Numerics::Fast,
+        };
+        for round in 0..50 {
+            let got = scoped::map(exec, 8, |i| match i {
+                2 => Err(OjasError::Shape {
+                    op: "task two",
+                    detail: "refused".to_string(),
+                }),
+                5 => panic!("task five"),
+                _ => Ok(i),
+            });
+            assert!(
+                matches!(&got, Err(OjasError::Shape { op: "task two", .. })),
+                "threads {threads} round {round}: {got:?}"
+            );
+            let scoped_two = detail_of(scoped::map(exec, 8, |i| {
+                if i == 3 || i == 6 {
+                    panic!("p{i}")
+                }
+                Ok(i)
+            }));
+            let run_two = detail_of(pool.run(8, |i| {
+                if i == 3 || i == 6 {
+                    panic!("p{i}")
+                }
+                i
+            }));
+            for text in [scoped_two, run_two] {
+                assert_eq!(
+                    text, "worker task panicked: p3",
+                    "threads {threads} round {round}"
+                );
+            }
+        }
+    }
+}

@@ -58,7 +58,9 @@ trait Work: Send + Sync {
 struct BatchState<T> {
     results: Vec<Option<T>>,
     finished: usize,
-    panic: Option<String>,
+    /// The panic of the lowest-indexed task that panicked, so which text a
+    /// batch reports does not depend on which thread got there first.
+    panic: Option<(usize, String)>,
 }
 
 type Task<T> = Arc<dyn Fn(usize) -> T + Send + Sync>;
@@ -99,8 +101,8 @@ impl<T: Send> Work for Batch<T> {
                 }
             }
             Err(text) => {
-                if state.panic.is_none() {
-                    state.panic = Some(text);
+                if state.panic.as_ref().is_none_or(|(first, _)| index < *first) {
+                    state.panic = Some((index, text));
                 }
             }
         }
@@ -311,7 +313,7 @@ impl Pool {
         let task = lock(&batch.task).take();
         drop(task);
         let mut state = lock(&batch.state);
-        if let Some(text) = state.panic.take() {
+        if let Some((_, text)) = state.panic.take() {
             return Err(task_panic(&text));
         }
         let mut out = Vec::with_capacity(count);
@@ -402,7 +404,7 @@ impl<T: Send> Handoff<T> {
         let task = lock(&self.batch.task).take();
         drop(task);
         let mut state = lock(&self.batch.state);
-        if let Some(text) = state.panic.take() {
+        if let Some((_, text)) = state.panic.take() {
             return Err(task_panic(&text));
         }
         match state.results.first_mut().and_then(Option::take) {

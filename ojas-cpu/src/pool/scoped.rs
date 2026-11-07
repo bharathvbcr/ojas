@@ -60,8 +60,9 @@ fn backend(detail: String) -> OjasError {
     }
 }
 
-/// `task(i)` for `i` in `0..count`, results in index order; the first error
-/// in index order wins.
+/// `task(i)` for `i` in `0..count`, results in index order; the first failure
+/// in index order wins, whether it is an `Err` or a panic, at any thread
+/// count.
 pub(crate) fn map<T, F>(exec: Exec<'_>, count: usize, task: F) -> Result<Vec<T>, OjasError>
 where
     T: Send,
@@ -79,7 +80,9 @@ where
             if i >= count {
                 return done;
             }
-            done.push((i, task(i)));
+            // A panic is this task's own failure, recorded at its index like
+            // an `Err`, so the lowest failing index wins at any thread count.
+            done.push((i, guarded(|| task(i))));
         }
     };
     let mut slots: Vec<Option<Result<T, OjasError>>> = (0..count).map(|_| None).collect();
@@ -111,21 +114,22 @@ where
                         slots[i] = Some(result);
                     }
                 }
-                // The first panic in thread order carries its text out.
+                // A thread that failed outside a task; the first one reports.
                 Err(error) => {
                     panicked.get_or_insert(error);
                 }
             }
         }
     });
-    if let Some(error) = panicked {
-        return Err(error);
-    }
     let mut out = Vec::with_capacity(count);
     for slot in slots {
         match slot {
             Some(result) => out.push(result?),
-            None => return Err(backend("scoped task finished without a result".to_string())),
+            // Only a thread that died outside any task leaves a slot empty.
+            None => {
+                return Err(panicked
+                    .unwrap_or_else(|| backend("scoped task finished without a result".to_string())))
+            }
         }
     }
     Ok(out)
