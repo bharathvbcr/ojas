@@ -30,7 +30,12 @@ cleanup_logs() {
   fi
   return 0
 }
-trap cleanup_logs EXIT INT TERM
+# EXIT only cleans up. INT and TERM clean up and then END the script with the
+# conventional 128+signal status: a handler that merely returns lets the script
+# resume (with its log deleted) and run on to a banner.
+trap cleanup_logs EXIT
+trap 'cleanup_logs; exit 130' INT
+trap 'cleanup_logs; exit 143' TERM
 
 show_help() {
   cat <<'EOF'
@@ -229,7 +234,26 @@ run_test_with_verification() {
     exit "$rc"
   fi
 
-  if grep -qE "(running 0 tests|test result: .* 0 passed; 0 failed)" "$log_file"; then
+  # Exit 0 is not evidence. A suite counts as passed only on what its own log
+  # says. grep exits 2 on an error (e.g. an unreadable log); that is a failed
+  # check, never "no match".
+  log_matches() {
+    local rc_grep=0
+    grep -qE "$1" "$log_file" || rc_grep=$?
+    if [[ $rc_grep -gt 1 ]]; then
+      echo "ERROR: could not read the $suite_label suite log (grep exit $rc_grep); refusing to report it as passed." >&2
+      exit 1
+    fi
+    return "$rc_grep"
+  }
+
+  if log_matches "test result: FAILED"; then
+    rm -f "$log_file"
+    echo "ERROR: $suite_label suite printed 'test result: FAILED' although cargo exited 0." >&2
+    exit 1
+  fi
+
+  if log_matches "(running 0 tests|test result: .* 0 passed; 0 failed)"; then
     rm -f "$log_file"
     echo "" >&2
     echo "======================================================================" >&2
@@ -242,6 +266,12 @@ run_test_with_verification() {
     echo "  conv2d, conv_transpose2d, gelu_erf, global_attention, group_norm," >&2
     echo "  layer_norm, linear_bias, rope_interleaved, rope_tables, windowed_attention" >&2
     echo "======================================================================" >&2
+    exit 1
+  fi
+
+  if ! log_matches "test result: ok\\. [1-9][0-9]* passed"; then
+    rm -f "$log_file"
+    echo "ERROR: $suite_label suite exited 0 but its log has no 'test result: ok. N passed' line with N > 0; it did not demonstrably run." >&2
     exit 1
   fi
 

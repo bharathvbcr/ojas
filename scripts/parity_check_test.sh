@@ -24,6 +24,10 @@ case "${STUB_CARGO:-ok}" in
   ok) echo "running 3 tests"; echo "test result: ok. 3 passed; 0 failed" ;;
   empty) echo "running 0 tests"; echo "test result: ok. 0 passed; 0 failed" ;;
   fail) echo "test result: FAILED. 1 passed; 2 failed"; exit 101 ;;
+  silent) ;;                                   # prints nothing, exits 0
+  failed_exit0) echo "test result: FAILED. 1 passed; 2 failed" ;;
+  failed_then_ok) echo "test result: FAILED. 1 passed; 2 failed"; echo "test result: ok. 3 passed; 0 failed" ;;
+  slow_zero) echo "running 0 tests"; echo "test result: ok. 0 passed; 0 failed"; sleep 1 ;;
 esac
 T
 chmod +x "$tmp/bin/uname" "$tmp/bin/cargo"
@@ -78,6 +82,34 @@ run STUB_UNAME=Linux STUB_CARGO=fail -- --backend cpu
 [[ "$rc" -eq 101 ]] && lacks "SUCCESS"; check "failing suite: exit 101, no SUCCESS" $?
 run STUB_UNAME=Linux STUB_CARGO=empty -- --backend cpu
 [[ "$rc" -ne 0 ]] && lacks "SUCCESS"; check "zero-test suite: non-zero, no SUCCESS" $?
+
+# 7. Exit 0 is not evidence: a silent cargo, a FAILED line, or a FAILED line followed
+# by an ok line must not reach SUCCESS (or count as ran).
+run STUB_UNAME=Linux STUB_CARGO=silent -- --backend cpu
+[[ "$rc" -ne 0 ]] && lacks "SUCCESS"; check "silent exit 0: non-zero, no SUCCESS" $?
+run STUB_UNAME=Linux STUB_CARGO=failed_exit0 -- --backend cpu
+[[ "$rc" -ne 0 ]] && lacks "SUCCESS"; check "FAILED line with exit 0: non-zero, no SUCCESS" $?
+run STUB_UNAME=Linux STUB_CARGO=failed_then_ok -- --backend cpu
+[[ "$rc" -ne 0 ]] && lacks "SUCCESS"; check "FAILED then ok with exit 0: non-zero, no SUCCESS" $?
+
+# 8. SIGTERM / SIGINT during a suite end the script with 128+signal and no banner,
+# rather than letting it resume with its log deleted.
+# Job control (set -m) so the background script does not inherit an ignored SIGINT.
+set -m
+for sig in TERM INT; do
+  want=$((128 + $(kill -l "$sig")))
+  outf="$tmp/sig.out"
+  env PATH="$tmp/bin:$PATH" STUB_UNAME=Linux STUB_CARGO=slow_zero \
+    "$HERE/parity_check.sh" --fixtures "$tmp/fixture.safetensors" --backend cpu >"$outf" 2>&1 &
+  pid=$!
+  sleep 0.4
+  kill -"$sig" "$pid"
+  rc=0
+  wait "$pid" || rc=$?
+  out="$(cat "$outf")"
+  [[ "$rc" -eq "$want" ]] && lacks "SUCCESS" && lacks "INCOMPLETE"; check "SIG$sig mid-suite: exit $want, no banner (got $rc)" $?
+done
+set +m
 
 if [[ "$fails" -ne 0 ]]; then echo "parity_check_test: $fails check(s) failed" >&2; exit 1; fi
 echo "parity_check_test OK"
