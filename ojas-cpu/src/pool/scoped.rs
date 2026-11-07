@@ -127,8 +127,9 @@ where
             Some(result) => out.push(result?),
             // Only a thread that died outside any task leaves a slot empty.
             None => {
-                return Err(panicked
-                    .unwrap_or_else(|| backend("scoped task finished without a result".to_string())))
+                return Err(panicked.unwrap_or_else(|| {
+                    backend("scoped task finished without a result".to_string())
+                }))
             }
         }
     }

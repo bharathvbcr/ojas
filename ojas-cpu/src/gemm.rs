@@ -1769,7 +1769,12 @@ mod tests {
                 pool: &pool,
                 numerics: Numerics::Exact,
             };
-            let got = gemm("test", exec, &Mat::row_major(&a, m, k), &Mat::row_major(&b, k, n));
+            let got = gemm(
+                "test",
+                exec,
+                &Mat::row_major(&a, m, k),
+                &Mat::row_major(&b, k, n),
+            );
             match got {
                 Err(OjasError::Backend { detail, .. }) => assert!(
                     detail.contains("cancel hook exploded"),
