@@ -464,8 +464,11 @@ impl Sparse24Weight {
 
     /// Verifies that every 4-element block has at most 2 non-zero entries and returns the zero fraction.
     pub fn verify_24_invariant(&self) -> bool {
-        self.pruned_f32
-            .chunks_exact(4)
+        // The remainder of a length that is not a multiple of 4 is ignored, as
+        // `chunks_exact` ignored it.
+        let (blocks, _remainder) = self.pruned_f32.as_chunks::<4>();
+        blocks
+            .iter()
             .all(|block| block.iter().filter(|&&v| v != 0.0).count() <= 2)
     }
 
@@ -481,5 +484,28 @@ impl Sparse24Weight {
     pub fn quantize_i8(&self, budget: &Budget) -> Result<QuantizedWeightI8, OjasError> {
         let w_tensor = Tensor::from_f32(&self.pruned_f32, &[self.n_out, self.k_in], budget)?;
         QuantizedWeightI8::quantize(&w_tensor, budget)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn weight(pruned_f32: Vec<f32>) -> Sparse24Weight {
+        Sparse24Weight {
+            n_out: 1,
+            k_in: pruned_f32.len(),
+            pruned_f32,
+            mask_bits: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn verify_24_invariant_checks_each_block_of_four_and_ignores_a_short_tail() {
+        assert!(weight(vec![1.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0]).verify_24_invariant());
+        assert!(!weight(vec![1.0, 2.0, 3.0, 0.0, 1.0, 0.0, 0.0, 0.0]).verify_24_invariant());
+        // Three non-zeros in the tail of 3 values form no block: not checked.
+        assert!(weight(vec![1.0, 0.0, 2.0, 0.0, 1.0, 2.0, 3.0]).verify_24_invariant());
+        assert!(weight(Vec::new()).verify_24_invariant());
     }
 }
