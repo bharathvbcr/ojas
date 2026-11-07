@@ -1085,3 +1085,85 @@ fn scale_zero_with_rows_is_not_refused_and_a_bad_scale_still_is() {
         assert!(p.accumulate(&j.view(), BankMode::Overwrite, None).is_err());
     }
 }
+
+fn tiny_calibration() -> Calibration {
+    Calibration::from_points(
+        "tiny",
+        1,
+        &[
+            Point {
+                tokens: 8,
+                peak_bytes: 1 << 20,
+            },
+            Point {
+                tokens: 16,
+                peak_bytes: 2 << 20,
+            },
+        ],
+    )
+    .unwrap()
+}
+
+fn device_provider_limited(
+    max_positions: Option<usize>,
+    reserved: Vec<u32>,
+) -> TapeStepProvider<DeviceLike> {
+    let mut cfg = open_config(16);
+    cfg.spec.max_positions = max_positions;
+    cfg.spec.reserved_token_ids = reserved;
+    TapeStepProvider::open_lora(device_like(), with_rebind(), cfg, lora_init(true)).unwrap()
+}
+
+#[test]
+fn the_preflight_refuses_a_bucket_longer_than_max_position_embeddings() {
+    let calibration = tiny_calibration();
+    let mut p = device_provider_limited(Some(4), Vec::new());
+    // 8 tokens round up to the 8-token bucket, which the config's limit of 4 forbids.
+    let err = p
+        .preflight(&calibration, 8, &[8, 16], 1 << 30, 0)
+        .unwrap_err();
+    let text = err.to_string();
+    assert!(
+        matches!(err, StepError::Contract(_))
+            && text.contains("bucket of 8 tokens")
+            && text.contains("max_position_embeddings 4"),
+        "{text}"
+    );
+    // The gate stays shut.
+    let j = job(4, 5, 1.0, false);
+    assert!(p
+        .accumulate(&j.view(), BankMode::Overwrite, None)
+        .unwrap_err()
+        .to_string()
+        .contains("pre-flight"));
+    // A limit that holds the bucket plans as before.
+    let mut ok = device_provider_limited(Some(8), Vec::new());
+    assert_eq!(
+        ok.preflight(&calibration, 8, &[8, 16], 1 << 30, 0)
+            .unwrap()
+            .bucket,
+        8
+    );
+}
+
+#[test]
+fn the_preflight_dry_run_never_uses_a_reserved_token_id() {
+    let calibration = tiny_calibration();
+    let vocab = spec().vocab as u32;
+    // Every id reserved: there is no token the dry run may use, so no plan is approved.
+    let mut none_left = device_provider_limited(None, (0..vocab).collect());
+    let err = none_left
+        .preflight(&calibration, 8, &[8, 16], 1 << 30, 0)
+        .unwrap_err();
+    assert!(err.to_string().contains("reserved"), "{err}");
+    // The old dry run's tokens (`i % vocab`) were ids 0..8; with those reserved the plan still
+    // succeeds, on the next ids.
+    let mut some_left = device_provider_limited(None, (0..8).collect());
+    assert_eq!(
+        some_left
+            .preflight(&calibration, 8, &[8, 16], 1 << 30, 0)
+            .unwrap()
+            .bucket,
+        8
+    );
+}
