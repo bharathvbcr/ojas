@@ -311,13 +311,35 @@ impl AdamwTable {
 /// entry's step count. The moments live in the bank's own buffers (host
 /// vectors here; device buffers in `crate::k11`).
 ///
-/// A step is planned ([`Self::plan_step`]), carried out, then committed
-/// ([`Self::commit`]). Planning marks the bank in flight and only a commit
-/// clears the mark, so a step that fails part-way (some windows updated, the
-/// counts not) leaves the bank dead with no cooperation from the failing
-/// path: every later [`Self::plan_step`] is refused before a launch is
-/// queued. Fail closed; there is no retry and no rollback. [`Self::run_step`]
-/// is the one place a step is carried out.
+/// A step is planned ([`Self::plan_step`]), carried out, then committed.
+/// Planning marks the bank in flight and only a commit clears the mark, so a
+/// step that fails part-way (some windows updated, the counts not) leaves the
+/// bank dead with no cooperation from the failing path: every later
+/// [`Self::plan_step`] is refused before a launch is queued. Fail closed;
+/// there is no retry and no rollback. The commit is crate-private and only
+/// `run_step` calls it, so a caller outside the crate cannot revive a
+/// dead bank by committing counts it chose:
+///
+/// ```compile_fail,E0624
+/// use ojas_cuda::k11_host::{AdamwBank, AdamwEntry, AdamwTable};
+/// let table = AdamwTable::new(
+///     vec![AdamwEntry {
+///         name: "w".into(),
+///         offset: 0,
+///         len: 2,
+///         lr_scale: 1.0,
+///         weight_decay: 0.0,
+///     }],
+///     2,
+/// )
+/// .unwrap();
+/// let mut bank = AdamwBank::new(table);
+/// let _ = bank.commit(vec![0]);
+/// ```
+///
+/// A clone is a separate bank with its own mark: one taken before a step is
+/// live, over whatever buffers it is used with, exactly as a fresh
+/// [`Self::new`] is. Cloning does not copy the buffers.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AdamwBank {
     table: AdamwTable,
@@ -355,7 +377,7 @@ impl AdamwBank {
     /// The scalars every active entry takes this step, and the counts after
     /// it, without committing them. `active` has one flag per entry.
     ///
-    /// Handing out a plan marks the bank dead until [`Self::commit`]; a bank
+    /// Handing out a plan marks the bank dead until the step commits; a bank
     /// already dead is refused before anything is planned. Arguments that fail
     /// validation return their error and leave the bank usable.
     pub fn plan_step(&mut self, h: &AdamwHyper, active: &[bool]) -> Result<StepPlan, CudaError> {
@@ -395,8 +417,15 @@ impl AdamwBank {
     }
 
     /// Record a step [`Self::plan_step`] planned and the device (or the host
-    /// emulation) carried out: the plan's `next` counts.
-    pub fn commit(&mut self, next: Vec<u64>) -> Result<(), CudaError> {
+    /// emulation) carried out: the plan's `next` counts. Refused with no plan
+    /// in flight, so a commit can never stand in for a step that was planned.
+    pub(crate) fn commit(&mut self, next: Vec<u64>) -> Result<(), CudaError> {
+        if !self.in_flight {
+            return Err(CudaError::invalid(
+                "AdamwBank::commit",
+                "no step is in flight: there is no plan to commit",
+            ));
+        }
         if next.len() != self.steps.len() {
             return Err(CudaError::invalid(
                 "AdamwBank::commit",
@@ -968,6 +997,24 @@ mod tests {
         assert!(bank.plan_step(&h, &[true]).is_err());
         assert!(!bank.is_dead());
         bank.run_step(&h, &[true, true], |_, _, _| Ok(())).unwrap();
+        assert_eq!(bank.steps(), &[1, 1]);
+    }
+
+    #[test]
+    fn a_commit_with_no_plan_in_flight_is_refused() {
+        let mut bank = two_entry_bank();
+        let err = bank.commit(vec![1, 1]).unwrap_err();
+        let CudaError::Invalid { detail, .. } = &err else {
+            panic!("expected an Invalid refusal, got {err:?}");
+        };
+        assert!(detail.contains("no step is in flight"), "{detail}");
+        assert_eq!(bank.steps(), &[0, 0], "a refused commit moved the counts");
+        assert!(!bank.is_dead());
+        // After a completed step the mark is clear again and a second commit
+        // of the same counts is refused too.
+        bank.run_step(&f_hyper(1e-2), &[true, true], |_, _, _| Ok(()))
+            .unwrap();
+        assert!(bank.commit(vec![2, 2]).is_err());
         assert_eq!(bank.steps(), &[1, 1]);
     }
 }
