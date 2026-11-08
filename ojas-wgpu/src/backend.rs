@@ -3369,6 +3369,151 @@ mod tests {
     }
 
     #[test]
+    fn a_second_clone_taking_the_fault_does_not_hide_it_from_the_read_that_saw_it() {
+        // Pre-fix, the clone that took first emptied the shared pair: the
+        // reader whose copy held the faulted values reported Ok.
+        use std::sync::mpsc;
+        let budget = Budget::new(1 << 20);
+        let a = WgpuBackend::open(budget.clone()).expect("wgpu adapter");
+        let b = WgpuBackend::with_context(a.ctx.clone(), budget.clone());
+        a.sync().unwrap();
+        let bad = a
+            .upload(&Tensor::from_f32(&[1.0, f32::NAN], &[2], &budget).unwrap())
+            .unwrap();
+        raise_as(&a, CAST.fault_id(), &raw_of(&bad), 2);
+        let (seen_tx, seen_rx) = mpsc::channel::<()>();
+        let (taken_tx, taken_rx) = mpsc::channel::<()>();
+        let (own, other) = std::thread::scope(|s| {
+            let reader = s.spawn(|| {
+                a.ctx.sync().unwrap(); // the read sees the mask
+                seen_tx.send(()).unwrap();
+                taken_rx.recv().unwrap();
+                a.faults() // after the other clone has taken
+            });
+            seen_rx.recv().unwrap();
+            let other = b.sync();
+            taken_tx.send(()).unwrap();
+            (reader.join().unwrap(), other)
+        });
+        assert!(
+            matches!(other, Err(OjasError::NonFinite { op: "cast_bf16" })),
+            "{other:?}"
+        );
+        assert!(
+            matches!(own, Err(OjasError::NonFinite { op: "cast_bf16" })),
+            "the reader returned Ok with faulted values: {own:?}"
+        );
+        gpu_clean(&a);
+    }
+
+    fn gpu_clean(gpu: &WgpuBackend) {
+        gpu.sync().expect("reported, then clear");
+    }
+
+    #[test]
+    fn raisers_and_syncers_over_one_context_never_tear_or_lose_a_fault() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let budget = Budget::new(1 << 20);
+        let gpu = WgpuBackend::open(budget.clone()).expect("wgpu adapter");
+        gpu.sync().unwrap();
+        let bad = gpu
+            .upload(&Tensor::from_f32(&[1.0, f32::NAN], &[2], &budget).unwrap())
+            .unwrap();
+        let buf = raw_of(&bad);
+        let ids = [1u32, 9, 33, 64];
+        let done = AtomicBool::new(false);
+        let mut reports: Vec<(u64, u32)> = Vec::new();
+        std::thread::scope(|s| {
+            let syncers: Vec<_> = (0..3)
+                .map(|_| {
+                    s.spawn(|| {
+                        let mut seen = Vec::new();
+                        while !done.load(Ordering::Acquire) {
+                            gpu.ctx.sync().unwrap();
+                            seen.push(gpu.ctx.take_faults());
+                        }
+                        seen
+                    })
+                })
+                .collect();
+            let raisers: Vec<_> = ids
+                .iter()
+                .map(|&id| {
+                    let (gpu, buf) = (&gpu, &buf);
+                    s.spawn(move || {
+                        for _ in 0..25 {
+                            raise_as(gpu, id, buf, 2);
+                        }
+                    })
+                })
+                .collect();
+            for r in raisers {
+                r.join().unwrap();
+            }
+            done.store(true, Ordering::Release);
+            for t in syncers {
+                reports.extend(t.join().unwrap());
+            }
+        });
+        gpu.ctx.sync().unwrap();
+        reports.push(gpu.ctx.take_faults());
+        let raised: u64 = ids.iter().fold(0, |m, id| m | 1u64 << (id - 1));
+        let mut union = 0u64;
+        for (bits, first) in reports {
+            assert_eq!(bits == 0, first == 0, "torn pair ({bits:#x}, {first})");
+            if first != 0 {
+                assert_ne!(bits & (1u64 << (first - 1)), 0, "{first} not in {bits:#x}");
+            }
+            assert_eq!(bits & !raised, 0, "a fault nobody raised: {bits:#x}");
+            union |= bits;
+        }
+        assert_eq!(union, raised, "a raised fault was never reported");
+    }
+
+    #[test]
+    fn adamw_step_refuses_while_a_fault_or_an_uncaptured_error_is_pending() {
+        // Pre-fix, adamw_step ended at job.commit() and returned Ok whatever
+        // was pending, and the step was recorded and applied.
+        let budget = Budget::new(1 << 20);
+        let gpu = WgpuBackend::open(budget.clone()).expect("wgpu adapter");
+        gpu.sync().unwrap();
+        let cfg = AdamWConfig::nanolab(1e-2, 0.1);
+        let up = |v: &[f32]| {
+            gpu.upload(&Tensor::from_f32(v, &[v.len()], &budget).unwrap())
+                .unwrap()
+        };
+        let host = |t: &Tensor| gpu.download(t).unwrap().to_f32_vec().unwrap();
+        let (mut p, g) = (up(&[1.0; 8]), up(&[0.5; 8]));
+        let (mut m, mut v) = (up(&[0.0; 8]), up(&[0.0; 8]));
+        let before = host(&p);
+        let bad = up(&[f32::NAN, 1.0]);
+
+        // A fault a read has already seen, and nobody has reported yet.
+        raise_as(&gpu, CAST.fault_id(), &raw_of(&bad), 2);
+        gpu.ctx.sync().unwrap();
+        let r = gpu.adamw_step(&mut p, &g, &mut m, &mut v, 1, cfg);
+        assert!(
+            matches!(r, Err(OjasError::NonFinite { op: "cast_bf16" })),
+            "{r:?}"
+        );
+        assert_eq!(host(&p), before, "a refused step changes nothing");
+
+        // An uncaptured error already queued.
+        gpu.ctx.push_uncaptured("queued-uncaptured-error");
+        let r = gpu.adamw_step(&mut p, &g, &mut m, &mut v, 1, cfg);
+        assert!(
+            matches!(&r, Err(OjasError::Backend { detail, .. }) if detail.contains("queued-uncaptured-error")),
+            "{r:?}"
+        );
+        assert_eq!(host(&p), before, "a refused step changes nothing");
+
+        // Nothing pending: the step applies.
+        gpu.adamw_step(&mut p, &g, &mut m, &mut v, 1, cfg).unwrap();
+        gpu.sync().unwrap();
+        assert_ne!(host(&p), before, "a clean step applies");
+    }
+
+    #[test]
     fn a_fault_id_past_the_mask_is_refused_before_anything_is_recorded() {
         let budget = Budget::new(1 << 20);
         let gpu = WgpuBackend::open(budget.clone()).expect("wgpu adapter");

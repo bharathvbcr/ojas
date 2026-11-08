@@ -541,10 +541,8 @@ pub(crate) struct Inner {
     /// Faults moved out of `fault` by a read and not yet observed by the host.
     held: wgpu::Buffer,
     hold: Mutex<Option<(Arc<Pipe>, wgpu::BindGroup)>>,
-    observed: AtomicU64,
-    /// First op (+ 1) among the `observed` bits; 0 when none is recorded.
-    first: AtomicU32,
-    errors: Arc<Mutex<Vec<String>>>,
+    faults: Faults,
+    errors: Arc<Mutex<ErrorQueue>>,
     /// Set by the device-lost callback and never cleared: loss is permanent.
     lost: Arc<Mutex<Option<String>>>,
     counters: Counters,
@@ -672,6 +670,59 @@ fn admits_adapter(kind: wgpu::DeviceType, opt_in: Option<&str>) -> bool {
     kind != wgpu::DeviceType::Cpu || opt_in == Some("1")
 }
 
+/// Uncaptured wgpu errors kept between checks.
+const UNCAPTURED_CAP: usize = 16;
+
+/// The uncaptured-error queue: at most [`UNCAPTURED_CAP`] messages.
+#[derive(Default)]
+struct ErrorQueue {
+    msgs: Vec<String>,
+}
+
+impl ErrorQueue {
+    fn push(&mut self, msg: String) {
+        if self.msgs.len() < UNCAPTURED_CAP {
+            self.msgs.push(msg);
+        }
+    }
+
+    fn take(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.msgs)
+    }
+}
+
+/// What reads have seen of the device fault words and the host has not yet
+/// taken: the op mask and the first op (+ 1) among its bits, 0 when none.
+#[derive(Default)]
+struct Faults {
+    observed: AtomicU64,
+    first: AtomicU32,
+    /// Test seam: runs between the two reads of [`Faults::take`].
+    #[cfg(test)]
+    pause: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+}
+
+impl Faults {
+    fn record(&self, bits: u64, first: u32) {
+        self.observed.fetch_or(bits, Ordering::Relaxed);
+        if first != 0 {
+            let _ = self
+                .first
+                .compare_exchange(0, first, Ordering::Relaxed, Ordering::Relaxed);
+        }
+    }
+
+    fn take(&self) -> (u64, u32) {
+        let bits = self.observed.swap(0, Ordering::Relaxed);
+        #[cfg(test)]
+        if let Some(pause) = lock(&self.pause).clone() {
+            pause();
+        }
+        let first = self.first.swap(0, Ordering::Relaxed);
+        (bits, first)
+    }
+}
+
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -736,13 +787,10 @@ impl WgpuContext {
             trace: wgpu::Trace::Off,
         }))
         .map_err(|err| gpu_error(format!("request_device: {err}")))?;
-        let errors: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let errors: Arc<Mutex<ErrorQueue>> = Arc::new(Mutex::new(ErrorQueue::default()));
         let sink = Arc::clone(&errors);
         device.on_uncaptured_error(Arc::new(move |err: wgpu::Error| {
-            let mut guard = lock(&sink);
-            if guard.len() < 16 {
-                guard.push(err.to_string());
-            }
+            lock(&sink).push(err.to_string());
         }));
         // Blocking, and outside the error cap: a lost device must never be
         // dropped because the error queue was busy or full. Nothing holds
@@ -786,8 +834,7 @@ impl WgpuContext {
                 fault,
                 held,
                 hold: Mutex::new(None),
-                observed: AtomicU64::new(0),
-                first: AtomicU32::new(0),
+                faults: Faults::default(),
                 errors,
                 lost,
                 counters: Counters::default(),
@@ -1660,15 +1707,7 @@ impl WgpuContext {
         // Unmapped and idle again: the next read may take it.
         self.staging_back(staging);
         if bits != 0 || first != 0 {
-            self.inner.observed.fetch_or(bits, Ordering::Relaxed);
-            if first != 0 {
-                let _ = self.inner.first.compare_exchange(
-                    0,
-                    first,
-                    Ordering::Relaxed,
-                    Ordering::Relaxed,
-                );
-            }
+            self.inner.faults.record(bits, first);
             // Seen: now, and only now, clear exactly these from `held`.
             // The release allocates nothing, so it charges an empty budget.
             let none = Budget::new(0);
@@ -1693,6 +1732,18 @@ impl WgpuContext {
         self.read(&self.inner.fault, 0, 0).map(|_| ())
     }
 
+    /// Queue one uncaptured-error message as the device callback would.
+    #[cfg(test)]
+    pub(crate) fn push_uncaptured(&self, msg: &str) {
+        lock(&self.inner.errors).push(msg.to_string());
+    }
+
+    /// Record a device-lost message as the lost callback would.
+    #[cfg(test)]
+    pub(crate) fn record_loss(&self, msg: &str) {
+        *lock(&self.inner.lost) = Some(msg.to_string());
+    }
+
     /// Make the next [`WgpuContext::read`] fail once its submission is done.
     #[cfg(test)]
     pub(crate) fn fail_next_read(&self) {
@@ -1704,9 +1755,7 @@ impl WgpuContext {
     /// (index plus one) of the first of them in recording order, 0 when no
     /// fault was seen.
     pub(crate) fn take_faults(&self) -> (u64, u32) {
-        let bits = self.inner.observed.swap(0, Ordering::Relaxed);
-        let first = self.inner.first.swap(0, Ordering::Relaxed);
-        (bits, first)
+        self.inner.faults.take()
     }
 
     /// The error for a failed device call (a wait, a map, or a buffer,
@@ -1734,9 +1783,9 @@ impl WgpuContext {
     /// Uncaptured wgpu errors since the last call, and a lost device on every
     /// call after the loss: [`OjasError::DeviceLost`] once the device is
     /// lost, [`OjasError::Backend`] for errors alone.
-    fn check_errors(&self) -> Result<(), OjasError> {
+    pub(crate) fn check_errors(&self) -> Result<(), OjasError> {
         let lost = lock(&self.inner.lost).clone();
-        let mut errors = lock(&self.inner.errors);
+        let mut errors = lock(&self.inner.errors).take();
         if errors.is_empty() && lost.is_none() {
             return Ok(());
         }
@@ -2634,6 +2683,216 @@ mod tests {
             .check_errors()
             .expect_err("the bad buffer was reported");
         assert!(matches!(plain, OjasError::Backend { .. }), "{plain:?}");
+    }
+
+    // ---- ft-757cb6b2 criteria 10, 13 and 14 ----
+
+    #[test]
+    fn take_faults_never_pairs_a_mask_with_another_reads_first_op() {
+        // Pre-fix, `take` swapped the mask and the first op one after the
+        // other: a read recording between the two swaps gave (0, first) or a
+        // first op whose bit was not in the mask.
+        use std::sync::mpsc;
+        use std::time::Duration;
+        let faults = Arc::new(Faults::default());
+        let (paused_tx, paused_rx) = mpsc::channel::<()>();
+        let (go_tx, go_rx) = mpsc::channel::<()>();
+        let (paused_tx, go_rx) = (Mutex::new(paused_tx), Mutex::new(go_rx));
+        *lock(&faults.pause) = Some(Arc::new(move || {
+            let _ = lock(&paused_tx).send(());
+            let _ = lock(&go_rx).recv_timeout(Duration::from_secs(2));
+        }));
+        let taker = {
+            let f = Arc::clone(&faults);
+            std::thread::spawn(move || f.take())
+        };
+        paused_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("the taker reached the pause");
+        let recorder = {
+            let f = Arc::clone(&faults);
+            std::thread::spawn(move || f.record(1 << 5, 6))
+        };
+        // A correct `take` holds the state across the pause, so the recorder
+        // waits behind it; a torn one lets the record land mid-take.
+        std::thread::sleep(Duration::from_millis(100));
+        go_tx.send(()).unwrap();
+        let got = taker.join().unwrap();
+        recorder.join().unwrap();
+        *lock(&faults.pause) = None;
+        assert!(
+            got == (0, 0) || got == (1 << 5, 6),
+            "a torn read of the pair: {got:?}"
+        );
+        let rest = faults.take();
+        assert_eq!(
+            (got.0 | rest.0, got.1.max(rest.1)),
+            (1 << 5, 6),
+            "the record is reported once, whole: {got:?} then {rest:?}"
+        );
+    }
+
+    #[test]
+    fn a_second_taker_does_not_empty_the_report_of_the_thread_that_saw_the_fault() {
+        // Pre-fix, whichever thread took first emptied the one shared pair:
+        // the thread whose read copied faulted values got (0, 0) and
+        // returned Ok with them.
+        use std::sync::mpsc;
+        let faults = Arc::new(Faults::default());
+        let (seen_tx, seen_rx) = mpsc::channel::<()>();
+        let (taken_tx, taken_rx) = mpsc::channel::<()>();
+        let reader = {
+            let f = Arc::clone(&faults);
+            std::thread::spawn(move || {
+                f.record(1 << 9, 10); // what `read_once` does after a copy
+                seen_tx.send(()).unwrap();
+                taken_rx.recv().unwrap();
+                f.take() // what `faults()` does after the read returns
+            })
+        };
+        seen_rx.recv().unwrap();
+        let other = faults.take(); // another clone's sync
+        taken_tx.send(()).unwrap();
+        let own = reader.join().unwrap();
+        assert_eq!(other, (1 << 9, 10), "the other caller reports the fault");
+        assert_eq!(own, (1 << 9, 10), "the reader's own copy is not hidden");
+        assert_eq!(faults.take(), (0, 0), "a third caller sees it reported");
+    }
+
+    #[test]
+    fn a_single_thread_reports_a_fault_once_and_edge_ids_survive() {
+        let faults = Faults::default();
+        assert_eq!(faults.take(), (0, 0));
+        faults.record(1 << 63, 64);
+        assert_eq!(faults.take(), (1 << 63, 64));
+        assert_eq!(faults.take(), (0, 0), "reported once");
+        faults.record(0b101, 3);
+        faults.record(0b010, 2);
+        assert_eq!(faults.take(), (0b111, 3), "the first record names the op");
+        // A corrupted word: a first op with no bits is still reported.
+        faults.record(0, 5);
+        assert_eq!(faults.take(), (0, 5));
+        assert_eq!(faults.take(), (0, 0));
+    }
+
+    #[test]
+    fn raisers_and_takers_never_see_a_torn_pair_nor_a_repeat() {
+        use std::sync::atomic::AtomicBool;
+        for _ in 0..200 {
+            let faults = Arc::new(Faults::default());
+            let done = Arc::new(AtomicBool::new(false));
+            let takers: Vec<_> = (0..3)
+                .map(|_| {
+                    let (f, d) = (Arc::clone(&faults), Arc::clone(&done));
+                    std::thread::spawn(move || {
+                        let mut seen = Vec::new();
+                        while !d.load(Ordering::Acquire) {
+                            seen.push(f.take());
+                        }
+                        seen
+                    })
+                })
+                .collect();
+            let raisers: Vec<_> = (0..8u32)
+                .map(|i| {
+                    let f = Arc::clone(&faults);
+                    std::thread::spawn(move || f.record(1u64 << (i * 8), i * 8 + 1))
+                })
+                .collect();
+            for r in raisers {
+                r.join().unwrap();
+            }
+            done.store(true, Ordering::Release);
+            let mut reports: Vec<(u64, u32)> =
+                takers.into_iter().flat_map(|t| t.join().unwrap()).collect();
+            reports.push(faults.take());
+            let mut union = 0u64;
+            for (bits, first) in reports {
+                assert_eq!(bits == 0, first == 0, "torn pair ({bits:#x}, {first})");
+                if first != 0 {
+                    assert_ne!(bits & (1u64 << (first - 1)), 0, "{first} not in {bits:#x}");
+                }
+                assert_eq!(union & bits, 0, "bits {bits:#x} reported twice");
+                union |= bits;
+            }
+            let want: u64 = (0..8u32).fold(0, |m, i| m | 1u64 << (i * 8));
+            assert_eq!(union, want, "a raised fault was never reported");
+        }
+    }
+
+    #[test]
+    fn a_failed_read_carries_the_queued_uncaptured_error() {
+        // Pre-fix, a map failure returned before `check_errors`, so the
+        // uncaptured error stayed queued for an unrelated later call.
+        let ctx = WgpuContext::open().expect("wgpu adapter");
+        ctx.push_uncaptured("queued-uncaptured-error");
+        ctx.fail_next_read();
+        let err = ctx.sync().expect_err("the injected read failure");
+        let text = format!("{err:?}");
+        assert!(text.contains("injected read failure"), "{text}");
+        assert!(text.contains("queued-uncaptured-error"), "{text}");
+        ctx.check_errors()
+            .expect("the error went with the failure, not to a later call");
+    }
+
+    #[test]
+    fn a_failed_read_names_a_recorded_device_loss() {
+        let ctx = WgpuContext::open().expect("wgpu adapter");
+        ctx.record_loss("device lost (Unknown): recorded-loss");
+        ctx.fail_next_read();
+        let err = ctx.sync().expect_err("the injected read failure");
+        assert!(
+            matches!(&err, OjasError::DeviceLost { detail, .. } if detail.contains("recorded-loss")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn uncaptured_errors_past_the_cap_are_counted_and_named() {
+        let ctx = WgpuContext::open().expect("wgpu adapter");
+        for i in 0..20 {
+            ctx.push_uncaptured(&format!("err-{i:02}"));
+        }
+        let err = ctx.check_errors().expect_err("twenty were queued");
+        let text = format!("{err:?}");
+        for i in 0..16 {
+            assert!(text.contains(&format!("err-{i:02}")), "{text}");
+        }
+        assert!(!text.contains("err-16"), "{text}");
+        assert!(
+            text.contains("and 4 more uncaptured errors dropped"),
+            "the drop is silent: {text}"
+        );
+        ctx.check_errors().expect("reported once, count reset");
+        // The real device callback shares the cap and the count.
+        for _ in 0..20 {
+            let _ = ctx.device().create_buffer(&wgpu::BufferDescriptor {
+                label: Some("empty-usage"),
+                size: 4,
+                usage: wgpu::BufferUsages::empty(),
+                mapped_at_creation: false,
+            });
+        }
+        let err = ctx.check_errors().expect_err("the device reported them");
+        assert!(
+            format!("{err:?}").contains("more uncaptured errors dropped"),
+            "{err:?}"
+        );
+    }
+
+    /// Characterization, not a fix: the loss record is permanent, and every
+    /// later sync reports it again (it is cloned, never cleared).
+    #[test]
+    fn a_lost_device_stays_reported_on_consecutive_syncs() {
+        let ctx = WgpuContext::open().expect("wgpu adapter");
+        ctx.device().destroy();
+        for round in 0..2 {
+            let err = ctx.sync().expect_err("a destroyed device cannot sync");
+            assert!(
+                matches!(&err, OjasError::DeviceLost { .. }),
+                "round {round}: {err:?}"
+            );
+        }
     }
 }
 
