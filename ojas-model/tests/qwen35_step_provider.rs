@@ -1328,3 +1328,364 @@ fn a_reserved_token_id_as_a_row_target_is_refused_before_any_work() {
         .unwrap_err();
     assert!(err.to_string().contains("target"), "{err}");
 }
+
+// ---- ft-042351e4: validate before take, zero markers, one readback, dry-run budget, rng encoding
+
+fn bank_host(p: &P) -> Vec<Vec<f32>> {
+    (0..p.leaf_count())
+        .map(|i| p.bank().grad(i).unwrap().to_f32_vec().unwrap())
+        .collect()
+}
+
+fn poison(p: &mut P, leaf: usize, value: f32) {
+    let shape = p.bank().entries()[leaf].shape.clone();
+    let n: usize = shape.iter().product();
+    let t = Tensor::from_f32(&vec![value; n], &shape, &budget()).unwrap();
+    p.bank_mut()
+        .accumulate(&cpu(), leaf, BankMode::Overwrite, t)
+        .unwrap();
+}
+
+fn moments_bits(p: &mut P) -> Vec<(Vec<u32>, Vec<u32>)> {
+    p.read_moments()
+        .unwrap()
+        .iter()
+        .map(|(m, v)| (bits(m), bits(v)))
+        .collect()
+}
+
+#[test]
+fn a_refused_adamw_step_leaves_the_bank_unscaled_and_complete_at_any_entry() {
+    for grad_scale in [1.0, 0.5] {
+        let n = open(16, true).leaf_count();
+        for leaf in [0, n / 2, n - 1] {
+            for bad in [f32::NAN, f32::INFINITY] {
+                let what = format!("scale {grad_scale}, leaf {leaf} of {n}, value {bad}");
+                let mut p = open(16, true);
+                p.accumulate(&job(10, 1, 1.0, false).view(), BankMode::Overwrite, None)
+                    .unwrap();
+                let clean = bank_host(&p)[leaf].clone();
+                poison(&mut p, leaf, bad);
+                let bank_before = bits_all(&bank_host(&p));
+                let params = bits_all(&p.read_parameters().unwrap());
+                let moments = moments_bits(&mut p);
+
+                let (lr_scale, wd) = per_entry(n_trainable(&p));
+                let err = p
+                    .adamw_step(&hyper(grad_scale), 1, &lr_scale, &wd)
+                    .unwrap_err();
+                assert!(err.to_string().contains("no tensor was stepped"), "{what}: {err}");
+                assert!(
+                    p.bank().is_complete(),
+                    "{what}: the refusal emptied the bank"
+                );
+                assert_eq!(
+                    bits_all(&bank_host(&p)),
+                    bank_before,
+                    "{what}: the bank's sums moved (scaled or lost)"
+                );
+                assert_eq!(bits_all(&p.read_parameters().unwrap()), params, "{what}");
+                assert_eq!(moments_bits(&mut p), moments, "{what}");
+                assert_eq!(p.step_count(), 0, "{what}");
+
+                // Put the clean gradient back: the same bank now steps, and lands
+                // where a provider that never saw the poison lands.
+                let shape = p.bank().entries()[leaf].shape.clone();
+                let t = Tensor::from_f32(&clean, &shape, &budget()).unwrap();
+                p.bank_mut()
+                    .accumulate(&cpu(), leaf, BankMode::Overwrite, t)
+                    .unwrap();
+                p.adamw_step(&hyper(grad_scale), 1, &lr_scale, &wd).unwrap();
+                let mut control = open(16, true);
+                control
+                    .accumulate(&job(10, 1, 1.0, false).view(), BankMode::Overwrite, None)
+                    .unwrap();
+                control
+                    .adamw_step(&hyper(grad_scale), 1, &lr_scale, &wd)
+                    .unwrap();
+                assert_eq!(
+                    bits_all(&p.read_parameters().unwrap()),
+                    bits_all(&control.read_parameters().unwrap()),
+                    "{what}: the retried step differs from a clean one"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_scale_that_overflows_a_finite_gradient_is_refused_with_the_bank_intact() {
+    let mut p = open(16, true);
+    p.accumulate(&job(10, 1, 1.0, false).view(), BankMode::Overwrite, None)
+        .unwrap();
+    let bank_before = bits_all(&bank_host(&p));
+    let params = bits_all(&p.read_parameters().unwrap());
+    let (lr_scale, wd) = per_entry(n_trainable(&p));
+    // Every gradient is finite and small; times 1e30 its square is not a finite f32.
+    let err = p.adamw_step(&hyper(1e30), 1, &lr_scale, &wd).unwrap_err();
+    assert!(err.to_string().contains("no tensor was stepped"), "{err}");
+    assert!(p.bank().is_complete());
+    assert_eq!(bits_all(&bank_host(&p)), bank_before);
+    assert_eq!(bits_all(&p.read_parameters().unwrap()), params);
+    assert_eq!(p.step_count(), 0);
+    p.adamw_step(&hyper(1.0), 1, &lr_scale, &wd).unwrap();
+    assert_eq!(p.step_count(), 1);
+}
+
+#[test]
+fn adamw_on_an_empty_bank_is_refused_and_takes_no_step() {
+    let mut p = open(16, true);
+    let params = bits_all(&p.read_parameters().unwrap());
+    let (lr_scale, wd) = per_entry(n_trainable(&p));
+    assert!(p.adamw_step(&hyper(1.0), 1, &lr_scale, &wd).is_err());
+    assert_eq!(p.step_count(), 0);
+    assert_eq!(bits_all(&p.read_parameters().unwrap()), params);
+    // Half-filled is empty too, and nothing was taken from it.
+    p.accumulate(&job(8, 2, 1.0, false).view(), BankMode::Overwrite, None)
+        .unwrap();
+    p.bank_mut().clear();
+    assert!(p.adamw_step(&hyper(1.0), 1, &lr_scale, &wd).is_err());
+}
+
+#[test]
+fn a_clean_step_after_a_norm_is_identical_to_one_without_it() {
+    let run = |ask_norm: bool| {
+        let mut p = open(16, true);
+        let mut ext = outside;
+        p.accumulate(&job(10, 1, 1.0, true).view(), BankMode::Overwrite, Some(&mut ext))
+            .unwrap();
+        p.accumulate(&job(9, 2, 0.5, false).view(), BankMode::Add, None)
+            .unwrap();
+        let norm = if ask_norm {
+            Some(p.grad_sq_norm().unwrap().to_bits())
+        } else {
+            None
+        };
+        let (lr_scale, wd) = per_entry(n_trainable(&p));
+        p.adamw_step(&hyper(0.5), 1, &lr_scale, &wd).unwrap();
+        (norm, bits_all(&p.read_parameters().unwrap()), moments_bits(&mut p))
+    };
+    let (norm, params_a, moments_a) = run(true);
+    let (_, params_b, moments_b) = run(false);
+    assert!(norm.is_some());
+    assert_eq!(params_a, params_b);
+    assert_eq!(moments_a, moments_b);
+}
+
+#[test]
+fn the_norm_after_a_changed_bank_is_not_the_cached_one() {
+    let mut p = open(16, true);
+    p.accumulate(&job(10, 1, 1.0, false).view(), BankMode::Overwrite, None)
+        .unwrap();
+    let a = p.grad_sq_norm().unwrap();
+    p.accumulate(&job(9, 2, 1.0, false).view(), BankMode::Add, None)
+        .unwrap();
+    let b = p.grad_sq_norm().unwrap();
+    assert_ne!(a.to_bits(), b.to_bits(), "a stale norm survived an Add");
+    p.accumulate(&job(10, 1, 1.0, false).view(), BankMode::Overwrite, None)
+        .unwrap();
+    assert_eq!(p.grad_sq_norm().unwrap().to_bits(), a.to_bits());
+    poison(&mut p, 0, f32::NAN);
+    assert!(p.grad_sq_norm().is_err(), "a stale norm hid a NaN");
+}
+
+fn full_provider() -> P {
+    TapeStepProvider::open_full(cpu(), DeviceHooks::default(), open_config(16)).unwrap()
+}
+
+#[test]
+fn a_scale_zero_sequence_allocates_no_gradient_in_either_mode() {
+    for (what, mut p) in [("lora", open(16, true)), ("full", full_provider())] {
+        let budget = p.backend().budget().clone();
+        let zero = job(8, 3, 0.0, false);
+        let live = budget.live_bytes().unwrap();
+        p.accumulate(&zero.view(), BankMode::Overwrite, None)
+            .unwrap();
+        // The bank holds no tensor for it: no [V, d] (full) and no adapter-sized
+        // zeros (LoRA) outlive the sequence.
+        assert_eq!(
+            budget.live_bytes().unwrap(),
+            live,
+            "{what}: a scale-0 gradient was materialised in the bank"
+        );
+        assert!(p.bank().is_complete(), "{what}");
+        assert_eq!(p.grad_sq_norm().unwrap(), 0.0, "{what}");
+        p.accumulate(&zero.view(), BankMode::Add, None).unwrap();
+        assert_eq!(budget.live_bytes().unwrap(), live, "{what}: Add");
+        // The step still runs on it (zero gradients, weight decay and moments).
+        let (lr_scale, wd) = per_entry(n_trainable(&p));
+        p.adamw_step(&hyper(1.0), 1, &lr_scale, &wd).unwrap();
+        assert_eq!(p.step_count(), 1, "{what}");
+    }
+}
+
+#[test]
+fn a_zero_sequence_then_a_real_one_sums_to_the_real_one() {
+    let real = job(10, 1, 1.0, false);
+    let want = grads_after(&real, false);
+    let mut p = open(16, true);
+    p.accumulate(&job(8, 3, 0.0, false).view(), BankMode::Overwrite, None)
+        .unwrap();
+    p.accumulate(&real.view(), BankMode::Add, None).unwrap();
+    assert!(max_rel(&grads_of(&mut p), &want) < 1e-6);
+    // And a zero marker reads as zeros.
+    let mut q = open(16, true);
+    q.accumulate(&job(8, 3, 0.0, false).view(), BankMode::Overwrite, None)
+        .unwrap();
+    assert!(grads_of(&mut q).iter().flatten().all(|x| *x == 0.0));
+}
+
+#[cfg(target_os = "macos")]
+fn metal() -> ojas_metal::MetalBackend {
+    ojas_metal::MetalBackend::new(ojas_core::Budget::new(2 << 30))
+        .unwrap_or_else(|e| panic!("no Metal device: {e:?}"))
+}
+
+#[cfg(target_os = "macos")]
+fn metal_provider() -> TapeStepProvider<ojas_metal::MetalBackend> {
+    use ojas_metal::MetalBackend;
+    let hooks = DeviceHooks {
+        freeze: Some(Box::new(|m: &MetalBackend, t: &Tensor| m.freeze_checked(t))),
+        rebind: Some(Box::new(|m: &MetalBackend, b: ojas_core::Budget| {
+            m.with_budget(b)
+        })),
+    };
+    let mut p = TapeStepProvider::open_lora(metal(), hooks, open_config(16), lora_init(true))
+        .unwrap();
+    p.preflight(&tiny_calibration(), 16, &[16], 1 << 30, 0)
+        .unwrap();
+    p
+}
+
+/// Device readbacks the budget has counted so far.
+#[cfg(target_os = "macos")]
+fn readbacks(p: &TapeStepProvider<ojas_metal::MetalBackend>) -> u64 {
+    p.backend().budget().device_readbacks().0
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn on_metal_the_norm_and_the_update_read_each_gradient_once() {
+    let mut p = metal_provider();
+    let n = p.leaf_count() as u64;
+    let (lr_scale, wd) = per_entry(n_trainable_any(&p));
+    p.accumulate(&job(10, 1, 1.0, false).view(), BankMode::Overwrite, None)
+        .unwrap();
+    p.accumulate(&job(9, 2, 1.0, false).view(), BankMode::Add, None)
+        .unwrap();
+
+    let start = readbacks(&p);
+    p.grad_sq_norm().unwrap();
+    let after_norm = readbacks(&p);
+    p.adamw_step(&hyper(0.5), 1, &lr_scale, &wd).unwrap();
+    let after_step = readbacks(&p);
+    assert_eq!(after_norm - start, n, "the norm reads each gradient once");
+    assert_eq!(
+        after_step - after_norm,
+        0,
+        "the update re-read gradients the norm had already read"
+    );
+
+    // Without a norm the update reads each gradient once, not zero times.
+    let mut q = metal_provider();
+    q.accumulate(&job(10, 1, 1.0, false).view(), BankMode::Overwrite, None)
+        .unwrap();
+    let start = readbacks(&q);
+    q.adamw_step(&hyper(0.5), 1, &lr_scale, &wd).unwrap();
+    assert_eq!(readbacks(&q) - start, n);
+}
+
+#[cfg(target_os = "macos")]
+fn n_trainable_any<B: ojas_core::Backend>(p: &TapeStepProvider<B>) -> usize {
+    p.parameters().iter().filter(|s| s.trainable).count()
+}
+
+type Seen = std::rc::Rc<std::cell::RefCell<Vec<ojas_core::Budget>>>;
+
+fn recording_hooks(seen: &Seen, honour: bool) -> DeviceHooks<DeviceLike> {
+    let seen = seen.clone();
+    DeviceHooks {
+        freeze: Some(Box::new(
+            |_: &DeviceLike, _: &Tensor| -> Result<(), ojas_core::OjasError> { Ok(()) },
+        )),
+        rebind: Some(Box::new(move |_: &DeviceLike, budget: ojas_core::Budget| {
+            seen.borrow_mut().push(budget.clone());
+            let charged = if honour {
+                budget
+            } else {
+                ojas_core::Budget::new(4 << 30)
+            };
+            DeviceLike(CpuBackend::new(charged).with_numerics(Numerics::Exact))
+        })),
+    }
+}
+
+#[test]
+fn the_dry_run_measures_only_what_the_rebound_backend_charges_to_its_budget() {
+    let calibration = tiny_calibration();
+
+    let seen: Seen = Default::default();
+    let mut p = device_provider(recording_hooks(&seen, true));
+    p.preflight(&calibration, 8, &[8, 16], 1 << 30, 0).unwrap();
+    let budgets = seen.borrow();
+    assert_eq!(budgets.len(), 1, "one dry run, one rebind");
+    assert!(
+        budgets[0].peak_bytes() > 0,
+        "a hook that rebinds to its budget must measure a peak"
+    );
+
+    // A hook that ignores its budget charges elsewhere: the measured peak is 0
+    // and the pre-flight still passes (the documented blind spot).
+    let blind: Seen = Default::default();
+    let mut q = device_provider(recording_hooks(&blind, false));
+    q.preflight(&calibration, 8, &[8, 16], 1 << 30, 0).unwrap();
+    assert_eq!(blind.borrow()[0].peak_bytes(), 0);
+}
+
+#[test]
+fn the_rng_state_is_the_seed_then_the_epoch_little_endian_and_round_trips() {
+    let tmp = Tmp::new();
+    let mut p = open(16, true);
+    let ctx = CheckpointContext {
+        optimizer_step: 0,
+        seed: 0x0102_0304_0506_0708,
+        epoch: 0x1112_1314_1516_1718,
+        consumed_digest: "ab".repeat(32),
+    };
+    p.save_state_with(&tmp.0, &ctx).unwrap();
+    let file = SafeTensors::open(&tmp.0.join("provider").join("adapters.safetensors")).unwrap();
+    assert_eq!(
+        file.metadata()["ojas.adapter.rng_state"],
+        "08070605040302011817161514131211"
+    );
+
+    let mut resumed = open(16, false);
+    resumed.load_state_with(&tmp.0, &ctx).unwrap();
+    // Swapped, or either half changed by one bit, is another data order.
+    for (what, wrong) in [
+        (
+            "swapped",
+            CheckpointContext {
+                seed: ctx.epoch,
+                epoch: ctx.seed,
+                ..ctx.clone()
+            },
+        ),
+        (
+            "seed",
+            CheckpointContext {
+                seed: ctx.seed ^ 1,
+                ..ctx.clone()
+            },
+        ),
+        (
+            "epoch",
+            CheckpointContext {
+                epoch: ctx.epoch ^ (1 << 63),
+                ..ctx.clone()
+            },
+        ),
+    ] {
+        assert!(resumed.load_state_with(&tmp.0, &wrong).is_err(), "{what}");
+    }
+}
