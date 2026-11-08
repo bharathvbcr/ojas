@@ -75,6 +75,8 @@ fn base_spec() -> Qwen35Spec {
         gdn_value_dim: 3,
         conv_width: 4,
         eps: 1e-6,
+        max_positions: None,
+        reserved_token_ids: Vec::new(),
     }
 }
 
@@ -106,6 +108,8 @@ fn random_spec(rng: &mut Lcg) -> Qwen35Spec {
         gdn_value_dim: rng.range(1, 5),
         conv_width: rng.range(1, 4),
         eps: 1e-6,
+        max_positions: None,
+        reserved_token_ids: Vec::new(),
     }
 }
 
@@ -442,6 +446,8 @@ fn runs_that_straddle_or_exactly_fill_a_decode_chunk_match_the_old_staging() {
             gdn_value_dim: hd,
             conv_width: 3,
             eps: 1e-6,
+            max_positions: None,
+            reserved_token_ids: Vec::new(),
         };
         for (seed, src) in [Src::F32, Src::Bf16, Src::F16].into_iter().enumerate() {
             let mut rng = Lcg(7 * hd as u64 + d as u64 + seed as u64);
@@ -468,6 +474,8 @@ fn an_odd_head_count_spec_with_runs_past_two_chunks_matches() {
         gdn_value_dim: 90,
         conv_width: 5,
         eps: 1e-6,
+        max_positions: None,
+        reserved_token_ids: Vec::new(),
     };
     let mut rng = Lcg(2024);
     let bytes = build(&spec, PREFIX, Src::Mixed, &mut rng);

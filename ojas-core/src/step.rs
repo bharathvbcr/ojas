@@ -150,7 +150,9 @@ pub struct SequenceJob<'a> {
 
 impl SequenceJob<'_> {
     /// The checks every provider needs before it runs anything: lengths agree, positions are in
-    /// range, the outside loss's positions are distinct, the scale is finite and non-negative.
+    /// range, the row positions and the outside loss's positions are each distinct, the scale is
+    /// finite and non-negative. Scale 0 with rows is legal and value-only, for DISTINCT row
+    /// positions; a repeated row position is refused at any scale, 0 included.
     pub fn validate(&self, vocab: usize) -> Result<(), StepError> {
         let t = self.tokens.len();
         if t == 0 {
@@ -185,6 +187,14 @@ impl SequenceJob<'_> {
         if let Some(bad) = rows.targets.iter().find(|&&id| id as usize >= vocab) {
             return Err(StepError::Contract(format!(
                 "row target {bad} >= vocabulary {vocab}"
+            )));
+        }
+        let mut rows_seen = rows.positions.to_vec();
+        rows_seen.sort_unstable();
+        if let Some(w) = rows_seen.windows(2).find(|w| w[0] == w[1]) {
+            return Err(StepError::Contract(format!(
+                "row position {} is scored twice; row positions are distinct",
+                w[0]
             )));
         }
         let mut seen = self.hidden_at.to_vec();
@@ -443,6 +453,19 @@ mod tests {
         assert!(
             job(&[1, 9], &[], &[], &[]).validate(8).is_err(),
             "token past the vocabulary"
+        );
+        assert!(
+            job(&toks, &[1, 1], &[3, 4], &[]).validate(8).is_err(),
+            "a repeated row position"
+        );
+        let mut zero = job(&toks, &[1], &[3], &[]);
+        zero.rows.scale = 0.0;
+        assert!(zero.validate(8).is_ok(), "scale 0 with rows is value-only");
+        let mut zero_dup = job(&toks, &[1, 1], &[3, 4], &[]);
+        zero_dup.rows.scale = 0.0;
+        assert!(
+            zero_dup.validate(8).is_err(),
+            "a repeated row position is refused at scale 0 too"
         );
         let mut nan = job(&toks, &[1], &[3], &[]);
         nan.rows.scale = f32::NAN;

@@ -995,3 +995,203 @@ fn a_failed_preflight_closes_a_gate_an_earlier_pass_opened() {
     p.preflight(&calibration, 8, &[8, 16], 1 << 30, 0).unwrap();
     p.accumulate(&j.view(), BankMode::Overwrite, None).unwrap();
 }
+
+// ---------------------------------------------- sequence refusals (ft-3c6ed4be)
+
+/// A LoRA provider whose spec carries the config-declared sequence limits.
+fn open_limited(max_positions: Option<usize>, reserved: Vec<u32>) -> P {
+    let mut cfg = open_config(16);
+    cfg.spec.max_positions = max_positions;
+    cfg.spec.reserved_token_ids = reserved;
+    TapeStepProvider::open_lora(cpu(), DeviceHooks::default(), cfg, lora_init(true)).unwrap()
+}
+
+/// Run `bad` as an `Add` after a good `Overwrite`: it is refused with a message
+/// holding `needle`, the bank's sum is bit-identical afterwards, and the
+/// backend's budget never rose, so nothing was gathered, scored or put on a tape.
+fn refused_before_any_work(p: &mut P, bad: &Job, needle: &str) {
+    // Short enough for every limit these tests set.
+    p.accumulate(&job(5, 2, 1.0, false).view(), BankMode::Overwrite, None)
+        .unwrap();
+    let before = bits_all(&p.read_gradients().unwrap());
+    let budget = p.backend().budget().clone();
+    let live = budget.live_bytes().unwrap();
+    budget.reset_peak();
+    let err = p
+        .accumulate(&bad.view(), BankMode::Add, None)
+        .expect_err("the sequence was accepted");
+    assert!(
+        matches!(err, StepError::Contract(_)) && err.to_string().contains(needle),
+        "{err}"
+    );
+    // The bank first, on its own: a refusal that wrote the bank (cleared it, or changed a
+    // gradient) without allocating anything must still fail here, before the budget check
+    // below could mask or replace the verdict.
+    assert!(
+        p.bank().is_complete(),
+        "the refused sequence left the bank incomplete"
+    );
+    assert_eq!(
+        bits_all(&p.read_gradients().unwrap()),
+        before,
+        "the refused sequence changed the bank's sum"
+    );
+    assert_eq!(
+        budget.peak_bytes().saturating_sub(live),
+        0,
+        "the refused sequence allocated before it was refused"
+    );
+}
+
+#[test]
+fn a_reserved_token_id_is_refused_before_any_work_and_names_the_id() {
+    let mut p = open_limited(None, vec![4242, 4243]);
+    let mut bad = job(8, 2, 1.0, false);
+    bad.tokens[3] = 4243;
+    refused_before_any_work(&mut p, &bad, "4243");
+    // The same job without the reserved id runs.
+    p.accumulate(&job(8, 2, 1.0, false).view(), BankMode::Add, None)
+        .unwrap();
+}
+
+#[test]
+fn a_sequence_past_max_position_embeddings_is_refused_before_any_work() {
+    let mut p = open_limited(Some(6), Vec::new());
+    refused_before_any_work(&mut p, &job(8, 2, 1.0, false), "max_position_embeddings 6");
+    // At the limit it runs; and with the field absent only the table width bounds it.
+    p.accumulate(&job(6, 2, 1.0, false).view(), BankMode::Add, None)
+        .unwrap();
+    let mut open_ended = open_limited(None, Vec::new());
+    open_ended
+        .accumulate(&job(16, 2, 1.0, false).view(), BankMode::Overwrite, None)
+        .unwrap();
+    assert!(open_ended
+        .accumulate(&job(17, 2, 1.0, false).view(), BankMode::Add, None)
+        .is_err());
+}
+
+#[test]
+fn a_repeated_row_position_is_refused_before_any_work_and_distinct_ones_run() {
+    let mut p = open(16, true);
+    let mut dup = job(8, 2, 1.0, false);
+    dup.positions = vec![4, 5, 4];
+    dup.targets = vec![1, 2, 3];
+    refused_before_any_work(&mut p, &dup, "row position 4");
+    let mut distinct = job(8, 2, 1.0, false);
+    distinct.positions = vec![4, 5, 6];
+    distinct.targets = vec![1, 2, 3];
+    p.accumulate(&distinct.view(), BankMode::Add, None).unwrap();
+}
+
+#[test]
+fn scale_zero_with_rows_is_not_refused_and_a_bad_scale_still_is() {
+    let mut p = open(16, true);
+    let zero = job(8, 2, 0.0, false);
+    assert!(p
+        .accumulate(&zero.view(), BankMode::Overwrite, None)
+        .is_ok());
+    for bad in [-1.0f32, f32::NAN, f32::INFINITY] {
+        let j = job(8, 2, bad, false);
+        assert!(p.accumulate(&j.view(), BankMode::Overwrite, None).is_err());
+    }
+}
+
+fn tiny_calibration() -> Calibration {
+    Calibration::from_points(
+        "tiny",
+        1,
+        &[
+            Point {
+                tokens: 8,
+                peak_bytes: 1 << 20,
+            },
+            Point {
+                tokens: 16,
+                peak_bytes: 2 << 20,
+            },
+        ],
+    )
+    .unwrap()
+}
+
+fn device_provider_limited(
+    max_positions: Option<usize>,
+    reserved: Vec<u32>,
+) -> TapeStepProvider<DeviceLike> {
+    let mut cfg = open_config(16);
+    cfg.spec.max_positions = max_positions;
+    cfg.spec.reserved_token_ids = reserved;
+    TapeStepProvider::open_lora(device_like(), with_rebind(), cfg, lora_init(true)).unwrap()
+}
+
+#[test]
+fn the_preflight_refuses_a_bucket_longer_than_max_position_embeddings() {
+    let calibration = tiny_calibration();
+    let mut p = device_provider_limited(Some(4), Vec::new());
+    // 8 tokens round up to the 8-token bucket, which the config's limit of 4 forbids.
+    let err = p
+        .preflight(&calibration, 8, &[8, 16], 1 << 30, 0)
+        .unwrap_err();
+    let text = err.to_string();
+    assert!(
+        matches!(err, StepError::Contract(_))
+            && text.contains("bucket of 8 tokens")
+            && text.contains("max_position_embeddings 4"),
+        "{text}"
+    );
+    // The gate stays shut.
+    let j = job(4, 5, 1.0, false);
+    assert!(p
+        .accumulate(&j.view(), BankMode::Overwrite, None)
+        .unwrap_err()
+        .to_string()
+        .contains("pre-flight"));
+    // A limit that holds the bucket plans as before.
+    let mut ok = device_provider_limited(Some(8), Vec::new());
+    assert_eq!(
+        ok.preflight(&calibration, 8, &[8, 16], 1 << 30, 0)
+            .unwrap()
+            .bucket,
+        8
+    );
+}
+
+#[test]
+fn the_preflight_dry_run_never_uses_a_reserved_token_id() {
+    let calibration = tiny_calibration();
+    let vocab = spec().vocab as u32;
+    // Every id reserved: there is no token the dry run may use, so no plan is approved.
+    let mut none_left = device_provider_limited(None, (0..vocab).collect());
+    let err = none_left
+        .preflight(&calibration, 8, &[8, 16], 1 << 30, 0)
+        .unwrap_err();
+    assert!(err.to_string().contains("reserved"), "{err}");
+    // The old dry run's tokens (`i % vocab`) were ids 0..8; with those reserved the plan still
+    // succeeds, on the next ids.
+    let mut some_left = device_provider_limited(None, (0..8).collect());
+    assert_eq!(
+        some_left
+            .preflight(&calibration, 8, &[8, 16], 1 << 30, 0)
+            .unwrap()
+            .bucket,
+        8
+    );
+}
+
+#[test]
+fn a_reserved_token_id_as_a_row_target_is_refused_before_any_work() {
+    let mut p = open_limited(None, vec![4243]);
+    let mut bad = job(8, 2, 1.0, false);
+    bad.targets[0] = 4243;
+    // Otherwise valid: the id is in the vocabulary and no token of the sequence is reserved.
+    assert!(!bad.tokens.contains(&4243));
+    refused_before_any_work(&mut p, &bad, "row target 4243");
+    let mut as_target_msg = open_limited(None, vec![4243]);
+    as_target_msg
+        .accumulate(&job(5, 2, 1.0, false).view(), BankMode::Overwrite, None)
+        .unwrap();
+    let err = as_target_msg
+        .accumulate(&bad.view(), BankMode::Add, None)
+        .unwrap_err();
+    assert!(err.to_string().contains("target"), "{err}");
+}

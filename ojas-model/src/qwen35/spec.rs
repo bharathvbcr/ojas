@@ -38,6 +38,14 @@ pub struct Qwen35Spec {
     /// Taps of the depthwise causal conv in front of the delta rule.
     pub conv_width: usize,
     pub eps: f32,
+    /// Longest sequence the model's config declares, when it declares one. A
+    /// sequence longer than this is refused by the provider before any work;
+    /// `None` leaves the length bounded only by the tables' width.
+    pub max_positions: Option<usize>,
+    /// Token ids a text-only run must never see (a vision config's
+    /// `image_token_id` and kin). The provider refuses a sequence holding one
+    /// before any gather, loss or tape write.
+    pub reserved_token_ids: Vec<u32>,
 }
 
 fn refuse(detail: String) -> OjasError {

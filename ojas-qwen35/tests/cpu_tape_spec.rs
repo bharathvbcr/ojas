@@ -63,3 +63,28 @@ fn the_tape_reads_the_providers_tensors_for_the_real_2b() {
 fn the_tape_reads_the_providers_tensors_for_the_tiny_fixture() {
     same_tensors(&tiny());
 }
+
+/// The provider reads its two sequence limits from the spec, so `tape_spec`
+/// must carry exactly what the config declared: the real 2B's 262144-position
+/// limit and its vision special-token ids; the tiny text-only config's none.
+#[test]
+fn tape_spec_carries_the_sequence_limits_the_config_declares() {
+    let cfg = Qwen35TextConfig::from_json(REAL).unwrap();
+    let spec = cfg.tape_spec();
+    assert_eq!(spec.max_positions, Some(262_144));
+    let mut want: Vec<u32> = cfg.reserved_token_ids.iter().map(|(_, id)| *id).collect();
+    assert!(!want.is_empty());
+    let mut got = spec.reserved_token_ids.clone();
+    want.sort_unstable();
+    got.sort_unstable();
+    assert_eq!(got, want);
+    let tiny_cfg = tiny();
+    let tiny_spec = tiny_cfg.tape_spec();
+    assert!(tiny_spec.reserved_token_ids.is_empty());
+    assert_eq!(
+        tiny_spec.max_positions,
+        tiny_cfg
+            .max_position_embeddings
+            .map(|n| usize::try_from(n).unwrap())
+    );
+}

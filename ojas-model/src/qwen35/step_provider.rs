@@ -245,6 +245,60 @@ fn contract(detail: impl Into<String>) -> StepError {
     StepError::Contract(detail.into())
 }
 
+/// The refusals that depend on the model's config (`Qwen35Spec::reserved_token_ids` and
+/// `max_positions`), the one owner both [`TapeStepProvider::accumulate`]'s path and
+/// [`TapeStepProvider::preflight`]'s dry run go through, before any gather, loss or tape
+/// write: a token id in the reserved set, as an input or as a row target (a text-only run
+/// must neither embed a vision special token nor train toward one), and a sequence longer
+/// than `max_positions` when the config sets one.
+fn check_config_limits(spec: &Qwen35Spec, job: &SequenceJob<'_>) -> Result<(), StepError> {
+    if let Some(id) = job
+        .tokens
+        .iter()
+        .find(|id| spec.reserved_token_ids.contains(id))
+    {
+        return Err(contract(format!(
+            "token {id} is reserved (a vision special token); a text-only run refuses it"
+        )));
+    }
+    if let Some(id) = job
+        .rows
+        .targets
+        .iter()
+        .find(|id| spec.reserved_token_ids.contains(id))
+    {
+        return Err(contract(format!(
+            "row target {id} is reserved (a vision special token); a text-only run cannot train \
+             toward it"
+        )));
+    }
+    if let Some(max) = spec.max_positions {
+        if job.tokens.len() > max {
+            return Err(contract(format!(
+                "a sequence of {} tokens is longer than max_position_embeddings {max}",
+                job.tokens.len()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The pre-flight dry run's tokens: `bucket` of them, cycling through the ids the config does
+/// not reserve, so the measured step is one a real run could take.
+fn dry_run_tokens(spec: &Qwen35Spec, bucket: usize) -> Result<Vec<u32>, StepError> {
+    let vocab = u32::try_from(spec.vocab)
+        .map_err(|_| contract(format!("vocabulary {} does not fit u32", spec.vocab)))?;
+    let allowed: Vec<u32> = (0..vocab)
+        .filter(|id| !spec.reserved_token_ids.contains(id))
+        .collect();
+    if allowed.is_empty() {
+        return Err(contract(
+            "every token id in the vocabulary is reserved; there is nothing to dry-run with",
+        ));
+    }
+    Ok((0..bucket).map(|i| allowed[i % allowed.len()]).collect())
+}
+
 fn adapter_err(e: AdapterError) -> StepError {
     match e {
         AdapterError::Unreadable { .. } => StepError::Io(e.to_string()),
@@ -847,6 +901,7 @@ impl<B: Backend> TapeStepProvider<B> {
     ) -> Result<f64, StepError> {
         self.require_ready()?;
         job.validate(self.spec.vocab)?;
+        check_config_limits(&self.spec, job)?;
         if job.tokens.len() > self.widest {
             return Err(contract(format!(
                 "a sequence of {} tokens is wider than the {} the tables were built for",
@@ -1016,6 +1071,14 @@ impl<B: Backend> TapeStepProvider<B> {
                 self.widest
             )));
         }
+        if let Some(max) = self.spec.max_positions {
+            if bucket > max {
+                return Err(contract(format!(
+                    "the planned bucket of {bucket} tokens is longer than max_position_embeddings \
+                     {max}"
+                )));
+            }
+        }
         let rebind = self.hooks.rebind.as_ref().ok_or_else(|| {
             StepError::Unsupported(
                 "the pre-flight's dry run needs DeviceHooks::rebind to charge a child budget; \
@@ -1023,25 +1086,25 @@ impl<B: Backend> TapeStepProvider<B> {
                     .into(),
             )
         })?;
-        let vocab = self.spec.vocab;
-        let tokens: Vec<u32> = (0..bucket).map(|i| (i % vocab) as u32).collect();
+        let tokens = dry_run_tokens(&self.spec, bucket)?;
         let last = [(bucket - 1) as u32];
-        let target = [0u32];
+        let target = [tokens[0]];
         let seq = self.seq();
+        let job = SequenceJob {
+            tokens: &tokens,
+            rows: RowTargets {
+                positions: &last,
+                targets: &target,
+                scale: 1.0,
+            },
+            hidden_at: &last,
+        };
+        check_config_limits(&self.spec, &job)?;
         preflight::dry_run(
             &self.backend,
             i64::try_from(bucket).unwrap_or(i64::MAX),
             |budget| {
                 let scratch = rebind(&self.backend, budget.clone());
-                let job = SequenceJob {
-                    tokens: &tokens,
-                    rows: RowTargets {
-                        positions: &last,
-                        targets: &target,
-                        scale: 1.0,
-                    },
-                    hidden_at: &last,
-                };
                 let mut zero = |_: &[u32], h: &[f32]| -> Result<Vec<f32>, StepError> {
                     Ok(vec![0.0; h.len()])
                 };

@@ -54,6 +54,8 @@ pub fn spec() -> Qwen35Spec {
         gdn_value_dim: 128,
         conv_width: 4,
         eps: 1e-6,
+        max_positions: None,
+        reserved_token_ids: Vec::new(),
     }
 }
 
