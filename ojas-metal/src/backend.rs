@@ -5238,6 +5238,33 @@ mod tests {
         drop(kept);
     }
 
+    /// A backend whose device reports no working set (tessl's `0`) has no
+    /// threshold to be over: growing past `WS_GROWTH` must never settle for
+    /// the working set.
+    #[test]
+    fn an_unreported_working_set_never_triggers_a_working_set_wait() {
+        let m = MetalBackend::new(Budget::new(4 << 30)).expect("Metal device");
+        let one = put(&m, &[0.5], &[1]);
+        m.sync().expect("settle");
+        m.set_mem_cap(4 << 30).expect("memory cap at the budget");
+        tune(&m, None, Some(0), (0, 0));
+        let before = m.wait_counts().working_set;
+        let big = put(&m, &vec![0.5; 8 << 20], &[8 << 20]);
+        let kept: Vec<Tensor> = (0..12)
+            .map(|_| m.silu_forward(&big).expect("big op"))
+            .collect();
+        for _ in 0..200 {
+            drop(m.silu_forward(&one).expect("tiny op"));
+        }
+        assert_eq!(
+            m.wait_counts().working_set - before,
+            0,
+            "a working-set wait with no reported working set"
+        );
+        assert_eq!(pending(&m), None);
+        drop(kept);
+    }
+
     /// An allocation that fails while work is recorded is retried after a
     /// waited commit, and that commit keeps the status of the op being
     /// recorded: its fault still reaches the next sync.
