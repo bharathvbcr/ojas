@@ -158,7 +158,7 @@ All three conditions must hold:
 2. **Thread Serialization (`--test-threads=1`)**:
    `ojas-metal` tests reading the process-wide device allocation gauge or shared Metal buffer pool fail under concurrent test threads. Always pass `--test-threads=1` when executing Metal tests.
 3. **No Silent GPU Fallback**:
-   On machines without Metal hardware (e.g. Linux CI or remote nodes), export `OJAS_ALLOW_NO_GPU=1` to allow clean skips. On Apple Silicon, ensure `OJAS_ALLOW_NO_GPU=0` (or unset) to enforce fail-closed execution.
+   On machines without Metal hardware (e.g. Linux CI or remote nodes), export `OJAS_ALLOW_NO_GPU=1` to allow clean skips. `scripts/parity_check.sh` then exits 0 but ends with `INCOMPLETE, NOT A FULL PASS` (or `NOTHING RAN`) and lists the skipped backend; only a run where every requested backend executed prints `SUCCESS ... (ran: ...)`. On Apple Silicon, ensure `OJAS_ALLOW_NO_GPU=0` (or unset) to enforce fail-closed execution.
 4. **Budget Isolation**:
    Every test must instantiate `MetalBackend::new(Budget::new(bytes))` with a dedicated budget ledger. Test assertions must verify that allocated bytes match charged bytes without leaks.
 

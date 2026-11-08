@@ -30,7 +30,12 @@ cleanup_logs() {
   fi
   return 0
 }
-trap cleanup_logs EXIT INT TERM
+# EXIT only cleans up. INT and TERM clean up and then END the script with the
+# conventional 128+signal status: a handler that merely returns lets the script
+# resume (with its log deleted) and run on to a banner.
+trap cleanup_logs EXIT
+trap 'cleanup_logs; exit 130' INT
+trap 'cleanup_logs; exit 143' TERM
 
 show_help() {
   cat <<'EOF'
@@ -66,6 +71,12 @@ CUSTOM_FIXTURES=""
 CUSTOM_WEIGHTS=""
 CUSTOM_GROUPNORM=""
 NO_GPU_LOCK=0
+
+# Which backend suites actually executed and which were skipped. The closing
+# banner is derived from these, so a skipped suite can never print the line a
+# passed one does. A suite that FAILS exits the script before either is touched.
+RAN_BACKENDS=()
+SKIPPED_BACKENDS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -223,7 +234,26 @@ run_test_with_verification() {
     exit "$rc"
   fi
 
-  if grep -qE "(running 0 tests|test result: .* 0 passed; 0 failed)" "$log_file"; then
+  # Exit 0 is not evidence. A suite counts as passed only on what its own log
+  # says. grep exits 2 on an error (e.g. an unreadable log); that is a failed
+  # check, never "no match".
+  log_matches() {
+    local rc_grep=0
+    grep -qE "$1" "$log_file" || rc_grep=$?
+    if [[ $rc_grep -gt 1 ]]; then
+      echo "ERROR: could not read the $suite_label suite log (grep exit $rc_grep); refusing to report it as passed." >&2
+      exit 1
+    fi
+    return "$rc_grep"
+  }
+
+  if log_matches "test result: FAILED"; then
+    rm -f "$log_file"
+    echo "ERROR: $suite_label suite printed 'test result: FAILED' although cargo exited 0." >&2
+    exit 1
+  fi
+
+  if log_matches "(running 0 tests|test result: .* 0 passed; 0 failed)"; then
     rm -f "$log_file"
     echo "" >&2
     echo "======================================================================" >&2
@@ -236,6 +266,12 @@ run_test_with_verification() {
     echo "  conv2d, conv_transpose2d, gelu_erf, global_attention, group_norm," >&2
     echo "  layer_norm, linear_bias, rope_interleaved, rope_tables, windowed_attention" >&2
     echo "======================================================================" >&2
+    exit 1
+  fi
+
+  if ! log_matches "test result: ok\\. [1-9][0-9]* passed"; then
+    rm -f "$log_file"
+    echo "ERROR: $suite_label suite exited 0 but its log has no 'test result: ok. N passed' line with N > 0; it did not demonstrably run." >&2
     exit 1
   fi
 
@@ -253,6 +289,7 @@ run_cpu_parity() {
   cmd+=(-- --ignored --nocapture)
   echo "    Command: ${cmd[*]}"
   run_test_with_verification "CPU" "ojas-oracle/tests/sam_fixtures_cpu.rs" "${cmd[@]}"
+  RAN_BACKENDS+=("cpu")
 }
 
 run_metal_parity() {
@@ -261,6 +298,7 @@ run_metal_parity() {
   if [[ "$(uname -s)" != "Darwin" ]]; then
     if [[ "${OJAS_ALLOW_NO_GPU:-0}" == "1" ]]; then
       echo "    [SKIP] Not running on Darwin and OJAS_ALLOW_NO_GPU=1."
+      SKIPPED_BACKENDS+=("metal")
       return 0
     else
       echo "    ERROR: Metal backend tests require macOS Darwin (Apple Silicon)." >&2
@@ -307,6 +345,7 @@ run_metal_parity() {
   fi
   echo "    Command: ${full_cmd[*]}"
   run_test_with_verification "Metal" "ojas-metal/tests/sam_fixtures_metal.rs" "${full_cmd[@]}"
+  RAN_BACKENDS+=("metal")
 }
 
 case "$BACKEND" in
@@ -322,8 +361,25 @@ case "$BACKEND" in
     ;;
 esac
 
-TOTAL_TIME=$(($(date +%s) - START_TIME))
-echo ""
-echo "======================================================================"
-echo "==> [Parity Check] SUCCESS in ${TOTAL_TIME}s"
-echo "======================================================================"
+# Closing banner. Exit status is 0 in every case that reaches here (a skip under
+# OJAS_ALLOW_NO_GPU=1 is a documented clean skip), but only a run in which every
+# requested suite executed says SUCCESS. A caller grepping for SUCCESS therefore
+# cannot mistake a skipped Metal suite, or a run where nothing executed, for a pass.
+print_summary() {
+  local elapsed="$1"
+  local ran="none" skipped="none"
+  [[ ${#RAN_BACKENDS[@]} -gt 0 ]] && ran="${RAN_BACKENDS[*]}"
+  [[ ${#SKIPPED_BACKENDS[@]} -gt 0 ]] && skipped="${SKIPPED_BACKENDS[*]}"
+  echo ""
+  echo "======================================================================"
+  if [[ ${#RAN_BACKENDS[@]} -eq 0 ]]; then
+    echo "==> [Parity Check] NOTHING RAN in ${elapsed}s (skipped: $skipped)"
+  elif [[ ${#SKIPPED_BACKENDS[@]} -gt 0 ]]; then
+    echo "==> [Parity Check] INCOMPLETE, NOT A FULL PASS in ${elapsed}s (ran: $ran; skipped: $skipped)"
+  else
+    echo "==> [Parity Check] SUCCESS in ${elapsed}s (ran: $ran)"
+  fi
+  echo "======================================================================"
+}
+
+print_summary "$(($(date +%s) - START_TIME))"
