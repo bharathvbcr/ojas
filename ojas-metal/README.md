@@ -4,6 +4,8 @@
 
 It bridges high-throughput GEMM, normalization, and flash-attention kernels from `tessl` with custom MSL (Metal Shading Language) shaders for attention output gating.
 
+Numerics default to `Fast`: linear GEMMs use tessl TensorOps. `with_numerics(Numerics::Exact)` sends linear products and the grouped conv2d GEMM through tessl `gemm_fixed_order_*` (one thread per output, ascending `k`, contraction off). The bf16-accumulation flag does not redirect that path. Depthwise conv, attention, and the other reductions stay on their existing kernels.
+
 ---
 
 ## Metal Execution & Memory Residency

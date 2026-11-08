@@ -24,7 +24,9 @@
 mod common;
 
 use common::*;
-use ojas_core::{Backend, Budget, Numerics, OjasError, Tensor};
+use ojas_core::{
+    Backend, BackendCore, BackendFloat, BackendModule, Budget, Numerics, OjasError, Tensor,
+};
 use ojas_cpu::CpuBackend;
 use ojas_metal::MetalBackend;
 use ojas_oracle::encoder_golden::{check, Tolerances};

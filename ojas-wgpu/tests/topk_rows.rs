@@ -6,7 +6,7 @@
 mod common;
 
 use common::{fresh, gpu};
-use ojas_core::{Backend, Budget, DType, OjasError, Tensor};
+use ojas_core::{BackendCore, BackendInt, BackendModule, Budget, DType, OjasError, Tensor};
 use ojas_wgpu::{WgpuBackend, WGPU_TOPK_MAX_K};
 
 fn host(values: &[f32], shape: &[usize]) -> Tensor {

@@ -8,7 +8,7 @@
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use ojas_core::{Backend, Budget, Tensor};
+use ojas_core::{BackendCore, BackendModule, Budget, Tensor};
 use ojas_wgpu::WgpuBackend;
 
 /// The matrix side on a fast GPU, where 4096^3 GEMMs keep the queue busy for

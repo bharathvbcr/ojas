@@ -8,7 +8,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{Backend, Budget, OjasError, Tensor};
+use ojas_core::{BackendCore, BackendModule, Budget, OjasError, Tensor};
 use ojas_metal::MetalBackend;
 
 const EPS: f32 = 1e-6;

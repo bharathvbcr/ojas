@@ -41,6 +41,78 @@ pub enum Numerics {
     Fast,
 }
 
+/// Which GEMM implementation a backend may run.
+///
+/// [`Numerics::Exact`] selects only [`GemmProvider::CpuReference`] or
+/// [`GemmProvider::TesslFixedOrder`]. MPS, MLX, and Accelerate do not promise
+/// a summation order, so [`GemmProvider::select`] never returns them for
+/// `Exact`. They are not wired as Ojas backends. CubeCL is not a provider; if
+/// it were added it would be non-exact only, with a pinned strategy, never
+/// `Strategy::Auto`, and never an atomic K-split.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum GemmProvider {
+    /// Packed ascending-index `f32` product. The CPU exact kernel.
+    CpuReference,
+    /// Tessl's fixed-order f32 GEMM: one output per thread, ascending `k`,
+    /// a precise multiply then a precise add. Not TensorOps. Exact on Metal.
+    TesslFixedOrder,
+    /// Tessl TensorOps. Its reduction order is not the exact contract.
+    TesslTensorOps,
+    /// Apple Accelerate `cblas_sgemm` / `cblas_ssyrk`. Non-exact. macOS fast path.
+    Accelerate,
+    /// Portable fast GEMM (`sgemm_tile`, wgpu, CUDA, HIP). Non-exact.
+    PortableFast,
+    /// Metal Performance Shaders. Not wired. Non-exact.
+    Mps,
+    /// MLX. Not wired. Non-exact.
+    Mlx,
+}
+
+impl GemmProvider {
+    /// Provider for an exact or fast GEMM on `backend`.
+    ///
+    /// MPS and MLX are never returned. Accelerate is returned only for a fast
+    /// CPU GEMM on macOS; other fast CPU builds use [`GemmProvider::PortableFast`].
+    pub const fn select(numerics: Numerics, backend: BackendId) -> Self {
+        match (numerics, backend) {
+            (Numerics::Exact, BackendId::Metal) => Self::TesslFixedOrder,
+            (
+                Numerics::Exact,
+                BackendId::Cpu | BackendId::Wgpu | BackendId::Cuda | BackendId::Hip,
+            ) => Self::CpuReference,
+            (Numerics::Fast, BackendId::Metal) => Self::TesslTensorOps,
+            (Numerics::Fast, BackendId::Cpu) => Self::cpu_fast(),
+            (Numerics::Fast, BackendId::Wgpu | BackendId::Cuda | BackendId::Hip) => {
+                Self::PortableFast
+            }
+        }
+    }
+
+    const fn cpu_fast() -> Self {
+        #[cfg(target_os = "macos")]
+        {
+            Self::Accelerate
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Self::PortableFast
+        }
+    }
+
+    /// `true` when this provider may run under [`Numerics::Exact`].
+    pub const fn allows_exact(self) -> bool {
+        matches!(self, Self::CpuReference | Self::TesslFixedOrder)
+    }
+
+    pub const fn numerics(self) -> Numerics {
+        if self.allows_exact() {
+            Numerics::Exact
+        } else {
+            Numerics::Fast
+        }
+    }
+}
+
 /// RMSNorm epsilon for the nanolab default (`mixers.py` `RMSNorm`, `eps=1e-6`).
 /// Do not substitute [`f32::EPSILON`].
 pub const RMS_NORM_EPS: f32 = 1e-6;
@@ -618,7 +690,7 @@ pub struct GdnDecayGrad {
 }
 
 /// `host` where `backend` computes: as given on the CPU, uploaded otherwise.
-fn place_host<B: Backend + ?Sized>(backend: &B, host: Tensor) -> Result<Tensor, OjasError> {
+fn place_host<B: BackendCore + ?Sized>(backend: &B, host: Tensor) -> Result<Tensor, OjasError> {
     if backend.id() == BackendId::Cpu {
         Ok(host)
     } else {
@@ -631,7 +703,7 @@ fn place_host<B: Backend + ?Sized>(backend: &B, host: Tensor) -> Result<Tensor, 
 /// s[1, 1]^T` is a `[cols, 1]` column of `s`, and `ones[rows, 1] @
 /// column^T` is `[rows, cols]`. Each output is one product with 1, so it is
 /// `s` exactly. Holds `rows + cols` ones besides the result.
-pub fn broadcast_scalar<B: Backend + ?Sized>(
+pub fn broadcast_scalar<B: BackendModule + ?Sized>(
     backend: &B,
     scalar: &Tensor,
     shape: &[usize],
@@ -760,34 +832,8 @@ pub fn refuse_bf16_table(op: &'static str, table: &Tensor) -> Result<(), OjasErr
     }
 }
 
-/// Nanolab-default training ops.
-///
-/// Every method returns [`Result`]. Implementations live in `ojas-cpu`
-/// and `ojas-metal`. A method that this crate cannot implement has no
-/// body here.
-///
-/// Layout notes shared by the methods:
-/// - Linear weights are `[out, in]`, no bias, `y = x @ W^T`, matching
-///   `nn.Linear(..., bias=False)`.
-/// - Token ids are [`crate::DType::U32`]. An id outside the vocabulary is
-///   [`OjasError::OutOfRange`], not a wrapped read.
-/// - `ignore_index: Option<u32>` is the unsigned form of nanolab's `-1`.
-///   DType has no signed integer. The data loader maps torch's `-1` onto the
-///   sentinel before the call. Mean is over valid targets. If every row is
-///   ignored, forward and backward return [`OjasError::NonFinite`]. The count
-///   is not floored at 1, because that turned an empty reduction into a
-///   finite loss of 0.
-/// - RoPE is the half-split in `mixers.apply_rope`: last axis split in half,
-///   rotate `(-x2, x1)`, then `x * cos + rot * sin`. Strides and `byte_offset`
-///   come from the tensor. Do not hard-code a query stride of `2 * head_dim`.
-/// - Causal attention scale is [`sdpa_scale`]. Metal calls
-///   [`refuse_unsupported_metal_head_dim`] and does not truncate.
-/// - The per-head gate is `sigmoid(x @ W^T + bias)` with `W` shaped
-///   `[n_head, d_model]`, then multiplied onto the attention output.
-/// - Value residual is `s = sigmoid(lambda); (1 - s) * v + s * v0`.
-/// - Non-finite inputs and gradients are [`OjasError::NonFinite`].
-///   Clipping and Adam must not apply them.
-pub trait Backend {
+/// Residency, numerics, casts, and the autocast region.
+pub trait BackendCore {
     fn id(&self) -> BackendId;
 
     /// Budget this backend charges for outputs and scratch probes.
@@ -837,6 +883,178 @@ pub trait Backend {
         tensor.to_host(self.budget())
     }
 
+    /// The most bytes one [`Backend::adamw_step`] or [`Backend::muon_ns5_step`]
+    /// on a `[rows, cols]` parameter charges to this backend's budget beyond
+    /// its operands (a vector is `[1, len]`). `None`: this backend does not
+    /// say.
+    ///
+    /// A training loop checks this room before its first optimizer call, so
+    /// a refusal arrives while every parameter is still unchanged. It is an
+    /// upper bound on what the step itself reserves, never below it; each
+    /// backend derives both from one sizing rule, and a test per backend
+    /// compares the figure with the budget's measured peak.
+    fn optimizer_scratch_bytes(
+        &self,
+        kind: OptimizerKind,
+        rows: usize,
+        cols: usize,
+    ) -> Result<Option<u64>, OjasError> {
+        let _ = (kind, rows, cols);
+        Ok(None)
+    }
+
+    /// Wait for every op this backend has submitted, then report any fault
+    /// it deferred.
+    ///
+    /// A backend that reports every fault from the op that caused it (CPU)
+    /// keeps this default. A backend that defers non-finite faults to a later
+    /// call (Metal and wgpu; see `docs/metal-deferred-faults.md`) must override
+    /// it so the fault surfaces here as [`OjasError::NonFinite`]. A training loop calls `sync` after
+    /// its optimizer calls and before it advances its step counter.
+    fn sync(&self) -> Result<(), OjasError> {
+        Ok(())
+    }
+
+    /// Round a host f32 tensor to bf16 and widen it back to f32.
+    ///
+    /// A non-f32 tensor is [`OjasError::Dtype`]. A device tensor is
+    /// [`OjasError::Unsupported`]: this default does not download. An empty
+    /// host tensor stays empty. A non-contiguous host tensor fails with the
+    /// [`Tensor::f32_slice`] shape error. [`crate::Autocast`] overrides this
+    /// to skip a tensor whose compute tag is already bf16.
+    fn cast_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "cast_bf16";
+        if tensor.dtype() != DType::F32 {
+            return Err(OjasError::Dtype {
+                op: OP,
+                expected: DType::F32,
+                got: tensor.dtype(),
+            });
+        }
+        refuse_device_cast(OP, tensor)?;
+        let src = tensor.f32_slice()?;
+        let mut out = Tensor::zeros(tensor.shape(), DType::F32, self.budget())?;
+        {
+            let dst = out.f32_slice_mut()?;
+            for (dst, src) in dst.iter_mut().zip(src.iter()) {
+                *dst = round_f32_to_bf16(*src);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Whether the matmul-class ops take `Bf16` storage as operands.
+    ///
+    /// The matmul-class ops are [`Self::linear_forward`],
+    /// [`Self::linear_backward`], [`Self::causal_sdpa_forward`] and
+    /// [`Self::causal_sdpa_backward`] (except its `lse`, which stays `F32`).
+    /// Their validators accept each operand as `F32` or `Bf16`, mixed freely.
+    /// A bf16 operand is widened exactly to `f32` (`bits << 16`), every
+    /// product and sum accumulates in `f32`, and every output is `F32`. So an
+    /// operand whose `f32` values are bf16-exact gives the same bits whether
+    /// it arrives as `F32` or as `Bf16`, under the same [`Self::numerics`].
+    ///
+    /// The tied table takes the same rule (decided 2026-10-14): the `table`
+    /// of [`Self::embedding_forward`] and [`Self::embedding_backward`] and
+    /// the `weight` of [`Self::linear_cross_entropy_mean`]. Their other
+    /// operands stay `F32` (`U32` for ids and targets). The table lane reads
+    /// bf16 rows in place, a gathered row or one vocabulary chunk at a time,
+    /// so a frozen bf16 table never costs an `f32` copy of itself. The CPU
+    /// and Metal take it; a backend without the lane refuses a `Bf16` table
+    /// with [`OjasError::Dtype`] ([`refuse_bf16_table`]), whatever this flag
+    /// says. Every other op refuses `Bf16` with [`OjasError::Dtype`].
+    ///
+    /// The default is `false`. Such a backend refuses a matmul-class `Bf16`
+    /// operand with [`OjasError::Unsupported`] ([`refuse_bf16_operands`])
+    /// before it charges or writes anything. [`crate::Autocast`] rounds its operand
+    /// copies in `f32` storage on every backend; this flag decides only
+    /// whether a `Bf16` tensor the caller holds is accepted.
+    fn bf16_operands(&self) -> bool {
+        false
+    }
+
+    /// A new `Bf16` tensor holding `tensor`'s `F32` values rounded to nearest
+    /// even ([`f32_to_bf16`]), on the same backend.
+    ///
+    /// A `Bf16` input is returned as a shared clone. Any other dtype is
+    /// [`OjasError::Dtype`]. A NaN stays a NaN and an infinity stays an
+    /// infinity; a finite value above the bf16 range rounds to an infinity,
+    /// which the matmul-class ops then refuse as [`OjasError::NonFinite`].
+    /// The default converts a contiguous host tensor and refuses a device
+    /// tensor with [`OjasError::Unsupported`]; it does not download.
+    fn to_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "to_bf16";
+        match tensor.dtype() {
+            DType::Bf16 => return Ok(tensor.clone()),
+            DType::F32 => {}
+            got => {
+                return Err(OjasError::Dtype {
+                    op: OP,
+                    expected: DType::F32,
+                    got,
+                })
+            }
+        }
+        refuse_device_cast(OP, tensor)?;
+        let src = tensor.f32_slice()?;
+        let mut out = Tensor::zeros(tensor.shape(), DType::Bf16, self.budget())?;
+        for (dst, src) in out.bf16_slice_mut()?.iter_mut().zip(src) {
+            *dst = f32_to_bf16(*src);
+        }
+        Ok(out)
+    }
+
+    /// A new `F32` tensor holding `tensor`'s `Bf16` values widened exactly
+    /// ([`bf16_to_f32`]), on the same backend.
+    ///
+    /// An `F32` input is returned as a shared clone. Any other dtype is
+    /// [`OjasError::Dtype`]. The default converts a contiguous host tensor and
+    /// refuses a device tensor with [`OjasError::Unsupported`].
+    fn to_f32(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "to_f32";
+        match tensor.dtype() {
+            DType::F32 => return Ok(tensor.clone()),
+            DType::Bf16 => {}
+            got => {
+                return Err(OjasError::Dtype {
+                    op: OP,
+                    expected: DType::Bf16,
+                    got,
+                })
+            }
+        }
+        refuse_device_cast(OP, tensor)?;
+        let src = tensor.bf16_slice()?;
+        let mut out = Tensor::zeros(tensor.shape(), DType::F32, self.budget())?;
+        for (dst, src) in out.f32_slice_mut()?.iter_mut().zip(src) {
+            *dst = bf16_to_f32(*src);
+        }
+        Ok(out)
+    }
+
+    /// Enter an autocast region.
+    ///
+    /// [`AutocastMode::Off`] is a no-op guard. [`AutocastMode::Bf16`] is
+    /// [`OjasError::Unsupported`] unless the backend is [`crate::Autocast`],
+    /// which owns the region stack.
+    fn autocast_region(&self, mode: AutocastMode) -> Result<AutocastGuard, OjasError> {
+        match mode {
+            AutocastMode::Off => Ok(AutocastGuard::noop()),
+            AutocastMode::Bf16 => Err(OjasError::Unsupported {
+                op: "autocast_region",
+                detail: format!(
+                    "{:?} backend has no bf16 autocast region; wrap it in Autocast",
+                    self.id()
+                ),
+            }),
+        }
+    }
+}
+/// Activations, elementwise ops, reductions, and gradient utilities.
+///
+/// Extends [`BackendModule`] so the [`Self::scale_grad`] default can
+/// broadcast its scale with `linear_forward`. An override does not have to.
+pub trait BackendFloat: BackendModule {
     /// A contiguous copy of an f32 `input` with its axes reordered:
     /// output axis `i` is input axis `dims[i]`, as in
     /// `torch.permute(input, dims).contiguous()`.
@@ -858,6 +1076,480 @@ pub trait Backend {
         Err(unsupported_op(self.id(), "permute"))
     }
 
+    /// Elementwise logistic sigmoid `1 / (1 + e^-x)`: Qwen3.5's attention
+    /// output gate (`attn * sigmoid(gate)`) and the delta rule's `beta`.
+    /// [`crate::sigmoid_forward_dims`] validates the shape. The default
+    /// refuses with [`OjasError::Unsupported`].
+    fn sigmoid_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        let _ = input;
+        Err(unsupported_op(self.id(), "sigmoid_forward"))
+    }
+
+    /// `grad_output * s * (1 - s)` with `s = sigmoid(input)`.
+    fn sigmoid_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        let _ = (input, grad_output);
+        Err(unsupported_op(self.id(), "sigmoid_backward"))
+    }
+
+    fn silu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError>;
+
+    fn silu_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError>;
+
+    fn mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError>;
+
+    /// `(grad_a, grad_b)`.
+    fn mul_backward(
+        &self,
+        a: &Tensor,
+        b: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError>;
+
+    fn residual_add_forward(&self, x: &Tensor, y: &Tensor) -> Result<Tensor, OjasError>;
+
+    /// `(grad_x, grad_y)` for an unbroadcast add.
+    fn residual_add_backward(
+        &self,
+        x: &Tensor,
+        y: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError>;
+
+    /// The exact GELU `x * Phi(x) = 0.5 * x * (1 + erf(x / sqrt(2)))`, torch's
+    /// `F.gelu(x, approximate="none")`, not the tanh approximation. On the
+    /// CPU it is [`crate::gelu_erf_exact`], the same bits on every platform.
+    /// [`crate::gelu_erf_forward_dims`] validates. The default refuses with
+    /// [`OjasError::Unsupported`].
+    fn gelu_erf_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        let _ = input;
+        Err(unsupported_op(self.id(), "gelu_erf_forward"))
+    }
+
+    /// `grad_output * gelu'(input)` for the exact GELU's derivative `Phi(x) +
+    /// x * phi(x)`: on the CPU [`crate::gelu_erf_backward_exact`], one `f32`
+    /// rounding of an `f64` value, the same bits on every platform. A
+    /// product that overflows `f32` is [`OjasError::NonFinite`].
+    /// [`crate::gelu_erf_backward_dims`] validates. The default refuses with
+    /// [`OjasError::Unsupported`].
+    fn gelu_erf_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        let _ = (input, grad_output);
+        Err(unsupported_op(self.id(), "gelu_erf_backward"))
+    }
+
+    /// The tanh-approximate GELU, torch's `F.gelu(x, approximate="tanh")`
+    /// (`gelu_pytorch_tanh`): `0.5 * x * (1 + tanh(sqrt(2 / pi) * (x + 0.044715
+    /// * x^3)))`. On the CPU it is computed in `f64` and rounded to `f32`
+    /// once. A product that overflows `f32` is [`OjasError::NonFinite`].
+    /// [`crate::gelu_tanh_forward_dims`] validates. The default refuses with
+    /// [`OjasError::Unsupported`].
+    fn gelu_tanh_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        let _ = input;
+        Err(unsupported_op(self.id(), "gelu_tanh_forward"))
+    }
+
+    /// `grad_output * gelu_tanh'(input)` with `gelu_tanh'(x) = 0.5 * (1 + t) +
+    /// 0.5 * x * (1 - t^2) * sqrt(2 / pi) * (1 + 3 * 0.044715 * x^2)` and `t`
+    /// the forward's `tanh`. On the CPU one `f32` rounding of an `f64`
+    /// value; a product that overflows `f32` is [`OjasError::NonFinite`].
+    /// [`crate::gelu_tanh_backward_dims`] validates. The default refuses
+    /// with [`OjasError::Unsupported`].
+    fn gelu_tanh_backward(
+        &self,
+        input: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        let _ = (input, grad_output);
+        Err(unsupported_op(self.id(), "gelu_tanh_backward"))
+    }
+
+    /// `max(x, 0)`, torch's `F.relu`: `x` where `x >= 0` and `+0` where
+    /// `x < 0`, so every output is an input value or zero and no rounding
+    /// happens. [`crate::relu_forward_dims`] validates. The default refuses
+    /// with [`OjasError::Unsupported`].
+    fn relu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        let _ = input;
+        Err(unsupported_op(self.id(), "relu_forward"))
+    }
+
+    /// Gradient of [`Self::relu_forward`]: `grad_output` where `input > 0`
+    /// and zero elsewhere. [`crate::relu_backward_dims`] validates. The
+    /// default refuses with [`OjasError::Unsupported`].
+    fn relu_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        let _ = (input, grad_output);
+        Err(unsupported_op(self.id(), "relu_backward"))
+    }
+
+    /// Join `inputs` along `axis`, torch's `torch.cat(inputs, axis)`: every
+    /// input has the first one's shape except on `axis`, and the output's
+    /// extent there is their sum. Values move without arithmetic, so an
+    /// output's bits are the inputs' bits; as for [`Self::permute`], a
+    /// non-finite input is [`OjasError::NonFinite`], not passed through. The
+    /// output stays on this backend. [`crate::concat_dims`] validates. The
+    /// default refuses with [`OjasError::Unsupported`].
+    fn concat(&self, inputs: &[&Tensor], axis: usize) -> Result<Tensor, OjasError> {
+        let _ = (inputs, axis);
+        Err(unsupported_op(self.id(), "concat"))
+    }
+
+    /// The rows `start..start + len` of `input` along `axis`, torch's
+    /// `input.narrow(axis, start, len).contiguous()`: a copy, `len` at least
+    /// 1 and `start + len` within the axis. Values move without arithmetic,
+    /// as for [`Self::concat`]. [`crate::slice_dims`] validates. The default
+    /// refuses with [`OjasError::Unsupported`].
+    fn slice(
+        &self,
+        input: &Tensor,
+        axis: usize,
+        start: usize,
+        len: usize,
+    ) -> Result<Tensor, OjasError> {
+        let _ = (input, axis, start, len);
+        Err(unsupported_op(self.id(), "slice"))
+    }
+
+    /// Gradient of [`Self::slice`]: a tensor of shape `in_shape` with zeros
+    /// everywhere except `start..start + len` along `axis`, where
+    /// `grad_output` is placed. [`crate::slice_backward_dims`] validates. The
+    /// default refuses with [`OjasError::Unsupported`].
+    fn slice_backward(
+        &self,
+        grad_output: &Tensor,
+        in_shape: &[usize],
+        axis: usize,
+        start: usize,
+    ) -> Result<Tensor, OjasError> {
+        let _ = (grad_output, in_shape, axis, start);
+        Err(unsupported_op(self.id(), "slice_backward"))
+    }
+
+    /// A new tensor of `shape` and `dtype` with every element `value`, torch's
+    /// `torch.full(shape, value, dtype=dtype)`, made on this backend: no host
+    /// buffer is uploaded. `F32` stores `value`'s bits; `Bf16` takes only a
+    /// value a bf16 holds exactly and `U32` only an integer in `0..2^32`, and
+    /// anything else is [`OjasError::OutOfRange`], never rounded; a NaN or an
+    /// infinity is [`OjasError::NonFinite`], as no op takes or stores one.
+    /// The output is the only charge. [`crate::fill_dims`] validates. The
+    /// default refuses with [`OjasError::Unsupported`].
+    fn fill(&self, shape: &[usize], dtype: DType, value: f32) -> Result<Tensor, OjasError> {
+        let _ = (shape, dtype, value);
+        Err(unsupported_op(self.id(), "fill"))
+    }
+
+    /// `a + b` with numpy broadcasting ([`crate::broadcast_shapes`]): shapes
+    /// aligned at the last axis, each pair of extents equal or one of them
+    /// 1, rank at most [`crate::MAX_BROADCAST_RANK`]. One `f32` add per
+    /// output element. Unlike [`Self::residual_add_forward`] the shapes may
+    /// differ. The default refuses with [`OjasError::Unsupported`].
+    fn broadcast_add_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
+        let _ = (a, b);
+        Err(unsupported_op(self.id(), "broadcast_add_forward"))
+    }
+
+    /// `(grad_a, grad_b)` of [`Self::broadcast_add_forward`] for
+    /// `grad_output` shaped like the sum: each is `grad_output` summed over
+    /// the axes its operand was stretched along, so it is shaped like its
+    /// operand. Each element is an `f64` sum of the output elements it fed,
+    /// in ascending output order, rounded once. A shape the forward refuses
+    /// is refused, never broadcast another way.
+    /// [`crate::broadcast_add_backward_dims`] validates. The default refuses
+    /// with [`OjasError::Unsupported`].
+    fn broadcast_add_backward(
+        &self,
+        a: &Tensor,
+        b: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        let _ = (a, b, grad_output);
+        Err(unsupported_op(self.id(), "broadcast_add_backward"))
+    }
+
+    /// `a * b` with numpy broadcasting, as [`Self::broadcast_add_forward`]:
+    /// one `f32` multiply per output element. The default refuses with
+    /// [`OjasError::Unsupported`].
+    fn broadcast_mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
+        let _ = (a, b);
+        Err(unsupported_op(self.id(), "broadcast_mul_forward"))
+    }
+
+    /// `(grad_a, grad_b)` of [`Self::broadcast_mul_forward`]: `grad_a` sums
+    /// `grad_output * b` and `grad_b` sums `grad_output * a` over the axes
+    /// each operand was stretched along, as
+    /// [`Self::broadcast_add_backward`] sums (the `f32` product is exact
+    /// in `f64`). [`crate::broadcast_mul_backward_dims`] validates. The
+    /// default refuses with [`OjasError::Unsupported`].
+    fn broadcast_mul_backward(
+        &self,
+        a: &Tensor,
+        b: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        let _ = (a, b, grad_output);
+        Err(unsupported_op(self.id(), "broadcast_mul_backward"))
+    }
+
+    /// `input * scale` into a new tensor, for a finite `scale`
+    /// ([`OjasError::NonFinite`] otherwise): one `f32` multiply per element.
+    /// [`Self::scale_grad`] is the in-place gradient form. The default
+    /// refuses with [`OjasError::Unsupported`].
+    fn scale_forward(&self, input: &Tensor, scale: f32) -> Result<Tensor, OjasError> {
+        let _ = (input, scale);
+        Err(unsupported_op(self.id(), "scale_forward"))
+    }
+
+    /// Softmax over the last axis of `input` (`[..., dim]`):
+    /// `e^(x - max) / sum(e^(x - max))`. The row maximum is exact. On the
+    /// CPU the exponential is [`crate::exp_exact`] under [`Numerics::Exact`]
+    /// and the sum ascends from index 0 in `f32`, so a row of `dim` equal
+    /// values gives `1 / dim` each; under [`Numerics::Fast`] it is the
+    /// vector exponential with fixed lane sums. Neither depends on the
+    /// thread count. To softmax another axis, [`Self::permute`] first. The
+    /// default refuses with [`OjasError::Unsupported`].
+    fn softmax_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        let _ = input;
+        Err(unsupported_op(self.id(), "softmax_forward"))
+    }
+
+    /// The input gradient of [`Self::softmax_forward`] from its `output`
+    /// `y` (not its input) and `grad_output` `g`, both `[..., dim]`:
+    /// `y * (g - sum(g * y))` per row. The dot is an `f64` sum that ascends
+    /// from index 0, and each value is rounded once, so the bits do not
+    /// depend on the thread count and `Fast` and `Exact` agree. A row that
+    /// is not a probability row is not checked: the gradient is
+    /// that formula's. [`crate::softmax_backward_dims`] validates. The
+    /// default refuses with [`OjasError::Unsupported`].
+    fn softmax_backward(&self, output: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        let _ = (output, grad_output);
+        Err(unsupported_op(self.id(), "softmax_backward"))
+    }
+
+    /// The mean over time of each sequence of `x` `[B, T, D]` (`F32`) under
+    /// `key_lens` (`U32`, `[B]`), the masked mean pooling of a sentence
+    /// embedding model: `out[b, d]` is the mean of `x[b, t, d]` over the rows
+    /// `t < min(key_lens[b], T)`, so it takes the same `key_lens` tensor the
+    /// attention does. The sum is `f64`, ascends from `t = 0` and is divided
+    /// by the count and rounded once, so the bits do not depend on the thread
+    /// count. A length of 0 gives a row of zeros (sentence-transformers
+    /// clamps the count to `1e-9`, and `0 / 1e-9 = 0`). Rows at or past the
+    /// length are never read. Returns `[B, D]`.
+    ///
+    /// [`Self::seq_mean_backward`] is its gradient.
+    /// [`crate::seq_mean_forward_dims`] validates. The default refuses with
+    /// [`OjasError::Unsupported`].
+    fn seq_mean_forward(&self, x: &Tensor, key_lens: &Tensor) -> Result<Tensor, OjasError> {
+        let _ = (x, key_lens);
+        Err(unsupported_op(self.id(), "seq_mean_forward"))
+    }
+
+    /// The gradient of [`Self::seq_mean_forward`]: with `n = min(key_lens[b],
+    /// T)`, `grad_x[b, t, d]` is `grad_output[b, d] / n` for `t < n` and `+0.0`
+    /// at or past `n`, because the forward never read those rows. A sequence
+    /// of `n = 0` takes a row of zeros, matching a forward that returned
+    /// zeros. Every output element reads one gradient element, so nothing is
+    /// summed and the bits do not depend on the thread count.
+    ///
+    /// `x` is the forward's input, taken for its shape and to pair with
+    /// `key_lens`; none of its values are read, so a non-finite value in it
+    /// does not refuse this call. Returns `[B, T, D]`.
+    /// [`crate::seq_mean_backward_dims`] validates. The default refuses with
+    /// [`OjasError::Unsupported`].
+    fn seq_mean_backward(
+        &self,
+        x: &Tensor,
+        key_lens: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        let _ = (x, key_lens, grad_output);
+        Err(unsupported_op(self.id(), "seq_mean_backward"))
+    }
+
+    /// `x / max(||x||_2, eps)` over the last axis of `x` `[rows, dim]`,
+    /// torch's `F.normalize(x, p=2, dim=-1, eps)` (`norm.clamp_min(eps)`;
+    /// the caller passes `1e-12`). The squared norm is an `f64` sum that
+    /// ascends from index 0, and each output is `x / max(norm, eps)` in `f64`
+    /// rounded once. A zero row stays zero. `eps` is finite and above 0. A
+    /// Matryoshka prefix is [`Self::slice`] first, then this: there is no
+    /// leading-dimension parameter.
+    ///
+    /// [`Self::l2_normalize_backward`] is its gradient.
+    /// [`crate::l2_normalize_forward_dims`] validates. The default refuses
+    /// with [`OjasError::Unsupported`].
+    fn l2_normalize_forward(&self, x: &Tensor, eps: f32) -> Result<Tensor, OjasError> {
+        let _ = (x, eps);
+        Err(unsupported_op(self.id(), "l2_normalize_forward"))
+    }
+
+    /// The gradient of [`Self::l2_normalize_forward`], with `n = ||x||_2`
+    /// over the row and `y = x / n`:
+    ///
+    /// - `n > eps`: `grad_x = (grad_output - y (y . grad_output)) / n`, the
+    ///   gradient of `x / ||x||`.
+    /// - `n <= eps`: `grad_x = grad_output / eps`. Below the clamp the
+    ///   forward divided by the constant `eps`, so it is linear there and
+    ///   its Jacobian is `I / eps`: no projection is subtracted. A zero row
+    ///   takes `grad_output / eps`, not zero, and the tie `n == eps` is this
+    ///   branch, as `max(n, eps)` returning `eps` is.
+    ///
+    /// The squared norm and the dot product are `f64` sums that ascend from
+    /// index 0 and belong to one row, as the forward's norm does, so the
+    /// bits do not depend on the thread count. The forward's output is not
+    /// an operand: `n` is recomputed from `x`, so the branch is decided from
+    /// the same values the forward decided it from.
+    /// [`crate::l2_normalize_backward_dims`] validates. The default refuses
+    /// with [`OjasError::Unsupported`].
+    fn l2_normalize_backward(
+        &self,
+        x: &Tensor,
+        grad_output: &Tensor,
+        eps: f32,
+    ) -> Result<Tensor, OjasError> {
+        let _ = (x, grad_output, eps);
+        Err(unsupported_op(self.id(), "l2_normalize_backward"))
+    }
+
+    /// In-place global-norm clip of `grads`. Returns the total norm.
+    ///
+    /// Scale is `min(1, max_norm / (total_norm + CLIP_GRAD_NORM_EPS))`.
+    /// A non-finite norm returns [`OjasError::NonFinite`] and does not
+    /// scale. `max_norm` is nanolab's `grad_clip` (default 1.0).
+    fn clip_grad_norm(&self, grads: &mut [Tensor], max_norm: f32) -> Result<f32, OjasError>;
+
+    /// `acc += grad`, elementwise, same shape and dtype.
+    ///
+    /// On success `acc` holds the sum and is uniquely owned. A non-finite
+    /// sum is [`OjasError::NonFinite`], reported as [`Backend::sync`]
+    /// describes: a backend that reports synchronously leaves `acc`
+    /// unchanged; on a deferring backend, `acc` must be treated as invalid
+    /// once `sync` reports the fault. Shapes are checked by
+    /// [`crate::accumulate_grad_dims`] first, so a refusal names
+    /// `accumulate_grad` on every backend. The default then composes
+    /// [`Backend::residual_add_forward`]; a backend may add in place.
+    fn accumulate_grad(&self, acc: &mut Tensor, grad: &Tensor) -> Result<(), OjasError> {
+        crate::accumulate_grad_dims(acc, grad)?;
+        *acc = self.residual_add_forward(acc, grad)?;
+        Ok(())
+    }
+
+    /// `grad *= scale`, for a gradient its caller owns: the loss seed a
+    /// tape applies to a loss's unit gradient when the walk was not seeded
+    /// with exactly 1 (a trainer averaging K micro-batches seeds `1 / K`).
+    ///
+    /// Each value is one rounding of `value * scale`. A non-finite `scale`,
+    /// input or product is [`OjasError::NonFinite`], reported as
+    /// [`Backend::sync`] describes, and `grad`'s values are then
+    /// unspecified: the caller discards it. A backend that overrides this
+    /// writes a uniquely owned `grad` in place and replaces a shared one
+    /// with a new tensor (the other handles keep the old values). The
+    /// default replaces `grad` with [`Backend::mul_forward`] of `grad` and
+    /// `scale` repeated over its shape ([`broadcast_scalar`]), built on the
+    /// backend from one uploaded value, so nothing is read back.
+    fn scale_grad(&self, grad: &mut Tensor, scale: f32) -> Result<(), OjasError> {
+        if !scale.is_finite() {
+            return Err(OjasError::NonFinite { op: "scale_grad" });
+        }
+        let scalar = place_host(self, Tensor::from_f32(&[scale], &[1], self.budget())?)?;
+        let full = broadcast_scalar(self, &scalar, grad.shape())?;
+        *grad = self.mul_forward(grad, &full)?;
+        Ok(())
+    }
+}
+/// Row reductions that return integer ids.
+pub trait BackendInt: BackendCore {
+    /// The column of each row's largest value: `x` `F32` `[rows, cols]` to
+    /// `U32` `[rows]`, ties to the lowest column (greedy decoding's pick).
+    /// Any NaN or infinity is [`OjasError::NonFinite`]; a device backend may
+    /// report it at the next [`Backend::sync`]. Every id is below `cols`, so
+    /// a backend may let the result index an `embedding_forward` table of at
+    /// least `cols` rows without reading the ids back. Validate with
+    /// [`crate::argmax_rows_dims`].
+    ///
+    /// The default reads `x` to the host (for a device tensor, a readback
+    /// and a [`Backend::sync`]), scans it there, and returns a host tensor
+    /// charged to this backend's budget.
+    fn argmax_rows(&self, x: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "argmax_rows";
+        let (rows, cols) = crate::argmax_rows_dims(x)?;
+        let host = match x.device() {
+            None => x.clone(),
+            Some(_) => {
+                let host = self.download(x)?;
+                self.sync()?;
+                host
+            }
+        };
+        let values = host.to_f32_vec()?;
+        let mut ids = Vec::with_capacity(rows);
+        for row in values.chunks_exact(cols) {
+            let mut best = 0usize;
+            for (i, &v) in row.iter().enumerate() {
+                if !v.is_finite() {
+                    return Err(OjasError::NonFinite { op: OP });
+                }
+                if v > row[best] {
+                    best = i;
+                }
+            }
+            // `argmax_rows_dims` checked that `cols` fits u32.
+            ids.push(best as u32);
+        }
+        Tensor::from_u32(&ids, &[rows], self.budget())
+    }
+
+    /// The `k` leaders of each row of `x` (`F32` `[rows, cols]`, `1 <= k <= cols`),
+    /// ranked by [`rank_logits`]: value descending with `+0.0` and `-0.0` one
+    /// value and `-inf` after every finite value, then column ascending (the
+    /// order `ojas_infer::sample_token` ranks candidates in). Returns
+    /// `(values, ids)`: `F32` `[rows, k]` and `U32` `[rows, k]`, every id
+    /// `< cols`. Any NaN or `+inf` in a row is
+    /// `OjasError::NonFinite` (a device backend may report it at the next sync);
+    /// `-inf` is a value (a masked logit). Validate with `topk_rows_dims`. The default
+    /// downloads `x` and selects on the host.
+    ///
+    /// As with [`Backend::argmax_rows`], a backend may let the ids index an
+    /// `embedding_forward` table of at least `cols` rows without reading them
+    /// back. A device kernel may refuse a large `k` as
+    /// [`OjasError::Unsupported`] (Metal and wgpu take `k <= 1024`). The
+    /// default's host scan is `O(cols + k log k)` per row (a
+    /// selection, then a sort of the `k` leaders), and its two results are
+    /// host tensors charged to this backend's budget.
+    fn topk_rows(&self, x: &Tensor, k: usize) -> Result<(Tensor, Tensor), OjasError> {
+        const OP: &str = "topk_rows";
+        let (rows, cols) = crate::topk_rows_dims(x, k)?;
+        let host = match x.device() {
+            None => x.clone(),
+            Some(_) => {
+                let host = self.download(x)?;
+                self.sync()?;
+                host
+            }
+        };
+        let values = host.to_f32_vec()?;
+        // `rows * k <= rows * cols`, the element count of `x`.
+        let mut top_values = Vec::with_capacity(rows * k);
+        let mut top_ids = Vec::with_capacity(rows * k);
+        // `topk_rows_dims` checked that `cols` fits u32.
+        let mut order: Vec<u32> = Vec::with_capacity(cols);
+        for row in values.chunks_exact(cols) {
+            if row.iter().any(|v| v.is_nan() || *v == f32::INFINITY) {
+                return Err(OjasError::NonFinite { op: OP });
+            }
+            let rank = |a: &u32, b: &u32| rank_logits(row, *a as usize, *b as usize);
+            order.clear();
+            order.extend(0..cols as u32);
+            if k < cols {
+                order.select_nth_unstable_by(k - 1, rank);
+            }
+            let leaders = &mut order[..k];
+            leaders.sort_unstable_by(rank);
+            top_values.extend(leaders.iter().map(|&i| row[i as usize]));
+            top_ids.extend_from_slice(leaders);
+        }
+        let values = Tensor::from_f32(&top_values, &[rows, k], self.budget())?;
+        let ids = Tensor::from_u32(&top_ids, &[rows, k], self.budget())?;
+        Ok((values, ids))
+    }
+}
+/// Layers: embeddings, matmul, norms, attention, convolution, and optimizers.
+pub trait BackendModule: BackendCore {
     /// The rows of `table` (`[vocab, dim]`) that `token_ids` pick, as an
     /// `F32` tensor shaped `ids.shape ++ [dim]`. A `Bf16` table is a
     /// bf16-operand slot ([`Self::bf16_operands`]): each picked row is
@@ -1324,21 +2016,6 @@ pub trait Backend {
         Err(unsupported_op(self.id(), "rope_partial_backward"))
     }
 
-    /// Elementwise logistic sigmoid `1 / (1 + e^-x)`: Qwen3.5's attention
-    /// output gate (`attn * sigmoid(gate)`) and the delta rule's `beta`.
-    /// [`crate::sigmoid_forward_dims`] validates the shape. The default
-    /// refuses with [`OjasError::Unsupported`].
-    fn sigmoid_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
-        let _ = input;
-        Err(unsupported_op(self.id(), "sigmoid_forward"))
-    }
-
-    /// `grad_output * s * (1 - s)` with `s = sigmoid(input)`.
-    fn sigmoid_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
-        let _ = (input, grad_output);
-        Err(unsupported_op(self.id(), "sigmoid_backward"))
-    }
-
     /// The gated delta rule's log decay (transformers
     /// `Qwen3_5GatedDeltaNet`):
     ///
@@ -1549,30 +2226,6 @@ pub trait Backend {
         Err(unsupported_op(self.id(), "rope_interleaved_backward"))
     }
 
-    fn silu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError>;
-
-    fn silu_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError>;
-
-    fn mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError>;
-
-    /// `(grad_a, grad_b)`.
-    fn mul_backward(
-        &self,
-        a: &Tensor,
-        b: &Tensor,
-        grad_output: &Tensor,
-    ) -> Result<(Tensor, Tensor), OjasError>;
-
-    fn residual_add_forward(&self, x: &Tensor, y: &Tensor) -> Result<Tensor, OjasError>;
-
-    /// `(grad_x, grad_y)` for an unbroadcast add.
-    fn residual_add_backward(
-        &self,
-        x: &Tensor,
-        y: &Tensor,
-        grad_output: &Tensor,
-    ) -> Result<(Tensor, Tensor), OjasError>;
-
     /// `LayerNorm(x) * weight + bias` over the last axis of `input`
     /// (`[..., dim]`, `weight` and `bias` `[dim]`): torch's
     /// `F.layer_norm`. Each row is centred on its mean, divided by
@@ -1702,126 +2355,6 @@ pub trait Backend {
         Err(unsupported_op(self.id(), "group_norm_backward"))
     }
 
-    /// The exact GELU `x * Phi(x) = 0.5 * x * (1 + erf(x / sqrt(2)))`, torch's
-    /// `F.gelu(x, approximate="none")`, not the tanh approximation. On the
-    /// CPU it is [`crate::gelu_erf_exact`], the same bits on every platform.
-    /// [`crate::gelu_erf_forward_dims`] validates. The default refuses with
-    /// [`OjasError::Unsupported`].
-    fn gelu_erf_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
-        let _ = input;
-        Err(unsupported_op(self.id(), "gelu_erf_forward"))
-    }
-
-    /// `grad_output * gelu'(input)` for the exact GELU's derivative `Phi(x) +
-    /// x * phi(x)`: on the CPU [`crate::gelu_erf_backward_exact`], one `f32`
-    /// rounding of an `f64` value, the same bits on every platform. A
-    /// product that overflows `f32` is [`OjasError::NonFinite`].
-    /// [`crate::gelu_erf_backward_dims`] validates. The default refuses with
-    /// [`OjasError::Unsupported`].
-    fn gelu_erf_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
-        let _ = (input, grad_output);
-        Err(unsupported_op(self.id(), "gelu_erf_backward"))
-    }
-
-    /// The tanh-approximate GELU, torch's `F.gelu(x, approximate="tanh")`
-    /// (`gelu_pytorch_tanh`): `0.5 * x * (1 + tanh(sqrt(2 / pi) * (x + 0.044715
-    /// * x^3)))`. On the CPU it is computed in `f64` and rounded to `f32`
-    /// once. A product that overflows `f32` is [`OjasError::NonFinite`].
-    /// [`crate::gelu_tanh_forward_dims`] validates. The default refuses with
-    /// [`OjasError::Unsupported`].
-    fn gelu_tanh_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
-        let _ = input;
-        Err(unsupported_op(self.id(), "gelu_tanh_forward"))
-    }
-
-    /// `grad_output * gelu_tanh'(input)` with `gelu_tanh'(x) = 0.5 * (1 + t) +
-    /// 0.5 * x * (1 - t^2) * sqrt(2 / pi) * (1 + 3 * 0.044715 * x^2)` and `t`
-    /// the forward's `tanh`. On the CPU one `f32` rounding of an `f64`
-    /// value; a product that overflows `f32` is [`OjasError::NonFinite`].
-    /// [`crate::gelu_tanh_backward_dims`] validates. The default refuses
-    /// with [`OjasError::Unsupported`].
-    fn gelu_tanh_backward(
-        &self,
-        input: &Tensor,
-        grad_output: &Tensor,
-    ) -> Result<Tensor, OjasError> {
-        let _ = (input, grad_output);
-        Err(unsupported_op(self.id(), "gelu_tanh_backward"))
-    }
-
-    /// `max(x, 0)`, torch's `F.relu`: `x` where `x >= 0` and `+0` where
-    /// `x < 0`, so every output is an input value or zero and no rounding
-    /// happens. [`crate::relu_forward_dims`] validates. The default refuses
-    /// with [`OjasError::Unsupported`].
-    fn relu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
-        let _ = input;
-        Err(unsupported_op(self.id(), "relu_forward"))
-    }
-
-    /// Gradient of [`Self::relu_forward`]: `grad_output` where `input > 0`
-    /// and zero elsewhere. [`crate::relu_backward_dims`] validates. The
-    /// default refuses with [`OjasError::Unsupported`].
-    fn relu_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
-        let _ = (input, grad_output);
-        Err(unsupported_op(self.id(), "relu_backward"))
-    }
-
-    /// Join `inputs` along `axis`, torch's `torch.cat(inputs, axis)`: every
-    /// input has the first one's shape except on `axis`, and the output's
-    /// extent there is their sum. Values move without arithmetic, so an
-    /// output's bits are the inputs' bits; as for [`Self::permute`], a
-    /// non-finite input is [`OjasError::NonFinite`], not passed through. The
-    /// output stays on this backend. [`crate::concat_dims`] validates. The
-    /// default refuses with [`OjasError::Unsupported`].
-    fn concat(&self, inputs: &[&Tensor], axis: usize) -> Result<Tensor, OjasError> {
-        let _ = (inputs, axis);
-        Err(unsupported_op(self.id(), "concat"))
-    }
-
-    /// The rows `start..start + len` of `input` along `axis`, torch's
-    /// `input.narrow(axis, start, len).contiguous()`: a copy, `len` at least
-    /// 1 and `start + len` within the axis. Values move without arithmetic,
-    /// as for [`Self::concat`]. [`crate::slice_dims`] validates. The default
-    /// refuses with [`OjasError::Unsupported`].
-    fn slice(
-        &self,
-        input: &Tensor,
-        axis: usize,
-        start: usize,
-        len: usize,
-    ) -> Result<Tensor, OjasError> {
-        let _ = (input, axis, start, len);
-        Err(unsupported_op(self.id(), "slice"))
-    }
-
-    /// Gradient of [`Self::slice`]: a tensor of shape `in_shape` with zeros
-    /// everywhere except `start..start + len` along `axis`, where
-    /// `grad_output` is placed. [`crate::slice_backward_dims`] validates. The
-    /// default refuses with [`OjasError::Unsupported`].
-    fn slice_backward(
-        &self,
-        grad_output: &Tensor,
-        in_shape: &[usize],
-        axis: usize,
-        start: usize,
-    ) -> Result<Tensor, OjasError> {
-        let _ = (grad_output, in_shape, axis, start);
-        Err(unsupported_op(self.id(), "slice_backward"))
-    }
-
-    /// A new tensor of `shape` and `dtype` with every element `value`, torch's
-    /// `torch.full(shape, value, dtype=dtype)`, made on this backend: no host
-    /// buffer is uploaded. `F32` stores `value`'s bits; `Bf16` takes only a
-    /// value a bf16 holds exactly and `U32` only an integer in `0..2^32`, and
-    /// anything else is [`OjasError::OutOfRange`], never rounded; a NaN or an
-    /// infinity is [`OjasError::NonFinite`], as no op takes or stores one.
-    /// The output is the only charge. [`crate::fill_dims`] validates. The
-    /// default refuses with [`OjasError::Unsupported`].
-    fn fill(&self, shape: &[usize], dtype: DType, value: f32) -> Result<Tensor, OjasError> {
-        let _ = (shape, dtype, value);
-        Err(unsupported_op(self.id(), "fill"))
-    }
-
     /// `y = x @ W^T + b` for `x` `[..., in]`, `W` `[out, in]` and an `F32`
     /// `bias` `[out]`: [`Self::linear_forward`] and then one `f32` add of the
     /// bias, so the product is the `linear_forward` bits and the bias adds
@@ -1858,177 +2391,6 @@ pub trait Backend {
         Err(unsupported_op(self.id(), "linear_bias_backward"))
     }
 
-    /// `a + b` with numpy broadcasting ([`crate::broadcast_shapes`]): shapes
-    /// aligned at the last axis, each pair of extents equal or one of them
-    /// 1, rank at most [`crate::MAX_BROADCAST_RANK`]. One `f32` add per
-    /// output element. Unlike [`Self::residual_add_forward`] the shapes may
-    /// differ. The default refuses with [`OjasError::Unsupported`].
-    fn broadcast_add_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
-        let _ = (a, b);
-        Err(unsupported_op(self.id(), "broadcast_add_forward"))
-    }
-
-    /// `(grad_a, grad_b)` of [`Self::broadcast_add_forward`] for
-    /// `grad_output` shaped like the sum: each is `grad_output` summed over
-    /// the axes its operand was stretched along, so it is shaped like its
-    /// operand. Each element is an `f64` sum of the output elements it fed,
-    /// in ascending output order, rounded once. A shape the forward refuses
-    /// is refused, never broadcast another way.
-    /// [`crate::broadcast_add_backward_dims`] validates. The default refuses
-    /// with [`OjasError::Unsupported`].
-    fn broadcast_add_backward(
-        &self,
-        a: &Tensor,
-        b: &Tensor,
-        grad_output: &Tensor,
-    ) -> Result<(Tensor, Tensor), OjasError> {
-        let _ = (a, b, grad_output);
-        Err(unsupported_op(self.id(), "broadcast_add_backward"))
-    }
-
-    /// `a * b` with numpy broadcasting, as [`Self::broadcast_add_forward`]:
-    /// one `f32` multiply per output element. The default refuses with
-    /// [`OjasError::Unsupported`].
-    fn broadcast_mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
-        let _ = (a, b);
-        Err(unsupported_op(self.id(), "broadcast_mul_forward"))
-    }
-
-    /// `(grad_a, grad_b)` of [`Self::broadcast_mul_forward`]: `grad_a` sums
-    /// `grad_output * b` and `grad_b` sums `grad_output * a` over the axes
-    /// each operand was stretched along, as
-    /// [`Self::broadcast_add_backward`] sums (the `f32` product is exact
-    /// in `f64`). [`crate::broadcast_mul_backward_dims`] validates. The
-    /// default refuses with [`OjasError::Unsupported`].
-    fn broadcast_mul_backward(
-        &self,
-        a: &Tensor,
-        b: &Tensor,
-        grad_output: &Tensor,
-    ) -> Result<(Tensor, Tensor), OjasError> {
-        let _ = (a, b, grad_output);
-        Err(unsupported_op(self.id(), "broadcast_mul_backward"))
-    }
-
-    /// `input * scale` into a new tensor, for a finite `scale`
-    /// ([`OjasError::NonFinite`] otherwise): one `f32` multiply per element.
-    /// [`Self::scale_grad`] is the in-place gradient form. The default
-    /// refuses with [`OjasError::Unsupported`].
-    fn scale_forward(&self, input: &Tensor, scale: f32) -> Result<Tensor, OjasError> {
-        let _ = (input, scale);
-        Err(unsupported_op(self.id(), "scale_forward"))
-    }
-
-    /// Softmax over the last axis of `input` (`[..., dim]`):
-    /// `e^(x - max) / sum(e^(x - max))`. The row maximum is exact. On the
-    /// CPU the exponential is [`crate::exp_exact`] under [`Numerics::Exact`]
-    /// and the sum ascends from index 0 in `f32`, so a row of `dim` equal
-    /// values gives `1 / dim` each; under [`Numerics::Fast`] it is the
-    /// vector exponential with fixed lane sums. Neither depends on the
-    /// thread count. To softmax another axis, [`Self::permute`] first. The
-    /// default refuses with [`OjasError::Unsupported`].
-    fn softmax_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
-        let _ = input;
-        Err(unsupported_op(self.id(), "softmax_forward"))
-    }
-
-    /// The input gradient of [`Self::softmax_forward`] from its `output`
-    /// `y` (not its input) and `grad_output` `g`, both `[..., dim]`:
-    /// `y * (g - sum(g * y))` per row. The dot is an `f64` sum that ascends
-    /// from index 0, and each value is rounded once, so the bits do not
-    /// depend on the thread count and `Fast` and `Exact` agree. A row that
-    /// is not a probability row is not checked: the gradient is
-    /// that formula's. [`crate::softmax_backward_dims`] validates. The
-    /// default refuses with [`OjasError::Unsupported`].
-    fn softmax_backward(&self, output: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
-        let _ = (output, grad_output);
-        Err(unsupported_op(self.id(), "softmax_backward"))
-    }
-
-    /// The mean over time of each sequence of `x` `[B, T, D]` (`F32`) under
-    /// `key_lens` (`U32`, `[B]`), the masked mean pooling of a sentence
-    /// embedding model: `out[b, d]` is the mean of `x[b, t, d]` over the rows
-    /// `t < min(key_lens[b], T)`, so it takes the same `key_lens` tensor the
-    /// attention does. The sum is `f64`, ascends from `t = 0` and is divided
-    /// by the count and rounded once, so the bits do not depend on the thread
-    /// count. A length of 0 gives a row of zeros (sentence-transformers
-    /// clamps the count to `1e-9`, and `0 / 1e-9 = 0`). Rows at or past the
-    /// length are never read. Returns `[B, D]`.
-    ///
-    /// [`Self::seq_mean_backward`] is its gradient.
-    /// [`crate::seq_mean_forward_dims`] validates. The default refuses with
-    /// [`OjasError::Unsupported`].
-    fn seq_mean_forward(&self, x: &Tensor, key_lens: &Tensor) -> Result<Tensor, OjasError> {
-        let _ = (x, key_lens);
-        Err(unsupported_op(self.id(), "seq_mean_forward"))
-    }
-
-    /// The gradient of [`Self::seq_mean_forward`]: with `n = min(key_lens[b],
-    /// T)`, `grad_x[b, t, d]` is `grad_output[b, d] / n` for `t < n` and `+0.0`
-    /// at or past `n`, because the forward never read those rows. A sequence
-    /// of `n = 0` takes a row of zeros, matching a forward that returned
-    /// zeros. Every output element reads one gradient element, so nothing is
-    /// summed and the bits do not depend on the thread count.
-    ///
-    /// `x` is the forward's input, taken for its shape and to pair with
-    /// `key_lens`; none of its values are read, so a non-finite value in it
-    /// does not refuse this call. Returns `[B, T, D]`.
-    /// [`crate::seq_mean_backward_dims`] validates. The default refuses with
-    /// [`OjasError::Unsupported`].
-    fn seq_mean_backward(
-        &self,
-        x: &Tensor,
-        key_lens: &Tensor,
-        grad_output: &Tensor,
-    ) -> Result<Tensor, OjasError> {
-        let _ = (x, key_lens, grad_output);
-        Err(unsupported_op(self.id(), "seq_mean_backward"))
-    }
-
-    /// `x / max(||x||_2, eps)` over the last axis of `x` `[rows, dim]`,
-    /// torch's `F.normalize(x, p=2, dim=-1, eps)` (`norm.clamp_min(eps)`;
-    /// the caller passes `1e-12`). The squared norm is an `f64` sum that
-    /// ascends from index 0, and each output is `x / max(norm, eps)` in `f64`
-    /// rounded once. A zero row stays zero. `eps` is finite and above 0. A
-    /// Matryoshka prefix is [`Self::slice`] first, then this: there is no
-    /// leading-dimension parameter.
-    ///
-    /// [`Self::l2_normalize_backward`] is its gradient.
-    /// [`crate::l2_normalize_forward_dims`] validates. The default refuses
-    /// with [`OjasError::Unsupported`].
-    fn l2_normalize_forward(&self, x: &Tensor, eps: f32) -> Result<Tensor, OjasError> {
-        let _ = (x, eps);
-        Err(unsupported_op(self.id(), "l2_normalize_forward"))
-    }
-
-    /// The gradient of [`Self::l2_normalize_forward`], with `n = ||x||_2`
-    /// over the row and `y = x / n`:
-    ///
-    /// - `n > eps`: `grad_x = (grad_output - y (y . grad_output)) / n`, the
-    ///   gradient of `x / ||x||`.
-    /// - `n <= eps`: `grad_x = grad_output / eps`. Below the clamp the
-    ///   forward divided by the constant `eps`, so it is linear there and
-    ///   its Jacobian is `I / eps`: no projection is subtracted. A zero row
-    ///   takes `grad_output / eps`, not zero, and the tie `n == eps` is this
-    ///   branch, as `max(n, eps)` returning `eps` is.
-    ///
-    /// The squared norm and the dot product are `f64` sums that ascend from
-    /// index 0 and belong to one row, as the forward's norm does, so the
-    /// bits do not depend on the thread count. The forward's output is not
-    /// an operand: `n` is recomputed from `x`, so the branch is decided from
-    /// the same values the forward decided it from.
-    /// [`crate::l2_normalize_backward_dims`] validates. The default refuses
-    /// with [`OjasError::Unsupported`].
-    fn l2_normalize_backward(
-        &self,
-        x: &Tensor,
-        grad_output: &Tensor,
-        eps: f32,
-    ) -> Result<Tensor, OjasError> {
-        let _ = (x, grad_output, eps);
-        Err(unsupported_op(self.id(), "l2_normalize_backward"))
-    }
-
     /// Scalar mean cross-entropy. Targets are `U32`.
     fn cross_entropy_mean_forward(
         &self,
@@ -2045,13 +2407,6 @@ pub trait Backend {
         targets: &Tensor,
         ignore_index: Option<u32>,
     ) -> Result<Tensor, OjasError>;
-
-    /// In-place global-norm clip of `grads`. Returns the total norm.
-    ///
-    /// Scale is `min(1, max_norm / (total_norm + CLIP_GRAD_NORM_EPS))`.
-    /// A non-finite norm returns [`OjasError::NonFinite`] and does not
-    /// scale. `max_norm` is nanolab's `grad_clip` (default 1.0).
-    fn clip_grad_norm(&self, grads: &mut [Tensor], max_norm: f32) -> Result<f32, OjasError>;
 
     /// One parameter. `step` is the count before this update; the body calls
     /// [`next_step`]. Gradient is already clipped. This method does not clip again.
@@ -2077,77 +2432,6 @@ pub trait Backend {
         momentum: &mut Tensor,
         config: MuonNs5Config,
     ) -> Result<(), OjasError>;
-
-    /// The most bytes one [`Backend::adamw_step`] or [`Backend::muon_ns5_step`]
-    /// on a `[rows, cols]` parameter charges to this backend's budget beyond
-    /// its operands (a vector is `[1, len]`). `None`: this backend does not
-    /// say.
-    ///
-    /// A training loop checks this room before its first optimizer call, so
-    /// a refusal arrives while every parameter is still unchanged. It is an
-    /// upper bound on what the step itself reserves, never below it; each
-    /// backend derives both from one sizing rule, and a test per backend
-    /// compares the figure with the budget's measured peak.
-    fn optimizer_scratch_bytes(
-        &self,
-        kind: OptimizerKind,
-        rows: usize,
-        cols: usize,
-    ) -> Result<Option<u64>, OjasError> {
-        let _ = (kind, rows, cols);
-        Ok(None)
-    }
-
-    /// Wait for every op this backend has submitted, then report any fault
-    /// it deferred.
-    ///
-    /// A backend that reports every fault from the op that caused it (CPU)
-    /// keeps this default. A backend that defers non-finite faults to a later
-    /// call (Metal and wgpu; see `docs/metal-deferred-faults.md`) must override
-    /// it so the fault surfaces here as [`OjasError::NonFinite`]. A training loop calls `sync` after
-    /// its optimizer calls and before it advances its step counter.
-    fn sync(&self) -> Result<(), OjasError> {
-        Ok(())
-    }
-
-    /// `acc += grad`, elementwise, same shape and dtype.
-    ///
-    /// On success `acc` holds the sum and is uniquely owned. A non-finite
-    /// sum is [`OjasError::NonFinite`], reported as [`Backend::sync`]
-    /// describes: a backend that reports synchronously leaves `acc`
-    /// unchanged; on a deferring backend, `acc` must be treated as invalid
-    /// once `sync` reports the fault. Shapes are checked by
-    /// [`crate::accumulate_grad_dims`] first, so a refusal names
-    /// `accumulate_grad` on every backend. The default then composes
-    /// [`Backend::residual_add_forward`]; a backend may add in place.
-    fn accumulate_grad(&self, acc: &mut Tensor, grad: &Tensor) -> Result<(), OjasError> {
-        crate::accumulate_grad_dims(acc, grad)?;
-        *acc = self.residual_add_forward(acc, grad)?;
-        Ok(())
-    }
-
-    /// `grad *= scale`, for a gradient its caller owns: the loss seed a
-    /// tape applies to a loss's unit gradient when the walk was not seeded
-    /// with exactly 1 (a trainer averaging K micro-batches seeds `1 / K`).
-    ///
-    /// Each value is one rounding of `value * scale`. A non-finite `scale`,
-    /// input or product is [`OjasError::NonFinite`], reported as
-    /// [`Backend::sync`] describes, and `grad`'s values are then
-    /// unspecified: the caller discards it. A backend that overrides this
-    /// writes a uniquely owned `grad` in place and replaces a shared one
-    /// with a new tensor (the other handles keep the old values). The
-    /// default replaces `grad` with [`Backend::mul_forward`] of `grad` and
-    /// `scale` repeated over its shape ([`broadcast_scalar`]), built on the
-    /// backend from one uploaded value, so nothing is read back.
-    fn scale_grad(&self, grad: &mut Tensor, scale: f32) -> Result<(), OjasError> {
-        if !scale.is_finite() {
-            return Err(OjasError::NonFinite { op: "scale_grad" });
-        }
-        let scalar = place_host(self, Tensor::from_f32(&[scale], &[1], self.budget())?)?;
-        let full = broadcast_scalar(self, &scalar, grad.shape())?;
-        *grad = self.mul_forward(grad, &full)?;
-        Ok(())
-    }
 
     /// Mean cross-entropy of `input @ weight^T` without materializing the
     /// `[N, V]` logits, plus the gradients `grads` asks for: each of
@@ -2222,236 +2506,49 @@ pub trait Backend {
         let _ = (cache, src, at);
         Err(unsupported_op(self.id(), "kv_cache_write"))
     }
-
-    /// The column of each row's largest value: `x` `F32` `[rows, cols]` to
-    /// `U32` `[rows]`, ties to the lowest column (greedy decoding's pick).
-    /// Any NaN or infinity is [`OjasError::NonFinite`]; a device backend may
-    /// report it at the next [`Backend::sync`]. Every id is below `cols`, so
-    /// a backend may let the result index an `embedding_forward` table of at
-    /// least `cols` rows without reading the ids back. Validate with
-    /// [`crate::argmax_rows_dims`].
-    ///
-    /// The default reads `x` to the host (for a device tensor, a readback
-    /// and a [`Backend::sync`]), scans it there, and returns a host tensor
-    /// charged to this backend's budget.
-    fn argmax_rows(&self, x: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "argmax_rows";
-        let (rows, cols) = crate::argmax_rows_dims(x)?;
-        let host = match x.device() {
-            None => x.clone(),
-            Some(_) => {
-                let host = self.download(x)?;
-                self.sync()?;
-                host
-            }
-        };
-        let values = host.to_f32_vec()?;
-        let mut ids = Vec::with_capacity(rows);
-        for row in values.chunks_exact(cols) {
-            let mut best = 0usize;
-            for (i, &v) in row.iter().enumerate() {
-                if !v.is_finite() {
-                    return Err(OjasError::NonFinite { op: OP });
-                }
-                if v > row[best] {
-                    best = i;
-                }
-            }
-            // `argmax_rows_dims` checked that `cols` fits u32.
-            ids.push(best as u32);
-        }
-        Tensor::from_u32(&ids, &[rows], self.budget())
-    }
-
-    /// The `k` leaders of each row of `x` (`F32` `[rows, cols]`, `1 <= k <= cols`),
-    /// ranked by [`rank_logits`]: value descending with `+0.0` and `-0.0` one
-    /// value and `-inf` after every finite value, then column ascending (the
-    /// order `ojas_infer::sample_token` ranks candidates in). Returns
-    /// `(values, ids)`: `F32` `[rows, k]` and `U32` `[rows, k]`, every id
-    /// `< cols`. Any NaN or `+inf` in a row is
-    /// `OjasError::NonFinite` (a device backend may report it at the next sync);
-    /// `-inf` is a value (a masked logit). Validate with `topk_rows_dims`. The default
-    /// downloads `x` and selects on the host.
-    ///
-    /// As with [`Backend::argmax_rows`], a backend may let the ids index an
-    /// `embedding_forward` table of at least `cols` rows without reading them
-    /// back. A device kernel may refuse a large `k` as
-    /// [`OjasError::Unsupported`] (Metal and wgpu take `k <= 1024`). The
-    /// default's host scan is `O(cols + k log k)` per row (a
-    /// selection, then a sort of the `k` leaders), and its two results are
-    /// host tensors charged to this backend's budget.
-    fn topk_rows(&self, x: &Tensor, k: usize) -> Result<(Tensor, Tensor), OjasError> {
-        const OP: &str = "topk_rows";
-        let (rows, cols) = crate::topk_rows_dims(x, k)?;
-        let host = match x.device() {
-            None => x.clone(),
-            Some(_) => {
-                let host = self.download(x)?;
-                self.sync()?;
-                host
-            }
-        };
-        let values = host.to_f32_vec()?;
-        // `rows * k <= rows * cols`, the element count of `x`.
-        let mut top_values = Vec::with_capacity(rows * k);
-        let mut top_ids = Vec::with_capacity(rows * k);
-        // `topk_rows_dims` checked that `cols` fits u32.
-        let mut order: Vec<u32> = Vec::with_capacity(cols);
-        for row in values.chunks_exact(cols) {
-            if row.iter().any(|v| v.is_nan() || *v == f32::INFINITY) {
-                return Err(OjasError::NonFinite { op: OP });
-            }
-            let rank = |a: &u32, b: &u32| rank_logits(row, *a as usize, *b as usize);
-            order.clear();
-            order.extend(0..cols as u32);
-            if k < cols {
-                order.select_nth_unstable_by(k - 1, rank);
-            }
-            let leaders = &mut order[..k];
-            leaders.sort_unstable_by(rank);
-            top_values.extend(leaders.iter().map(|&i| row[i as usize]));
-            top_ids.extend_from_slice(leaders);
-        }
-        let values = Tensor::from_f32(&top_values, &[rows, k], self.budget())?;
-        let ids = Tensor::from_u32(&top_ids, &[rows, k], self.budget())?;
-        Ok((values, ids))
-    }
-
-    /// Round a host f32 tensor to bf16 and widen it back to f32.
-    ///
-    /// A non-f32 tensor is [`OjasError::Dtype`]. A device tensor is
-    /// [`OjasError::Unsupported`]: this default does not download. An empty
-    /// host tensor stays empty. A non-contiguous host tensor fails with the
-    /// [`Tensor::f32_slice`] shape error. [`crate::Autocast`] overrides this
-    /// to skip a tensor whose compute tag is already bf16.
-    fn cast_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "cast_bf16";
-        if tensor.dtype() != DType::F32 {
-            return Err(OjasError::Dtype {
-                op: OP,
-                expected: DType::F32,
-                got: tensor.dtype(),
-            });
-        }
-        refuse_device_cast(OP, tensor)?;
-        let src = tensor.f32_slice()?;
-        let mut out = Tensor::zeros(tensor.shape(), DType::F32, self.budget())?;
-        {
-            let dst = out.f32_slice_mut()?;
-            for (dst, src) in dst.iter_mut().zip(src.iter()) {
-                *dst = round_f32_to_bf16(*src);
-            }
-        }
-        Ok(out)
-    }
-
-    /// Whether the matmul-class ops take `Bf16` storage as operands.
-    ///
-    /// The matmul-class ops are [`Self::linear_forward`],
-    /// [`Self::linear_backward`], [`Self::causal_sdpa_forward`] and
-    /// [`Self::causal_sdpa_backward`] (except its `lse`, which stays `F32`).
-    /// Their validators accept each operand as `F32` or `Bf16`, mixed freely.
-    /// A bf16 operand is widened exactly to `f32` (`bits << 16`), every
-    /// product and sum accumulates in `f32`, and every output is `F32`. So an
-    /// operand whose `f32` values are bf16-exact gives the same bits whether
-    /// it arrives as `F32` or as `Bf16`, under the same [`Self::numerics`].
-    ///
-    /// The tied table takes the same rule (decided 2026-10-14): the `table`
-    /// of [`Self::embedding_forward`] and [`Self::embedding_backward`] and
-    /// the `weight` of [`Self::linear_cross_entropy_mean`]. Their other
-    /// operands stay `F32` (`U32` for ids and targets). The table lane reads
-    /// bf16 rows in place, a gathered row or one vocabulary chunk at a time,
-    /// so a frozen bf16 table never costs an `f32` copy of itself. The CPU
-    /// and Metal take it; a backend without the lane refuses a `Bf16` table
-    /// with [`OjasError::Dtype`] ([`refuse_bf16_table`]), whatever this flag
-    /// says. Every other op refuses `Bf16` with [`OjasError::Dtype`].
-    ///
-    /// The default is `false`. Such a backend refuses a matmul-class `Bf16`
-    /// operand with [`OjasError::Unsupported`] ([`refuse_bf16_operands`])
-    /// before it charges or writes anything. [`crate::Autocast`] rounds its operand
-    /// copies in `f32` storage on every backend; this flag decides only
-    /// whether a `Bf16` tensor the caller holds is accepted.
-    fn bf16_operands(&self) -> bool {
-        false
-    }
-
-    /// A new `Bf16` tensor holding `tensor`'s `F32` values rounded to nearest
-    /// even ([`f32_to_bf16`]), on the same backend.
-    ///
-    /// A `Bf16` input is returned as a shared clone. Any other dtype is
-    /// [`OjasError::Dtype`]. A NaN stays a NaN and an infinity stays an
-    /// infinity; a finite value above the bf16 range rounds to an infinity,
-    /// which the matmul-class ops then refuse as [`OjasError::NonFinite`].
-    /// The default converts a contiguous host tensor and refuses a device
-    /// tensor with [`OjasError::Unsupported`]; it does not download.
-    fn to_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "to_bf16";
-        match tensor.dtype() {
-            DType::Bf16 => return Ok(tensor.clone()),
-            DType::F32 => {}
-            got => {
-                return Err(OjasError::Dtype {
-                    op: OP,
-                    expected: DType::F32,
-                    got,
-                })
-            }
-        }
-        refuse_device_cast(OP, tensor)?;
-        let src = tensor.f32_slice()?;
-        let mut out = Tensor::zeros(tensor.shape(), DType::Bf16, self.budget())?;
-        for (dst, src) in out.bf16_slice_mut()?.iter_mut().zip(src) {
-            *dst = f32_to_bf16(*src);
-        }
-        Ok(out)
-    }
-
-    /// A new `F32` tensor holding `tensor`'s `Bf16` values widened exactly
-    /// ([`bf16_to_f32`]), on the same backend.
-    ///
-    /// An `F32` input is returned as a shared clone. Any other dtype is
-    /// [`OjasError::Dtype`]. The default converts a contiguous host tensor and
-    /// refuses a device tensor with [`OjasError::Unsupported`].
-    fn to_f32(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "to_f32";
-        match tensor.dtype() {
-            DType::F32 => return Ok(tensor.clone()),
-            DType::Bf16 => {}
-            got => {
-                return Err(OjasError::Dtype {
-                    op: OP,
-                    expected: DType::Bf16,
-                    got,
-                })
-            }
-        }
-        refuse_device_cast(OP, tensor)?;
-        let src = tensor.bf16_slice()?;
-        let mut out = Tensor::zeros(tensor.shape(), DType::F32, self.budget())?;
-        for (dst, src) in out.f32_slice_mut()?.iter_mut().zip(src) {
-            *dst = bf16_to_f32(*src);
-        }
-        Ok(out)
-    }
-
-    /// Enter an autocast region.
-    ///
-    /// [`AutocastMode::Off`] is a no-op guard. [`AutocastMode::Bf16`] is
-    /// [`OjasError::Unsupported`] unless the backend is [`crate::Autocast`],
-    /// which owns the region stack.
-    fn autocast_region(&self, mode: AutocastMode) -> Result<AutocastGuard, OjasError> {
-        match mode {
-            AutocastMode::Off => Ok(AutocastGuard::noop()),
-            AutocastMode::Bf16 => Err(OjasError::Unsupported {
-                op: "autocast_region",
-                detail: format!(
-                    "{:?} backend has no bf16 autocast region; wrap it in Autocast",
-                    self.id()
-                ),
-            }),
-        }
-    }
 }
+
+/// Nanolab-default training ops.
+///
+/// Every method returns [`Result`]. Implementations live in `ojas-cpu`
+/// and `ojas-metal`. A method that this crate cannot implement has no
+/// body here.
+///
+/// Layout notes shared by the methods:
+/// - Linear weights are `[out, in]`, no bias, `y = x @ W^T`, matching
+///   `nn.Linear(..., bias=False)`.
+/// - Token ids are [`crate::DType::U32`]. An id outside the vocabulary is
+///   [`OjasError::OutOfRange`], not a wrapped read.
+/// - `ignore_index: Option<u32>` is the unsigned form of nanolab's `-1`.
+///   DType has no signed integer. The data loader maps torch's `-1` onto the
+///   sentinel before the call. Mean is over valid targets. If every row is
+///   ignored, forward and backward return [`OjasError::NonFinite`]. The count
+///   is not floored at 1, because that turned an empty reduction into a
+///   finite loss of 0.
+/// - RoPE is the half-split in `mixers.apply_rope`: last axis split in half,
+///   rotate `(-x2, x1)`, then `x * cos + rot * sin`. Strides and `byte_offset`
+///   come from the tensor. Do not hard-code a query stride of `2 * head_dim`.
+/// - Causal attention scale is [`sdpa_scale`]. Metal calls
+///   [`refuse_unsupported_metal_head_dim`] and does not truncate.
+/// - The per-head gate is `sigmoid(x @ W^T + bias)` with `W` shaped
+///   `[n_head, d_model]`, then multiplied onto the attention output.
+/// - Value residual is `s = sigmoid(lambda); (1 - s) * v + s * v0`.
+/// - Non-finite inputs and gradients are [`OjasError::NonFinite`].
+///   Clipping and Adam must not apply them.
+///
+/// The methods are split the way Burn splits capabilities:
+/// [`BackendCore`] (residency, numerics, casts), [`BackendFloat`]
+/// (elementwise ops and reductions), [`BackendInt`] (row reductions
+/// to ids), and [`BackendModule`] (layers and optimizers). This trait
+/// is their aggregate, so a bound on [`Backend`] still names every op
+/// and [`with_backend_methods!`] still lists every one. MPS, MLX, and
+/// Accelerate are non-exact GEMM choices ([`GemmProvider`]);
+/// [`GemmProvider::select`] never returns them for [`Numerics::Exact`].
+pub trait Backend: BackendFloat + BackendInt + BackendModule {}
+
+// `Sized` is required. A `?Sized` blanket also matches `dyn Backend`
+// and conflicts with the compiler's `impl Backend for dyn Backend`.
+impl<T: BackendFloat + BackendInt + BackendModule> Backend for T {}
 
 /// The one list of [`Backend`] methods. Every wrapper that must forward the
 /// whole trait (`&B`, `Arc<B>`, `Gated`, the test `Probe`) is generated from
@@ -2594,9 +2691,126 @@ mod backend_method_names {
     with_backend_methods!(names, {});
 }
 
+/// Emit `$then` when `$name` belongs to the capability `$group`
+/// (`core`, `float`, `int`, or `module`). Forwarding wrappers pass a
+/// group so each capability trait receives only its own methods.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! emit_in_group {
+    (core, id, $($then:tt)*) => { $($then)* };
+    (core, budget, $($then:tt)*) => { $($then)* };
+    (core, numerics, $($then:tt)*) => { $($then)* };
+    (core, upload, $($then:tt)*) => { $($then)* };
+    (core, download, $($then:tt)*) => { $($then)* };
+    (core, sync, $($then:tt)*) => { $($then)* };
+    (core, bf16_operands, $($then:tt)*) => { $($then)* };
+    (core, autocast_region, $($then:tt)*) => { $($then)* };
+    (core, to_bf16, $($then:tt)*) => { $($then)* };
+    (core, to_f32, $($then:tt)*) => { $($then)* };
+    (core, cast_bf16, $($then:tt)*) => { $($then)* };
+    (core, optimizer_scratch_bytes, $($then:tt)*) => { $($then)* };
+    (float, permute, $($then:tt)*) => { $($then)* };
+    (float, sigmoid_forward, $($then:tt)*) => { $($then)* };
+    (float, sigmoid_backward, $($then:tt)*) => { $($then)* };
+    (float, silu_forward, $($then:tt)*) => { $($then)* };
+    (float, silu_backward, $($then:tt)*) => { $($then)* };
+    (float, mul_forward, $($then:tt)*) => { $($then)* };
+    (float, mul_backward, $($then:tt)*) => { $($then)* };
+    (float, residual_add_forward, $($then:tt)*) => { $($then)* };
+    (float, residual_add_backward, $($then:tt)*) => { $($then)* };
+    (float, gelu_erf_forward, $($then:tt)*) => { $($then)* };
+    (float, gelu_erf_backward, $($then:tt)*) => { $($then)* };
+    (float, gelu_tanh_forward, $($then:tt)*) => { $($then)* };
+    (float, gelu_tanh_backward, $($then:tt)*) => { $($then)* };
+    (float, relu_forward, $($then:tt)*) => { $($then)* };
+    (float, relu_backward, $($then:tt)*) => { $($then)* };
+    (float, concat, $($then:tt)*) => { $($then)* };
+    (float, slice, $($then:tt)*) => { $($then)* };
+    (float, slice_backward, $($then:tt)*) => { $($then)* };
+    (float, fill, $($then:tt)*) => { $($then)* };
+    (float, broadcast_add_forward, $($then:tt)*) => { $($then)* };
+    (float, broadcast_add_backward, $($then:tt)*) => { $($then)* };
+    (float, broadcast_mul_forward, $($then:tt)*) => { $($then)* };
+    (float, broadcast_mul_backward, $($then:tt)*) => { $($then)* };
+    (float, scale_forward, $($then:tt)*) => { $($then)* };
+    (float, softmax_forward, $($then:tt)*) => { $($then)* };
+    (float, softmax_backward, $($then:tt)*) => { $($then)* };
+    (float, seq_mean_forward, $($then:tt)*) => { $($then)* };
+    (float, seq_mean_backward, $($then:tt)*) => { $($then)* };
+    (float, l2_normalize_forward, $($then:tt)*) => { $($then)* };
+    (float, l2_normalize_backward, $($then:tt)*) => { $($then)* };
+    (float, clip_grad_norm, $($then:tt)*) => { $($then)* };
+    (float, accumulate_grad, $($then:tt)*) => { $($then)* };
+    (float, scale_grad, $($then:tt)*) => { $($then)* };
+    (int, argmax_rows, $($then:tt)*) => { $($then)* };
+    (int, topk_rows, $($then:tt)*) => { $($then)* };
+    (module, embedding_forward, $($then:tt)*) => { $($then)* };
+    (module, embedding_backward, $($then:tt)*) => { $($then)* };
+    (module, linear_forward, $($then:tt)*) => { $($then)* };
+    (module, linear_backward, $($then:tt)*) => { $($then)* };
+    (module, linear_backward_input, $($then:tt)*) => { $($then)* };
+    (module, rms_norm_forward, $($then:tt)*) => { $($then)* };
+    (module, rms_norm_backward, $($then:tt)*) => { $($then)* };
+    (module, rope_half_split_forward, $($then:tt)*) => { $($then)* };
+    (module, rope_half_split_backward, $($then:tt)*) => { $($then)* };
+    (module, rms_qk_norm_forward, $($then:tt)*) => { $($then)* };
+    (module, rms_qk_norm_backward, $($then:tt)*) => { $($then)* };
+    (module, rms_qkv_norm_forward, $($then:tt)*) => { $($then)* };
+    (module, causal_sdpa_forward, $($then:tt)*) => { $($then)* };
+    (module, causal_sdpa_backward, $($then:tt)*) => { $($then)* };
+    (module, causal_sdpa_backward_recompute, $($then:tt)*) => { $($then)* };
+    (module, attention_forward, $($then:tt)*) => { $($then)* };
+    (module, attention_forward_saving, $($then:tt)*) => { $($then)* };
+    (module, attention_backward, $($then:tt)*) => { $($then)* };
+    (module, per_head_sigmoid_gate_forward, $($then:tt)*) => { $($then)* };
+    (module, per_head_sigmoid_gate_backward, $($then:tt)*) => { $($then)* };
+    (module, per_head_sigmoid_gate_forward_saving, $($then:tt)*) => { $($then)* };
+    (module, per_head_sigmoid_gate_backward_saved, $($then:tt)*) => { $($then)* };
+    (module, value_residual_blend_forward, $($then:tt)*) => { $($then)* };
+    (module, value_residual_blend_backward, $($then:tt)*) => { $($then)* };
+    (module, chunked_gdn_forward, $($then:tt)*) => { $($then)* };
+    (module, chunked_gdn_backward, $($then:tt)*) => { $($then)* };
+    (module, causal_conv1d_silu_forward, $($then:tt)*) => { $($then)* };
+    (module, causal_conv1d_silu_backward, $($then:tt)*) => { $($then)* };
+    (module, gated_rms_norm_forward, $($then:tt)*) => { $($then)* };
+    (module, gated_rms_norm_backward, $($then:tt)*) => { $($then)* };
+    (module, rope_partial_forward, $($then:tt)*) => { $($then)* };
+    (module, rope_partial_backward, $($then:tt)*) => { $($then)* };
+    (module, gdn_log_decay_forward, $($then:tt)*) => { $($then)* };
+    (module, gdn_log_decay_backward, $($then:tt)*) => { $($then)* };
+    (module, conv2d_forward, $($then:tt)*) => { $($then)* };
+    (module, conv_transpose2d_forward, $($then:tt)*) => { $($then)* };
+    (module, max_pool2d_forward, $($then:tt)*) => { $($then)* };
+    (module, conv2d_backward, $($then:tt)*) => { $($then)* };
+    (module, conv_transpose2d_backward, $($then:tt)*) => { $($then)* };
+    (module, max_pool2d_backward, $($then:tt)*) => { $($then)* };
+    (module, interpolate_bilinear_forward, $($then:tt)*) => { $($then)* };
+    (module, interpolate_bilinear_backward, $($then:tt)*) => { $($then)* };
+    (module, rope_interleaved_forward, $($then:tt)*) => { $($then)* };
+    (module, rope_interleaved_backward, $($then:tt)*) => { $($then)* };
+    (module, layer_norm_forward, $($then:tt)*) => { $($then)* };
+    (module, layer_norm_backward, $($then:tt)*) => { $($then)* };
+    (module, channel_layer_norm_forward, $($then:tt)*) => { $($then)* };
+    (module, channel_layer_norm_backward, $($then:tt)*) => { $($then)* };
+    (module, group_norm_forward, $($then:tt)*) => { $($then)* };
+    (module, group_norm_backward, $($then:tt)*) => { $($then)* };
+    (module, linear_bias_forward, $($then:tt)*) => { $($then)* };
+    (module, linear_bias_backward, $($then:tt)*) => { $($then)* };
+    (module, cross_entropy_mean_forward, $($then:tt)*) => { $($then)* };
+    (module, cross_entropy_mean_backward, $($then:tt)*) => { $($then)* };
+    (module, adamw_step, $($then:tt)*) => { $($then)* };
+    (module, muon_ns5_step, $($then:tt)*) => { $($then)* };
+    (module, linear_cross_entropy_mean, $($then:tt)*) => { $($then)* };
+    (module, cached_attention_forward, $($then:tt)*) => { $($then)* };
+    (module, kv_cache_write, $($then:tt)*) => { $($then)* };
+    ($group:ident, $name:ident, $($then:tt)*) => {};
+}
+
 /// Generates forwarding impls of every [`Backend`] method from
 /// [`with_backend_methods!`]. The context is
-/// `{ self_ident, inner_expr, admit, hand }`:
+/// `{ self_ident, inner_expr, admit, hand }` or, for one capability
+/// trait, `{ self_ident, inner_expr, admit, hand, group }` with
+/// `group` of `core`, `float`, `int`, or `module`:
 ///
 /// - `inner_expr` is the backend each method forwards to (`(**self)`,
 ///   `self.inner`);
@@ -2609,6 +2823,24 @@ mod backend_method_names {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! forward_backend_methods {
+    ({ $s:ident, $inner:expr, $admit:tt, $hand:ident, $group:ident }
+     $($kind:ident fn $name:ident(&self $(, $arg:ident : $ty:ty)*) -> $ret:ty;)*) => {
+        $(
+            $crate::forward_backend_methods!(
+                @grouped $group, $s, $inner, $admit, $hand, $kind, $name, [$($arg: $ty),*], $ret
+            );
+        )*
+    };
+    (@grouped $group:ident, $s:ident, $inner:expr, $admit:tt, $hand:ident, $kind:ident,
+     $name:ident, [$($arg:ident : $ty:ty),*], $ret:ty) => {
+        $crate::emit_in_group!(
+            $group,
+            $name,
+            $crate::forward_backend_methods!(
+                @one $s, $inner, $admit, $hand, $kind, $name, [$($arg: $ty),*], $ret
+            );
+        );
+    };
     ({ $s:ident, $inner:expr, $admit:tt, $hand:ident }
      $($kind:ident fn $name:ident(&self $(, $arg:ident : $ty:ty)*) -> $ret:ty;)*) => {
         $(
@@ -2659,19 +2891,61 @@ macro_rules! forward_backend_keep {
 
 /// A shared reference to a backend is a backend, so one backend can serve a
 /// `Tape` and a trainer at once.
-impl<B: Backend + ?Sized> Backend for &B {
+impl<B: Backend + ?Sized> BackendCore for &B {
     with_backend_methods!(
         forward_backend_methods,
-        { self, (**self), none, forward_backend_keep }
+        { self, (**self), none, forward_backend_keep, core}
+    );
+}
+
+impl<B: Backend + ?Sized> BackendFloat for &B {
+    with_backend_methods!(
+        forward_backend_methods,
+        { self, (**self), none, forward_backend_keep, float}
+    );
+}
+
+impl<B: Backend + ?Sized> BackendInt for &B {
+    with_backend_methods!(
+        forward_backend_methods,
+        { self, (**self), none, forward_backend_keep, int}
+    );
+}
+
+impl<B: Backend + ?Sized> BackendModule for &B {
+    with_backend_methods!(
+        forward_backend_methods,
+        { self, (**self), none, forward_backend_keep, module}
     );
 }
 
 /// An `Arc` of a backend is a backend, for backends that are not `Clone`
 /// (for example `WgpuBackend`) shared across sessions.
-impl<B: Backend + ?Sized> Backend for std::sync::Arc<B> {
+impl<B: Backend + ?Sized> BackendCore for std::sync::Arc<B> {
     with_backend_methods!(
         forward_backend_methods,
-        { self, (**self), none, forward_backend_keep }
+        { self, (**self), none, forward_backend_keep, core}
+    );
+}
+
+impl<B: Backend + ?Sized> BackendFloat for std::sync::Arc<B> {
+    with_backend_methods!(
+        forward_backend_methods,
+        { self, (**self), none, forward_backend_keep, float}
+    );
+}
+
+impl<B: Backend + ?Sized> BackendInt for std::sync::Arc<B> {
+    with_backend_methods!(
+        forward_backend_methods,
+        { self, (**self), none, forward_backend_keep, int}
+    );
+}
+
+impl<B: Backend + ?Sized> BackendModule for std::sync::Arc<B> {
+    with_backend_methods!(
+        forward_backend_methods,
+        { self, (**self), none, forward_backend_keep, module}
     );
 }
 
@@ -2836,13 +3110,58 @@ pub(crate) mod tests {
         }
     }
 
-    impl Backend for NoUpload {
+    impl BackendCore for NoUpload {
         fn id(&self) -> BackendId {
             self.id
         }
         fn budget(&self) -> &Budget {
             &self.budget
         }
+    }
+
+    impl BackendFloat for NoUpload {
+        fn silu_forward(&self, _: &Tensor) -> Result<Tensor, OjasError> {
+            Err(none("silu_forward"))
+        }
+        fn silu_backward(&self, _: &Tensor, _: &Tensor) -> Result<Tensor, OjasError> {
+            Err(none("silu_backward"))
+        }
+        fn mul_forward(&self, _: &Tensor, _: &Tensor) -> Result<Tensor, OjasError> {
+            Err(none("mul_forward"))
+        }
+        fn mul_backward(
+            &self,
+            _: &Tensor,
+            _: &Tensor,
+            _: &Tensor,
+        ) -> Result<(Tensor, Tensor), OjasError> {
+            Err(none("mul_backward"))
+        }
+        /// A host sum, so the default `accumulate_grad` can be checked end to end.
+        fn residual_add_forward(&self, x: &Tensor, y: &Tensor) -> Result<Tensor, OjasError> {
+            if x.shape() != y.shape() {
+                return Err(none("residual_add_forward"));
+            }
+            let (x_values, y_values) = (x.to_f32_vec()?, y.to_f32_vec()?);
+            let sum: Vec<f32> = x_values.iter().zip(&y_values).map(|(a, b)| a + b).collect();
+            Tensor::from_f32(&sum, x.shape(), &self.budget)
+        }
+        fn residual_add_backward(
+            &self,
+            _: &Tensor,
+            _: &Tensor,
+            _: &Tensor,
+        ) -> Result<(Tensor, Tensor), OjasError> {
+            Err(none("residual_add_backward"))
+        }
+        fn clip_grad_norm(&self, _: &mut [Tensor], _: f32) -> Result<f32, OjasError> {
+            Err(none("clip_grad_norm"))
+        }
+    }
+
+    impl BackendInt for NoUpload {}
+
+    impl BackendModule for NoUpload {
         fn embedding_forward(&self, _: &Tensor, _: &Tensor) -> Result<Tensor, OjasError> {
             Err(none("embedding_forward"))
         }
@@ -2972,40 +3291,6 @@ pub(crate) mod tests {
         ) -> Result<ValueResidualGrad, OjasError> {
             Err(none("value_residual_blend_backward"))
         }
-        fn silu_forward(&self, _: &Tensor) -> Result<Tensor, OjasError> {
-            Err(none("silu_forward"))
-        }
-        fn silu_backward(&self, _: &Tensor, _: &Tensor) -> Result<Tensor, OjasError> {
-            Err(none("silu_backward"))
-        }
-        fn mul_forward(&self, _: &Tensor, _: &Tensor) -> Result<Tensor, OjasError> {
-            Err(none("mul_forward"))
-        }
-        fn mul_backward(
-            &self,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-        ) -> Result<(Tensor, Tensor), OjasError> {
-            Err(none("mul_backward"))
-        }
-        /// A host sum, so the default `accumulate_grad` can be checked end to end.
-        fn residual_add_forward(&self, x: &Tensor, y: &Tensor) -> Result<Tensor, OjasError> {
-            if x.shape() != y.shape() {
-                return Err(none("residual_add_forward"));
-            }
-            let (x_values, y_values) = (x.to_f32_vec()?, y.to_f32_vec()?);
-            let sum: Vec<f32> = x_values.iter().zip(&y_values).map(|(a, b)| a + b).collect();
-            Tensor::from_f32(&sum, x.shape(), &self.budget)
-        }
-        fn residual_add_backward(
-            &self,
-            _: &Tensor,
-            _: &Tensor,
-            _: &Tensor,
-        ) -> Result<(Tensor, Tensor), OjasError> {
-            Err(none("residual_add_backward"))
-        }
         fn cross_entropy_mean_forward(
             &self,
             _: &Tensor,
@@ -3021,9 +3306,6 @@ pub(crate) mod tests {
             _: Option<u32>,
         ) -> Result<Tensor, OjasError> {
             Err(none("cross_entropy_mean_backward"))
-        }
-        fn clip_grad_norm(&self, _: &mut [Tensor], _: f32) -> Result<f32, OjasError> {
-            Err(none("clip_grad_norm"))
         }
         fn adamw_step(
             &self,
@@ -3251,12 +3533,16 @@ pub(crate) mod tests {
     }
 
     macro_rules! marker_methods {
-        ({} $($kind:ident fn $name:ident(&self $(, $arg:ident : $ty:ty)*) -> $ret:ty;)*) => {
-            $( marker_method!($name, $kind, [$($ty),*], $ret); )*
+        ({ $group:ident } $($kind:ident fn $name:ident(&self $(, $arg:ident : $ty:ty)*) -> $ret:ty;)*) => {
+            $(
+                crate::emit_in_group!($group, $name,
+                    marker_method!($name, $kind, [$($ty),*], $ret);
+                );
+            )*
         };
     }
 
-    impl Backend for Marker {
+    impl BackendCore for Marker {
         fn id(&self) -> BackendId {
             BackendId::Wgpu
         }
@@ -3277,7 +3563,19 @@ pub(crate) mod tests {
         ) -> Result<Option<u64>, OjasError> {
             Err(mark("optimizer_scratch_bytes"))
         }
-        with_backend_methods!(marker_methods, {});
+        with_backend_methods!(marker_methods, { core });
+    }
+
+    impl BackendFloat for Marker {
+        with_backend_methods!(marker_methods, { float });
+    }
+
+    impl BackendInt for Marker {
+        with_backend_methods!(marker_methods, { int });
+    }
+
+    impl BackendModule for Marker {
+        with_backend_methods!(marker_methods, { module });
     }
 
     /// Call every method through `backend` (a wrapper, dispatched
@@ -3580,32 +3878,213 @@ pub(crate) mod tests {
     #[test]
     fn the_method_list_names_every_trait_method() {
         let source = include_str!("backend.rs");
-        let start = source.find("pub trait Backend {").unwrap();
-        let end = start + source[start..].find("\n}\n").unwrap();
-        let mut in_trait: Vec<&str> = source[start..end]
-            .lines()
-            .filter_map(|line| {
-                let rest = line.strip_prefix("    fn ")?;
-                Some(&rest[..rest.find(['(', '<'])?])
-            })
-            .collect();
+        let groups: &[(&str, &[&str])] = &[
+            (
+                "BackendCore",
+                &[
+                    "id",
+                    "budget",
+                    "numerics",
+                    "upload",
+                    "download",
+                    "sync",
+                    "bf16_operands",
+                    "autocast_region",
+                    "to_bf16",
+                    "to_f32",
+                    "cast_bf16",
+                    "optimizer_scratch_bytes",
+                ],
+            ),
+            (
+                "BackendFloat",
+                &[
+                    "permute",
+                    "sigmoid_forward",
+                    "sigmoid_backward",
+                    "silu_forward",
+                    "silu_backward",
+                    "mul_forward",
+                    "mul_backward",
+                    "residual_add_forward",
+                    "residual_add_backward",
+                    "gelu_erf_forward",
+                    "gelu_erf_backward",
+                    "gelu_tanh_forward",
+                    "gelu_tanh_backward",
+                    "relu_forward",
+                    "relu_backward",
+                    "concat",
+                    "slice",
+                    "slice_backward",
+                    "fill",
+                    "broadcast_add_forward",
+                    "broadcast_add_backward",
+                    "broadcast_mul_forward",
+                    "broadcast_mul_backward",
+                    "scale_forward",
+                    "softmax_forward",
+                    "softmax_backward",
+                    "seq_mean_forward",
+                    "seq_mean_backward",
+                    "l2_normalize_forward",
+                    "l2_normalize_backward",
+                    "clip_grad_norm",
+                    "accumulate_grad",
+                    "scale_grad",
+                ],
+            ),
+            ("BackendInt", &["argmax_rows", "topk_rows"]),
+            (
+                "BackendModule",
+                &[
+                    "embedding_forward",
+                    "embedding_backward",
+                    "linear_forward",
+                    "linear_backward",
+                    "linear_backward_input",
+                    "rms_norm_forward",
+                    "rms_norm_backward",
+                    "rope_half_split_forward",
+                    "rope_half_split_backward",
+                    "rms_qk_norm_forward",
+                    "rms_qk_norm_backward",
+                    "rms_qkv_norm_forward",
+                    "causal_sdpa_forward",
+                    "causal_sdpa_backward",
+                    "causal_sdpa_backward_recompute",
+                    "attention_forward",
+                    "attention_forward_saving",
+                    "attention_backward",
+                    "per_head_sigmoid_gate_forward",
+                    "per_head_sigmoid_gate_backward",
+                    "per_head_sigmoid_gate_forward_saving",
+                    "per_head_sigmoid_gate_backward_saved",
+                    "value_residual_blend_forward",
+                    "value_residual_blend_backward",
+                    "chunked_gdn_forward",
+                    "chunked_gdn_backward",
+                    "causal_conv1d_silu_forward",
+                    "causal_conv1d_silu_backward",
+                    "gated_rms_norm_forward",
+                    "gated_rms_norm_backward",
+                    "rope_partial_forward",
+                    "rope_partial_backward",
+                    "gdn_log_decay_forward",
+                    "gdn_log_decay_backward",
+                    "conv2d_forward",
+                    "conv_transpose2d_forward",
+                    "max_pool2d_forward",
+                    "conv2d_backward",
+                    "conv_transpose2d_backward",
+                    "max_pool2d_backward",
+                    "interpolate_bilinear_forward",
+                    "interpolate_bilinear_backward",
+                    "rope_interleaved_forward",
+                    "rope_interleaved_backward",
+                    "layer_norm_forward",
+                    "layer_norm_backward",
+                    "channel_layer_norm_forward",
+                    "channel_layer_norm_backward",
+                    "group_norm_forward",
+                    "group_norm_backward",
+                    "linear_bias_forward",
+                    "linear_bias_backward",
+                    "cross_entropy_mean_forward",
+                    "cross_entropy_mean_backward",
+                    "adamw_step",
+                    "muon_ns5_step",
+                    "linear_cross_entropy_mean",
+                    "cached_attention_forward",
+                    "kv_cache_write",
+                ],
+            ),
+        ];
+        let mut union: Vec<&str> = Vec::new();
+        for (name, expect) in groups {
+            let marker = format!("pub trait {name}");
+            let start = source
+                .find(&marker)
+                .unwrap_or_else(|| panic!("missing {name}"));
+            let end = start + source[start..].find("\n}\n").unwrap();
+            let mut found: Vec<&str> = source[start..end]
+                .lines()
+                .filter_map(|line| {
+                    let rest = line.strip_prefix("    fn ")?;
+                    Some(&rest[..rest.find(['(', '<']).unwrap()])
+                })
+                .collect();
+            found.sort_unstable();
+            let mut want: Vec<&str> = expect.to_vec();
+            want.sort_unstable();
+            assert_eq!(found, want, "{name} methods drifted");
+            union.extend(found);
+        }
+        union.sort_unstable();
         let mut listed: Vec<&str> = crate::BACKEND_METHODS.to_vec();
-        in_trait.sort_unstable();
         listed.sort_unstable();
-        assert!(
-            in_trait.len() > 50,
-            "the trait scan found {}",
-            in_trait.len()
-        );
-        let unlisted: Vec<_> = in_trait.iter().filter(|n| !listed.contains(n)).collect();
-        let stale: Vec<_> = listed.iter().filter(|n| !in_trait.contains(n)).collect();
-        assert!(
-            unlisted.is_empty() && stale.is_empty(),
-            "not in with_backend_methods!: {unlisted:?}; not in the trait: {stale:?}"
+        assert_eq!(
+            union, listed,
+            "capability traits and with_backend_methods! disagree"
         );
         let mut deduped = listed.clone();
         deduped.dedup();
         assert_eq!(deduped, listed, "a method is listed twice");
+        // Built at runtime so this assertion is not itself a match.
+        let bare_backend = concat!("pub trait Backend ", "{");
+        assert!(
+            !source.contains(bare_backend),
+            "Backend is the aggregate; its methods live on the capability traits"
+        );
+    }
+
+    /// MPS, MLX, and Accelerate are not exact GEMM choices. `select` never
+    /// returns them, and an exact request never lands on a provider whose
+    /// reduction order is unspecified.
+    #[test]
+    fn mps_mlx_and_accelerate_are_not_selectable_as_exact() {
+        for provider in [
+            GemmProvider::Mps,
+            GemmProvider::Mlx,
+            GemmProvider::Accelerate,
+            GemmProvider::TesslTensorOps,
+            GemmProvider::PortableFast,
+        ] {
+            assert!(!provider.allows_exact(), "{provider:?}");
+            assert_eq!(provider.numerics(), Numerics::Fast);
+        }
+        assert!(GemmProvider::CpuReference.allows_exact());
+        assert!(GemmProvider::TesslFixedOrder.allows_exact());
+        let ids = [
+            BackendId::Cpu,
+            BackendId::Metal,
+            BackendId::Wgpu,
+            BackendId::Cuda,
+            BackendId::Hip,
+        ];
+        for id in ids {
+            let exact = GemmProvider::select(Numerics::Exact, id);
+            assert!(exact.allows_exact(), "{id:?} selected {exact:?}");
+            assert!(!matches!(
+                exact,
+                GemmProvider::Mps | GemmProvider::Mlx | GemmProvider::Accelerate
+            ));
+            for numerics in [Numerics::Exact, Numerics::Fast] {
+                let picked = GemmProvider::select(numerics, id);
+                assert!(
+                    !matches!(picked, GemmProvider::Mps | GemmProvider::Mlx),
+                    "{numerics:?} {id:?} selected {picked:?}"
+                );
+            }
+        }
+        assert_eq!(
+            GemmProvider::select(Numerics::Exact, BackendId::Metal),
+            GemmProvider::TesslFixedOrder
+        );
+        assert_eq!(
+            GemmProvider::select(Numerics::Exact, BackendId::Cpu),
+            GemmProvider::CpuReference
+        );
     }
 
     #[test]

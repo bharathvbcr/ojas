@@ -64,8 +64,9 @@ pub struct ClusteredLmHead {
     pub top_k: usize,
     /// `[num_centroids, hidden]`
     pub centroids: Vec<f32>,
-    /// `[vocab, num_centroids]` sparse affinity (dense for synthetic).
-    pub vocab_to_centroid: Vec<u32>,
+    /// HF `masked_embedding.token_ordering`: cluster `c` holds the tokens
+    /// `cluster_tokens[c * per .. (c + 1) * per]`, `per = vocab / num_centroids`.
+    pub cluster_tokens: Vec<u32>,
     /// Optional dense `[vocab, hidden]` rows for selected clusters (synthetic: full).
     pub cluster_rows: Vec<f32>,
     pub vocab: usize,
@@ -80,21 +81,22 @@ impl ClusteredLmHead {
             ((seed >> 33) as f32 / (u32::MAX as f32)) * 0.1 - 0.05
         };
         let centroids_w: Vec<f32> = (0..centroids * hidden).map(|_| rand()).collect();
-        let vocab_to_centroid: Vec<u32> =
-            (0..vocab).map(|i| (i % centroids) as u32).collect();
+        let cluster_tokens: Vec<u32> = (0..vocab as u32).collect();
         let cluster_rows: Vec<f32> = (0..vocab * hidden).map(|_| rand()).collect();
         Self {
             hidden,
             num_centroids: centroids,
             top_k,
             centroids: centroids_w,
-            vocab_to_centroid,
+            cluster_tokens,
             cluster_rows,
             vocab,
         }
     }
 
-    /// Score centroids, take top-k, then score only tokens mapped to those clusters.
+    /// HF `Gemma4AssistantMaskedEmbedder`: score centroids, take the top-k clusters,
+    /// and score only their tokens; every other logit is `-inf` (HF fills a value below
+    /// the selected minimum, so the argmax is the same).
     pub fn logits(&self, h: &[f32]) -> Result<Vec<f32>> {
         if h.len() != self.hidden {
             return Err(Error::Config(format!(
@@ -104,13 +106,8 @@ impl ClusteredLmHead {
             )));
         }
         let mut scores = vec![0f32; self.num_centroids];
-        for c in 0..self.num_centroids {
-            let mut s = 0f32;
-            let off = c * self.hidden;
-            for d in 0..self.hidden {
-                s += self.centroids[off + d] * h[d];
-            }
-            scores[c] = s;
+        for (c, score) in scores.iter_mut().enumerate() {
+            *score = dot_fast(&self.centroids[c * self.hidden..(c + 1) * self.hidden], h);
         }
         let mut order: Vec<usize> = (0..self.num_centroids).collect();
         order.sort_by(|&a, &b| {
@@ -119,20 +116,16 @@ impl ClusteredLmHead {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         order.truncate(self.top_k.min(self.num_centroids));
-        let selected: std::collections::HashSet<usize> = order.into_iter().collect();
-
+        let per = self.vocab / self.num_centroids.max(1);
         let mut logits = vec![f32::NEG_INFINITY; self.vocab];
-        for v in 0..self.vocab {
-            let c = self.vocab_to_centroid[v] as usize;
-            if !selected.contains(&c) {
-                continue;
+        for c in order {
+            for &tok in &self.cluster_tokens[c * per..(c + 1) * per] {
+                let v = tok as usize;
+                if v >= self.vocab {
+                    return Err(Error::Weights(format!("token_ordering entry {v} >= vocab")));
+                }
+                logits[v] = dot_fast(&self.cluster_rows[v * self.hidden..(v + 1) * self.hidden], h);
             }
-            let off = v * self.hidden;
-            let mut s = 0f32;
-            for d in 0..self.hidden {
-                s += self.cluster_rows[off + d] * h[d];
-            }
-            logits[v] = s;
         }
         Ok(logits)
     }
@@ -478,167 +471,154 @@ impl MtpSession {
         })
     }
 
-    /// Draft `policy.draft_len()` tokens from a backbone activation.
-    ///
-    /// Real-weight path: `pre_projection @ concat(h, ctx)` → 4-layer consumer
-    /// attention over target shared sliding/global KV → clustered greedy.
-    pub fn draft_from_hidden(&self, backbone_h: &[f32]) -> Result<Vec<u32>> {
-        let n = self.policy.draft_len();
-        let t0 = Instant::now();
-        diag::log(
-            "mtp",
-            format_args!(
-                "▶ draft_from_hidden n={n} backbone_len={} synced={} accept_ema={:.3} layers={}",
-                backbone_h.len(),
-                self.cross_kv.synced_from_target,
-                self.policy.accept_ema,
-                self.draft_layers.len()
-            ),
-        );
+    /// One assistant step (HF `Gemma4AssistantForCausalLM.forward` for one query):
+    /// `pre_projection(concat(target_embed, target_hidden))`, the four KV-shared
+    /// layers attending over the synced target sliding / global KV at position `pos`,
+    /// the final norm, the clustered head's greedy token, and
+    /// `post_projection(normed)` as the next step's backbone-sized hidden.
+    pub fn assistant_step(
+        &self,
+        target_embed: &[f32],
+        target_hidden: &[f32],
+        pos: usize,
+    ) -> Result<(u32, Vec<f32>)> {
+        let bb = self.assistant.backbone_hidden_size;
+        let asst_h = self.assistant.text_config.hidden_size;
+        let (pre, post) = match (&self.pre_projection, &self.post_projection) {
+            (Some(pre), Some(post)) => (pre, post),
+            _ => {
+                return Err(Error::Config(
+                    "assistant_step needs the real pre/post projections".into(),
+                ))
+            }
+        };
+        if target_embed.len() != bb || target_hidden.len() != bb {
+            return Err(Error::Config(format!(
+                "assistant_step: embed {} / hidden {} != backbone {bb}",
+                target_embed.len(),
+                target_hidden.len()
+            )));
+        }
+        if !self.cross_kv.synced_from_target {
+            return Err(Error::Kv("assistant_step: target KV not synced".into()));
+        }
         let head = self
             .clustered
             .as_ref()
-            .ok_or_else(|| Error::Config("MTP draft needs clustered head (E4B)".into()))?;
+            .ok_or_else(|| Error::Config("assistant_step needs the clustered head".into()))?;
+        let mut cat = Vec::with_capacity(2 * bb);
+        cat.extend_from_slice(target_embed);
+        cat.extend_from_slice(target_hidden);
+        let x = gemv_fast(pre, &cat, asst_h, 2 * bb);
+        let mut h = self.forward_draft_layers(&x, pos)?;
+        if let Some(ref fnorm) = self.final_norm {
+            h = rms_norm(&h, fnorm, self.assistant.text_config.rms_norm_eps as f32);
+        }
+        let tok = head.greedy(&h, None)?;
+        Ok((tok, gemv_fast(post, &h, bb, asst_h)))
+    }
 
-        let mut state = if let Some(ref pre) = self.pre_projection {
-            let bb = self.assistant.backbone_hidden_size;
-            if backbone_h.len() != bb {
-                return Err(Error::Config(format!(
-                    "draft backbone len {} != {}",
-                    backbone_h.len(),
-                    bb
-                )));
-            }
-            // Context half: mean-pool last shared sliding slot (when synced),
-            // else duplicate backbone (legacy stand-in).
-            let mut cat = vec![0f32; bb * 2];
-            cat[..bb].copy_from_slice(backbone_h);
-            if self.cross_kv.synced_from_target && self.cross_kv.target_sliding.seq_len > 0 {
-                let ctx = shared_slot_to_backbone_ctx(
-                    &self.cross_kv.target_sliding,
-                    bb,
-                    self.post_projection.as_deref(),
-                    self.assistant.text_config.hidden_size,
-                );
-                cat[bb..].copy_from_slice(&ctx);
-            } else {
-                cat[bb..].copy_from_slice(backbone_h);
-            }
-            gemv(pre, &cat, self.assistant.text_config.hidden_size, bb * 2)
-        } else {
-            self.bridge.project(backbone_h)?
-        };
-
-        let pos = self
-            .cross_kv
-            .target_sliding
-            .seq_len
-            .max(self.cross_kv.target_global.seq_len)
-            .saturating_sub(1);
-
+    /// Draft `n` tokens after `last_token` (HF `get_candidates` loop). `last_hidden`
+    /// is the target's final-normed hidden state at the position before
+    /// `last_token` (the one whose logits chose it), `pos` is `last_token`'s
+    /// position (held fixed across the draft, as HF does), and `embed` returns the
+    /// target's scaled input embedding of a token.
+    pub fn draft(
+        &self,
+        last_token: u32,
+        last_hidden: &[f32],
+        pos: usize,
+        n: usize,
+        embed: &mut dyn FnMut(u32) -> Result<Vec<f32>>,
+    ) -> Result<Vec<u32>> {
+        let mut tok = last_token;
+        let mut hidden = last_hidden.to_vec();
         let mut out = Vec::with_capacity(n);
         for _ in 0..n {
-            if !self.draft_layers.is_empty() && self.cross_kv.synced_from_target {
-                match self.forward_draft_layers(&state, pos) {
-                    Ok(s) if s.iter().all(|v| v.is_finite()) => state = s,
-                    Ok(_) => {
-                        // Non-finite residual — keep projected state for this step.
-                    }
-                    Err(_) => {}
-                }
-            }
-            let tok = head.greedy(&state, None)?;
-            out.push(tok);
-            let emb_off = (tok as usize) * head.hidden;
-            if emb_off + head.hidden <= head.cluster_rows.len() {
-                for (i, v) in state.iter_mut().enumerate() {
-                    *v = 0.7 * *v + 0.3 * head.cluster_rows[emb_off + i];
-                }
-            } else {
-                for (i, v) in state.iter_mut().enumerate() {
-                    *v = 0.9 * *v + 0.01 * ((tok as usize + i) % 7) as f32;
-                }
-            }
+            let e = embed(tok)?;
+            let (next, h) = self.assistant_step(&e, &hidden, pos)?;
+            out.push(next);
+            tok = next;
+            hidden = h;
         }
-        diag::log(
-            "mtp",
-            format_args!(
-                "✔ draft tokens={out:?} in {:.1} ms",
-                t0.elapsed().as_secs_f64() * 1e3
-            ),
-        );
         Ok(out)
     }
 
-    /// Run loaded assistant layers attending over synced shared KV.
+    /// The four assistant layers (HF `Gemma4TextDecoderLayer`, all KV-shared): Q from
+    /// the assistant, K/V from the target's last sliding / full layer. Queries see
+    /// every synced key (bidirectional mask) within the sliding window for sliding
+    /// layers. Attention scale is 1.0 (Q/K are RMS-normed).
     fn forward_draft_layers(&self, x: &[f32], pos: usize) -> Result<Vec<f32>> {
-        let eps = 1e-6;
+        let tc = &self.assistant.text_config;
+        let eps = tc.rms_norm_eps as f32;
+        let asst_h = tc.hidden_size;
+        let window = tc.sliding_window.unwrap_or(usize::MAX);
         let mut h = x.to_vec();
-        let asst_h = self.assistant.text_config.hidden_size;
         for layer in &self.draft_layers {
-            let normed = rms_norm(&h, &layer.input_norm, eps);
-            let q = gemv(&layer.q_proj, &normed, layer.hq * layer.head_dim, asst_h);
-            let mut q = q;
-            // Q RMS-norm per head.
-            for hi in 0..layer.hq {
-                let off = hi * layer.head_dim;
-                let slice = &mut q[off..off + layer.head_dim];
-                let row = rms_norm(slice, &layer.q_norm, eps);
-                slice.copy_from_slice(&row);
-                apply_rope(slice, layer.head_dim, layer.head_dim.min(layer.q_norm.len()), pos, 10_000.0);
-            }
-            let (k, v, tkv, hkv, d) = match layer.layer_type {
+            let (s, theta, rotary_dim) = match layer.layer_type {
                 LayerType::SlidingAttention => {
-                    let s = &self.cross_kv.target_sliding;
-                    (
-                        &s.k[..s.seq_len * s.heads * s.dim],
-                        &s.v[..s.seq_len * s.heads * s.dim],
-                        s.seq_len,
-                        s.heads,
-                        s.dim,
-                    )
+                    let fam = tc.rope_parameters.as_ref().map(|r| &r.sliding_attention);
+                    let theta = fam.map(|f| f.rope_theta).unwrap_or(10_000.0);
+                    (&self.cross_kv.target_sliding, theta, layer.head_dim)
                 }
                 LayerType::FullAttention => {
-                    let s = &self.cross_kv.target_global;
-                    (
-                        &s.k[..s.seq_len * s.heads * s.dim],
-                        &s.v[..s.seq_len * s.heads * s.dim],
-                        s.seq_len,
-                        s.heads,
-                        s.dim,
-                    )
+                    let fam = tc.rope_parameters.as_ref().map(|r| &r.full_attention);
+                    let theta = fam.map(|f| f.rope_theta).unwrap_or(1_000_000.0);
+                    let partial = fam.and_then(|f| f.partial_rotary_factor).unwrap_or(1.0);
+                    let rd = crate::forward::proportional_rope_dim(layer.head_dim, partial);
+                    (&self.cross_kv.target_global, theta, rd)
                 }
             };
-            if tkv == 0 || d != layer.head_dim {
-                // Dim mismatch / empty — skip attn residual.
-            } else {
-                let attn = gqa_attend_one(&q, k, v, layer.hq, hkv, d, tkv)?;
-                let proj = gemv(&layer.o_proj, &attn, asst_h, layer.hq * layer.head_dim);
-                for (a, b) in h.iter_mut().zip(proj.iter()) {
-                    *a += *b * layer.layer_scalar;
-                }
+            if s.dim != layer.head_dim || s.seq_len == 0 {
+                return Err(Error::Kv(format!(
+                    "assistant layer {:?}: target KV dim {} len {} (head_dim {})",
+                    layer.layer_type, s.dim, s.seq_len, layer.head_dim
+                )));
             }
-            let n2 = rms_norm(&h, &layer.post_attn_norm, eps);
-            let n3 = rms_norm(&n2, &layer.pre_ff_norm, eps);
+            let residual = h.clone();
+            let normed = rms_norm(&h, &layer.input_norm, eps);
+            let mut q = gemv_fast(&layer.q_proj, &normed, layer.hq * layer.head_dim, asst_h);
+            for hi in 0..layer.hq {
+                let slice = &mut q[hi * layer.head_dim..(hi + 1) * layer.head_dim];
+                let row = rms_norm(slice, &layer.q_norm, eps);
+                slice.copy_from_slice(&row);
+                apply_rope(slice, layer.head_dim, rotary_dim, pos, theta as f32);
+            }
+            let n = s.heads * s.dim;
+            let t0 = match layer.layer_type {
+                LayerType::SlidingAttention => s.seq_len.saturating_sub(window),
+                LayerType::FullAttention => 0,
+            };
+            let attn = gqa_attend_one(
+                &q,
+                &s.k[t0 * n..s.seq_len * n],
+                &s.v[t0 * n..s.seq_len * n],
+                layer.hq,
+                s.heads,
+                s.dim,
+                s.seq_len - t0,
+            )?;
+            let o = gemv_fast(&layer.o_proj, &attn, asst_h, layer.hq * layer.head_dim);
+            let o = rms_norm(&o, &layer.post_attn_norm, eps);
+            for ((a, r), b) in h.iter_mut().zip(residual.iter()).zip(o.iter()) {
+                *a = r + b;
+            }
+
+            let residual = h.clone();
+            let n3 = rms_norm(&h, &layer.pre_ff_norm, eps);
             let inter = layer.gate_proj.len() / asst_h;
-            let gate = gemv(&layer.gate_proj, &n3, inter, asst_h);
-            let up = gemv(&layer.up_proj, &n3, inter, asst_h);
-            let mut mid = vec![0f32; inter];
-            for i in 0..inter {
-                // gelu_pytorch_tanh approx
-                let x = gate[i];
-                let inner = 0.7978845608 * (x + 0.044715 * x * x * x);
-                let gelu = 0.5 * x * (1.0 + inner.tanh());
-                mid[i] = gelu * up[i];
+            let gate = gemv_fast(&layer.gate_proj, &n3, inter, asst_h);
+            let up = gemv_fast(&layer.up_proj, &n3, inter, asst_h);
+            let mid: Vec<f32> = gate
+                .iter()
+                .zip(up.iter())
+                .map(|(&g, &u)| crate::forward::gelu_pytorch_tanh(g) * u)
+                .collect();
+            let down = gemv_fast(&layer.down_proj, &mid, asst_h, inter);
+            let down = rms_norm(&down, &layer.post_ff_norm, eps);
+            for ((a, r), b) in h.iter_mut().zip(residual.iter()).zip(down.iter()) {
+                *a = (r + b) * layer.layer_scalar;
             }
-            let down = gemv(&layer.down_proj, &mid, asst_h, inter);
-            for (a, b) in h.iter_mut().zip(down.iter()) {
-                *a += *b;
-            }
-            h = rms_norm(&h, &layer.post_ff_norm, eps);
-        }
-        if let Some(ref fnorm) = self.final_norm {
-            h = rms_norm(&h, fnorm, eps);
         }
         Ok(h)
     }
@@ -733,15 +713,17 @@ impl MtpSession {
             )));
         }
 
-        // Map vocab→centroid via token_ordering when present (ordered embeddings).
-        let vocab_to_centroid: Vec<u32> = if let Some(ref ord) = ordering {
-            // ordering[i] = rank; assign centroid = rank % n_cent (HF clusters by order).
-            ord.iter()
-                .take(vocab)
-                .map(|&r| (r as usize % n_cent) as u32)
-                .collect()
-        } else {
-            (0..vocab).map(|i| (i % n_cent) as u32).collect()
+        // HF `token_ordering.view(num_centroids, vocab / num_centroids)`: row c lists
+        // cluster c's tokens. Without ordered embeddings the clusters are contiguous.
+        let cluster_tokens: Vec<u32> = match ordering {
+            Some(ord) if ord.len() == vocab && vocab % n_cent == 0 => ord,
+            Some(ord) => {
+                return Err(Error::Weights(format!(
+                    "token_ordering len {} (vocab {vocab}, {n_cent} centroids)",
+                    ord.len()
+                )))
+            }
+            None => (0..vocab as u32).collect(),
         };
 
         let clustered = ClusteredLmHead {
@@ -749,7 +731,7 @@ impl MtpSession {
             num_centroids: n_cent,
             top_k: assistant.centroid_intermediate_top_k.max(1),
             centroids,
-            vocab_to_centroid,
+            cluster_tokens,
             cluster_rows: embeds,
             vocab,
         };
@@ -862,44 +844,29 @@ impl MtpSession {
     }
 }
 
-/// Mean-pool last shared KV slot → pad/project toward backbone dim for pre_projection context.
-fn shared_slot_to_backbone_ctx(
-    shared: &SharedKvBuffer,
-    backbone: usize,
-    post_projection: Option<&[f32]>,
-    asst_h: usize,
-) -> Vec<f32> {
-    let n = shared.heads * shared.dim;
-    let mut out = vec![0f32; backbone];
-    if shared.seq_len == 0 || n == 0 {
-        return out;
-    }
-    let off = (shared.seq_len - 1) * n;
-    let slot = &shared.k[off..off + n];
-    // Mean over heads → head_dim vector, then pad / lift via post^T if present.
-    let d = shared.dim;
-    let mut mean = vec![0f32; d];
-    for h in 0..shared.heads {
-        for i in 0..d {
-            mean[i] += slot[h * d + i];
+/// `w · x` with eight independent partial sums, so the loop vectorizes (one running sum
+/// cannot: float addition does not reassociate). The drafter's numbers only steer which
+/// tokens are proposed; verification decides what is emitted.
+fn dot_fast(w: &[f32], x: &[f32]) -> f32 {
+    let mut acc = [0f32; 8];
+    let wc = w.chunks_exact(8);
+    let xc = x.chunks_exact(8);
+    let (wr, xr) = (wc.remainder(), xc.remainder());
+    for (a, b) in wc.zip(xc) {
+        for i in 0..8 {
+            acc[i] += a[i] * b[i];
         }
     }
-    let inv = 1.0 / shared.heads as f32;
-    for v in &mut mean {
-        *v *= inv;
+    let mut tail = 0f32;
+    for (a, b) in wr.iter().zip(xr) {
+        tail += a * b;
     }
-    if let Some(post) = post_projection {
-        // post is [backbone, asst_h]; build asst vector from mean (pad/truncate) then gemv.
-        let mut asst = vec![0f32; asst_h];
-        let copy = d.min(asst_h);
-        asst[..copy].copy_from_slice(&mean[..copy]);
-        let lifted = gemv(post, &asst, backbone, asst_h);
-        out.copy_from_slice(&lifted);
-    } else {
-        let copy = d.min(backbone);
-        out[..copy].copy_from_slice(&mean[..copy]);
-    }
-    out
+    ((acc[0] + acc[4]) + (acc[1] + acc[5])) + ((acc[2] + acc[6]) + (acc[3] + acc[7])) + tail
+}
+
+/// `W [rows, cols] · x` through [`dot_fast`].
+fn gemv_fast(w: &[f32], x: &[f32], rows: usize, cols: usize) -> Vec<f32> {
+    w[..rows * cols].chunks_exact(cols).map(|row| dot_fast(row, &x[..cols])).collect()
 }
 
 /// Decode-step GQA: q [hq*d], k/v [T, hkv, d] → [hq*d].
@@ -1021,6 +988,7 @@ mod tests {
         assert!(tok < 32);
     }
 
+
     #[test]
     fn bridge_projects() {
         let b = ActivationBridge::identity_pad(8, 4);
@@ -1030,19 +998,18 @@ mod tests {
     }
 
     #[test]
-    fn e4b_mtp_session_draft_verify() {
+    fn assistant_step_refuses_without_projections_or_synced_kv() {
         let host = SyntheticE4bGraph::mini_parity().unwrap();
-        let mut mtp = MtpSession::e4b_synthetic(&host.kv).unwrap();
+        let mtp = MtpSession::e4b_synthetic(&host.kv).unwrap();
         let h = vec![0.02f32; mtp.assistant.backbone_hidden_size];
-        let draft = mtp.draft_from_hidden(&h).unwrap();
-        assert!(!draft.is_empty());
-        // Fake target matches first token only.
-        let mut target = draft.clone();
-        if target.len() > 1 {
-            target[1] = target[1].wrapping_add(1);
-        }
-        let r = mtp.verify_and_adapt(&draft, &target);
-        assert!(r.accepted >= 1);
+        assert!(mtp.assistant_step(&h, &h, 0).is_err());
+        let mut tok_calls = 0;
+        let r = mtp.draft(3, &h, 0, 2, &mut |_| {
+            tok_calls += 1;
+            Ok(h.clone())
+        });
+        assert!(r.is_err());
+        assert_eq!(tok_calls, 1);
     }
 
     #[test]
@@ -1068,38 +1035,12 @@ mod tests {
         assert!(mtp.real_weights);
         assert!(mtp.pre_projection.is_some());
         assert!(mtp.clustered.is_some());
-        let h = vec![0.01f32; mtp.assistant.backbone_hidden_size];
-        let draft = mtp.draft_from_hidden(&h).unwrap();
-        assert!(!draft.is_empty());
-        assert!(draft.iter().all(|&t| (t as usize) < 262_144));
-    }
-
-
-    #[test]
-    fn mtp_real_accept_smoke() {
-        let Some(dir) = crate::weights::resolve_default_e4b_assistant_cache() else {
-            eprintln!("skip: no assistant");
-            return;
-        };
-        let layout = KvLayout::from_config(&Gemma4TextConfig::e4b_preset(), 64).unwrap();
-        let mut mtp = MtpSession::from_assistant_dir(&dir, &layout).unwrap();
-        // Draft-only latency / self-consistency: draft twice from same h, measure overlap.
-        let h = vec![0.02f32; mtp.assistant.backbone_hidden_size];
-        let t0 = std::time::Instant::now();
-        let d1 = mtp.draft_from_hidden(&h).unwrap();
-        let draft_ms = t0.elapsed().as_secs_f64() * 1e3;
-        let d2 = mtp.draft_from_hidden(&h).unwrap();
-        let r = mtp.verify_and_adapt(&d1, &d2);
-        eprintln!(
-            "MTP_REAL draft_len={} draft_ms={:.2} self_accept={}/{} real_weights={}",
-            d1.len(),
-            draft_ms,
-            r.accepted,
-            r.drafted,
-            mtp.real_weights
-        );
-        assert!(mtp.real_weights);
-        assert_eq!(d1, d2); // deterministic greedy
+        // token_ordering is a permutation of the vocab.
+        let head = mtp.clustered.as_ref().unwrap();
+        let mut seen = vec![false; head.vocab];
+        for &t in &head.cluster_tokens {
+            assert!(!std::mem::replace(&mut seen[t as usize], true), "token {t} twice");
+        }
     }
 
     #[test]

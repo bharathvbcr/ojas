@@ -188,8 +188,13 @@ pub(crate) enum ReadAs {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Lane {
     /// tessl `GemmOperands::ExactF32`: f32 operands, exact products, the
-    /// 1-simdgroup tile.
+    /// 1-simdgroup tile. Fast untagged f32 uses this. It is not the
+    /// ascending-k contract.
     ExactF32,
+    /// [`Numerics::Exact`](ojas_core::Numerics::Exact) linear products:
+    /// tessl `gemm_fixed_order_*`, one output per thread, ascending k.
+    /// Not TensorOps, and not stolen by the bf16-accumulation flag.
+    FixedOrder,
     /// Both operands bf16-exact (`Tensor::bf16_exact`, what `Autocast`
     /// hands its inner backend): tessl `GemmOperands::Bf16`, the
     /// 4-simdgroup cooperative TensorOps kernels (128×64 or 64×64 NN, the
@@ -219,7 +224,7 @@ impl Lane {
     /// [`Lane::Bf16Accum`]. `None` on overflow.
     pub(crate) fn copies(self, a: usize, b: usize) -> Option<usize> {
         match self {
-            Self::ExactF32 | Self::Bf16Accum => Some(0),
+            Self::ExactF32 | Self::Bf16Accum | Self::FixedOrder => Some(0),
             Self::Bf16 => a.div_ceil(2).checked_add(b.div_ceil(2)),
         }
     }
@@ -1412,6 +1417,26 @@ pub(crate) struct DeviceInfo {
     pub(crate) tensorops: bool,
 }
 
+thread_local! {
+    /// Set on every Metal device thread, for its whole life
+    /// ([`mark_device_thread`]). A device thread is the only reader of its
+    /// own channel and is busy while it runs a command, so a blocking
+    /// [`Link::call_with`] from one can wait on a reply that never comes:
+    /// on its own link, or on another backend's whose device thread is
+    /// waiting back (a cycle).
+    static ON_DEVICE_THREAD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Mark the calling thread as a Metal device thread. The device thread calls
+/// this first thing, before its runtime opens.
+pub(crate) fn mark_device_thread() {
+    ON_DEVICE_THREAD.with(|flag| flag.set(true));
+}
+
+fn on_device_thread() -> bool {
+    ON_DEVICE_THREAD.with(std::cell::Cell::get)
+}
+
 impl Link {
     pub(crate) fn new(
         tx: mpsc::Sender<Msg>,
@@ -1486,7 +1511,23 @@ impl Link {
     }
 
     /// Run `cmd` on the device thread with an explicit `bf16_accum` flag.
+    ///
+    /// Refused, before anything is sent, when called on any Metal device
+    /// thread, this link's or another backend's (a `with_runtime` closure
+    /// that runs an op, `sync`, `trim_pool`, or a budget trim it triggers).
+    /// On this link's own thread the wait could never end, because that
+    /// thread is the only reader of the channel. On another backend's it
+    /// ends only if that thread is not itself waiting back on this one, and
+    /// two closures that each call the other's backend are exactly that
+    /// cycle. [`Link::post`] never waits and stays allowed.
     pub(crate) fn call_with(&self, cmd: Cmd, bf16_accum: bool) -> Res<Reply> {
+        if on_device_thread() {
+            return Err(metal_err(
+                "device-thread re-entry refused: a with_runtime closure (or a budget trim it triggered) \
+                 made a blocking call into a Metal backend from a device thread; calls into the \
+                 backend it runs on, and cross-backend waits, are refused",
+            ));
+        }
         let (reply, rx) = mpsc::sync_channel(1);
         self.tx
             .send(Msg {

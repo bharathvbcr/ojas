@@ -8,7 +8,10 @@
 //! which only compares the two gradients with each other.
 
 use ojas_autograd::Tape;
-use ojas_core::{forward_backend_methods, Backend, BackendId, Budget, OjasError, Tensor};
+use ojas_core::{
+    forward_backend_methods, BackendCore, BackendFloat, BackendId, BackendInt, BackendModule,
+    Budget, OjasError, Tensor,
+};
 use ojas_cpu::CpuBackend;
 
 enum SiluGrad {
@@ -32,10 +35,17 @@ macro_rules! keep_except_sabotage {
     };
 }
 
-impl Backend for Warp {
+impl BackendCore for Warp {
     ojas_core::with_backend_methods!(
         forward_backend_methods,
-        { self, self.inner, none, keep_except_sabotage }
+        { self, self.inner, none, keep_except_sabotage, core}
+    );
+}
+
+impl BackendFloat for Warp {
+    ojas_core::with_backend_methods!(
+        forward_backend_methods,
+        { self, self.inner, none, keep_except_sabotage, float}
     );
 
     fn silu_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
@@ -44,6 +54,20 @@ impl Backend for Warp {
             SiluGrad::Flat4 => Tensor::from_f32(&[0.0; 4], &[4], self.inner.budget()),
         }
     }
+}
+
+impl BackendInt for Warp {
+    ojas_core::with_backend_methods!(
+        forward_backend_methods,
+        { self, self.inner, none, keep_except_sabotage, int}
+    );
+}
+
+impl BackendModule for Warp {
+    ojas_core::with_backend_methods!(
+        forward_backend_methods,
+        { self, self.inner, none, keep_except_sabotage, module}
+    );
 
     fn linear_backward(
         &self,

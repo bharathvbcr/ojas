@@ -7,8 +7,9 @@ mod common;
 
 use common::{down, host, host_u32, metal, ok, rand, up, values};
 use ojas_core::{
-    bf16_to_f32, f32_to_bf16, AttentionOpts, Autocast, AutocastMode, Backend, Budget, CeChunk,
-    CeGrads, Conv2dParams, ConvTranspose2dParams, MuonNs5Config, Ns5Precision, OjasError, Tensor,
+    bf16_to_f32, f32_to_bf16, AttentionOpts, Autocast, AutocastMode, BackendCore, BackendFloat,
+    BackendModule, Budget, CeChunk, CeGrads, Conv2dParams, ConvTranspose2dParams, MuonNs5Config,
+    Ns5Precision, OjasError, Tensor,
 };
 
 fn r(x: f32) -> f32 {

@@ -12,7 +12,7 @@ mod common;
 
 use common::{bits, gate_g6, grads, record, serial};
 use ojas_autograd::Tape;
-use ojas_core::{Backend, BackendId, Budget, Numerics};
+use ojas_core::{BackendCore, BackendId, Budget, Numerics};
 use ojas_cpu::CpuBackend;
 use ojas_metal::MetalBackend;
 

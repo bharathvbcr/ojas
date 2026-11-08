@@ -9,7 +9,9 @@
 //! `Err(Backend)` after earlier pieces were written, so a step that panicked
 //! leaves its tensors unspecified, not unchanged.
 
-use ojas_core::{AdamWConfig, Backend, Budget, MuonNs5Config, OjasError, Tensor};
+use ojas_core::{
+    AdamWConfig, BackendFloat, BackendModule, Budget, MuonNs5Config, OjasError, Tensor,
+};
 use ojas_cpu::CpuBackend;
 
 mod common;

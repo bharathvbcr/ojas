@@ -7,7 +7,7 @@ mod common;
 
 use common::{data, serial};
 use ojas_autograd::{Tape, Var};
-use ojas_core::{Backend, BackendId, Budget, Numerics, OjasError, Tensor};
+use ojas_core::{Backend, BackendCore, BackendId, Budget, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 use ojas_wgpu::WgpuBackend;
 

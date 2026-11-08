@@ -23,7 +23,7 @@ mod bench {
     use std::process::Command;
     use std::time::Instant;
 
-    use ojas_core::{Autocast, Backend, Budget, DType, Tensor};
+    use ojas_core::{Autocast, BackendCore, BackendFloat, BackendModule, Budget, DType, Tensor};
     use ojas_metal::MetalBackend;
 
     /// The 1-minute load above which a run is repeated.

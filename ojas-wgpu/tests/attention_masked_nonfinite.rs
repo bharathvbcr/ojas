@@ -20,7 +20,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{Backend, OjasError, Tensor};
+use ojas_core::{BackendCore, BackendModule, OjasError, Tensor};
 use ojas_wgpu::WgpuBackend;
 
 /// `B = 1`, 4 query heads over 2 KV heads, `T = 96`, `D = 48`, window 10.

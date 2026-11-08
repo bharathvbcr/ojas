@@ -33,8 +33,9 @@ use ojas_core::{
     residual_add_forward_dims, rms_norm_backward_dims, rms_norm_forward_dims,
     rms_qk_norm_backward_dims, rms_qk_norm_forward_dims, rope_half_split_backward_dims,
     rope_half_split_forward_dims, silu_backward_dims, silu_forward_dims,
-    value_residual_blend_backward_dims, value_residual_blend_forward_dims, AdamWConfig, Backend,
-    Budget, CeChunk, CeGrads, DType, MuonNs5Config, OjasError, Tensor, METAL_MAX_HEAD_DIM,
+    value_residual_blend_backward_dims, value_residual_blend_forward_dims, AdamWConfig,
+    BackendCore, BackendFloat, BackendModule, Budget, CeChunk, CeGrads, DType, MuonNs5Config,
+    OjasError, Tensor, METAL_MAX_HEAD_DIM,
 };
 use ojas_metal::MetalBackend;
 

@@ -14,7 +14,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{Backend, OjasError, Tensor};
+use ojas_core::{BackendCore, BackendFloat, BackendModule, OjasError, Tensor};
 use ojas_metal::MetalBackend;
 
 /// What `sync` reports: `None` for `Ok`, the op for `NonFinite`.

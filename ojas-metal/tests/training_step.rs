@@ -10,7 +10,9 @@
 mod common;
 
 use common::*;
-use ojas_core::{AdamWConfig, Backend, BackendId, MuonNs5Config, OjasError, Tensor};
+use ojas_core::{
+    AdamWConfig, Backend, BackendCore, BackendId, BackendModule, MuonNs5Config, OjasError, Tensor,
+};
 
 const V: usize = 64;
 const D: usize = 64;

@@ -11,7 +11,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{interpolate_bilinear_forward_dims, Backend, Tensor};
+use ojas_core::{interpolate_bilinear_forward_dims, BackendCore, BackendModule, Tensor};
 use ojas_metal::MetalBackend;
 
 fn check(m: &MetalBackend, what: &str, x: &Tensor, out: [usize; 2]) {

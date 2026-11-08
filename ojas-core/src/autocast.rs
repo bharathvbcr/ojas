@@ -31,9 +31,9 @@
 //! [`Backend`]: crate::Backend
 
 use crate::backend::{
-    AdamWConfig, AffineGrad, AttentionGrad, AttentionOpts, Backend, BackendId, CeChunk, CeGrads,
-    GatedRmsGrad, GdnDecayGrad, GdnForward, GdnGrad, GdnInputs, LinearCe, MuonNs5Config,
-    PerHeadGateGrad, ValueResidualGrad,
+    AdamWConfig, AffineGrad, AttentionGrad, AttentionOpts, Backend, BackendCore, BackendFloat,
+    BackendId, BackendInt, BackendModule, CeChunk, CeGrads, GatedRmsGrad, GdnDecayGrad, GdnForward,
+    GdnGrad, GdnInputs, LinearCe, MuonNs5Config, PerHeadGateGrad, ValueResidualGrad,
 };
 use crate::budget::Budget;
 use crate::dtype::DType;
@@ -590,7 +590,7 @@ impl Deref for Operand<'_> {
     }
 }
 
-impl<B: Backend> Backend for Autocast<B> {
+impl<B: Backend> BackendCore for Autocast<B> {
     fn id(&self) -> BackendId {
         self.inner.id()
     }
@@ -683,12 +683,364 @@ impl<B: Backend> Backend for Autocast<B> {
         Ok(self.copy_tag(tensor, out))
     }
 
+    fn optimizer_scratch_bytes(
+        &self,
+        kind: crate::backend::OptimizerKind,
+        rows: usize,
+        cols: usize,
+    ) -> Result<Option<u64>, OjasError> {
+        self.pass()?;
+        self.inner.optimizer_scratch_bytes(kind, rows, cols)
+    }
+
+    fn sync(&self) -> Result<(), OjasError> {
+        self.pass()?;
+        self.inner.sync()
+    }
+}
+
+impl<B: Backend> BackendFloat for Autocast<B> {
     fn permute(&self, input: &Tensor, dims: &[usize]) -> Result<Tensor, OjasError> {
         self.pass()?;
         let out = self.inner.permute(input, dims)?;
         Ok(self.copy_tag(input, out))
     }
 
+    fn sigmoid_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self.inner.sigmoid_forward(input)?;
+        Ok(self.keep_f32(out))
+    }
+
+    fn sigmoid_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self.inner.sigmoid_backward(input, grad_output)?;
+        Ok(self.keep_f32(out))
+    }
+
+    fn silu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        let on = self.region()?;
+        let tagged = input.compute_tag() == COMPUTE_BF16;
+        let out = self.inner.silu_forward(input)?;
+        self.promote(on, tagged, out)
+    }
+
+    fn silu_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        let on = self.region()?;
+        let tagged =
+            input.compute_tag() == COMPUTE_BF16 && grad_output.compute_tag() == COMPUTE_BF16;
+        let out = self.inner.silu_backward(input, grad_output)?;
+        self.promote(on, tagged, out)
+    }
+
+    fn mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
+        let on = self.region()?;
+        let tagged = a.compute_tag() == COMPUTE_BF16 && b.compute_tag() == COMPUTE_BF16;
+        let out = self.inner.mul_forward(a, b)?;
+        self.promote(on, tagged, out)
+    }
+
+    fn mul_backward(
+        &self,
+        a: &Tensor,
+        b: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        let on = self.region()?;
+        let tagged = a.compute_tag() == COMPUTE_BF16
+            && b.compute_tag() == COMPUTE_BF16
+            && grad_output.compute_tag() == COMPUTE_BF16;
+        let (ga, gb) = self.inner.mul_backward(a, b, grad_output)?;
+        Ok((self.promote(on, tagged, ga)?, self.promote(on, tagged, gb)?))
+    }
+
+    fn residual_add_forward(&self, x: &Tensor, y: &Tensor) -> Result<Tensor, OjasError> {
+        let on = self.region()?;
+        let tagged = x.compute_tag() == COMPUTE_BF16 && y.compute_tag() == COMPUTE_BF16;
+        let out = self.inner.residual_add_forward(x, y)?;
+        self.promote(on, tagged, out)
+    }
+
+    /// Pointwise, like SiLU: an output computed from a bf16-tagged input
+    /// is rounded and tagged; one from an untagged input is left alone.
+    fn gelu_erf_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        let on = self.region()?;
+        let tagged = input.compute_tag() == COMPUTE_BF16;
+        let out = self.inner.gelu_erf_forward(input)?;
+        self.promote(on, tagged, out)
+    }
+
+    /// Pointwise, like [`Backend::gelu_erf_forward`].
+    fn gelu_tanh_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        let on = self.region()?;
+        let tagged = input.compute_tag() == COMPUTE_BF16;
+        let out = self.inner.gelu_tanh_forward(input)?;
+        self.promote(on, tagged, out)
+    }
+
+    /// Data movement: no value is rounded or computed. The output is bf16-
+    /// tagged only when every input is, since only then is every value
+    /// bf16-exact.
+    fn concat(&self, inputs: &[&Tensor], axis: usize) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self.inner.concat(inputs, axis)?;
+        let all_bf16 = inputs.iter().all(|t| t.compute_tag() == COMPUTE_BF16);
+        out.set_compute_tag(if all_bf16 { COMPUTE_BF16 } else { COMPUTE_F32 });
+        Ok(out)
+    }
+
+    /// A constant is exact in its dtype ([`crate::fill_dims`] refuses a value
+    /// that is not), so nothing is rounded and the output keeps the backend's
+    /// tag.
+    fn fill(&self, shape: &[usize], dtype: DType, value: f32) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        self.inner.fill(shape, dtype, value)
+    }
+
+    /// Data movement, as [`Self::permute`]: the tag follows the input.
+    fn slice(
+        &self,
+        input: &Tensor,
+        axis: usize,
+        start: usize,
+        len: usize,
+    ) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self.inner.slice(input, axis, start, len)?;
+        Ok(self.copy_tag(input, out))
+    }
+
+    fn slice_backward(
+        &self,
+        grad_output: &Tensor,
+        in_shape: &[usize],
+        axis: usize,
+        start: usize,
+    ) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self
+            .inner
+            .slice_backward(grad_output, in_shape, axis, start)?;
+        Ok(self.copy_tag(grad_output, out))
+    }
+
+    fn relu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        let on = self.region()?;
+        let tagged = input.compute_tag() == COMPUTE_BF16;
+        let out = self.inner.relu_forward(input)?;
+        self.promote(on, tagged, out)
+    }
+
+    fn relu_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        let on = self.region()?;
+        let tagged =
+            input.compute_tag() == COMPUTE_BF16 && grad_output.compute_tag() == COMPUTE_BF16;
+        let out = self.inner.relu_backward(input, grad_output)?;
+        self.promote(on, tagged, out)
+    }
+
+    /// Pointwise, like [`Backend::residual_add_forward`]: rounded and
+    /// tagged only when both operands are bf16-tagged.
+    fn broadcast_add_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
+        let on = self.region()?;
+        let tagged = a.compute_tag() == COMPUTE_BF16 && b.compute_tag() == COMPUTE_BF16;
+        let out = self.inner.broadcast_add_forward(a, b)?;
+        self.promote(on, tagged, out)
+    }
+
+    /// Pointwise, like [`Backend::mul_forward`].
+    fn broadcast_mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
+        let on = self.region()?;
+        let tagged = a.compute_tag() == COMPUTE_BF16 && b.compute_tag() == COMPUTE_BF16;
+        let out = self.inner.broadcast_mul_forward(a, b)?;
+        self.promote(on, tagged, out)
+    }
+
+    /// Pointwise on one operand, like [`Backend::silu_forward`].
+    fn scale_forward(&self, input: &Tensor, scale: f32) -> Result<Tensor, OjasError> {
+        let on = self.region()?;
+        let tagged = input.compute_tag() == COMPUTE_BF16;
+        let out = self.inner.scale_forward(input, scale)?;
+        self.promote(on, tagged, out)
+    }
+
+    fn softmax_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self.inner.softmax_forward(input)?;
+        Ok(self.keep_f32(out))
+    }
+
+    /// A reduction like the forward: the dot stays `f32` and the gradient is
+    /// not rounded to the compute dtype.
+    fn softmax_backward(&self, output: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self.inner.softmax_backward(output, grad_output)?;
+        Ok(self.keep_f32(out))
+    }
+
+    /// Pointwise, like [`Backend::silu_backward`]: rounded and tagged only
+    /// when the input and the incoming gradient are both bf16-tagged.
+    fn gelu_erf_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        let on = self.region()?;
+        let tagged =
+            input.compute_tag() == COMPUTE_BF16 && grad_output.compute_tag() == COMPUTE_BF16;
+        let out = self.inner.gelu_erf_backward(input, grad_output)?;
+        self.promote(on, tagged, out)
+    }
+
+    /// Pointwise, like [`Backend::gelu_erf_backward`].
+    fn gelu_tanh_backward(
+        &self,
+        input: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        let on = self.region()?;
+        let tagged =
+            input.compute_tag() == COMPUTE_BF16 && grad_output.compute_tag() == COMPUTE_BF16;
+        let out = self.inner.gelu_tanh_backward(input, grad_output)?;
+        self.promote(on, tagged, out)
+    }
+
+    /// A reduction: the `f64` sum over each sequence stays `f32` and the
+    /// output is not rounded to the compute dtype. `key_lens` is an integer
+    /// tensor and passes through.
+    fn seq_mean_forward(&self, x: &Tensor, key_lens: &Tensor) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self.inner.seq_mean_forward(x, key_lens)?;
+        Ok(self.keep_f32(out))
+    }
+
+    /// The gradient of a reduction: one division of the incoming gradient,
+    /// kept `f32` as the forward's output is. `x` is read for its shape and
+    /// `key_lens` is an integer tensor, so neither is rounded.
+    fn seq_mean_backward(
+        &self,
+        x: &Tensor,
+        key_lens: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self.inner.seq_mean_backward(x, key_lens, grad_output)?;
+        Ok(self.keep_f32(out))
+    }
+
+    /// A reduction: the norm stays `f32` and the output is not rounded to
+    /// the compute dtype.
+    fn l2_normalize_forward(&self, x: &Tensor, eps: f32) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self.inner.l2_normalize_forward(x, eps)?;
+        Ok(self.keep_f32(out))
+    }
+
+    /// The gradient of a reduction: the norm and the dot product stay `f32`
+    /// and the gradient is not rounded to the compute dtype.
+    fn l2_normalize_backward(
+        &self,
+        x: &Tensor,
+        grad_output: &Tensor,
+        eps: f32,
+    ) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        let out = self.inner.l2_normalize_backward(x, grad_output, eps)?;
+        Ok(self.keep_f32(out))
+    }
+
+    /// Pointwise, like [`Backend::residual_add_backward`]: rounded and
+    /// tagged only when both operands and the incoming gradient are
+    /// bf16-tagged.
+    fn broadcast_add_backward(
+        &self,
+        a: &Tensor,
+        b: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        let on = self.region()?;
+        let tagged = a.compute_tag() == COMPUTE_BF16
+            && b.compute_tag() == COMPUTE_BF16
+            && grad_output.compute_tag() == COMPUTE_BF16;
+        let (ga, gb) = self.inner.broadcast_add_backward(a, b, grad_output)?;
+        Ok((self.promote(on, tagged, ga)?, self.promote(on, tagged, gb)?))
+    }
+
+    /// Pointwise, like [`Backend::mul_backward`].
+    fn broadcast_mul_backward(
+        &self,
+        a: &Tensor,
+        b: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        let on = self.region()?;
+        let tagged = a.compute_tag() == COMPUTE_BF16
+            && b.compute_tag() == COMPUTE_BF16
+            && grad_output.compute_tag() == COMPUTE_BF16;
+        let (ga, gb) = self.inner.broadcast_mul_backward(a, b, grad_output)?;
+        Ok((self.promote(on, tagged, ga)?, self.promote(on, tagged, gb)?))
+    }
+
+    fn residual_add_backward(
+        &self,
+        x: &Tensor,
+        y: &Tensor,
+        grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        let on = self.region()?;
+        let tagged = x.compute_tag() == COMPUTE_BF16
+            && y.compute_tag() == COMPUTE_BF16
+            && grad_output.compute_tag() == COMPUTE_BF16;
+        let (gx, gy) = self.inner.residual_add_backward(x, y, grad_output)?;
+        Ok((self.promote(on, tagged, gx)?, self.promote(on, tagged, gy)?))
+    }
+
+    fn clip_grad_norm(&self, grads: &mut [Tensor], max_norm: f32) -> Result<f32, OjasError> {
+        self.pass()?;
+        let norm = self.inner.clip_grad_norm(grads, max_norm)?;
+        for grad in grads.iter() {
+            self.wrote(grad);
+        }
+        Ok(norm)
+    }
+
+    /// Outside a region, or for an operand not tagged bf16, the inner sum,
+    /// recorded f32 (a trainer's micro-batch accumulators, which it adds
+    /// with the region closed). Inside a region two bf16-tagged gradients
+    /// add as [`Backend::residual_add_forward`] does here, the sum rounded:
+    /// that is a tape's gradient fan-in, which composed that op until
+    /// 2026-10-07 and keeps its bits.
+    fn accumulate_grad(&self, acc: &mut Tensor, grad: &Tensor) -> Result<(), OjasError> {
+        let on = self.region()?;
+        if on && acc.compute_tag() == COMPUTE_BF16 && grad.compute_tag() == COMPUTE_BF16 {
+            crate::accumulate_grad_dims(acc, grad)?;
+            *acc = self.residual_add_forward(acc, grad)?;
+            return Ok(());
+        }
+        self.inner.accumulate_grad(acc, grad)?;
+        self.wrote(acc);
+        Ok(())
+    }
+
+    fn scale_grad(&self, grad: &mut Tensor, scale: f32) -> Result<(), OjasError> {
+        self.pass()?;
+        self.inner.scale_grad(grad, scale)?;
+        self.wrote(grad);
+        Ok(())
+    }
+}
+
+impl<B: Backend> BackendInt for Autocast<B> {
+    /// A selection, not arithmetic: the operand passes through unrounded.
+    fn argmax_rows(&self, x: &Tensor) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        self.inner.argmax_rows(x)
+    }
+
+    /// A selection, not arithmetic: the operand passes through unrounded.
+    fn topk_rows(&self, x: &Tensor, k: usize) -> Result<(Tensor, Tensor), OjasError> {
+        self.pass()?;
+        self.inner.topk_rows(x, k)
+    }
+}
+
+impl<B: Backend> BackendModule for Autocast<B> {
     fn embedding_forward(&self, table: &Tensor, token_ids: &Tensor) -> Result<Tensor, OjasError> {
         self.pass()?;
         self.inner.embedding_forward(table, token_ids)
@@ -1231,18 +1583,6 @@ impl<B: Backend> Backend for Autocast<B> {
         Ok(self.keep_f32(out))
     }
 
-    fn sigmoid_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
-        self.pass()?;
-        let out = self.inner.sigmoid_forward(input)?;
-        Ok(self.keep_f32(out))
-    }
-
-    fn sigmoid_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
-        self.pass()?;
-        let out = self.inner.sigmoid_backward(input, grad_output)?;
-        Ok(self.keep_f32(out))
-    }
-
     fn gdn_log_decay_forward(
         &self,
         a: &Tensor,
@@ -1431,49 +1771,6 @@ impl<B: Backend> Backend for Autocast<B> {
         self.promote(on, tagged, out)
     }
 
-    fn silu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
-        let on = self.region()?;
-        let tagged = input.compute_tag() == COMPUTE_BF16;
-        let out = self.inner.silu_forward(input)?;
-        self.promote(on, tagged, out)
-    }
-
-    fn silu_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
-        let on = self.region()?;
-        let tagged =
-            input.compute_tag() == COMPUTE_BF16 && grad_output.compute_tag() == COMPUTE_BF16;
-        let out = self.inner.silu_backward(input, grad_output)?;
-        self.promote(on, tagged, out)
-    }
-
-    fn mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
-        let on = self.region()?;
-        let tagged = a.compute_tag() == COMPUTE_BF16 && b.compute_tag() == COMPUTE_BF16;
-        let out = self.inner.mul_forward(a, b)?;
-        self.promote(on, tagged, out)
-    }
-
-    fn mul_backward(
-        &self,
-        a: &Tensor,
-        b: &Tensor,
-        grad_output: &Tensor,
-    ) -> Result<(Tensor, Tensor), OjasError> {
-        let on = self.region()?;
-        let tagged = a.compute_tag() == COMPUTE_BF16
-            && b.compute_tag() == COMPUTE_BF16
-            && grad_output.compute_tag() == COMPUTE_BF16;
-        let (ga, gb) = self.inner.mul_backward(a, b, grad_output)?;
-        Ok((self.promote(on, tagged, ga)?, self.promote(on, tagged, gb)?))
-    }
-
-    fn residual_add_forward(&self, x: &Tensor, y: &Tensor) -> Result<Tensor, OjasError> {
-        let on = self.region()?;
-        let tagged = x.compute_tag() == COMPUTE_BF16 && y.compute_tag() == COMPUTE_BF16;
-        let out = self.inner.residual_add_forward(x, y)?;
-        self.promote(on, tagged, out)
-    }
-
     fn layer_norm_forward(
         &self,
         input: &Tensor,
@@ -1535,84 +1832,6 @@ impl<B: Backend> Backend for Autocast<B> {
         Ok(self.keep_affine_f32(grad))
     }
 
-    /// Pointwise, like SiLU: an output computed from a bf16-tagged input
-    /// is rounded and tagged; one from an untagged input is left alone.
-    fn gelu_erf_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
-        let on = self.region()?;
-        let tagged = input.compute_tag() == COMPUTE_BF16;
-        let out = self.inner.gelu_erf_forward(input)?;
-        self.promote(on, tagged, out)
-    }
-
-    /// Pointwise, like [`Backend::gelu_erf_forward`].
-    fn gelu_tanh_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
-        let on = self.region()?;
-        let tagged = input.compute_tag() == COMPUTE_BF16;
-        let out = self.inner.gelu_tanh_forward(input)?;
-        self.promote(on, tagged, out)
-    }
-
-    /// Data movement: no value is rounded or computed. The output is bf16-
-    /// tagged only when every input is, since only then is every value
-    /// bf16-exact.
-    fn concat(&self, inputs: &[&Tensor], axis: usize) -> Result<Tensor, OjasError> {
-        self.pass()?;
-        let out = self.inner.concat(inputs, axis)?;
-        let all_bf16 = inputs.iter().all(|t| t.compute_tag() == COMPUTE_BF16);
-        out.set_compute_tag(if all_bf16 { COMPUTE_BF16 } else { COMPUTE_F32 });
-        Ok(out)
-    }
-
-    /// A constant is exact in its dtype ([`crate::fill_dims`] refuses a value
-    /// that is not), so nothing is rounded and the output keeps the backend's
-    /// tag.
-    fn fill(&self, shape: &[usize], dtype: DType, value: f32) -> Result<Tensor, OjasError> {
-        self.pass()?;
-        self.inner.fill(shape, dtype, value)
-    }
-
-    /// Data movement, as [`Self::permute`]: the tag follows the input.
-    fn slice(
-        &self,
-        input: &Tensor,
-        axis: usize,
-        start: usize,
-        len: usize,
-    ) -> Result<Tensor, OjasError> {
-        self.pass()?;
-        let out = self.inner.slice(input, axis, start, len)?;
-        Ok(self.copy_tag(input, out))
-    }
-
-    fn slice_backward(
-        &self,
-        grad_output: &Tensor,
-        in_shape: &[usize],
-        axis: usize,
-        start: usize,
-    ) -> Result<Tensor, OjasError> {
-        self.pass()?;
-        let out = self
-            .inner
-            .slice_backward(grad_output, in_shape, axis, start)?;
-        Ok(self.copy_tag(grad_output, out))
-    }
-
-    fn relu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
-        let on = self.region()?;
-        let tagged = input.compute_tag() == COMPUTE_BF16;
-        let out = self.inner.relu_forward(input)?;
-        self.promote(on, tagged, out)
-    }
-
-    fn relu_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
-        let on = self.region()?;
-        let tagged =
-            input.compute_tag() == COMPUTE_BF16 && grad_output.compute_tag() == COMPUTE_BF16;
-        let out = self.inner.relu_backward(input, grad_output)?;
-        self.promote(on, tagged, out)
-    }
-
     /// A matmul-class op: the operands round in a region and the output
     /// rounds, as [`Backend::linear_forward`] does. The bias stays `f32`.
     fn linear_bias_forward(
@@ -1625,45 +1844,6 @@ impl<B: Backend> Backend for Autocast<B> {
         let weight = self.prep(weight)?;
         let out = self.inner.linear_bias_forward(&input, &weight, bias)?;
         self.emit(out)
-    }
-
-    /// Pointwise, like [`Backend::residual_add_forward`]: rounded and
-    /// tagged only when both operands are bf16-tagged.
-    fn broadcast_add_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
-        let on = self.region()?;
-        let tagged = a.compute_tag() == COMPUTE_BF16 && b.compute_tag() == COMPUTE_BF16;
-        let out = self.inner.broadcast_add_forward(a, b)?;
-        self.promote(on, tagged, out)
-    }
-
-    /// Pointwise, like [`Backend::mul_forward`].
-    fn broadcast_mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
-        let on = self.region()?;
-        let tagged = a.compute_tag() == COMPUTE_BF16 && b.compute_tag() == COMPUTE_BF16;
-        let out = self.inner.broadcast_mul_forward(a, b)?;
-        self.promote(on, tagged, out)
-    }
-
-    /// Pointwise on one operand, like [`Backend::silu_forward`].
-    fn scale_forward(&self, input: &Tensor, scale: f32) -> Result<Tensor, OjasError> {
-        let on = self.region()?;
-        let tagged = input.compute_tag() == COMPUTE_BF16;
-        let out = self.inner.scale_forward(input, scale)?;
-        self.promote(on, tagged, out)
-    }
-
-    fn softmax_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
-        self.pass()?;
-        let out = self.inner.softmax_forward(input)?;
-        Ok(self.keep_f32(out))
-    }
-
-    /// A reduction like the forward: the dot stays `f32` and the gradient is
-    /// not rounded to the compute dtype.
-    fn softmax_backward(&self, output: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
-        self.pass()?;
-        let out = self.inner.softmax_backward(output, grad_output)?;
-        Ok(self.keep_f32(out))
     }
 
     /// Reductions like [`Backend::layer_norm_forward`]: the statistics and
@@ -1698,73 +1878,6 @@ impl<B: Backend> Backend for Autocast<B> {
         Ok(self.keep_affine_f32(grad))
     }
 
-    /// Pointwise, like [`Backend::silu_backward`]: rounded and tagged only
-    /// when the input and the incoming gradient are both bf16-tagged.
-    fn gelu_erf_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
-        let on = self.region()?;
-        let tagged =
-            input.compute_tag() == COMPUTE_BF16 && grad_output.compute_tag() == COMPUTE_BF16;
-        let out = self.inner.gelu_erf_backward(input, grad_output)?;
-        self.promote(on, tagged, out)
-    }
-
-    /// Pointwise, like [`Backend::gelu_erf_backward`].
-    fn gelu_tanh_backward(
-        &self,
-        input: &Tensor,
-        grad_output: &Tensor,
-    ) -> Result<Tensor, OjasError> {
-        let on = self.region()?;
-        let tagged =
-            input.compute_tag() == COMPUTE_BF16 && grad_output.compute_tag() == COMPUTE_BF16;
-        let out = self.inner.gelu_tanh_backward(input, grad_output)?;
-        self.promote(on, tagged, out)
-    }
-
-    /// A reduction: the `f64` sum over each sequence stays `f32` and the
-    /// output is not rounded to the compute dtype. `key_lens` is an integer
-    /// tensor and passes through.
-    fn seq_mean_forward(&self, x: &Tensor, key_lens: &Tensor) -> Result<Tensor, OjasError> {
-        self.pass()?;
-        let out = self.inner.seq_mean_forward(x, key_lens)?;
-        Ok(self.keep_f32(out))
-    }
-
-    /// The gradient of a reduction: one division of the incoming gradient,
-    /// kept `f32` as the forward's output is. `x` is read for its shape and
-    /// `key_lens` is an integer tensor, so neither is rounded.
-    fn seq_mean_backward(
-        &self,
-        x: &Tensor,
-        key_lens: &Tensor,
-        grad_output: &Tensor,
-    ) -> Result<Tensor, OjasError> {
-        self.pass()?;
-        let out = self.inner.seq_mean_backward(x, key_lens, grad_output)?;
-        Ok(self.keep_f32(out))
-    }
-
-    /// A reduction: the norm stays `f32` and the output is not rounded to
-    /// the compute dtype.
-    fn l2_normalize_forward(&self, x: &Tensor, eps: f32) -> Result<Tensor, OjasError> {
-        self.pass()?;
-        let out = self.inner.l2_normalize_forward(x, eps)?;
-        Ok(self.keep_f32(out))
-    }
-
-    /// The gradient of a reduction: the norm and the dot product stay `f32`
-    /// and the gradient is not rounded to the compute dtype.
-    fn l2_normalize_backward(
-        &self,
-        x: &Tensor,
-        grad_output: &Tensor,
-        eps: f32,
-    ) -> Result<Tensor, OjasError> {
-        self.pass()?;
-        let out = self.inner.l2_normalize_backward(x, grad_output, eps)?;
-        Ok(self.keep_f32(out))
-    }
-
     /// As [`Backend::linear_backward`]: the operands rounded, the input
     /// gradient emitted rounded, the weight and bias gradients kept `f32`.
     /// The bias is read for its shape only, so it is not rounded.
@@ -1788,52 +1901,6 @@ impl<B: Backend> Backend for Autocast<B> {
         })
     }
 
-    /// Pointwise, like [`Backend::residual_add_backward`]: rounded and
-    /// tagged only when both operands and the incoming gradient are
-    /// bf16-tagged.
-    fn broadcast_add_backward(
-        &self,
-        a: &Tensor,
-        b: &Tensor,
-        grad_output: &Tensor,
-    ) -> Result<(Tensor, Tensor), OjasError> {
-        let on = self.region()?;
-        let tagged = a.compute_tag() == COMPUTE_BF16
-            && b.compute_tag() == COMPUTE_BF16
-            && grad_output.compute_tag() == COMPUTE_BF16;
-        let (ga, gb) = self.inner.broadcast_add_backward(a, b, grad_output)?;
-        Ok((self.promote(on, tagged, ga)?, self.promote(on, tagged, gb)?))
-    }
-
-    /// Pointwise, like [`Backend::mul_backward`].
-    fn broadcast_mul_backward(
-        &self,
-        a: &Tensor,
-        b: &Tensor,
-        grad_output: &Tensor,
-    ) -> Result<(Tensor, Tensor), OjasError> {
-        let on = self.region()?;
-        let tagged = a.compute_tag() == COMPUTE_BF16
-            && b.compute_tag() == COMPUTE_BF16
-            && grad_output.compute_tag() == COMPUTE_BF16;
-        let (ga, gb) = self.inner.broadcast_mul_backward(a, b, grad_output)?;
-        Ok((self.promote(on, tagged, ga)?, self.promote(on, tagged, gb)?))
-    }
-
-    fn residual_add_backward(
-        &self,
-        x: &Tensor,
-        y: &Tensor,
-        grad_output: &Tensor,
-    ) -> Result<(Tensor, Tensor), OjasError> {
-        let on = self.region()?;
-        let tagged = x.compute_tag() == COMPUTE_BF16
-            && y.compute_tag() == COMPUTE_BF16
-            && grad_output.compute_tag() == COMPUTE_BF16;
-        let (gx, gy) = self.inner.residual_add_backward(x, y, grad_output)?;
-        Ok((self.promote(on, tagged, gx)?, self.promote(on, tagged, gy)?))
-    }
-
     fn cross_entropy_mean_forward(
         &self,
         logits: &Tensor,
@@ -1854,15 +1921,6 @@ impl<B: Backend> Backend for Autocast<B> {
         self.pass()?;
         self.inner
             .cross_entropy_mean_backward(logits, targets, ignore_index)
-    }
-
-    fn clip_grad_norm(&self, grads: &mut [Tensor], max_norm: f32) -> Result<f32, OjasError> {
-        self.pass()?;
-        let norm = self.inner.clip_grad_norm(grads, max_norm)?;
-        for grad in grads.iter() {
-            self.wrote(grad);
-        }
-        Ok(norm)
     }
 
     fn adamw_step(
@@ -1894,46 +1952,6 @@ impl<B: Backend> Backend for Autocast<B> {
         self.inner.muon_ns5_step(param, grad, momentum, config)?;
         self.wrote(param);
         self.wrote(momentum);
-        Ok(())
-    }
-
-    fn optimizer_scratch_bytes(
-        &self,
-        kind: crate::backend::OptimizerKind,
-        rows: usize,
-        cols: usize,
-    ) -> Result<Option<u64>, OjasError> {
-        self.pass()?;
-        self.inner.optimizer_scratch_bytes(kind, rows, cols)
-    }
-
-    fn sync(&self) -> Result<(), OjasError> {
-        self.pass()?;
-        self.inner.sync()
-    }
-
-    /// Outside a region, or for an operand not tagged bf16, the inner sum,
-    /// recorded f32 (a trainer's micro-batch accumulators, which it adds
-    /// with the region closed). Inside a region two bf16-tagged gradients
-    /// add as [`Backend::residual_add_forward`] does here, the sum rounded:
-    /// that is a tape's gradient fan-in, which composed that op until
-    /// 2026-10-07 and keeps its bits.
-    fn accumulate_grad(&self, acc: &mut Tensor, grad: &Tensor) -> Result<(), OjasError> {
-        let on = self.region()?;
-        if on && acc.compute_tag() == COMPUTE_BF16 && grad.compute_tag() == COMPUTE_BF16 {
-            crate::accumulate_grad_dims(acc, grad)?;
-            *acc = self.residual_add_forward(acc, grad)?;
-            return Ok(());
-        }
-        self.inner.accumulate_grad(acc, grad)?;
-        self.wrote(acc);
-        Ok(())
-    }
-
-    fn scale_grad(&self, grad: &mut Tensor, scale: f32) -> Result<(), OjasError> {
-        self.pass()?;
-        self.inner.scale_grad(grad, scale)?;
-        self.wrote(grad);
         Ok(())
     }
 
@@ -1988,18 +2006,6 @@ impl<B: Backend> Backend for Autocast<B> {
         self.inner.kv_cache_write(cache, src, at)?;
         self.wrote(cache);
         Ok(())
-    }
-
-    /// A selection, not arithmetic: the operand passes through unrounded.
-    fn argmax_rows(&self, x: &Tensor) -> Result<Tensor, OjasError> {
-        self.pass()?;
-        self.inner.argmax_rows(x)
-    }
-
-    /// A selection, not arithmetic: the operand passes through unrounded.
-    fn topk_rows(&self, x: &Tensor, k: usize) -> Result<(Tensor, Tensor), OjasError> {
-        self.pass()?;
-        self.inner.topk_rows(x, k)
     }
 }
 
@@ -2128,7 +2134,7 @@ mod tests {
         };
     }
 
-    impl Backend for Rec {
+    impl BackendCore for Rec {
         fn id(&self) -> BackendId {
             BackendId::Cpu
         }
@@ -2181,7 +2187,9 @@ mod tests {
             }
             Ok(out)
         }
+    }
 
+    impl BackendFloat for Rec {
         fn permute(&self, input: &Tensor, dims: &[usize]) -> Result<Tensor, OjasError> {
             const OP: &str = "permute";
             let out_shape = permute_output_shape(OP, input.shape(), dims)?;
@@ -2214,6 +2222,111 @@ mod tests {
             Ok(out)
         }
 
+        fn silu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
+            let x = input.f32_slice()?;
+            let y: Vec<f32> = x.iter().map(|value| value * sigmoid(*value)).collect();
+            Tensor::from_f32(&y, input.shape(), self.budget())
+        }
+
+        fn silu_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
+            let x = input.f32_slice()?;
+            let g = grad_output.f32_slice()?;
+            if x.len() != g.len() {
+                return Err(OjasError::Shape {
+                    op: "silu_backward",
+                    detail: "input and grad differ".into(),
+                });
+            }
+            let y: Vec<f32> = x
+                .iter()
+                .zip(g.iter())
+                .map(|(value, grad)| {
+                    let s = sigmoid(*value);
+                    grad * s * (1.0 + value * (1.0 - s))
+                })
+                .collect();
+            Tensor::from_f32(&y, input.shape(), self.budget())
+        }
+
+        fn mul_forward(&self, left: &Tensor, right: &Tensor) -> Result<Tensor, OjasError> {
+            let a = left.f32_slice()?;
+            let b = right.f32_slice()?;
+            if left.shape() != right.shape() {
+                return Err(OjasError::Shape {
+                    op: "mul_forward",
+                    detail: "operands differ".into(),
+                });
+            }
+            let y: Vec<f32> = a.iter().zip(b.iter()).map(|(a, b)| a * b).collect();
+            Tensor::from_f32(&y, left.shape(), self.budget())
+        }
+
+        fn mul_backward(
+            &self,
+            a: &Tensor,
+            b: &Tensor,
+            grad_output: &Tensor,
+        ) -> Result<(Tensor, Tensor), OjasError> {
+            let av = a.f32_slice()?;
+            let bv = b.f32_slice()?;
+            let g = grad_output.f32_slice()?;
+            if av.len() != bv.len() || av.len() != g.len() {
+                return Err(OjasError::Shape {
+                    op: "mul_backward",
+                    detail: "operands differ".into(),
+                });
+            }
+            let ga: Vec<f32> = g.iter().zip(bv.iter()).map(|(grad, b)| grad * b).collect();
+            let gb: Vec<f32> = g.iter().zip(av.iter()).map(|(grad, a)| grad * a).collect();
+            Ok((
+                Tensor::from_f32(&ga, a.shape(), self.budget())?,
+                Tensor::from_f32(&gb, b.shape(), self.budget())?,
+            ))
+        }
+
+        fn residual_add_forward(&self, x: &Tensor, y: &Tensor) -> Result<Tensor, OjasError> {
+            let a = x.f32_slice()?;
+            let b = y.f32_slice()?;
+            if x.shape() != y.shape() {
+                return Err(OjasError::Shape {
+                    op: "residual_add_forward",
+                    detail: "shapes differ".into(),
+                });
+            }
+            let sum: Vec<f32> = a.iter().zip(b.iter()).map(|(a, b)| a + b).collect();
+            Tensor::from_f32(&sum, x.shape(), self.budget())
+        }
+
+        fn residual_add_backward(
+            &self,
+            x: &Tensor,
+            y: &Tensor,
+            grad_output: &Tensor,
+        ) -> Result<(Tensor, Tensor), OjasError> {
+            if x.shape() != y.shape() || x.shape() != grad_output.shape() {
+                return Err(OjasError::Shape {
+                    op: "residual_add_backward",
+                    detail: "shapes differ".into(),
+                });
+            }
+            let g = grad_output.f32_slice()?;
+            Ok((
+                Tensor::from_f32(g, x.shape(), self.budget())?,
+                Tensor::from_f32(g, y.shape(), self.budget())?,
+            ))
+        }
+
+        fn clip_grad_norm(&self, grads: &mut [Tensor], _max_norm: f32) -> Result<f32, OjasError> {
+            for grad in grads.iter() {
+                finite("clip_grad_norm", grad)?;
+            }
+            Ok(1.0)
+        }
+    }
+
+    impl BackendInt for Rec {}
+
+    impl BackendModule for Rec {
         fn embedding_forward(
             &self,
             table: &Tensor,
@@ -2556,100 +2669,6 @@ mod tests {
             })
         }
 
-        fn silu_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
-            let x = input.f32_slice()?;
-            let y: Vec<f32> = x.iter().map(|value| value * sigmoid(*value)).collect();
-            Tensor::from_f32(&y, input.shape(), self.budget())
-        }
-
-        fn silu_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
-            let x = input.f32_slice()?;
-            let g = grad_output.f32_slice()?;
-            if x.len() != g.len() {
-                return Err(OjasError::Shape {
-                    op: "silu_backward",
-                    detail: "input and grad differ".into(),
-                });
-            }
-            let y: Vec<f32> = x
-                .iter()
-                .zip(g.iter())
-                .map(|(value, grad)| {
-                    let s = sigmoid(*value);
-                    grad * s * (1.0 + value * (1.0 - s))
-                })
-                .collect();
-            Tensor::from_f32(&y, input.shape(), self.budget())
-        }
-
-        fn mul_forward(&self, left: &Tensor, right: &Tensor) -> Result<Tensor, OjasError> {
-            let a = left.f32_slice()?;
-            let b = right.f32_slice()?;
-            if left.shape() != right.shape() {
-                return Err(OjasError::Shape {
-                    op: "mul_forward",
-                    detail: "operands differ".into(),
-                });
-            }
-            let y: Vec<f32> = a.iter().zip(b.iter()).map(|(a, b)| a * b).collect();
-            Tensor::from_f32(&y, left.shape(), self.budget())
-        }
-
-        fn mul_backward(
-            &self,
-            a: &Tensor,
-            b: &Tensor,
-            grad_output: &Tensor,
-        ) -> Result<(Tensor, Tensor), OjasError> {
-            let av = a.f32_slice()?;
-            let bv = b.f32_slice()?;
-            let g = grad_output.f32_slice()?;
-            if av.len() != bv.len() || av.len() != g.len() {
-                return Err(OjasError::Shape {
-                    op: "mul_backward",
-                    detail: "operands differ".into(),
-                });
-            }
-            let ga: Vec<f32> = g.iter().zip(bv.iter()).map(|(grad, b)| grad * b).collect();
-            let gb: Vec<f32> = g.iter().zip(av.iter()).map(|(grad, a)| grad * a).collect();
-            Ok((
-                Tensor::from_f32(&ga, a.shape(), self.budget())?,
-                Tensor::from_f32(&gb, b.shape(), self.budget())?,
-            ))
-        }
-
-        fn residual_add_forward(&self, x: &Tensor, y: &Tensor) -> Result<Tensor, OjasError> {
-            let a = x.f32_slice()?;
-            let b = y.f32_slice()?;
-            if x.shape() != y.shape() {
-                return Err(OjasError::Shape {
-                    op: "residual_add_forward",
-                    detail: "shapes differ".into(),
-                });
-            }
-            let sum: Vec<f32> = a.iter().zip(b.iter()).map(|(a, b)| a + b).collect();
-            Tensor::from_f32(&sum, x.shape(), self.budget())
-        }
-
-        fn residual_add_backward(
-            &self,
-            x: &Tensor,
-            y: &Tensor,
-            grad_output: &Tensor,
-        ) -> Result<(Tensor, Tensor), OjasError> {
-            if x.shape() != y.shape() || x.shape() != grad_output.shape() {
-                return Err(OjasError::Shape {
-                    op: "residual_add_backward",
-                    detail: "shapes differ".into(),
-                });
-            }
-            let g = grad_output.f32_slice()?;
-            Ok((
-                Tensor::from_f32(g, x.shape(), self.budget())?,
-                Tensor::from_f32(g, y.shape(), self.budget())?,
-            ))
-        }
-
         fn cross_entropy_mean_forward(
             &self,
             logits: &Tensor,
@@ -2703,13 +2722,6 @@ mod tests {
                 ignore_index: Option<u32>,
             ) -> Tensor
         );
-
-        fn clip_grad_norm(&self, grads: &mut [Tensor], _max_norm: f32) -> Result<f32, OjasError> {
-            for grad in grads.iter() {
-                finite("clip_grad_norm", grad)?;
-            }
-            Ok(1.0)
-        }
 
         fn adamw_step(
             &self,

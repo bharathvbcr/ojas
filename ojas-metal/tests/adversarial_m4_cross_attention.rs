@@ -29,7 +29,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{AttentionOpts, Backend};
+use ojas_core::{AttentionOpts, BackendCore, BackendModule};
 use ojas_metal::MetalBackend;
 
 const FLASH_KERNEL: &str = "ojas_attn_fwd_d32";

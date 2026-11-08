@@ -4,8 +4,8 @@ use std::sync::Arc;
 #[cfg(feature = "cuda")]
 use ojas_core::DType;
 use ojas_core::{
-    AdamWConfig, Backend, BackendId, Budget, MuonNs5Config, Numerics, OjasError, PerHeadGateGrad,
-    Tensor, ValueResidualGrad,
+    AdamWConfig, BackendCore, BackendFloat, BackendId, BackendInt, BackendModule, Budget,
+    MuonNs5Config, Numerics, OjasError, PerHeadGateGrad, Tensor, ValueResidualGrad,
 };
 use ojas_device::DeviceError;
 
@@ -81,7 +81,7 @@ impl CudaBackend {
     }
 }
 
-impl Backend for CudaBackend {
+impl BackendCore for CudaBackend {
     fn id(&self) -> BackendId {
         BackendId::Cuda
     }
@@ -189,7 +189,9 @@ impl Backend for CudaBackend {
         self.sync()?;
         Ok(host)
     }
+}
 
+impl BackendFloat for CudaBackend {
     fn permute(&self, _input: &Tensor, _dims: &[usize]) -> Result<Tensor, OjasError> {
         Err(OjasError::Unsupported {
             op: "permute",
@@ -197,6 +199,69 @@ impl Backend for CudaBackend {
         })
     }
 
+    fn silu_forward(&self, _input: &Tensor) -> Result<Tensor, OjasError> {
+        Err(OjasError::Unsupported {
+            op: "silu_forward",
+            detail: "Cuda backend does not yet implement silu_forward".to_string(),
+        })
+    }
+
+    fn silu_backward(&self, _input: &Tensor, _grad_output: &Tensor) -> Result<Tensor, OjasError> {
+        Err(OjasError::Unsupported {
+            op: "silu_backward",
+            detail: "Cuda backend does not yet implement silu_backward".to_string(),
+        })
+    }
+
+    fn mul_forward(&self, _a: &Tensor, _b: &Tensor) -> Result<Tensor, OjasError> {
+        Err(OjasError::Unsupported {
+            op: "mul_forward",
+            detail: "Cuda backend does not yet implement mul_forward".to_string(),
+        })
+    }
+
+    fn mul_backward(
+        &self,
+        _a: &Tensor,
+        _b: &Tensor,
+        _grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        Err(OjasError::Unsupported {
+            op: "mul_backward",
+            detail: "Cuda backend does not yet implement mul_backward".to_string(),
+        })
+    }
+
+    fn residual_add_forward(&self, _x: &Tensor, _y: &Tensor) -> Result<Tensor, OjasError> {
+        Err(OjasError::Unsupported {
+            op: "residual_add_forward",
+            detail: "Cuda backend does not yet implement residual_add_forward".to_string(),
+        })
+    }
+
+    fn residual_add_backward(
+        &self,
+        _x: &Tensor,
+        _y: &Tensor,
+        _grad_output: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        Err(OjasError::Unsupported {
+            op: "residual_add_backward",
+            detail: "Cuda backend does not yet implement residual_add_backward".to_string(),
+        })
+    }
+
+    fn clip_grad_norm(&self, _grads: &mut [Tensor], _max_norm: f32) -> Result<f32, OjasError> {
+        Err(OjasError::Unsupported {
+            op: "clip_grad_norm",
+            detail: "Cuda backend does not yet implement clip_grad_norm".to_string(),
+        })
+    }
+}
+
+impl BackendInt for CudaBackend {}
+
+impl BackendModule for CudaBackend {
     fn embedding_forward(&self, _table: &Tensor, _token_ids: &Tensor) -> Result<Tensor, OjasError> {
         Err(OjasError::Unsupported {
             op: "embedding_forward",
@@ -396,58 +461,6 @@ impl Backend for CudaBackend {
         })
     }
 
-    fn silu_forward(&self, _input: &Tensor) -> Result<Tensor, OjasError> {
-        Err(OjasError::Unsupported {
-            op: "silu_forward",
-            detail: "Cuda backend does not yet implement silu_forward".to_string(),
-        })
-    }
-
-    fn silu_backward(&self, _input: &Tensor, _grad_output: &Tensor) -> Result<Tensor, OjasError> {
-        Err(OjasError::Unsupported {
-            op: "silu_backward",
-            detail: "Cuda backend does not yet implement silu_backward".to_string(),
-        })
-    }
-
-    fn mul_forward(&self, _a: &Tensor, _b: &Tensor) -> Result<Tensor, OjasError> {
-        Err(OjasError::Unsupported {
-            op: "mul_forward",
-            detail: "Cuda backend does not yet implement mul_forward".to_string(),
-        })
-    }
-
-    fn mul_backward(
-        &self,
-        _a: &Tensor,
-        _b: &Tensor,
-        _grad_output: &Tensor,
-    ) -> Result<(Tensor, Tensor), OjasError> {
-        Err(OjasError::Unsupported {
-            op: "mul_backward",
-            detail: "Cuda backend does not yet implement mul_backward".to_string(),
-        })
-    }
-
-    fn residual_add_forward(&self, _x: &Tensor, _y: &Tensor) -> Result<Tensor, OjasError> {
-        Err(OjasError::Unsupported {
-            op: "residual_add_forward",
-            detail: "Cuda backend does not yet implement residual_add_forward".to_string(),
-        })
-    }
-
-    fn residual_add_backward(
-        &self,
-        _x: &Tensor,
-        _y: &Tensor,
-        _grad_output: &Tensor,
-    ) -> Result<(Tensor, Tensor), OjasError> {
-        Err(OjasError::Unsupported {
-            op: "residual_add_backward",
-            detail: "Cuda backend does not yet implement residual_add_backward".to_string(),
-        })
-    }
-
     fn cross_entropy_mean_forward(
         &self,
         _logits: &Tensor,
@@ -469,13 +482,6 @@ impl Backend for CudaBackend {
         Err(OjasError::Unsupported {
             op: "cross_entropy_mean_backward",
             detail: "Cuda backend does not yet implement cross_entropy_mean_backward".to_string(),
-        })
-    }
-
-    fn clip_grad_norm(&self, _grads: &mut [Tensor], _max_norm: f32) -> Result<f32, OjasError> {
-        Err(OjasError::Unsupported {
-            op: "clip_grad_norm",
-            detail: "Cuda backend does not yet implement clip_grad_norm".to_string(),
         })
     }
 

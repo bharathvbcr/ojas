@@ -10,7 +10,7 @@
 use std::sync::{mpsc, Barrier};
 use std::time::Duration;
 
-use ojas_core::{AdamWConfig, Backend, Budget, Numerics, Tensor, RMS_NORM_EPS};
+use ojas_core::{AdamWConfig, BackendModule, Budget, Numerics, Tensor, RMS_NORM_EPS};
 use ojas_cpu::CpuBackend;
 
 mod common;

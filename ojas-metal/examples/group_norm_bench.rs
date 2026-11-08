@@ -16,7 +16,7 @@
 mod bench {
     use std::time::Instant;
 
-    use ojas_core::{Backend, Budget, Tensor};
+    use ojas_core::{BackendCore, BackendModule, Budget, Tensor};
     use ojas_cpu::CpuBackend;
     use ojas_metal::MetalBackend;
 

@@ -9,7 +9,7 @@
 //! - A variable that is not on the tape is refused and pushes nothing.
 
 use ojas_autograd::{central_diff, gradients_match, Tape, Var};
-use ojas_core::{Backend, Budget, Numerics, OjasError, Tensor};
+use ojas_core::{Backend, BackendFloat, BackendModule, Budget, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 
 const TOKENS: usize = 3;

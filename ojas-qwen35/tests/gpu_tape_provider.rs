@@ -89,7 +89,7 @@ use std::process::{Child, Command, ExitStatus};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use ojas_core::{Backend, Budget, DType, Numerics, Tensor};
+use ojas_core::{Backend, BackendCore, Budget, DType, Numerics, Tensor};
 use ojas_cpu::CpuBackend;
 use ojas_io::sha256::open_sha256_hex;
 use ojas_io::SafeTensors;

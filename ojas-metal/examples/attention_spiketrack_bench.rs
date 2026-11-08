@@ -101,7 +101,7 @@ mod bench {
     use std::sync::Arc;
     use std::time::Instant;
 
-    use ojas_core::{AttentionOpts, Backend, Budget, Numerics, Tensor};
+    use ojas_core::{AttentionOpts, BackendCore, BackendModule, Budget, Numerics, Tensor};
     use ojas_cpu::CpuBackend;
     use ojas_metal::MetalBackend;
     use tessl::dispatch::{dispatch_1d, set_gpu_buf, set_gpu_buf_offset, set_u32, Binder};

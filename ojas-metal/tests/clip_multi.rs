@@ -9,7 +9,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{Backend, OjasError, Tensor};
+use ojas_core::{BackendCore, BackendFloat, OjasError, Tensor};
 
 fn vec1(v: &[f32]) -> Tensor {
     host(v, &[v.len()])

@@ -109,3 +109,14 @@ On Apple Silicon, unified memory allows CPU cores and GPU execution units to acc
 3. **Budget Governance:** Allocations must reserve space in an explicit `Budget`. Over-budget requests fail immediately with `OjasError::CapacityExceeded`.
 4. **Boundary Validation:** All tensor shapes, dtypes, and sparse column bounds are validated prior to kernel dispatch or memory reservation.
 5. **No Duplicate Kernels:** Metal compute kernels are single-sourced in `tessl` via `DEP_TESSL_KERNELS`; sparse representations are single-sourced in `sparsl`; autograd tape and universal training algorithms are single-sourced in `ojas`.
+
+---
+
+## 5. Fusion and Placement: What the Measurements Say (2026-11)
+
+`ojas-metal` maps each `Backend` op onto one or a few kernels, so a model runs as a sequence of dispatches whose outputs go through memory. Two workloads measured on the M5 Pro show where that costs speed and where it does not. The evidence, sources and a checklist are in tessl's [`docs/apple-silicon/fusion_and_placement.md`](https://github.com/bharathvbcr/tessl/blob/main/docs/apple-silicon/fusion_and_placement.md); the Gemma half is `gemma-metal/DECISIONS.md` D20.
+
+- **Vision at batch 1 pays for fusion.** SpikeTrack runs SAM 3.1 on `ojas-metal`. A compiled Core ML program in place of the per-op ViT trunk cut dispatches from 6,284 to 4,007 per frame and frame time to 0.80× (fp32). Core ML runs SAM's whole segmentation head in 24.8 ms, less than `ojas-metal`'s two 3×3 convs alone (26.9 + 6.2 ms isolated), because the 3×3 route materialises an im2col matrix (~764 MB at 288²). Task ft-d62b1248 replaces it with an implicit-GEMM conv.
+- **LLM decode: not where it was assumed.** Removing 90 of the ~600 dispatches per token, encode-once and ICB replay all left E4B tok/s flat. Measured alone, tessl's Q4 GEMV streams weights at 83-89% of the bandwidth ceiling and matches MLX (`gemma-metal/bench/results/gemv_fraction_of_peak_20261104/`, task ft-5b2a72ee). So a token's GEMVs are about 13 ms of about 42 ms, and the gap is between kernels. A per-dispatch profile of a real token comes before the megakernel probe ft-e6d8035e.
+- **A framework boundary costs host copies.** Core ML programs that were 2–4× faster alone gained nothing inside a Metal frame, because each crossing tensor is copied through the host. One exception: SAM's necks paid in fp16 (0.89-0.92× the frame, E30) once they ran on the trunk program's own worker thread, where their input never crossed the boundary. tessl task ft-77620e66 (Core ML on `SharedBuf` memory) and ojas task ft-f6dcf4c5 (zero-copy `read_with` / `upload_with`) remove those copies.
+- **Fusion belongs in `tessl`.** A fused region or megakernel is a Metal kernel, so by invariant 5 it lands in `tessl`; `ojas-metal` routes the op to it.

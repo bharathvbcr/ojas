@@ -19,7 +19,7 @@ mod common;
 use std::time::{Duration, Instant};
 
 use common::token_bin;
-use ojas_core::{Backend, Budget};
+use ojas_core::{BackendCore, Budget};
 use ojas_cpu::{CosineSchedule, LrSchedule};
 use ojas_metal::{MetalBackend, WaitCounts};
 use ojas_model::{init_params, ModelSpec, TrainConfig, Trainer};

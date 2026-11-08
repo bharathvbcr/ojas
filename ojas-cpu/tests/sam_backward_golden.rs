@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 
-use ojas_core::{Backend, Budget, Numerics, Tensor};
+use ojas_core::{BackendModule, Budget, Numerics, Tensor};
 use ojas_cpu::CpuBackend;
 
 const FIXTURE: &str = concat!(

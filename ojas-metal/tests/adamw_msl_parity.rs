@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use common::*;
-use ojas_core::{check_adamw, AdamWConfig, Backend, OjasError};
+use ojas_core::{check_adamw, AdamWConfig, BackendCore, BackendModule, OjasError};
 use tessl::dispatch::{dispatch_1d, set_gpu_buf_offset, set_u32};
 use tessl::runtime::GpuRuntime;
 

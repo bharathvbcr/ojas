@@ -6,8 +6,8 @@ use std::fmt;
 ///
 /// Library code returns this instead of panicking. [`OjasError::Poisoned`]
 /// stays in the enum so existing matches keep compiling. [`crate::Budget`]
-/// charges an atomic counter, so reservation does not take a lock and does
-/// not return `Poisoned`.
+/// charges an atomic counter, and its trim-handler list recovers a poisoned
+/// lock instead of failing, so no budget call returns `Poisoned`.
 #[derive(Debug)]
 pub enum OjasError {
     Shape {

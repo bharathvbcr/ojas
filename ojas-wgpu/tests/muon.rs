@@ -10,7 +10,9 @@
 mod common;
 
 use common::*;
-use ojas_core::{Backend, DType, MuonNs5Config, Ns5Precision, OjasError, Tensor};
+use ojas_core::{
+    BackendCore, BackendFloat, BackendModule, DType, MuonNs5Config, Ns5Precision, OjasError, Tensor,
+};
 use ojas_oracle::golden::{muon_step_bf16, MuonStepCase};
 use ojas_oracle::parity::TRACE_BF16_PARAM_NORMWISE_REL_TOL;
 use ojas_wgpu::WgpuBackend;

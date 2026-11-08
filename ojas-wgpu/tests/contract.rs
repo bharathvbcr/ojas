@@ -4,7 +4,10 @@
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use ojas_core::{Backend, BackendId, Budget, OjasError, Tensor, RMS_NORM_EPS};
+use ojas_core::{
+    Backend, BackendCore, BackendFloat, BackendId, BackendModule, Budget, OjasError, Tensor,
+    RMS_NORM_EPS,
+};
 use ojas_wgpu::WgpuBackend;
 
 fn gpu() -> WgpuBackend {

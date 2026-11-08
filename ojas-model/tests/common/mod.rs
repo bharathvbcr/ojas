@@ -22,9 +22,10 @@ use std::sync::{Arc, Mutex};
 
 use ojas_core::{forward_backend_methods, DataCursor};
 use ojas_core::{
-    AdamWConfig, AutocastGuard, AutocastMode, Backend, BackendId, Budget, CeChunk, CeGrads, DType,
-    DeviceBuffer, LinearCe, MuonNs5Config, Numerics, OjasError, OptimizerKind, PerHeadGateGrad,
-    Reservation, Tensor, ValueResidualGrad,
+    AdamWConfig, AutocastGuard, AutocastMode, Backend, BackendCore, BackendFloat, BackendId,
+    BackendInt, BackendModule, Budget, CeChunk, CeGrads, DType, DeviceBuffer, LinearCe,
+    MuonNs5Config, Numerics, OjasError, OptimizerKind, PerHeadGateGrad, Reservation, Tensor,
+    ValueResidualGrad,
 };
 use ojas_cpu::CpuBackend;
 use ojas_data::TokenBin;
@@ -126,7 +127,7 @@ impl Resident {
     }
 }
 
-impl Backend for Resident {
+impl BackendCore for Resident {
     fn id(&self) -> BackendId {
         self.id
     }
@@ -147,9 +148,88 @@ impl Backend for Resident {
             }),
         }
     }
+    fn cast_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "cast_bf16";
+        // Read this double's own shadow. The trait default refuses a device tensor.
+        self.d(self.cpu.cast_bf16(&self.h(OP, tensor)?)?)
+    }
+}
+
+impl BackendFloat for Resident {
     fn permute(&self, x: &Tensor, dims: &[usize]) -> Result<Tensor, OjasError> {
         self.d(self.cpu.permute(&self.h("permute", x)?, dims)?)
     }
+    fn silu_forward(&self, x: &Tensor) -> Result<Tensor, OjasError> {
+        self.d(self.cpu.silu_forward(&self.h("silu_forward", x)?)?)
+    }
+    fn silu_backward(&self, x: &Tensor, g: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "silu_backward";
+        self.d(self.cpu.silu_backward(&self.h(OP, x)?, &self.h(OP, g)?)?)
+    }
+    fn mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "mul_forward";
+        self.d(self.cpu.mul_forward(&self.h(OP, a)?, &self.h(OP, b)?)?)
+    }
+    fn mul_backward(
+        &self,
+        a: &Tensor,
+        b: &Tensor,
+        g: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        const OP: &str = "mul_backward";
+        let (x, y) = self
+            .cpu
+            .mul_backward(&self.h(OP, a)?, &self.h(OP, b)?, &self.h(OP, g)?)?;
+        Ok((self.d(x)?, self.d(y)?))
+    }
+    fn residual_add_forward(&self, x: &Tensor, y: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "residual_add_forward";
+        self.d(self
+            .cpu
+            .residual_add_forward(&self.h(OP, x)?, &self.h(OP, y)?)?)
+    }
+    fn residual_add_backward(
+        &self,
+        x: &Tensor,
+        y: &Tensor,
+        g: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        const OP: &str = "residual_add_backward";
+        let (a, b) =
+            self.cpu
+                .residual_add_backward(&self.h(OP, x)?, &self.h(OP, y)?, &self.h(OP, g)?)?;
+        Ok((self.d(a)?, self.d(b)?))
+    }
+    fn clip_grad_norm(&self, grads: &mut [Tensor], max_norm: f32) -> Result<f32, OjasError> {
+        const OP: &str = "clip_grad_norm";
+        let mut hosts = Vec::with_capacity(grads.len());
+        for g in grads.iter_mut() {
+            Self::unique(OP, g)?;
+            hosts.push(self.h(OP, g)?);
+        }
+        let norm = self.cpu.clip_grad_norm(&mut hosts, max_norm)?;
+        let fresh = hosts
+            .into_iter()
+            .map(|h| self.d(h))
+            .collect::<Result<Vec<_>, _>>()?;
+        for (g, f) in grads.iter_mut().zip(fresh) {
+            *g = f;
+        }
+        Ok(norm)
+    }
+    fn accumulate_grad(&self, acc: &mut Tensor, g: &Tensor) -> Result<(), OjasError> {
+        const OP: &str = "accumulate_grad";
+        Self::unique(OP, acc)?;
+        let mut h = self.h(OP, acc)?;
+        self.cpu.accumulate_grad(&mut h, &self.h(OP, g)?)?;
+        *acc = self.d(h)?;
+        Ok(())
+    }
+}
+
+impl BackendInt for Resident {}
+
+impl BackendModule for Resident {
     fn embedding_forward(&self, table: &Tensor, ids: &Tensor) -> Result<Tensor, OjasError> {
         const OP: &str = "embedding_forward";
         self.d(self
@@ -372,47 +452,6 @@ impl Backend for Resident {
             lambda: self.d(r.lambda)?,
         })
     }
-    fn silu_forward(&self, x: &Tensor) -> Result<Tensor, OjasError> {
-        self.d(self.cpu.silu_forward(&self.h("silu_forward", x)?)?)
-    }
-    fn silu_backward(&self, x: &Tensor, g: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "silu_backward";
-        self.d(self.cpu.silu_backward(&self.h(OP, x)?, &self.h(OP, g)?)?)
-    }
-    fn mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "mul_forward";
-        self.d(self.cpu.mul_forward(&self.h(OP, a)?, &self.h(OP, b)?)?)
-    }
-    fn mul_backward(
-        &self,
-        a: &Tensor,
-        b: &Tensor,
-        g: &Tensor,
-    ) -> Result<(Tensor, Tensor), OjasError> {
-        const OP: &str = "mul_backward";
-        let (x, y) = self
-            .cpu
-            .mul_backward(&self.h(OP, a)?, &self.h(OP, b)?, &self.h(OP, g)?)?;
-        Ok((self.d(x)?, self.d(y)?))
-    }
-    fn residual_add_forward(&self, x: &Tensor, y: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "residual_add_forward";
-        self.d(self
-            .cpu
-            .residual_add_forward(&self.h(OP, x)?, &self.h(OP, y)?)?)
-    }
-    fn residual_add_backward(
-        &self,
-        x: &Tensor,
-        y: &Tensor,
-        g: &Tensor,
-    ) -> Result<(Tensor, Tensor), OjasError> {
-        const OP: &str = "residual_add_backward";
-        let (a, b) =
-            self.cpu
-                .residual_add_backward(&self.h(OP, x)?, &self.h(OP, y)?, &self.h(OP, g)?)?;
-        Ok((self.d(a)?, self.d(b)?))
-    }
     fn cross_entropy_mean_forward(
         &self,
         l: &Tensor,
@@ -434,23 +473,6 @@ impl Backend for Resident {
         self.d(self
             .cpu
             .cross_entropy_mean_backward(&self.h(OP, l)?, &self.h(OP, t)?, ignore)?)
-    }
-    fn clip_grad_norm(&self, grads: &mut [Tensor], max_norm: f32) -> Result<f32, OjasError> {
-        const OP: &str = "clip_grad_norm";
-        let mut hosts = Vec::with_capacity(grads.len());
-        for g in grads.iter_mut() {
-            Self::unique(OP, g)?;
-            hosts.push(self.h(OP, g)?);
-        }
-        let norm = self.cpu.clip_grad_norm(&mut hosts, max_norm)?;
-        let fresh = hosts
-            .into_iter()
-            .map(|h| self.d(h))
-            .collect::<Result<Vec<_>, _>>()?;
-        for (g, f) in grads.iter_mut().zip(fresh) {
-            *g = f;
-        }
-        Ok(norm)
     }
     fn adamw_step(
         &self,
@@ -488,14 +510,6 @@ impl Backend for Resident {
             .muon_ns5_step(&mut hp, &self.h(OP, g)?, &mut hm, config)?;
         let (np, nm) = (self.d(hp)?, self.d(hm)?);
         (*p, *m) = (np, nm);
-        Ok(())
-    }
-    fn accumulate_grad(&self, acc: &mut Tensor, g: &Tensor) -> Result<(), OjasError> {
-        const OP: &str = "accumulate_grad";
-        Self::unique(OP, acc)?;
-        let mut h = self.h(OP, acc)?;
-        self.cpu.accumulate_grad(&mut h, &self.h(OP, g)?)?;
-        *acc = self.d(h)?;
         Ok(())
     }
     fn linear_cross_entropy_mean(
@@ -546,11 +560,6 @@ impl Backend for Resident {
         self.cpu.kv_cache_write(&mut h, &self.h(OP, src)?, at)?;
         *cache = self.d(h)?;
         Ok(())
-    }
-    fn cast_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "cast_bf16";
-        // Read this double's own shadow. The trait default refuses a device tensor.
-        self.d(self.cpu.cast_bf16(&self.h(OP, tensor)?)?)
     }
 }
 
@@ -765,10 +774,10 @@ macro_rules! forward_unwritten {
     };
 }
 
-impl<B: Backend> Backend for Probe<B> {
+impl<B: Backend> BackendCore for Probe<B> {
     ojas_core::with_backend_methods!(
         forward_backend_methods,
-        { self, self.inner, gate, forward_unwritten }
+        { self, self.inner, gate, forward_unwritten, core}
     );
 
     fn id(&self) -> BackendId {
@@ -793,10 +802,114 @@ impl<B: Backend> Backend for Probe<B> {
         self.download_live.lock().unwrap().push(live);
         self.inner.download(t)
     }
+    fn optimizer_scratch_bytes(
+        &self,
+        kind: OptimizerKind,
+        rows: usize,
+        cols: usize,
+    ) -> Result<Option<u64>, OjasError> {
+        self.inner.optimizer_scratch_bytes(kind, rows, cols)
+    }
+    fn sync(&self) -> Result<(), OjasError> {
+        self.gate("sync")?;
+        self.inner.sync()
+    }
+    fn cast_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
+        self.gate("cast_bf16")?;
+        self.inner.cast_bf16(tensor)
+    }
+    fn autocast_region(&self, mode: AutocastMode) -> Result<AutocastGuard, OjasError> {
+        self.gate("autocast_region")?;
+        self.inner.autocast_region(mode)
+    }
+}
+
+impl<B: Backend> BackendFloat for Probe<B> {
+    ojas_core::with_backend_methods!(
+        forward_backend_methods,
+        { self, self.inner, gate, forward_unwritten, float}
+    );
     fn permute(&self, x: &Tensor, dims: &[usize]) -> Result<Tensor, OjasError> {
         self.gate("permute")?;
         self.inner.permute(x, dims)
     }
+    fn silu_forward(&self, x: &Tensor) -> Result<Tensor, OjasError> {
+        self.gate("silu_forward")?;
+        self.inner.silu_forward(x)
+    }
+    fn silu_backward(&self, x: &Tensor, g: &Tensor) -> Result<Tensor, OjasError> {
+        self.gate("silu_backward")?;
+        self.inner.silu_backward(x, g)
+    }
+    fn mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
+        self.gate("mul_forward")?;
+        self.inner.mul_forward(a, b)
+    }
+    fn mul_backward(
+        &self,
+        a: &Tensor,
+        b: &Tensor,
+        g: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        self.gate("mul_backward")?;
+        self.inner.mul_backward(a, b, g)
+    }
+    fn residual_add_forward(&self, x: &Tensor, y: &Tensor) -> Result<Tensor, OjasError> {
+        self.gate("residual_add_forward")?;
+        self.inner.residual_add_forward(x, y)
+    }
+    fn residual_add_backward(
+        &self,
+        x: &Tensor,
+        y: &Tensor,
+        g: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        self.gate("residual_add_backward")?;
+        self.inner.residual_add_backward(x, y, g)
+    }
+    fn clip_grad_norm(&self, grads: &mut [Tensor], max_norm: f32) -> Result<f32, OjasError> {
+        self.gate("clip_grad_norm")?;
+        let norm = self.inner.clip_grad_norm(grads, max_norm)?;
+        let index = self.count("clip_grad_norm") - 1;
+        let squeeze = *self.squeeze.lock().unwrap();
+        if let Some((at, room)) = squeeze {
+            if at == index {
+                let budget = self.inner.budget();
+                let free = budget.cap_bytes() - budget.live_bytes()?;
+                if free > room {
+                    let held = budget.try_reserve(free - room)?;
+                    self.held.lock().unwrap().push(held);
+                }
+            }
+        }
+        Ok(norm)
+    }
+    fn accumulate_grad(&self, acc: &mut Tensor, g: &Tensor) -> Result<(), OjasError> {
+        self.gate("accumulate_grad")?;
+        self.inner.accumulate_grad(acc, g)
+    }
+}
+
+impl<B: Backend> BackendInt for Probe<B> {
+    ojas_core::with_backend_methods!(
+        forward_backend_methods,
+        { self, self.inner, gate, forward_unwritten, int}
+    );
+    fn argmax_rows(&self, x: &Tensor) -> Result<Tensor, OjasError> {
+        self.gate("argmax_rows")?;
+        self.inner.argmax_rows(x)
+    }
+    fn topk_rows(&self, x: &Tensor, k: usize) -> Result<(Tensor, Tensor), OjasError> {
+        self.gate("topk_rows")?;
+        self.inner.topk_rows(x, k)
+    }
+}
+
+impl<B: Backend> BackendModule for Probe<B> {
+    ojas_core::with_backend_methods!(
+        forward_backend_methods,
+        { self, self.inner, gate, forward_unwritten, module}
+    );
     fn embedding_forward(&self, t: &Tensor, i: &Tensor) -> Result<Tensor, OjasError> {
         self.gate("embedding_forward")?;
         self.inner.embedding_forward(t, i)
@@ -949,40 +1062,6 @@ impl<B: Backend> Backend for Probe<B> {
         self.gate("value_residual_blend_backward")?;
         self.inner.value_residual_blend_backward(v, v0, l, g)
     }
-    fn silu_forward(&self, x: &Tensor) -> Result<Tensor, OjasError> {
-        self.gate("silu_forward")?;
-        self.inner.silu_forward(x)
-    }
-    fn silu_backward(&self, x: &Tensor, g: &Tensor) -> Result<Tensor, OjasError> {
-        self.gate("silu_backward")?;
-        self.inner.silu_backward(x, g)
-    }
-    fn mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
-        self.gate("mul_forward")?;
-        self.inner.mul_forward(a, b)
-    }
-    fn mul_backward(
-        &self,
-        a: &Tensor,
-        b: &Tensor,
-        g: &Tensor,
-    ) -> Result<(Tensor, Tensor), OjasError> {
-        self.gate("mul_backward")?;
-        self.inner.mul_backward(a, b, g)
-    }
-    fn residual_add_forward(&self, x: &Tensor, y: &Tensor) -> Result<Tensor, OjasError> {
-        self.gate("residual_add_forward")?;
-        self.inner.residual_add_forward(x, y)
-    }
-    fn residual_add_backward(
-        &self,
-        x: &Tensor,
-        y: &Tensor,
-        g: &Tensor,
-    ) -> Result<(Tensor, Tensor), OjasError> {
-        self.gate("residual_add_backward")?;
-        self.inner.residual_add_backward(x, y, g)
-    }
     fn cross_entropy_mean_forward(
         &self,
         l: &Tensor,
@@ -1000,23 +1079,6 @@ impl<B: Backend> Backend for Probe<B> {
     ) -> Result<Tensor, OjasError> {
         self.gate("cross_entropy_mean_backward")?;
         self.inner.cross_entropy_mean_backward(l, t, ignore)
-    }
-    fn clip_grad_norm(&self, grads: &mut [Tensor], max_norm: f32) -> Result<f32, OjasError> {
-        self.gate("clip_grad_norm")?;
-        let norm = self.inner.clip_grad_norm(grads, max_norm)?;
-        let index = self.count("clip_grad_norm") - 1;
-        let squeeze = *self.squeeze.lock().unwrap();
-        if let Some((at, room)) = squeeze {
-            if at == index {
-                let budget = self.inner.budget();
-                let free = budget.cap_bytes() - budget.live_bytes()?;
-                if free > room {
-                    let held = budget.try_reserve(free - room)?;
-                    self.held.lock().unwrap().push(held);
-                }
-            }
-        }
-        Ok(norm)
     }
     fn adamw_step(
         &self,
@@ -1054,22 +1116,6 @@ impl<B: Backend> Backend for Probe<B> {
         }
         self.inner.muon_ns5_step(p, g, m, config)
     }
-    fn optimizer_scratch_bytes(
-        &self,
-        kind: OptimizerKind,
-        rows: usize,
-        cols: usize,
-    ) -> Result<Option<u64>, OjasError> {
-        self.inner.optimizer_scratch_bytes(kind, rows, cols)
-    }
-    fn sync(&self) -> Result<(), OjasError> {
-        self.gate("sync")?;
-        self.inner.sync()
-    }
-    fn accumulate_grad(&self, acc: &mut Tensor, g: &Tensor) -> Result<(), OjasError> {
-        self.gate("accumulate_grad")?;
-        self.inner.accumulate_grad(acc, g)
-    }
     fn linear_cross_entropy_mean(
         &self,
         x: &Tensor,
@@ -1097,22 +1143,6 @@ impl<B: Backend> Backend for Probe<B> {
     fn kv_cache_write(&self, cache: &mut Tensor, src: &Tensor, at: usize) -> Result<(), OjasError> {
         self.gate("kv_cache_write")?;
         self.inner.kv_cache_write(cache, src, at)
-    }
-    fn argmax_rows(&self, x: &Tensor) -> Result<Tensor, OjasError> {
-        self.gate("argmax_rows")?;
-        self.inner.argmax_rows(x)
-    }
-    fn topk_rows(&self, x: &Tensor, k: usize) -> Result<(Tensor, Tensor), OjasError> {
-        self.gate("topk_rows")?;
-        self.inner.topk_rows(x, k)
-    }
-    fn cast_bf16(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
-        self.gate("cast_bf16")?;
-        self.inner.cast_bf16(tensor)
-    }
-    fn autocast_region(&self, mode: AutocastMode) -> Result<AutocastGuard, OjasError> {
-        self.gate("autocast_region")?;
-        self.inner.autocast_region(mode)
     }
 }
 

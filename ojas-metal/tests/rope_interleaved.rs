@@ -9,8 +9,8 @@ mod common;
 
 use common::*;
 use ojas_core::{
-    axial_rope_2d_tables, rope_interleaved_backward_dims, rope_interleaved_forward_dims, Backend,
-    Budget, Tensor,
+    axial_rope_2d_tables, rope_interleaved_backward_dims, rope_interleaved_forward_dims,
+    BackendCore, BackendModule, Budget, Tensor,
 };
 
 fn axial(head_dim: usize, h: usize, w: usize, scale: f32) -> (Tensor, Tensor) {

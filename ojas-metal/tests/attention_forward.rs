@@ -7,7 +7,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{Backend, OjasError, Tensor};
+use ojas_core::{BackendModule, OjasError, Tensor};
 use ojas_metal::MetalBackend;
 
 /// The forward tolerance of `backend_parity.rs`, widened with sqrt(T) as the

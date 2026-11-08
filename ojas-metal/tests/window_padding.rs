@@ -14,7 +14,7 @@ mod common;
 mod suite;
 
 use common::*;
-use ojas_core::{window_merge, window_partition, Backend, Tensor};
+use ojas_core::{window_merge, window_partition, BackendCore, BackendFloat, Tensor};
 use ojas_metal::MetalBackend;
 
 struct MetalRig(MetalBackend);

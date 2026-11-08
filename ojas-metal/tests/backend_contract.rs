@@ -10,7 +10,9 @@ use std::sync::Arc;
 use std::thread;
 
 use common::*;
-use ojas_core::{AdamWConfig, Backend, BackendId, Budget, OjasError, Tensor};
+use ojas_core::{
+    AdamWConfig, BackendCore, BackendFloat, BackendId, BackendModule, Budget, OjasError, Tensor,
+};
 use ojas_metal::MetalBackend;
 
 fn is_placement(r: Result<Tensor, OjasError>) -> bool {

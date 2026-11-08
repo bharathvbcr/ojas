@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use common::{bits, SplitMix64};
-use ojas_core::{Backend, Budget, Numerics, OjasError, Tensor};
+use ojas_core::{BackendCore, BackendModule, Budget, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 
 struct Counting;

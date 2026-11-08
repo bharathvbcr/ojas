@@ -867,3 +867,50 @@ real weights not on disk).
   Folding the GELU into the gate GEMV (v3) measured slower and was removed.
 - **Overturn if:** the verify path or MTP needs the block (port it), or a split-K GEMV for the
   block's 256-row gate makes its ~0.7 ms per token shorter.
+
+## D23. Fewer serial dispatches per E4B layer: in-place KV ring, fused residual tails (2026-11-05)
+
+- **Found:** on the real-weight stamps, each sliding layer copied its KV ring into scratch (K and
+  V behind separate barriers) even before any wrap, only to keep the opt-in decode ICB tape one
+  shape; and each layer ran a pre-FFN norm, a bf16 cast and a next-layer input norm as their own
+  dependent dispatches after residual tails that had just read the same row.
+- **Decided:** FA reads the ring in place while its live window starts at row 0 (decode ICB
+  replay keeps the copy); `rms_norm_residual_add_emit_bf16` writes the next GEMV's bf16 input
+  from the residual tail (default on, `GEMMA_METAL_EMIT_BF16_TAIL=0` turns it off). Both are
+  bit-identical to what they replace.
+- **Evidence:** paired A/Bs in `bench/results/real_e4b_20261104`: +1.6% and +1.3%, together
+  77.53 -> 80.53 tok/s median (+3.9%, 5 of 5 rounds); 0.96x mlx_lm at 64 tokens, 0.95x at 128.
+- **Also (same day):** greedy argmax as two GPU-wide dispatches (`argmax_two_pass.metal`, default
+  on, `GEMMA_METAL_ARGMAX_TWO_PASS=0` off): same token rule, +0.5% paired (9 of 10 rounds);
+  and decode attention in one pass when the live keys fit one 128-key chunk
+  (`flash_attn_decode_single.metal`, generated from tessl's partial pass, bit-identical,
+  `GEMMA_METAL_ATTN_SINGLE_PASS=0` off): +0.8% paired (5 of 5). All four: 77.78 -> 81.71 tok/s
+  (+5.1%), 0.97x mlx_lm at 64 tokens.
+- **Re-measured on real weights, still rejected:** whole-step ICB replay 0.38x (exact); the
+  persistent gate->down megakernel, forced onto the real graph in a scratch tree, gives garbage
+  text (stale `mid`, no grid-wide memory order on Metal, D17/D18) at 8.2-9.3 tok/s (~0.11x); fp16 weights 3.7-3.9x slower per GEMV and 0.36x as a full decode
+  (29.5 vs 81 tok/s, same text; scratch-tree experiment); Core ML int4 ~25% slower and inexact
+  (rel L2 0.61, symmetric int4 vs MLX affine). See the README there and
+  `bench/results/coreml_gemv_probe_20261104` (real-weight section).
+- **Overturn if:** a context past the 512 window shows the densify path is the common case, or
+  the decode ICB path is made default (then give its tape an in-place variant).
+
+## D24. Speculative decoding with the E4B assistant (2026-11-05)
+
+- **Found:** the MTP drafter was not the reference recipe (0 of 108 drafts accepted); the E4B
+  verify path still ran the per-layer-input stand-in (wrong tokens at every M > 1); the verify
+  GEMM took M at run time and cost 1.6x / 3.2x / 9x one GEMV at M = 2 / 4 / 8; and the verify
+  attention cost ~124 us per call.
+- **Decided:** drafter rebuilt from transformers' `Gemma4AssistantForCausalLM` (oracle-matched);
+  real per-layer input block and dual norms in `step_verify`; `gemm_q4_mlx_mrow` (compile-time
+  M, default on, `GEMMA_METAL_GEMM_MROW=0` off) and the single-pass attention for verify blocks;
+  `generate_speculative` (draft k, one verify, keep the matching prefix + bonus, trim).
+- **Evidence:** `bench/results/real_e4b_20261104` (README section "Speculative decoding works"):
+  verify(4) 53.3 -> 20.7 ms; 36 of 36 verify blocks equal sequential greedy; end to end at k = 1
+  over eight prompts, 95.2 vs 80.9 tok/s for the pipelined decode, paired ratio 1.177
+  [1.172, 1.184] over 5 reps (decode only, 64 tokens; 1.14x at k = 2; the earlier 1.283 was the
+  first three prompts only), output equal to greedy except at exact ties (logit gap below 0.05).
+  Measured only where the context fits one 128-key chunk.
+- **Overturn if:** the drafter moves to the GPU (then longer drafts should win: k = 3 accepts
+  2.34 tokens per 20.7 ms verify), or a context past one 128-key chunk makes the verify
+  attention fall back to tessl's kernel often enough to matter.

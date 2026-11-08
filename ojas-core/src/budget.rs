@@ -26,6 +26,21 @@ pub struct Budget {
 /// (e.g., from an internal freelist buffer cache). Returns the number of bytes actually freed.
 pub trait BudgetTrimHandler: Send + Sync + std::fmt::Debug {
     fn trim_memory(&self, needed_bytes: u64) -> u64;
+
+    /// What this handler trims, as an opaque identity. [`Budget::add_trim_handler`]
+    /// registers a second handler with the same `Some` key once, not twice.
+    /// `None` (the default) never matches another handler.
+    fn pool_key(&self) -> Option<usize> {
+        None
+    }
+
+    /// Whether the pool this handler trims still exists. A handler that
+    /// returns `false` is left out of [`Budget::trim_handlers`] and dropped
+    /// the next time a handler is added to the same budget. It runs under the
+    /// budget's handler lock, so it must not call back into the budget.
+    fn is_live(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Debug)]
@@ -39,7 +54,7 @@ struct Inner {
     /// Device-to-host copies charged to this budget or a descendant.
     readbacks: AtomicU64,
     readback_bytes: AtomicU64,
-    trim_handler: std::sync::RwLock<Option<Arc<dyn BudgetTrimHandler>>>,
+    trim_handlers: std::sync::RwLock<Vec<Arc<dyn BudgetTrimHandler>>>,
 }
 
 /// Charges `bytes` against a [`Budget`] until dropped.
@@ -72,7 +87,7 @@ impl Budget {
                 parent: None,
                 readbacks: AtomicU64::new(0),
                 readback_bytes: AtomicU64::new(0),
-                trim_handler: std::sync::RwLock::new(None),
+                trim_handlers: std::sync::RwLock::new(Vec::new()),
             }),
         }
     }
@@ -91,26 +106,88 @@ impl Budget {
                 parent: Some(self.clone()),
                 readbacks: AtomicU64::new(0),
                 readback_bytes: AtomicU64::new(0),
-                trim_handler: std::sync::RwLock::new(None),
+                trim_handlers: std::sync::RwLock::new(Vec::new()),
             }),
         }
     }
 
-    /// Set an eviction callback invoked when an allocation would exceed capacity.
+    /// Make `handler` the only eviction callback of this budget, replacing
+    /// any registered before. A budget shared by several pools registers
+    /// each with [`Budget::add_trim_handler`].
     pub fn set_trim_handler(&self, handler: Arc<dyn BudgetTrimHandler>) {
-        if let Ok(mut lock) = self.inner.trim_handler.write() {
-            *lock = Some(handler);
-        }
+        let mut lock = self.handlers_mut();
+        lock.clear();
+        lock.push(handler);
     }
 
-    /// Retrieve the trim handler on this budget or the nearest ancestor.
-    pub fn trim_handler(&self) -> Option<Arc<dyn BudgetTrimHandler>> {
-        if let Ok(lock) = self.inner.trim_handler.read() {
-            if let Some(h) = lock.as_ref() {
-                return Some(Arc::clone(h));
+    /// Register `handler` beside the ones this budget already has, so a
+    /// capacity miss trims every pool charged to it, not only the last one
+    /// registered. Handlers whose pool is gone ([`BudgetTrimHandler::is_live`])
+    /// are dropped first, and a handler whose [`BudgetTrimHandler::pool_key`]
+    /// matches one already registered is not added twice.
+    ///
+    /// Infallible: a poisoned handler lock is recovered and cleared (see
+    /// [`Budget::trim_handlers`]), the same policy as every other access.
+    pub fn add_trim_handler(&self, handler: Arc<dyn BudgetTrimHandler>) {
+        let mut lock = self.handlers_mut();
+        lock.retain(|h| h.is_live());
+        if let Some(key) = handler.pool_key() {
+            if lock.iter().any(|h| h.pool_key() == Some(key)) {
+                return;
             }
         }
-        self.inner.parent.as_ref().and_then(|p| p.trim_handler())
+        lock.push(handler);
+    }
+
+    /// The handler list for writing. The list is a `Vec` of `Arc`s that is
+    /// only pushed to, cleared or filtered, so a panic while the lock is held
+    /// cannot leave it torn: a poisoned lock is recovered and its poison
+    /// cleared, here and in every reader, so one early panic does not
+    /// refuse every later handler.
+    fn handlers_mut(&self) -> std::sync::RwLockWriteGuard<'_, Vec<Arc<dyn BudgetTrimHandler>>> {
+        let lock = self
+            .inner
+            .trim_handlers
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.inner.trim_handlers.clear_poison();
+        lock
+    }
+
+    /// The eviction callbacks that apply to this budget: its own, then each
+    /// ancestor's, nearest first. A handler whose [`BudgetTrimHandler::pool_key`]
+    /// repeats one already listed is skipped, so a pool registered on a child
+    /// and on its parent is trimmed once, and a handler whose pool is gone
+    /// ([`BudgetTrimHandler::is_live`]) is not listed. Cloned out, so the
+    /// caller runs them without holding a lock. A poisoned handler lock is
+    /// recovered and its poison cleared.
+    pub fn trim_handlers(&self) -> Vec<Arc<dyn BudgetTrimHandler>> {
+        let mut out: Vec<Arc<dyn BudgetTrimHandler>> = Vec::new();
+        let mut node = Some(self);
+        while let Some(budget) = node {
+            let own = budget
+                .inner
+                .trim_handlers
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            budget.inner.trim_handlers.clear_poison();
+            for h in own.iter().filter(|h| h.is_live()) {
+                let seen = h
+                    .pool_key()
+                    .is_some_and(|k| out.iter().any(|o| o.pool_key() == Some(k)));
+                if !seen {
+                    out.push(Arc::clone(h));
+                }
+            }
+            drop(own);
+            node = budget.inner.parent.as_ref();
+        }
+        out
+    }
+
+    /// The nearest of [`Budget::trim_handlers`].
+    pub fn trim_handler(&self) -> Option<Arc<dyn BudgetTrimHandler>> {
+        self.trim_handlers().into_iter().next()
     }
 
     /// `(calls, bytes)` of device-to-host copies [`crate::Tensor::to_host`]
@@ -219,7 +296,7 @@ impl Budget {
         if let Err(err) = self.charge(bytes) {
             if let OjasError::CapacityExceeded { .. } = &err {
                 if self.can_ever_fit(bytes) {
-                    if let Some(handler) = self.trim_handler() {
+                    for handler in self.trim_handlers() {
                         let freed = handler.trim_memory(bytes);
                         if freed > 0 && self.charge(bytes).is_ok() {
                             return Ok(Reservation {
@@ -1241,5 +1318,135 @@ mod tests {
         let res2 = b.try_reserve(40).expect("trim freed memory");
         assert_eq!(res2.bytes(), 40);
         assert_eq!(b.live_bytes().unwrap(), 80); // (80 - 40) + 40 = 80
+    }
+
+    /// A pool that frees `idle` bytes of what its budget still charges.
+    #[derive(Debug)]
+    struct Pool {
+        idle: std::sync::atomic::AtomicU64,
+        budget: Budget,
+        key: Option<usize>,
+        live: std::sync::atomic::AtomicBool,
+    }
+
+    impl Pool {
+        fn new(idle: u64, budget: &Budget, key: Option<usize>) -> Arc<Self> {
+            Arc::new(Self {
+                idle: std::sync::atomic::AtomicU64::new(idle),
+                budget: budget.clone(),
+                key,
+                live: std::sync::atomic::AtomicBool::new(true),
+            })
+        }
+    }
+
+    impl BudgetTrimHandler for Pool {
+        fn trim_memory(&self, _needed_bytes: u64) -> u64 {
+            let freed = self.idle.swap(0, Ordering::SeqCst);
+            self.budget.release(freed);
+            freed
+        }
+        fn pool_key(&self) -> Option<usize> {
+            self.key
+        }
+        fn is_live(&self) -> bool {
+            self.live.load(Ordering::SeqCst)
+        }
+    }
+
+    /// Two pools on one budget: a miss trims both, not only the last one
+    /// registered (ft-44871303).
+    #[test]
+    fn every_pool_on_a_budget_is_trimmed_on_a_capacity_miss() {
+        let b = Budget::new(100);
+        std::mem::forget(b.try_reserve(100).unwrap());
+        let first = Pool::new(40, &b, None);
+        let second = Pool::new(40, &b, None);
+        b.add_trim_handler(first.clone());
+        b.add_trim_handler(second.clone());
+        assert_eq!(b.trim_handlers().len(), 2);
+
+        // 60 needs both: one pool frees 40, the other another 40.
+        let r = b.try_reserve(60).expect("both pools were trimmed");
+        assert_eq!(r.bytes(), 60);
+        assert_eq!(b.live_bytes().unwrap(), 80);
+        assert_eq!(first.idle.load(Ordering::SeqCst), 0);
+        assert_eq!(second.idle.load(Ordering::SeqCst), 0);
+    }
+
+    /// A child with no handler of its own trims through its parent's list.
+    #[test]
+    fn a_child_inherits_every_handler_of_its_parent() {
+        let b = Budget::new(100);
+        std::mem::forget(b.try_reserve(100).unwrap());
+        b.add_trim_handler(Pool::new(40, &b, None));
+        b.add_trim_handler(Pool::new(40, &b, None));
+        let child = b.child(100);
+        assert_eq!(child.trim_handlers().len(), 2);
+        child.try_reserve(60).expect("the parent's pools trim");
+    }
+
+    /// The same pool registered twice is one handler; a handler whose pool
+    /// is gone is dropped at the next registration.
+    #[test]
+    fn registering_dedups_by_pool_and_drops_dead_pools() {
+        let b = Budget::new(100);
+        let a = Pool::new(0, &b, Some(7));
+        b.add_trim_handler(a.clone());
+        b.add_trim_handler(Pool::new(0, &b, Some(7)));
+        assert_eq!(b.trim_handlers().len(), 1, "same pool key twice");
+        a.live.store(false, Ordering::SeqCst);
+        b.add_trim_handler(Pool::new(0, &b, Some(8)));
+        assert_eq!(b.trim_handlers().len(), 1, "the dead pool stayed");
+    }
+
+    /// A handler whose pool is gone is not listed, before any later
+    /// registration drops it (a capacity miss must not call into it).
+    #[test]
+    fn trim_handlers_skips_a_dead_pool_before_the_next_registration() {
+        let b = Budget::new(100);
+        let gone = Pool::new(0, &b, Some(1));
+        let alive = Pool::new(0, &b, Some(2));
+        b.add_trim_handler(gone.clone());
+        b.add_trim_handler(alive);
+        assert_eq!(b.trim_handlers().len(), 2);
+        gone.live.store(false, Ordering::SeqCst);
+        assert_eq!(b.trim_handlers().len(), 1, "the dead pool was listed");
+        assert_eq!(b.trim_handlers()[0].pool_key(), Some(2));
+    }
+
+    /// A panic while the handler lock is held poisons it. Every access then
+    /// recovers and clears the poison, so a later `add_trim_handler`
+    /// installs its handler and the handlers already there still answer
+    /// (ft-44871303).
+    #[test]
+    fn a_poisoned_handler_lock_is_recovered_by_every_access() {
+        let poison = |b: &Budget| {
+            let held = b.clone();
+            let _ = std::thread::spawn(move || {
+                let _guard = held.inner.trim_handlers.write().unwrap();
+                panic!("poison the handler lock, injected by the test");
+            })
+            .join();
+            assert!(b.inner.trim_handlers.is_poisoned());
+        };
+
+        let b = Budget::new(100);
+        let early = Pool::new(0, &b, Some(1));
+        b.add_trim_handler(early);
+        poison(&b);
+        let late = Pool::new(0, &b, Some(2));
+        b.add_trim_handler(late.clone());
+        assert!(!b.inner.trim_handlers.is_poisoned(), "poison not cleared");
+        assert_eq!(b.trim_handlers().len(), 2, "add dropped its handler");
+
+        poison(&b);
+        assert_eq!(b.trim_handlers().len(), 2, "read lost the handlers");
+        assert!(!b.inner.trim_handlers.is_poisoned());
+
+        poison(&b);
+        b.set_trim_handler(late);
+        assert_eq!(b.trim_handlers().len(), 1, "set dropped its handler");
+        assert!(!b.inner.trim_handlers.is_poisoned());
     }
 }

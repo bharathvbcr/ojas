@@ -19,7 +19,9 @@
 mod common;
 
 use common::*;
-use ojas_core::{Backend, Budget, CeChunk, CeGrads, LinearCe, OjasError, Tensor};
+use ojas_core::{
+    Backend, BackendCore, BackendModule, Budget, CeChunk, CeGrads, LinearCe, OjasError, Tensor,
+};
 use ojas_metal::MetalBackend;
 
 const OP: &str = "linear_cross_entropy_mean";

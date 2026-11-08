@@ -7,7 +7,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{AdamWConfig, Backend, DType, OjasError, Tensor};
+use ojas_core::{AdamWConfig, BackendCore, BackendFloat, BackendModule, DType, OjasError, Tensor};
 use ojas_wgpu::WgpuBackend;
 
 fn nonfinite_op(r: Result<impl std::fmt::Debug, OjasError>) -> &'static str {

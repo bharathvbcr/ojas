@@ -34,8 +34,8 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use ojas_core::{
-    AdamWConfig, Backend, Budget, CeChunk, CeGrads, DType, MuonNs5Config, Ns5Precision, Numerics,
-    OjasError, Tensor, RMS_NORM_EPS,
+    AdamWConfig, BackendCore, BackendFloat, BackendModule, Budget, CeChunk, CeGrads, DType,
+    MuonNs5Config, Ns5Precision, Numerics, OjasError, Tensor, RMS_NORM_EPS,
 };
 use ojas_cpu::CpuBackend;
 

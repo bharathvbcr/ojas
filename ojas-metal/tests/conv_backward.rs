@@ -29,7 +29,8 @@ use std::collections::HashMap;
 
 use common::*;
 use ojas_core::{
-    Backend, Budget, Conv2dParams, ConvGrad, ConvTranspose2dParams, OjasError, Tensor,
+    Backend, BackendCore, BackendModule, Budget, Conv2dParams, ConvGrad, ConvTranspose2dParams,
+    OjasError, Tensor,
 };
 use ojas_metal::MetalBackend;
 

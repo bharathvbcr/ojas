@@ -16,7 +16,10 @@
 mod common;
 
 use common::{deferred, down, host, host_u32, ids, metal, ok, rand, up};
-use ojas_core::{AdamWConfig, Backend, CeChunk, CeGrads, DType, OjasError, Tensor};
+use ojas_core::{
+    AdamWConfig, BackendCore, BackendFloat, BackendModule, CeChunk, CeGrads, DType, OjasError,
+    Tensor,
+};
 use ojas_metal::MetalBackend;
 
 fn bits(t: &Tensor) -> Vec<u32> {

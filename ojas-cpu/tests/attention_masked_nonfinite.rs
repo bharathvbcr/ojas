@@ -19,7 +19,7 @@
 //! log-sum-exp equals it (it is formed from the scores), and `dV` equals it
 //! (it never reads `V`).
 
-use ojas_core::{Backend, Budget, Numerics, OjasError, Tensor};
+use ojas_core::{BackendModule, Budget, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 
 /// `B = 1`, 4 query heads over 2 KV heads, `T = 96`, `D = 16`, window 10.

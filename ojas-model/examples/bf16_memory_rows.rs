@@ -24,7 +24,7 @@
 
 use std::time::Instant;
 
-use ojas_core::{Autocast, AutocastMode, Backend, Budget, OjasError};
+use ojas_core::{Autocast, AutocastMode, Backend, BackendCore, Budget, OjasError};
 use ojas_cpu::{CosineSchedule, CpuBackend, LrSchedule};
 use ojas_data::TokenBin;
 use ojas_model::{init_params, ActivationCheckpoint, ModelSpec, TrainConfig, Trainer};

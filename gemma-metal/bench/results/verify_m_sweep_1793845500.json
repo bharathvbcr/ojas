@@ -1,0 +1,80 @@
+{
+  "artifact": "verify_m_sweep",
+  "encode_once": {
+    "api_gap_summary": "MTL4CommandBuffer has no replay-prior-encoding API (begin+allocator re-records); path is compute ICB only; mini+E4B Hot DecodeIcb layer-graph capture→from_commands+skip landed (flags default OFF); 31B session graph not migrated; DecodeIcb: inheritBuffers+prebuilt arg-tables (setArgumentTable × cmds; last_setAddress=0). The classic-bind freeze/range/coarse alternatives lost on product tok/s vs prebuilt and were removed",
+    "api_gaps": [
+      "MTL4CommandBuffer has no replay-prior-encoding API (begin+allocator re-records); path is compute ICB only",
+      "mini+E4B Hot DecodeIcb layer-graph capture→from_commands+skip landed (flags default OFF); 31B session graph not migrated",
+      "DecodeIcb: inheritBuffers+prebuilt arg-tables (setArgumentTable × cmds; last_setAddress=0). The classic-bind freeze/range/coarse alternatives lost on product tok/s vs prebuilt and were removed"
+    ],
+    "cb_replay_wired": false,
+    "decode_icb": null,
+    "decode_icb_wired": false,
+    "flag": false,
+    "live_encodes": 0,
+    "not_wired_hits": 0,
+    "pos_buf": true,
+    "scaffold": "cb_replay active=A A=Idle/0 B=Idle/0 dry_run=false wired=false live_encodes=0 not_wired=0 icb_replays=0 icb_exec_fail=0 layer_live_replays=0 stale_completes=0 | decode_icb=none",
+    "seed_tok_gpu": true
+  },
+  "evidence_status": "diagnostic_only",
+  "iters": 4,
+  "model": "mini_synth",
+  "nax_verify_readiness": {
+    "fp8_e8m0_tensorops_dtype": false,
+    "int4_tensorops_dtype": false,
+    "int8_tensorops_dtype": true,
+    "note": "MTLTensorDataType::Int4 is not bound in objc2-metal 0.3, which gates only host-created MTLTensor descriptors (TensorOps itself accepts int4b_format). Qwen Q4 with M>8 calls nn::gemm_q4_mlx_tensorops; M==1 stays on gemv_q4_mlx_simd and M in 2..=8 stays on gemm_q4_mlx. QUANT_PREFILL_GEMM_WIRED stays false because that host descriptor path is unwired and the TensorOps Q4 GEMM is not yet timed.",
+    "quant_prefill_gemm_wired": false
+  },
+  "notes": [
+    "Mini graph via GpuDecodeSession::bench_step_verify_ms; does not touch bench.rs Lane A writer.",
+    "E4B: load Hot session then same M=1..8 loop; write model=e4b into this schema.",
+    "TensorOps Q4 is not shipped: raw-address kernels still lack a shader-side sub-byte tensor constructor and wired host dispatch; the missing Int4 host descriptor binding is separate."
+  ],
+  "prefill_tokens": 2,
+  "results": [
+    {
+      "M": 1,
+      "ms_per_iter": 0.5578227499999999,
+      "ratio_vs_m1": 1.0
+    },
+    {
+      "M": 2,
+      "ms_per_iter": 1.0508437499999999,
+      "ratio_vs_m1": 1.883830930165541
+    },
+    {
+      "M": 3,
+      "ms_per_iter": 1.6769375,
+      "ratio_vs_m1": 3.0062192694722474
+    },
+    {
+      "M": 4,
+      "ms_per_iter": 2.0120625,
+      "ratio_vs_m1": 3.6069925437784676
+    },
+    {
+      "M": 5,
+      "ms_per_iter": 2.2543855,
+      "ratio_vs_m1": 4.041401144001388
+    },
+    {
+      "M": 6,
+      "ms_per_iter": 2.616323,
+      "ratio_vs_m1": 4.69024076196247
+    },
+    {
+      "M": 7,
+      "ms_per_iter": 3.1186875,
+      "ratio_vs_m1": 5.59082163644276
+    },
+    {
+      "M": 8,
+      "ms_per_iter": 3.5955000000000004,
+      "ratio_vs_m1": 6.445595845633762
+    }
+  ],
+  "unix_ts": 1793845500,
+  "warmup": 1
+}

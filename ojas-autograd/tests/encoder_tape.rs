@@ -16,7 +16,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use ojas_autograd::{central_diff, gradients_match, Tape, Var};
 use ojas_core::{
-    erf_f64, forward_backend_methods, AffineGrad, Backend, Budget, Numerics, OjasError, Tensor,
+    erf_f64, forward_backend_methods, AffineGrad, Backend, BackendCore, BackendFloat, BackendInt,
+    BackendModule, Budget, Numerics, OjasError, Tensor,
 };
 use ojas_cpu::CpuBackend;
 
@@ -220,10 +221,31 @@ macro_rules! all_but_linear_backwards {
     };
 }
 
-impl Backend for Counting {
+impl BackendCore for Counting {
     ojas_core::with_backend_methods!(
         forward_backend_methods,
-        { self, self.inner, none, all_but_linear_backwards }
+        { self, self.inner, none, all_but_linear_backwards, core}
+    );
+}
+
+impl BackendFloat for Counting {
+    ojas_core::with_backend_methods!(
+        forward_backend_methods,
+        { self, self.inner, none, all_but_linear_backwards, float}
+    );
+}
+
+impl BackendInt for Counting {
+    ojas_core::with_backend_methods!(
+        forward_backend_methods,
+        { self, self.inner, none, all_but_linear_backwards, int}
+    );
+}
+
+impl BackendModule for Counting {
+    ojas_core::with_backend_methods!(
+        forward_backend_methods,
+        { self, self.inner, none, all_but_linear_backwards, module}
     );
 
     fn linear_bias_backward(

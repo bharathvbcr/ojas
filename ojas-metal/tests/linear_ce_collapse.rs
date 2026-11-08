@@ -15,7 +15,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{Backend, CeChunk, CeGrads};
+use ojas_core::{BackendModule, CeChunk, CeGrads};
 use ojas_metal::MetalBackend;
 
 /// `|got - want|` in units of the f32 spacing at `want`.

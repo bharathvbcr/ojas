@@ -476,7 +476,7 @@ impl Sparse24Weight {
     pub fn linear_24_forward(&self, input: &Tensor, budget: &Budget) -> Result<Tensor, OjasError> {
         let w_tensor = Tensor::from_f32(&self.pruned_f32, &[self.n_out, self.k_in], budget)?;
         let cpu = crate::CpuBackend::new(budget.clone());
-        ojas_core::Backend::linear_forward(&cpu, input, &w_tensor)
+        ojas_core::BackendModule::linear_forward(&cpu, input, &w_tensor)
     }
 
     /// Quantizes the `2:4`-pruned slow weights into symmetric per-channel `INT8`

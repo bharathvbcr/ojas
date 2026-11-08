@@ -1,7 +1,9 @@
 //! `CpuBackend::permute`: a contiguous copy with axes reordered, moved bit
 //! for bit, validated by `ojas_core::permute_dims` and charged to the budget.
 
-use ojas_core::{inverse_permutation, Backend, Budget, DType, OjasError, Tensor, MAX_PERMUTE_RANK};
+use ojas_core::{
+    inverse_permutation, BackendFloat, Budget, DType, OjasError, Tensor, MAX_PERMUTE_RANK,
+};
 use ojas_cpu::CpuBackend;
 
 mod common;

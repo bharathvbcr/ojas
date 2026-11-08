@@ -9,7 +9,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{Backend, Conv2dParams};
+use ojas_core::{BackendCore, BackendModule, Conv2dParams};
 
 const ATOL: f32 = 1e-5;
 const RTOL: f32 = 1e-4;

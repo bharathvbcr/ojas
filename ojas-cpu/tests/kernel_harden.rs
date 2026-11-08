@@ -2,7 +2,9 @@
 //! A failure is a real mismatch with the scalar reduction order, the causal
 //! mask, or the existing non-finite / empty-tensor policy.
 
-use ojas_core::{exp_exact, AdamWConfig, Backend, Budget, DType, Numerics, Tensor, RMS_NORM_EPS};
+use ojas_core::{
+    exp_exact, AdamWConfig, BackendModule, Budget, DType, Numerics, Tensor, RMS_NORM_EPS,
+};
 use ojas_cpu::{scaled_lr, CosineSchedule, CpuBackend, GradAccumulator};
 
 mod common;

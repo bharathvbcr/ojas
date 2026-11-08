@@ -173,7 +173,7 @@ fn dropping_the_runtime_returns_every_charge_to_the_budget() {
 
 #[test]
 fn adversarial_metal_backend_trim_pool_and_child_budget_invariants() {
-    use ojas_core::{Backend, BudgetTrimHandler, Tensor};
+    use ojas_core::{BackendCore, BudgetTrimHandler, Tensor};
     use ojas_metal::MetalBackend;
 
     let root = Budget::new(64 * MIB as u64);

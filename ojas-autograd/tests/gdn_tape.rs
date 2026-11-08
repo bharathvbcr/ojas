@@ -4,7 +4,7 @@
 //! `ojas-oracle/tests/gdn.rs` (published goldens and central differences).
 
 use ojas_autograd::Tape;
-use ojas_core::{Backend, Budget, GdnInputs, Numerics, Tensor};
+use ojas_core::{BackendFloat, BackendModule, Budget, GdnInputs, Numerics, Tensor};
 use ojas_cpu::CpuBackend;
 
 const B: usize = 1;

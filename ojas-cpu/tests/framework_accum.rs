@@ -11,7 +11,7 @@ mod common;
 use std::time::Instant;
 
 use common::{assert_capacity, assert_nonfinite, assert_shape, bits, SplitMix64};
-use ojas_core::{Backend, Budget, DType, OjasError, Tensor};
+use ojas_core::{BackendFloat, Budget, DType, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 
 fn t(data: &[f32], shape: &[usize]) -> Tensor {

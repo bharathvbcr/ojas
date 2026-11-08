@@ -6,7 +6,7 @@
 
 use std::thread;
 
-use ojas_core::{Backend, Budget, DType, OjasError, Tensor};
+use ojas_core::{BackendFloat, Budget, DType, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 
 mod common;

@@ -21,7 +21,7 @@
 //!
 //! The values against torch are in `sam_backward_golden.rs`.
 
-use ojas_core::{Backend, Budget, Numerics, OjasError, Tensor};
+use ojas_core::{BackendModule, Budget, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 
 mod common;

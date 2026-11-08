@@ -13,7 +13,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{AttentionOpts, Backend, OjasError, Tensor, METAL_MAX_HEAD_DIM};
+use ojas_core::{AttentionOpts, BackendCore, BackendModule, OjasError, Tensor, METAL_MAX_HEAD_DIM};
 use ojas_metal::MetalBackend;
 
 #[derive(Clone, Debug)]

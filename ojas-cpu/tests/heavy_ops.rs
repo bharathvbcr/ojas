@@ -14,7 +14,8 @@ mod common;
 
 use common::{bits, SplitMix64};
 use ojas_core::{
-    exp_exact, AdamWConfig, Backend, Budget, MuonNs5Config, Numerics, OjasError, Tensor,
+    exp_exact, AdamWConfig, BackendFloat, BackendModule, Budget, MuonNs5Config, Numerics,
+    OjasError, Tensor,
 };
 use ojas_cpu::CpuBackend;
 

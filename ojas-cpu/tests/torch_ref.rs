@@ -9,7 +9,7 @@
 //! (warmup 4, total 20). Matrices use weight decay 0.1. The norm weight uses
 //! weight decay 0, so that parameter is not scaled before the moment update.
 
-use ojas_core::{AdamWConfig, Backend, Budget, DType, Tensor, RMS_NORM_EPS};
+use ojas_core::{AdamWConfig, BackendModule, Budget, DType, Tensor, RMS_NORM_EPS};
 use ojas_cpu::{scaled_lr, CosineSchedule, CpuBackend};
 
 #[path = "torch_ref/data.rs"]

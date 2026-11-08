@@ -13,8 +13,8 @@
 //! (`CpuBackend::new`), so the per-task terms are one task's.
 
 use ojas_core::{
-    Backend, Budget, CeChunk, CeGrads, GdnInputs, OjasError, Tensor, GDN_CHECKPOINT_TOKENS,
-    RMS_NORM_EPS,
+    BackendFloat, BackendModule, Budget, CeChunk, CeGrads, GdnInputs, OjasError, Tensor,
+    GDN_CHECKPOINT_TOKENS, RMS_NORM_EPS,
 };
 use ojas_cpu::CpuBackend;
 

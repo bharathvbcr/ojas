@@ -22,7 +22,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use common::SplitMix64;
-use ojas_core::{Backend, Budget, Numerics, OjasError, Tensor};
+use ojas_core::{BackendModule, Budget, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 
 const HUGE: u64 = 1 << 40;

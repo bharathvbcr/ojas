@@ -22,8 +22,8 @@ use ojas_core::{
     interpolate_bilinear_backward_dims, interpolate_bilinear_forward_dims,
     l2_normalize_forward_dims, max_pool2d_backward_dims, max_pool2d_forward_dims,
     rms_qkv_norm_forward_dims, rope_interleaved_forward_dims, seq_mean_forward_dims,
-    slice_backward_dims, slice_dims, AttentionOpts, Backend, Budget, Conv2dParams,
-    ConvTranspose2dParams, Numerics, OjasError, Tensor,
+    slice_backward_dims, slice_dims, AttentionOpts, BackendCore, BackendFloat, BackendModule,
+    Budget, Conv2dParams, ConvTranspose2dParams, Numerics, OjasError, Tensor,
 };
 use ojas_cpu::CpuBackend;
 

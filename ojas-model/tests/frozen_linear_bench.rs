@@ -14,7 +14,7 @@
 
 use std::time::Instant;
 
-use ojas_core::{Backend, Budget, Tensor};
+use ojas_core::{Backend, BackendCore, Budget, Tensor};
 use ojas_cpu::CpuBackend;
 
 const T: usize = 2048;

@@ -21,7 +21,10 @@
 
 use std::sync::{Arc, Mutex};
 
-use ojas_core::{forward_backend_keep, forward_backend_methods, Backend, OjasError};
+use ojas_core::{
+    forward_backend_keep, forward_backend_methods, Backend, BackendCore, BackendFloat, BackendInt,
+    BackendModule, OjasError,
+};
 
 /// The per-call cancel check: `Err` carries the cancel's own message
 /// (`"cancelled: Explicit"`, which gusset maps to `context.Canceled`).
@@ -180,10 +183,31 @@ impl<B: Backend> Gated<B> {
 /// provided method the inner backend overrides is never replaced by the
 /// trait default, and a method added to the trait is gated without an edit
 /// here. A size query or accessor (`pure`) is not gated.
-impl<B: Backend> Backend for Gated<B> {
+impl<B: Backend> BackendCore for Gated<B> {
     ojas_core::with_backend_methods!(
         forward_backend_methods,
-        { self, self.inner, admit, forward_backend_keep }
+        { self, self.inner, admit, forward_backend_keep, core}
+    );
+}
+
+impl<B: Backend> BackendFloat for Gated<B> {
+    ojas_core::with_backend_methods!(
+        forward_backend_methods,
+        { self, self.inner, admit, forward_backend_keep, float}
+    );
+}
+
+impl<B: Backend> BackendInt for Gated<B> {
+    ojas_core::with_backend_methods!(
+        forward_backend_methods,
+        { self, self.inner, admit, forward_backend_keep, int}
+    );
+}
+
+impl<B: Backend> BackendModule for Gated<B> {
+    ojas_core::with_backend_methods!(
+        forward_backend_methods,
+        { self, self.inner, admit, forward_backend_keep, module}
     );
 }
 
@@ -322,10 +346,31 @@ mod tests {
         }
     }
 
-    impl Backend for Spy {
+    impl BackendCore for Spy {
         ojas_core::with_backend_methods!(
             forward_backend_methods,
-            { self, self.inner, none, all_but_recompute }
+            { self, self.inner, none, all_but_recompute, core}
+        );
+    }
+
+    impl BackendFloat for Spy {
+        ojas_core::with_backend_methods!(
+            forward_backend_methods,
+            { self, self.inner, none, all_but_recompute, float}
+        );
+    }
+
+    impl BackendInt for Spy {
+        ojas_core::with_backend_methods!(
+            forward_backend_methods,
+            { self, self.inner, none, all_but_recompute, int}
+        );
+    }
+
+    impl BackendModule for Spy {
+        ojas_core::with_backend_methods!(
+            forward_backend_methods,
+            { self, self.inner, none, all_but_recompute, module}
         );
         fn causal_sdpa_backward_recompute(
             &self,

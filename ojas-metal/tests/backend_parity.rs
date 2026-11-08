@@ -9,7 +9,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{Backend, Numerics};
+use ojas_core::{BackendCore, BackendFloat, BackendModule, Numerics, Tensor};
 
 /// GEMM-based ops: K-length dot products of values in [-1, 1].
 const GEMM_ATOL: f32 = 2e-5;
@@ -212,6 +212,65 @@ fn metal_reports_fast_numerics() {
     assert_eq!(metal().numerics(), Numerics::Fast);
 }
 
+/// Order-sensitive products: a leading +1 and -1, then residuals of `p * 1e-6`.
+/// The 32×32 TensorOps tile disagrees with the CPU left fold on K = 16.
+fn order_sensitive_pair(rows: usize, kin: usize, nout: usize) -> (Tensor, Tensor) {
+    let mut x = vec![0.0f32; rows * kin];
+    let mut w = vec![0.0f32; nout * kin];
+    for i in 0..rows {
+        for p in 0..kin {
+            x[i * kin + p] = match p {
+                0 => 1.0,
+                1 => -1.0,
+                _ => (p as f32) * 1.0e-6,
+            };
+        }
+    }
+    for j in 0..nout {
+        for p in 0..kin {
+            w[j * kin + p] = 1.0 + (j as f32) * 1.0e-3;
+        }
+    }
+    (host(&x, &[rows, kin]), host(&w, &[nout, kin]))
+}
+
+fn bits_of(t: &Tensor) -> Vec<u32> {
+    down(t).iter().map(|x| x.to_bits()).collect()
+}
+
+#[test]
+fn exact_linear_matches_cpu_bits() {
+    let m = metal().with_numerics(Numerics::Exact);
+    // The shared device flag must not pull Exact linear onto bf16 accumulation.
+    m.set_bf16_accumulation(true);
+    let c = cpu();
+    assert_eq!(m.numerics(), Numerics::Exact);
+    assert_eq!(metal().numerics(), Numerics::Fast);
+    let nt0 = m.kernel_dispatches("matmul_fixed_order_nt_f32");
+    let nn0 = m.kernel_dispatches("matmul_fixed_order_nn_f32");
+    let tn0 = m.kernel_dispatches("matmul_fixed_order_tn_f32");
+    let bf0 = m.kernel_dispatches("ojas_gemm_bf16_accum");
+
+    // K = 16 is the shape where the TensorOps tile missed the CPU fold.
+    let (x, w) = order_sensitive_pair(8, 16, 16);
+    let y = ok("cpu linear", c.linear_forward(&x, &w));
+    let my = ok("metal linear", m.linear_forward(&up(&m, &x), &up(&m, &w)));
+    assert_eq!(bits_of(&my), bits_of(&y), "exact linear forward");
+    assert_eq!(m.kernel_dispatches("matmul_fixed_order_nt_f32") - nt0, 1);
+
+    let gy = host(&vec![0.25f32; 8 * 16], &[8, 16]);
+    let (gx, gw) = ok("cpu bwd", c.linear_backward(&x, &w, &gy));
+    let (mgx, mgw) = ok(
+        "metal bwd",
+        m.linear_backward(&up(&m, &x), &up(&m, &w), &up(&m, &gy)),
+    );
+    assert_eq!(bits_of(&mgx), bits_of(&gx), "exact linear grad input");
+    assert_eq!(bits_of(&mgw), bits_of(&gw), "exact linear grad weight");
+    assert_eq!(m.kernel_dispatches("matmul_fixed_order_nn_f32") - nn0, 1);
+    assert_eq!(m.kernel_dispatches("matmul_fixed_order_tn_f32") - tn0, 1);
+    assert_eq!(m.kernel_dispatches("ojas_gemm_bf16_accum"), bf0);
+}
+
 #[test]
 fn linear_matches_cpu() {
     let (m, c) = (metal(), cpu());
@@ -225,6 +284,14 @@ fn linear_matches_cpu() {
         let y = ok("cpu linear", c.linear_forward(&x, &w));
         let my = ok("metal linear", m.linear_forward(&dx, &dw));
         same_tensor("linear y", &my, &y, tol, GEMM_RTOL);
+        if i == 0 {
+            let host = down(&my);
+            eprintln!(
+                "tessl linear_forward m={rows} k={kin} n={nout} return0={} len={}",
+                host[0],
+                host.len()
+            );
+        }
         let (gx, gw) = ok("cpu linear bwd", c.linear_backward(&x, &w, &gy));
         let (mgx, mgw) = ok("metal linear bwd", m.linear_backward(&dx, &dw, &dgy));
         same_tensor("linear dx", &mgx, &gx, GEMM_ATOL * nout as f32, GEMM_RTOL);

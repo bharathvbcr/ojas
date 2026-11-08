@@ -91,7 +91,7 @@ Each row is an op of the `Backend` trait (`ojas-core/src/backend.rs`). The Metal
 | Operation | CPU (`ojas-cpu`) | Metal (`ojas-metal`) | wgpu (`ojas-wgpu`) | DType | Specification |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Embedding** | Table lookup / scatter-add; ARM64 NEON `gather_embedding_rows_768` in `ojas-simd` | `ojas_embed_*` | WGSL | `f32` (`bf16` table on CPU/Metal), ids `u32` | $y_t = W[x_t]$ |
-| **Linear** | Packed GEMM (Exact) or SIMD/Accelerate (Fast) | tessl GEMM (`ExactF32` or `Bf16` lane), or `ojas_gemm_bf16_accum` under `bf16_accumulation` | WGSL GEMM | `f32`, `bf16` | $y = x W^T$, no bias |
+| **Linear** | Packed GEMM (Exact) or SIMD/Accelerate (Fast) | `Numerics::Fast`: tessl GEMM (`ExactF32` or `Bf16` lane), or `ojas_gemm_bf16_accum` under `bf16_accumulation`. `Numerics::Exact`: tessl `gemm_fixed_order_*` (one thread per output, ascending `k`); bf16 accumulation does not take this path | WGSL GEMM | `f32`, `bf16` | $y = x W^T$, no bias |
 | **RMSNorm** | Exact reduction | `ojas_rms_*` | WGSL | `f32` | $y = x / \sqrt{\overline{x^2} + 10^{-6}} \odot w$ |
 | **Half-split RoPE** | Split last axis | `ojas_rope` | WGSL | `f32` | Rotate halves $(-x_2, x_1)$; layout `[B, T, H, D]` |
 | **RMS QK-Norm** | Head-wise RMSNorm | `ojas_rms_*` per head | WGSL | `f32` | Applied to Q and K before RoPE (nanolab order) |

@@ -9,7 +9,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{Backend, OjasError, Tensor};
+use ojas_core::{BackendCore, BackendModule, OjasError, Tensor};
 use ojas_wgpu::WgpuBackend;
 
 fn qkvg(seed: u64, shape: &[usize]) -> [Tensor; 4] {

@@ -16,7 +16,7 @@
 mod common;
 
 use common::*;
-use ojas_core::Backend;
+use ojas_core::{BackendCore, BackendModule};
 use ojas_metal::MetalBackend;
 
 fn dy(r: usize, h: usize) -> f32 {

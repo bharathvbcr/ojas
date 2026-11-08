@@ -20,7 +20,8 @@ mod common;
 
 use common::*;
 use ojas_core::{
-    max_pool2d_backward_dims, max_pool2d_forward_dims, Backend, DType, OjasError, Tensor,
+    max_pool2d_backward_dims, max_pool2d_forward_dims, BackendCore, BackendModule, DType,
+    OjasError, Tensor,
 };
 use ojas_metal::MetalBackend;
 

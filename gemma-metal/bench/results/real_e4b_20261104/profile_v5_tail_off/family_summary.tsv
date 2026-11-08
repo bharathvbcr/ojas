@@ -1,0 +1,11 @@
+family	count_per_token	ms_per_token_mean
+attention	84.0	0.4182
+copy_scale	46.0	0.1072
+eltwise	42.0	0.1211
+gemv	254.0	12.2621
+kv_append	2.0	0.0046
+norm	212.0	2.0596
+norm_rope_fused	42.0	0.3630
+other	1.0	0.0062
+ple	2.0	0.0056
+softcap_argmax	1.0	0.0779

@@ -79,7 +79,7 @@
 
 use std::time::Instant;
 
-use ojas_core::{AdamWConfig, Backend, Budget, OjasError, Tensor};
+use ojas_core::{AdamWConfig, BackendCore, BackendFloat, BackendModule, Budget, OjasError, Tensor};
 use ojas_metal::MetalBackend;
 
 type R<T> = Result<T, OjasError>;
@@ -436,7 +436,7 @@ mod probe {
     use std::thread::sleep;
     use std::time::{Duration, Instant};
 
-    use ojas_core::{Backend, BackendId, OjasError, Tensor};
+    use ojas_core::{BackendCore, BackendFloat, BackendId, BackendModule, OjasError, Tensor};
     use ojas_metal::MetalBackend;
     use tessl::dispatch::{dispatch_1d, set_f32, set_gpu_buf, set_gpu_buf_offset, set_u32, Binder};
     use tessl::gemm::{gemm_tn_splitk_par_f32, GemmOperands};

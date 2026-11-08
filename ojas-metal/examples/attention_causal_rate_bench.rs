@@ -19,7 +19,7 @@ mod bench {
     use std::process::Command;
     use std::time::Instant;
 
-    use ojas_core::{AttentionOpts, Backend, Budget, Tensor};
+    use ojas_core::{AttentionOpts, BackendCore, BackendModule, Budget, Tensor};
     use ojas_metal::MetalBackend;
 
     const MAX_LOAD: f64 = 6.0;

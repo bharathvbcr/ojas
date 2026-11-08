@@ -142,8 +142,16 @@ pub(crate) fn whole_calls() -> (usize, usize) {
 }
 
 /// `a [m, k] · b [k, n]` under `numerics` bypasses the packed kernel.
+///
+/// Only a fast CPU provider (Accelerate on macOS, the portable tile elsewhere)
+/// takes that path. Exact selects [`ojas_core::GemmProvider::CpuReference`].
 pub(crate) fn whole_call(numerics: Numerics, m: usize, k: usize, n: usize) -> bool {
-    numerics == Numerics::Fast && m.saturating_mul(n).saturating_mul(k) >= FAST_WHOLE_CALL_MACS
+    let provider = ojas_core::GemmProvider::select(numerics, BackendId::Cpu);
+    let fast_cpu = matches!(
+        provider,
+        ojas_core::GemmProvider::Accelerate | ojas_core::GemmProvider::PortableFast
+    );
+    fast_cpu && m.saturating_mul(n).saturating_mul(k) >= FAST_WHOLE_CALL_MACS
 }
 
 /// Read-only strided matrix: element `(i, j)` is `data[i * rs + j * cs]`.
@@ -1661,7 +1669,7 @@ mod tests {
     #[test]
     fn one_row_nonfinite_products_are_refused_before_a_result_is_returned() {
         use crate::backend::CpuBackend;
-        use ojas_core::{Backend, Tensor};
+        use ojas_core::{BackendModule, Tensor};
         let kin = 8usize;
         let nout = FAST_WHOLE_CALL_MACS.div_ceil(kin);
         assert!(whole_call(Numerics::Fast, nout, 1, kin));

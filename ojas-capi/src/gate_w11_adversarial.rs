@@ -13,8 +13,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ojas_core::{
-    forward_backend_keep, forward_backend_methods, Autocast, AutocastMode, Backend, Budget,
-    Numerics, OjasError, Tensor,
+    forward_backend_keep, forward_backend_methods, Autocast, AutocastMode, Backend, BackendCore,
+    BackendFloat, BackendInt, BackendModule, Budget, Numerics, OjasError, Tensor,
 };
 use ojas_cpu::{CosineSchedule, CpuBackend, LrSchedule};
 use ojas_data::TokenBin;
@@ -528,10 +528,31 @@ impl<B: Backend> Tripper<B> {
     }
 }
 
-impl<B: Backend> Backend for Tripper<B> {
+impl<B: Backend> BackendCore for Tripper<B> {
     ojas_core::with_backend_methods!(
         forward_backend_methods,
-        { self, self.inner, admit, forward_backend_keep }
+        { self, self.inner, admit, forward_backend_keep, core}
+    );
+}
+
+impl<B: Backend> BackendFloat for Tripper<B> {
+    ojas_core::with_backend_methods!(
+        forward_backend_methods,
+        { self, self.inner, admit, forward_backend_keep, float}
+    );
+}
+
+impl<B: Backend> BackendInt for Tripper<B> {
+    ojas_core::with_backend_methods!(
+        forward_backend_methods,
+        { self, self.inner, admit, forward_backend_keep, int}
+    );
+}
+
+impl<B: Backend> BackendModule for Tripper<B> {
+    ojas_core::with_backend_methods!(
+        forward_backend_methods,
+        { self, self.inner, admit, forward_backend_keep, module}
     );
 }
 

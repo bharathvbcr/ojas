@@ -13,7 +13,7 @@
 
 mod qwen35_common;
 
-use ojas_core::{Backend, Budget, Tensor};
+use ojas_core::{BackendCore, Budget, Tensor};
 use ojas_metal::MetalBackend;
 use qwen35_common::lora::{fixture_sites, lora_file};
 use qwen35_common::readout::*;

@@ -8,7 +8,8 @@ mod common;
 
 use common::*;
 use ojas_core::{
-    inverse_permutation, Backend, BackendId, Budget, DType, OjasError, Tensor, MAX_PERMUTE_RANK,
+    inverse_permutation, BackendCore, BackendFloat, BackendId, Budget, DType, OjasError, Tensor,
+    MAX_PERMUTE_RANK,
 };
 use ojas_metal::MetalBackend;
 

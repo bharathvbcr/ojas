@@ -19,7 +19,7 @@ mod common;
 use std::thread;
 
 use common::*;
-use ojas_core::{AttentionOpts, Backend, Budget, OjasError};
+use ojas_core::{AttentionOpts, BackendCore, BackendFloat, BackendModule, Budget, OjasError};
 use ojas_oracle::gemma_golden::check;
 
 // =========================================================================

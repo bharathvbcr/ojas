@@ -10,7 +10,7 @@
 
 use std::ops::Range;
 
-use ojas_core::{AttentionOpts, Backend, Budget, Numerics, OjasError, Tensor};
+use ojas_core::{AttentionOpts, BackendModule, Budget, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 
 fn backend(threads: usize, numerics: Numerics) -> CpuBackend {

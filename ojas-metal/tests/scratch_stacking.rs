@@ -13,7 +13,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{Backend, Budget, DType, MuonNs5Config, OptimizerKind, Tensor};
+use ojas_core::{BackendCore, BackendModule, Budget, DType, MuonNs5Config, OptimizerKind, Tensor};
 use ojas_metal::MetalBackend;
 
 #[test]

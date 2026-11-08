@@ -18,7 +18,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use ojas_core::{AdamWConfig, Backend, Budget, Numerics, Tensor};
+use ojas_core::{AdamWConfig, Backend, BackendCore, Budget, Numerics, Tensor};
 use ojas_cpu::CpuBackend;
 use ojas_io::SafeTensors;
 

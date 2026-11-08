@@ -7,7 +7,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{Backend, OjasError, Tensor, RMS_NORM_EPS};
+use ojas_core::{BackendCore, BackendModule, OjasError, Tensor, RMS_NORM_EPS};
 use ojas_wgpu::WgpuBackend;
 
 fn bits(g: &WgpuBackend, t: &Tensor) -> Vec<u32> {

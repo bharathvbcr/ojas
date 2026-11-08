@@ -25,8 +25,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use ojas_autograd::{Tape, Var};
 use ojas_core::{
-    linear_ce_dims, AdamWConfig, Backend, BackendId, Budget, CeChunk, CeGrads, DType, DeviceBuffer,
-    LinearCe, MuonNs5Config, Numerics, OjasError, PerHeadGateGrad, Tensor, ValueResidualGrad,
+    linear_ce_dims, AdamWConfig, Backend, BackendCore, BackendFloat, BackendId, BackendInt,
+    BackendModule, Budget, CeChunk, CeGrads, DType, DeviceBuffer, LinearCe, MuonNs5Config,
+    Numerics, OjasError, PerHeadGateGrad, Tensor, ValueResidualGrad,
 };
 use ojas_cpu::CpuBackend;
 
@@ -197,7 +198,7 @@ pub fn unsupported(op: &'static str) -> OjasError {
     }
 }
 
-impl Backend for Resident {
+impl BackendCore for Resident {
     fn id(&self) -> BackendId {
         self.id
     }
@@ -215,6 +216,70 @@ impl Backend for Resident {
             }),
         }
     }
+}
+
+impl BackendFloat for Resident {
+    fn silu_forward(&self, x: &Tensor) -> Result<Tensor, OjasError> {
+        let y = self.cpu.silu_forward(&self.host_of("silu_forward", x)?)?;
+        self.dev(y)
+    }
+    fn silu_backward(&self, x: &Tensor, grad: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "silu_backward";
+        let g = self
+            .cpu
+            .silu_backward(&self.host_of(OP, x)?, &self.host_of(OP, grad)?)?;
+        self.dev(g)
+    }
+    fn mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "mul_forward";
+        let y = self
+            .cpu
+            .mul_forward(&self.host_of(OP, a)?, &self.host_of(OP, b)?)?;
+        self.dev(y)
+    }
+    fn mul_backward(
+        &self,
+        a: &Tensor,
+        b: &Tensor,
+        grad: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        const OP: &str = "mul_backward";
+        let (ga, gb) = self.cpu.mul_backward(
+            &self.host_of(OP, a)?,
+            &self.host_of(OP, b)?,
+            &self.host_of(OP, grad)?,
+        )?;
+        Ok((self.dev(ga)?, self.dev(gb)?))
+    }
+    fn residual_add_forward(&self, x: &Tensor, y: &Tensor) -> Result<Tensor, OjasError> {
+        const OP: &str = "residual_add_forward";
+        let z = self
+            .cpu
+            .residual_add_forward(&self.host_of(OP, x)?, &self.host_of(OP, y)?)?;
+        self.dev(z)
+    }
+    fn residual_add_backward(
+        &self,
+        x: &Tensor,
+        y: &Tensor,
+        grad: &Tensor,
+    ) -> Result<(Tensor, Tensor), OjasError> {
+        const OP: &str = "residual_add_backward";
+        let (gx, gy) = self.cpu.residual_add_backward(
+            &self.host_of(OP, x)?,
+            &self.host_of(OP, y)?,
+            &self.host_of(OP, grad)?,
+        )?;
+        Ok((self.dev(gx)?, self.dev(gy)?))
+    }
+    fn clip_grad_norm(&self, _: &mut [Tensor], _: f32) -> Result<f32, OjasError> {
+        Err(unsupported("clip_grad_norm"))
+    }
+}
+
+impl BackendInt for Resident {}
+
+impl BackendModule for Resident {
     fn embedding_forward(&self, table: &Tensor, ids: &Tensor) -> Result<Tensor, OjasError> {
         const OP: &str = "embedding_forward";
         let y = self
@@ -375,59 +440,6 @@ impl Backend for Resident {
     ) -> Result<ValueResidualGrad, OjasError> {
         Err(unsupported("value_residual_blend_backward"))
     }
-    fn silu_forward(&self, x: &Tensor) -> Result<Tensor, OjasError> {
-        let y = self.cpu.silu_forward(&self.host_of("silu_forward", x)?)?;
-        self.dev(y)
-    }
-    fn silu_backward(&self, x: &Tensor, grad: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "silu_backward";
-        let g = self
-            .cpu
-            .silu_backward(&self.host_of(OP, x)?, &self.host_of(OP, grad)?)?;
-        self.dev(g)
-    }
-    fn mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "mul_forward";
-        let y = self
-            .cpu
-            .mul_forward(&self.host_of(OP, a)?, &self.host_of(OP, b)?)?;
-        self.dev(y)
-    }
-    fn mul_backward(
-        &self,
-        a: &Tensor,
-        b: &Tensor,
-        grad: &Tensor,
-    ) -> Result<(Tensor, Tensor), OjasError> {
-        const OP: &str = "mul_backward";
-        let (ga, gb) = self.cpu.mul_backward(
-            &self.host_of(OP, a)?,
-            &self.host_of(OP, b)?,
-            &self.host_of(OP, grad)?,
-        )?;
-        Ok((self.dev(ga)?, self.dev(gb)?))
-    }
-    fn residual_add_forward(&self, x: &Tensor, y: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "residual_add_forward";
-        let z = self
-            .cpu
-            .residual_add_forward(&self.host_of(OP, x)?, &self.host_of(OP, y)?)?;
-        self.dev(z)
-    }
-    fn residual_add_backward(
-        &self,
-        x: &Tensor,
-        y: &Tensor,
-        grad: &Tensor,
-    ) -> Result<(Tensor, Tensor), OjasError> {
-        const OP: &str = "residual_add_backward";
-        let (gx, gy) = self.cpu.residual_add_backward(
-            &self.host_of(OP, x)?,
-            &self.host_of(OP, y)?,
-            &self.host_of(OP, grad)?,
-        )?;
-        Ok((self.dev(gx)?, self.dev(gy)?))
-    }
     fn cross_entropy_mean_forward(
         &self,
         logits: &Tensor,
@@ -455,9 +467,6 @@ impl Backend for Resident {
             ignore,
         )?;
         self.dev(g)
-    }
-    fn clip_grad_norm(&self, _: &mut [Tensor], _: f32) -> Result<f32, OjasError> {
-        Err(unsupported("clip_grad_norm"))
     }
     fn adamw_step(
         &self,

@@ -52,6 +52,8 @@ pub enum KernelId {
     RmsNormBf16,
     /// Fused `resid += rms_norm(x) * weight` (Gemma4 dual-norm residual tails).
     RmsNormResidualAddF32,
+    /// [`Self::RmsNormResidualAddF32`] that also writes the next GEMV's bf16 input.
+    RmsNormResidualAddEmitBf16,
     PleLookup,
     PleLookupQ4Mlx,
     PleResidualAdd,
@@ -63,6 +65,22 @@ pub enum KernelId {
     SoftcapSample,
     SoftcapLogits,
     SoftcapArgmaxOnePass,
+    /// Greedy argmax over the full vocab in two GPU-wide dispatches (partials, then fold).
+    ArgmaxTwoPassPartials,
+    ArgmaxTwoPassFinal,
+    /// Decode attention in one pass when every live key fits one chunk (D=256 / D=512).
+    FlashAttnDecodeSingleH256,
+    FlashAttnDecodeSingleH512,
+    /// gelu(gate) * up for the M rows of a verify block, `up` at a row stride.
+    GeluMulRowsBf16,
+    /// The same, for the M query rows of a verify block over one K/V buffer.
+    FlashAttnVerifySingleH256,
+    FlashAttnVerifySingleH512,
+    /// Q4 GEMM with a compile-time row count (verify blocks, M = 2..5; 6..8 split in two).
+    GemmQ4MlxM2,
+    GemmQ4MlxM3,
+    GemmQ4MlxM4,
+    GemmQ4MlxM5,
     ArgmaxF32,
     KvStoreTimestep,
     KvStoreTimestepPair,
@@ -105,6 +123,7 @@ impl KernelId {
             KernelId::RmsNormF32 => "rms_norm_f32",
             KernelId::RmsNormBf16 => "rms_norm_bf16",
             KernelId::RmsNormResidualAddF32 => "rms_norm_residual_add_f32",
+            KernelId::RmsNormResidualAddEmitBf16 => "rms_norm_residual_add_emit_bf16",
             KernelId::PleLookup => "ple_lookup",
             KernelId::PleLookupQ4Mlx => "ple_lookup_q4_mlx",
             KernelId::PleResidualAdd => "ple_residual_add",
@@ -114,6 +133,17 @@ impl KernelId {
             KernelId::SoftcapSample => "softcap_sample",
             KernelId::SoftcapLogits => "softcap_logits",
             KernelId::SoftcapArgmaxOnePass => "softcap_argmax_one_pass",
+            KernelId::ArgmaxTwoPassPartials => "argmax_two_pass_partials",
+            KernelId::ArgmaxTwoPassFinal => "argmax_two_pass_final",
+            KernelId::FlashAttnDecodeSingleH256 => "flash_attn_decode_single_h256_c128_r16",
+            KernelId::FlashAttnDecodeSingleH512 => "flash_attn_decode_single_h512_c128_r32",
+            KernelId::GeluMulRowsBf16 => "gelu_mul_rows_bf16",
+            KernelId::FlashAttnVerifySingleH256 => "flash_attn_verify_single_h256_c128_r16",
+            KernelId::FlashAttnVerifySingleH512 => "flash_attn_verify_single_h512_c128_r32",
+            KernelId::GemmQ4MlxM2 => "gemm_q4_mlx_m2",
+            KernelId::GemmQ4MlxM3 => "gemm_q4_mlx_m3",
+            KernelId::GemmQ4MlxM4 => "gemm_q4_mlx_m4",
+            KernelId::GemmQ4MlxM5 => "gemm_q4_mlx_m5",
             KernelId::ArgmaxF32 => "argmax_f32",
             KernelId::KvStoreTimestep => "kv_store_timestep",
             KernelId::KvStoreTimestepPair => "kv_store_timestep_pair",
@@ -148,6 +178,7 @@ impl KernelId {
             KernelId::RmsNormF32,
             KernelId::RmsNormBf16,
             KernelId::RmsNormResidualAddF32,
+            KernelId::RmsNormResidualAddEmitBf16,
             KernelId::PleLookup,
             KernelId::PleLookupQ4Mlx,
             KernelId::PleResidualAdd,
@@ -157,6 +188,17 @@ impl KernelId {
             KernelId::SoftcapSample,
             KernelId::SoftcapLogits,
             KernelId::SoftcapArgmaxOnePass,
+            KernelId::ArgmaxTwoPassPartials,
+            KernelId::ArgmaxTwoPassFinal,
+            KernelId::FlashAttnDecodeSingleH256,
+            KernelId::FlashAttnDecodeSingleH512,
+            KernelId::GeluMulRowsBf16,
+            KernelId::FlashAttnVerifySingleH256,
+            KernelId::FlashAttnVerifySingleH512,
+            KernelId::GemmQ4MlxM2,
+            KernelId::GemmQ4MlxM3,
+            KernelId::GemmQ4MlxM4,
+            KernelId::GemmQ4MlxM5,
             KernelId::ArgmaxF32,
             KernelId::KvStoreTimestep,
             KernelId::KvStoreTimestepPair,
@@ -1668,8 +1710,56 @@ fn decode_attn_values(
     kv_capacity: usize,
     out_bf16: bool,
 ) -> Result<bool> {
-    if tq != 1 || gpu.icb_scalars.stable() {
+    if gpu.icb_scalars.stable() {
         return Ok(false);
+    }
+    if tq > 1 {
+        // A verify block: one dispatch when every key fits one chunk.
+        return if b == 1 {
+            verify_attn_single_pass(
+                gpu,
+                q,
+                k,
+                v,
+                o,
+                tq,
+                tkv,
+                h,
+                hkv,
+                head_dim,
+                window,
+                scale,
+                q_pos_offset,
+                kv_pos_offset,
+                kv_capacity,
+                out_bf16,
+            )
+        } else {
+            Ok(false)
+        };
+    }
+    if tq != 1 {
+        return Ok(false);
+    }
+    if decode_attn_single_pass(
+        gpu,
+        q,
+        k,
+        v,
+        o,
+        b,
+        tkv,
+        h,
+        hkv,
+        head_dim,
+        window,
+        scale,
+        q_pos_offset,
+        kv_pos_offset,
+        kv_capacity,
+        out_bf16,
+    )? {
+        return Ok(true);
     }
     let key = (b, h, kv_capacity, head_dim);
     let mut cache = gpu
@@ -1709,6 +1799,264 @@ fn decode_attn_values(
     )
     .map_err(map_metal)?;
     Ok(true)
+}
+
+/// Decode attention without the reduce pass when every live key fits tessl's chunk: the
+/// partial pass over one chunk writes O itself (`kernels/flash_attn_decode_single.metal`,
+/// bit-identical to partial + reduce). Same chunk, lanes and head block as tessl's
+/// [`tessl::nn::flash_attn_decode_values`]. `Ok(false)` when it does not apply.
+#[allow(clippy::too_many_arguments)]
+pub fn decode_attn_single_pass(
+    gpu: &GemmaGpu,
+    q: &GpuBuffer,
+    k: &GpuBuffer,
+    v: &GpuBuffer,
+    o: &GpuBuffer,
+    b: u32,
+    tkv: u32,
+    h: u32,
+    hkv: u32,
+    head_dim: u32,
+    window: u32,
+    scale: f32,
+    q_pos_offset: u32,
+    kv_pos_offset: u32,
+    kv_capacity: usize,
+    out_bf16: bool,
+) -> Result<bool> {
+    attn_single_pass(
+        gpu,
+        q,
+        k,
+        v,
+        o,
+        b,
+        tkv,
+        h,
+        hkv,
+        head_dim,
+        window,
+        scale,
+        q_pos_offset,
+        kv_pos_offset,
+        kv_capacity,
+        out_bf16,
+        false,
+    )
+}
+
+/// [`decode_attn_single_pass`] for the `m` query rows of a verify block (`q`/`o` are
+/// `[m, h, head_dim]`, row `i` at position `q_pos0 + i`) over one K/V buffer holding `tkv`
+/// keys: one dispatch for the block instead of tessl's multi-query flash kernel, with each
+/// row computed exactly as decode computes it. `Ok(false)` when it does not apply.
+pub fn verify_attn_single_pass(
+    gpu: &GemmaGpu,
+    q: &GpuBuffer,
+    k: &GpuBuffer,
+    v: &GpuBuffer,
+    o: &GpuBuffer,
+    m: u32,
+    tkv: u32,
+    h: u32,
+    hkv: u32,
+    head_dim: u32,
+    window: u32,
+    scale: f32,
+    q_pos0: u32,
+    kv_pos_offset: u32,
+    kv_capacity: usize,
+    out_bf16: bool,
+) -> Result<bool> {
+    attn_single_pass(
+        gpu,
+        q,
+        k,
+        v,
+        o,
+        m,
+        tkv,
+        h,
+        hkv,
+        head_dim,
+        window,
+        scale,
+        q_pos0,
+        kv_pos_offset,
+        kv_capacity,
+        out_bf16,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn attn_single_pass(
+    gpu: &GemmaGpu,
+    q: &GpuBuffer,
+    k: &GpuBuffer,
+    v: &GpuBuffer,
+    o: &GpuBuffer,
+    b: u32,
+    tkv: u32,
+    h: u32,
+    hkv: u32,
+    head_dim: u32,
+    window: u32,
+    scale: f32,
+    q_pos_offset: u32,
+    kv_pos_offset: u32,
+    kv_capacity: usize,
+    out_bf16: bool,
+    verify: bool,
+) -> Result<bool> {
+    if !decode_attn_single_pass_enabled() || tkv == 0 || b == 0 || h == 0 || hkv == 0 {
+        return Ok(false);
+    }
+    let chunk = tessl::nn::decode_chunk_for(head_dim);
+    let lanes = tessl::nn::decode_lanes_for(head_dim);
+    let id = match (head_dim, chunk.keys(), lanes.width(), verify) {
+        (256, 128, 16, false) => KernelId::FlashAttnDecodeSingleH256,
+        (512, 128, 32, false) => KernelId::FlashAttnDecodeSingleH512,
+        (256, 128, 16, true) => KernelId::FlashAttnVerifySingleH256,
+        (512, 128, 32, true) => KernelId::FlashAttnVerifySingleH512,
+        _ => return Ok(false),
+    };
+    let kv_capacity_u32 = u32::try_from(kv_capacity)
+        .map_err(|_| Error::Metal("decode single pass: kv_capacity exceeds u32".into()))?;
+    if tkv as usize > chunk.keys() || tkv > kv_capacity_u32 {
+        return Ok(false);
+    }
+    let heads = h as usize;
+    let group = ((h / hkv).max(1)) as usize;
+    let sgs = [
+        tessl::nn::decode_head_block_for(head_dim),
+        tessl::nn::DecodeHeadBlock::Group,
+        tessl::nn::DecodeHeadBlock::One,
+    ]
+    .into_iter()
+    .find_map(|p| p.simdgroups(heads, group))
+    .unwrap_or(1);
+    let rows = (b as usize)
+        .checked_mul(heads / sgs)
+        .ok_or_else(|| Error::Metal("decode single pass: grid height overflows".into()))?;
+    let p = gpu.rt.pipeline(id.entry_name()).map_err(map_metal)?;
+    dispatch_2d_tg(&gpu.rt, &p, 1, rows, sgs * 32, |bnd| {
+        set_gpu_buf(bnd, q, 0);
+        set_gpu_buf(bnd, k, 1);
+        set_gpu_buf(bnd, v, 2);
+        set_gpu_buf(bnd, o, 3);
+        set_u32(bnd, b, 4);
+        set_u32(bnd, u32::from(out_bf16), 5);
+        set_u32(bnd, tkv, 6);
+        set_u32(bnd, h, 7);
+        set_u32(bnd, hkv, 8);
+        set_u32(bnd, window, 9);
+        set_f32(bnd, scale, 10);
+        set_u32(bnd, q_pos_offset, 11);
+        set_u32(bnd, kv_pos_offset, 12);
+        set_u32(bnd, kv_capacity_u32, 13);
+    })
+    .map_err(map_metal)?;
+    Ok(true)
+}
+
+/// [`gemm_q4_mlx_mrow`] for row-major verify GEMMs (default). `GEMMA_METAL_GEMM_MROW=0` keeps
+/// tessl's runtime-M `gemm_q4_mlx_simd`.
+pub fn gemm_mrow_enabled() -> bool {
+    static V: OnceLock<bool> = OnceLock::new();
+    *V.get_or_init(
+        || match std::env::var("GEMMA_METAL_GEMM_MROW").ok().as_deref() {
+            Some("0") | Some("false") | Some("off") => false,
+            _ => true,
+        },
+    )
+}
+
+/// `Y[m, rows] = X[m] . W^T` for a row-major MLX Q4 bank with `m` in 2..=8, through the
+/// compile-time-M entries of `kernels/gemm_q4_mlx_mrow.metal` (one nibble unpack per weight
+/// row for all rows of X). Blocks above 5 rows run as two dispatches (3+3, 4+3, 4+4): one
+/// entry's registers spill there and it costs ~2.7-10x a GEMV (README). Same buffers and
+/// grid as [`gemm_q4_mlx_simd`].
+pub fn gemm_q4_mlx_mrow(
+    gpu: &GemmaGpu,
+    packed: &GpuBuffer,
+    scales: &GpuBuffer,
+    zeros: &GpuBuffer,
+    x_bf16: &GpuBuffer,
+    y: &GpuBuffer,
+    rows: u32,
+    cols: u32,
+    group_size: u32,
+    m: u32,
+) -> Result<()> {
+    let chunks: &[u32] = match m {
+        2..=5 => &[m][..],
+        6 => &[3, 3],
+        7 => &[4, 3],
+        8 => &[4, 4],
+        _ => {
+            return Err(Error::Metal(format!(
+                "gemm_q4_mlx_mrow: M={m} outside 2..=8"
+            )))
+        }
+    };
+    let x_need = (m as usize) * (cols as usize) * 2;
+    let y_need = (m as usize) * (rows as usize) * 4;
+    if x_bf16.nbytes() < x_need || y.nbytes() < y_need || cols % 16 != 0 || group_size == 0 {
+        return Err(Error::Metal(format!(
+            "gemm_q4_mlx_mrow: M={m} rows={rows} cols={cols} gs={group_size}: x {} B (need {x_need}), \
+             y {} B (need {y_need})",
+            x_bf16.nbytes(),
+            y.nbytes()
+        )));
+    }
+    let (tptg, n_tg) = simd_tg_geometry(rows);
+    let mut m0 = 0usize;
+    for &mc in chunks {
+        let id = match mc {
+            2 => KernelId::GemmQ4MlxM2,
+            3 => KernelId::GemmQ4MlxM3,
+            4 => KernelId::GemmQ4MlxM4,
+            _ => KernelId::GemmQ4MlxM5,
+        };
+        let p = gpu.rt.pipeline(id.entry_name()).map_err(map_metal)?;
+        let x_off = m0 * cols as usize * 2;
+        let y_off = m0 * rows as usize * 4;
+        gpu.rt
+            .with_binder(|bnd| {
+                bnd.set_pipeline(&p);
+                set_gpu_buf(bnd, packed, 0);
+                set_gpu_buf(bnd, scales, 1);
+                set_gpu_buf(bnd, zeros, 2);
+                set_gpu_buf_offset(bnd, x_bf16, x_off, 3);
+                set_gpu_buf_offset(bnd, y, y_off, 4);
+                set_u32(bnd, rows, 5);
+                set_u32(bnd, cols, 6);
+                set_u32(bnd, group_size, 7);
+                bnd.dispatch(
+                    tessl::runtime::mtl_size(n_tg, 1, 1),
+                    tessl::runtime::mtl_size(tptg, 1, 1),
+                );
+                Ok(())
+            })
+            .map_err(map_metal)?;
+        m0 += mc as usize;
+    }
+    Ok(())
+}
+
+/// [`decode_attn_single_pass`] on (default). `GEMMA_METAL_ATTN_SINGLE_PASS=0` keeps tessl's
+/// partial + reduce passes at every length.
+pub fn decode_attn_single_pass_enabled() -> bool {
+    static V: OnceLock<bool> = OnceLock::new();
+    *V.get_or_init(|| {
+        match std::env::var("GEMMA_METAL_ATTN_SINGLE_PASS")
+            .ok()
+            .as_deref()
+        {
+            Some("0") | Some("false") | Some("off") => false,
+            _ => true,
+        }
+    })
 }
 
 /// Sliding-window FA @ D=256.
@@ -2605,6 +2953,73 @@ pub fn rms_norm_residual_add_f32_scaled(
     .map_err(map_metal)
 }
 
+/// [`rms_norm_residual_add_f32_scaled`], then the next GEMV's bf16 input from the updated
+/// residual in the same dispatch: `out_bf16 = bf16(rms_norm(resid) * next_weight)`, or
+/// `bf16(resid)` when `next_weight` is `None`. Saves one dependent dispatch and barrier.
+#[allow(clippy::too_many_arguments)]
+pub fn rms_norm_residual_add_emit_bf16(
+    gpu: &GemmaGpu,
+    x: &GpuBuffer,
+    weight: &GpuBuffer,
+    resid: &GpuBuffer,
+    next_weight: Option<&GpuBuffer>,
+    out_bf16: &GpuBuffer,
+    rows: u32,
+    dim: u32,
+    eps: f32,
+    layer_scale: f32,
+) -> Result<()> {
+    const ENTRY: &str = "rms_norm_residual_add_emit_bf16";
+    validate_rms_scalars(ENTRY, dim, eps, Some(layer_scale))?;
+    let n = (rows as usize)
+        .checked_mul(dim as usize)
+        .ok_or_else(|| Error::Metal(format!("{ENTRY}: rows*dim overflows")))?;
+    let need = |buf: &GpuBuffer, bytes: usize, what: &str| -> Result<()> {
+        if buf.nbytes() < bytes {
+            return Err(Error::Metal(format!(
+                "{ENTRY}: {what} holds {} bytes, needs {bytes}",
+                buf.nbytes()
+            )));
+        }
+        Ok(())
+    };
+    need(x, n * 4, "x")?;
+    need(resid, n * 4, "resid")?;
+    need(weight, dim as usize * 4, "weight")?;
+    if let Some(w) = next_weight {
+        need(w, dim as usize * 4, "next_weight")?;
+    }
+    need(out_bf16, n * 2, "out_bf16")?;
+    if rows == 0 {
+        return Ok(());
+    }
+    let p = gpu
+        .rt
+        .pipeline(KernelId::RmsNormResidualAddEmitBf16.entry_name())
+        .map_err(map_metal)?;
+    // Same lane count as tessl's row reductions (`reduce_tptg`): the row width rounded
+    // up to a power of two, capped at the 1024 the kernel is compiled for.
+    let tptg = (dim as usize).next_power_of_two().min(1024);
+    let rows_off = gpu.icb_scalars.push_u32(rows)?;
+    let dim_off = gpu.icb_scalars.push_u32(dim)?;
+    let eps_off = gpu.icb_scalars.push_f32(eps)?;
+    let scale_off = gpu.icb_scalars.push_f32(layer_scale)?;
+    let mode_off = gpu.icb_scalars.push_u32(u32::from(next_weight.is_some()))?;
+    dispatch_2d_tg(&gpu.rt, &p, rows as usize, 1, tptg, |bnd| {
+        set_gpu_buf(bnd, x, 0);
+        set_gpu_buf(bnd, weight, 1);
+        set_gpu_buf(bnd, resid, 2);
+        set_gpu_buf(bnd, next_weight.unwrap_or(weight), 3);
+        set_gpu_buf(bnd, out_bf16, 4);
+        gpu.icb_scalars.bind_u32(bnd, rows_off, 5);
+        gpu.icb_scalars.bind_u32(bnd, dim_off, 6);
+        gpu.icb_scalars.bind_f32(bnd, eps_off, 7);
+        gpu.icb_scalars.bind_f32(bnd, scale_off, 8);
+        gpu.icb_scalars.bind_u32(bnd, mode_off, 9);
+    })
+    .map_err(map_metal)
+}
+
 /// Cast `src[0..n]` f32 → bf16 into `dst` (n bf16 elements).
 pub fn cast_f32_to_bf16(gpu: &GemmaGpu, src: &GpuBuffer, dst: &GpuBuffer, n: u32) -> Result<()> {
     if n == 0 {
@@ -3110,8 +3525,50 @@ impl HotQuantBanks {
         )
     }
 
-    /// Thin Q4 GEMM `Y[M, rows] = X[M, cols] @ W^T` (bf16 X). Falls back to M× GEMV
-    /// when simd GEMM is unavailable for this bank.
+    /// [`Self::gemv_postnorm_add_into_bf16_x_scaled`] whose residual tail also writes the
+    /// next GEMV's bf16 input into `out_bf16` (see [`rms_norm_residual_add_emit_bf16`]).
+    #[allow(clippy::too_many_arguments)]
+    pub fn gemv_postnorm_add_emit_bf16(
+        &self,
+        gpu: &GemmaGpu,
+        x_bf16: &GpuBuffer,
+        resid: &GpuBuffer,
+        proj_scratch: &GpuBuffer,
+        post_norm_weight: &GpuBuffer,
+        next_weight: Option<&GpuBuffer>,
+        out_bf16: &GpuBuffer,
+        eps: f32,
+        layer_scale: f32,
+    ) -> Result<()> {
+        self.gemv_bf16_x(gpu, x_bf16, proj_scratch)?;
+        if tessl::ab_flags::need_barrier(true) {
+            gpu.barrier()?;
+        }
+        rms_norm_residual_add_emit_bf16(
+            gpu,
+            proj_scratch,
+            post_norm_weight,
+            resid,
+            next_weight,
+            out_bf16,
+            1,
+            self.rows,
+            eps,
+            layer_scale,
+        )
+    }
+
+    /// `Y[M, rows] = X[M, cols] @ W^T` (bf16 X, f32 Y).
+    ///
+    /// One row stays on the existing GEMV. More than one row runs the
+    /// cooperative TensorOps matmul with dequantization inside the kernel:
+    /// row-major MLX Q4 (groups 32, 64, 128) through
+    /// [`tessl::nn::gemm_q4_mlx_tensorops`], and Q8 (the same groups) through
+    /// [`tessl::nn::gemm_q8_tensorops`] after a device cast of the activations
+    /// to f32. A group those kernels do not accept, a Q4 layout other than
+    /// row-major, classic signed Q4, a missing TensorOps device, or a shape
+    /// they refuse returns before any encode. Weights are not dequantized on
+    /// the host, and a refused call does not loop a GEMV.
     pub fn gemm_bf16_x(
         &self,
         gpu: &GemmaGpu,
@@ -3122,77 +3579,177 @@ impl HotQuantBanks {
         if m == 0 {
             return Ok(());
         }
-        if self.can_gemm_simd() {
-            return gemm_q4_mlx_simd(
-                gpu,
-                &self.packed,
-                &self.scales,
-                &self.zeros,
-                x_bf16,
-                y,
-                self.rows,
-                self.cols,
-                self.group_size,
-                m,
-                self.layout == HotGemvLayout::Interleaved4,
-            );
-        }
         if m == 1 {
-            return self.gemv_bf16_x(gpu, x_bf16, y);
+            return self.gemm_one_row(gpu, x_bf16, y);
         }
-        for mi in 0..m {
-            self.gemm_fallback_one(gpu, x_bf16, y, mi)?;
-        }
-        Ok(())
+        self.gemm_cooperative(gpu, x_bf16, y, m)
     }
 
-    fn gemm_fallback_one(
+    /// M = 1. Q8's GEMV reads f32 activations, so a bf16 row is widened on
+    /// device first. The packed weights are left as they are.
+    fn gemm_one_row(&self, gpu: &GemmaGpu, x_bf16: &GpuBuffer, y: &GpuBuffer) -> Result<()> {
+        if !matches!(self.scheme, crate::quant::QuantScheme::Q8 { .. }) {
+            return self.gemv_bf16_x(gpu, x_bf16, y);
+        }
+        self.q8_gemv_shape(x_bf16, y)?;
+        let x_f32 = gpu
+            .rt
+            .alloc_buffer((self.cols as usize) * 4)
+            .map_err(map_metal)?;
+        cast_bf16_to_f32(gpu, x_bf16, &x_f32, self.cols)?;
+        if tessl::ab_flags::need_barrier(true) {
+            gpu.barrier()?;
+        }
+        self.gemv(gpu, &x_f32, y)
+    }
+
+    /// Group, device, and shape checks shared by both cooperative matmuls.
+    /// Returns before the caller encodes anything, including the Q8 cast.
+    fn cooperative_preflight(
         &self,
         gpu: &GemmaGpu,
         x_bf16: &GpuBuffer,
         y: &GpuBuffer,
-        mi: u32,
+        m: u32,
+        q8: bool,
     ) -> Result<()> {
-        use tessl::dispatch::set_gpu_buf_offset;
-        // Row-major peel GEMV with x/y byte offsets.
+        if !q8 && self.layout != HotGemvLayout::RowMajor {
+            return Err(Error::Metal(format!(
+                "gemm_bf16_x: layout {:?} has no cooperative matmul",
+                self.layout
+            )));
+        }
+        let groups: &[u32] = if q8 {
+            &tessl::nn::GEMM_Q8_TENSOROPS_GROUP_SIZES
+        } else {
+            &tessl::nn::GEMM_Q4_MLX_TENSOROPS_GROUP_SIZES
+        };
+        if !groups.contains(&self.group_size) {
+            return Err(Error::Metal(format!(
+                "gemm_bf16_x: group_size {} is not one of {groups:?}",
+                self.group_size
+            )));
+        }
+        if !gpu.rt.has_tensorops() {
+            return Err(Error::Metal(
+                "gemm_bf16_x: TensorOps is unavailable on this device".into(),
+            ));
+        }
+        if self.group_size == 0 || self.cols == 0 || self.cols % self.group_size != 0 {
+            return Err(Error::Metal(format!(
+                "gemm_bf16_x: cols {} is not a multiple of group_size {}",
+                self.cols, self.group_size
+            )));
+        }
+        let x_elems = (m as usize).checked_mul(self.cols as usize).ok_or_else(|| {
+            Error::Metal(format!("gemm_bf16_x: M={m} cols={} overflows", self.cols))
+        })?;
+        let y_elems = (m as usize).checked_mul(self.rows as usize).ok_or_else(|| {
+            Error::Metal(format!("gemm_bf16_x: M={m} rows={} overflows", self.rows))
+        })?;
+        let x_bytes = x_elems
+            .checked_mul(2)
+            .ok_or_else(|| Error::Metal("gemm_bf16_x: x bytes overflow".into()))?;
+        let y_bytes = y_elems
+            .checked_mul(4)
+            .ok_or_else(|| Error::Metal("gemm_bf16_x: y bytes overflow".into()))?;
+        if x_bf16.nbytes() < x_bytes || y.nbytes() < y_bytes {
+            return Err(Error::Metal(format!(
+                "gemm_bf16_x: x or y is short for M={m} rows={} cols={} (x {} bytes, need {x_bytes}; y {} bytes, need {y_bytes})",
+                self.rows,
+                self.cols,
+                x_bf16.nbytes(),
+                y.nbytes()
+            )));
+        }
+        let max_k = if q8 {
+            tessl::nn::gemm_q8_tensorops_max_k(m, self.rows, self.group_size)
+        } else {
+            tessl::nn::gemm_q4_mlx_tensorops_max_k(m, self.rows, self.group_size)
+        };
+        if self.cols > max_k {
+            return Err(Error::Metal(format!(
+                "gemm_bf16_x: cols {} exceeds the i32 extent {max_k} for M={m} rows={}",
+                self.cols, self.rows
+            )));
+        }
+        Ok(())
+    }
+
+    /// Q8 GEMV shape, checked before the activation cast encodes.
+    fn q8_gemv_shape(&self, x_bf16: &GpuBuffer, y: &GpuBuffer) -> Result<()> {
+        if self.group_size == 0 || self.cols == 0 || self.cols % self.group_size != 0 {
+            return Err(Error::Metal(format!(
+                "gemm_bf16_x: cols {} is not a multiple of group_size {}",
+                self.cols, self.group_size
+            )));
+        }
+        let x_bytes = (self.cols as usize).saturating_mul(2);
+        let y_bytes = (self.rows as usize).saturating_mul(4);
+        if x_bf16.nbytes() < x_bytes || y.nbytes() < y_bytes {
+            return Err(Error::Metal(format!(
+                "gemm_bf16_x: x or y is short for one row of cols {} rows {} (x {} bytes, need {x_bytes}; y {} bytes, need {y_bytes})",
+                self.cols,
+                self.rows,
+                x_bf16.nbytes(),
+                y.nbytes()
+            )));
+        }
+        Ok(())
+    }
+
+    fn gemm_cooperative(
+        &self,
+        gpu: &GemmaGpu,
+        x_bf16: &GpuBuffer,
+        y: &GpuBuffer,
+        m: u32,
+    ) -> Result<()> {
         match self.scheme {
             crate::quant::QuantScheme::Q4Mlx { .. } => {
-                let interleaved = self.layout == HotGemvLayout::Interleaved4;
-                let entry = if interleaved {
-                    "gemv_q4_mlx_simd_i4"
-                } else if matches!(self.layout, HotGemvLayout::BlockedBn16) {
-                    return Err(Error::Metal(
-                        "gemm fallback: BlockedBn16 needs blocked path".into(),
-                    ));
-                } else {
-                    "gemv_q4_mlx_simd"
+                self.cooperative_preflight(gpu, x_bf16, y, m, false)?;
+                let bank = tessl::nn::Q4MlxBank {
+                    packed: &self.packed,
+                    scales_biases: &self.scales,
                 };
-                let p = gpu.rt.pipeline(entry).map_err(map_metal)?;
-                let (tptg, n_tg) = simd_tg_geometry(self.rows);
-                let x_off = (mi as usize) * (self.cols as usize) * 2;
-                let y_off = (mi as usize) * (self.rows as usize) * 4;
-                let (rows_off, cols_off, gs_off) =
-                    push_gemv_dims(gpu, self.rows, self.cols, self.group_size)?;
-                gpu.rt
-                    .with_binder(|bnd| {
-                        bnd.set_pipeline(&p);
-                        set_gpu_buf(bnd, &self.packed, 0);
-                        set_gpu_buf(bnd, &self.scales, 1);
-                        set_gpu_buf(bnd, &self.zeros, 2);
-                        set_gpu_buf_offset(bnd, x_bf16, x_off, 3);
-                        set_gpu_buf_offset(bnd, y, y_off, 4);
-                        gpu.icb_scalars.bind_u32(bnd, rows_off, 5);
-                        gpu.icb_scalars.bind_u32(bnd, cols_off, 6);
-                        gpu.icb_scalars.bind_u32(bnd, gs_off, 7);
-                        bnd.dispatch(
-                            tessl::runtime::mtl_size(n_tg, 1, 1),
-                            tessl::runtime::mtl_size(tptg, 1, 1),
-                        );
-                        Ok(())
-                    })
-                    .map_err(map_metal)
+                let shape = tessl::nn::QuantShape {
+                    rows: self.rows,
+                    cols: self.cols,
+                    group_size: self.group_size,
+                };
+                tessl::nn::gemm_q4_mlx_tensorops(&gpu.rt, bank, x_bf16, y, shape, m).map_err(map_metal)
             }
-            _ => Err(Error::Metal("gemm fallback: need Q4Mlx".into())),
+            crate::quant::QuantScheme::Q8 { .. } => {
+                self.cooperative_preflight(gpu, x_bf16, y, m, true)?;
+                let x_elems = (m as usize) * (self.cols as usize);
+                let x_f32 = gpu
+                    .rt
+                    .alloc_buffer(x_elems * 4)
+                    .map_err(map_metal)?;
+                cast_bf16_to_f32(gpu, x_bf16, &x_f32, x_elems as u32)?;
+                if tessl::ab_flags::need_barrier(true) {
+                    gpu.barrier()?;
+                }
+                tessl::nn::gemm_q8_tensorops(
+                    &gpu.rt,
+                    &self.packed,
+                    &self.scales,
+                    &self.zeros,
+                    &x_f32,
+                    y,
+                    self.rows,
+                    self.cols,
+                    self.group_size,
+                    m,
+                )
+                .map_err(map_metal)
+            }
+            crate::quant::QuantScheme::Q4 { .. } => Err(Error::Metal(
+                "gemm_bf16_x: classic Q4 has no cooperative matmul".into(),
+            )),
+            crate::quant::QuantScheme::Bf16 => Err(Error::Metal(
+                "gemm_bf16_x: Bf16 has no cooperative matmul".into(),
+            )),
         }
     }
 
@@ -3209,7 +3766,25 @@ impl HotQuantBanks {
             && self.rows > 0
     }
 
-    /// Residual-add GEMM into `resid` (same buffer in/out), M rows.
+    /// [`gemm_q4_mlx_mrow`] takes this bank for an `m`-row block: row-major MLX Q4 with at
+    /// least 256 columns. Unlike [`Self::can_gemm_simd`] it includes 256 (the E4B per-layer
+    /// input projection): one dispatch with half the lanes idle still beats `m` GEMVs.
+    pub fn can_gemm_mrow(&self, m: u32) -> bool {
+        matches!(self.scheme, crate::quant::QuantScheme::Q4Mlx { .. })
+            && self.layout == HotGemvLayout::RowMajor
+            && gemv_simd_enabled()
+            && gemm_mrow_enabled()
+            && (2..=8).contains(&m)
+            && self.cols >= 256
+            && self.cols % 16 == 0
+            && self.rows > 0
+    }
+
+    /// `resid += X[M] @ W^T`. One row keeps the fused GEMV add. More than one
+    /// row writes the cooperative product into a fresh buffer and adds it, so
+    /// the residual is not dropped and the cooperative kernel is not asked to
+    /// fuse an epilogue it does not have. A refusal from [`Self::gemm_bf16_x`]
+    /// returns before that add.
     pub fn gemm_add_into_bf16_x(
         &self,
         gpu: &GemmaGpu,
@@ -3217,29 +3792,40 @@ impl HotQuantBanks {
         resid: &GpuBuffer,
         m: u32,
     ) -> Result<()> {
-        if m == 0 {
+        if m == 0 || self.rows == 0 {
             return Ok(());
         }
-        if self.can_gemm_simd() {
-            return gemm_q4_mlx_simd_add(
-                gpu,
-                &self.packed,
-                &self.scales,
-                &self.zeros,
-                x_bf16,
-                resid,
-                resid,
-                self.rows,
-                self.cols,
-                self.group_size,
-                m,
-                self.layout == HotGemvLayout::Interleaved4,
-            );
+        let elems = (m as usize).checked_mul(self.rows as usize).ok_or_else(|| {
+            Error::Metal(format!(
+                "gemm_add_into_bf16_x: M={m} rows={} overflows",
+                self.rows
+            ))
+        })?;
+        let bytes = elems
+            .checked_mul(4)
+            .ok_or_else(|| Error::Metal("gemm_add_into_bf16_x: bytes overflow".into()))?;
+        let n = u32::try_from(elems).map_err(|_| {
+            Error::Metal(format!(
+                "gemm_add_into_bf16_x: {elems} elements exceed u32"
+            ))
+        })?;
+        if m == 1 {
+            let scratch = gpu.rt.alloc_buffer(bytes).map_err(map_metal)?;
+            if matches!(self.scheme, crate::quant::QuantScheme::Q8 { .. }) {
+                self.gemm_bf16_x(gpu, x_bf16, &scratch, 1)?;
+                if tessl::ab_flags::need_barrier(true) {
+                    gpu.barrier()?;
+                }
+                return add_inplace_f32(gpu, resid, &scratch, self.rows);
+            }
+            return self.gemv_add_into_bf16_x(gpu, x_bf16, resid, &scratch);
         }
-        for mi in 0..m {
-            self.gemm_add_fallback_one(gpu, x_bf16, resid, mi)?;
+        let prod = gpu.rt.alloc_buffer(bytes).map_err(map_metal)?;
+        self.gemm_bf16_x(gpu, x_bf16, &prod, m)?;
+        if tessl::ab_flags::need_barrier(true) {
+            gpu.barrier()?;
         }
-        Ok(())
+        add_inplace_f32(gpu, resid, &prod, n)
     }
 
     /// Gemma4 dual-norm residual at M>1: `resid[m, rows] += post_ln(W @ x)`.
@@ -3293,47 +3879,6 @@ impl HotQuantBanks {
             eps,
             layer_scale,
         )
-    }
-
-    fn gemm_add_fallback_one(
-        &self,
-        gpu: &GemmaGpu,
-        x_bf16: &GpuBuffer,
-        resid: &GpuBuffer,
-        mi: u32,
-    ) -> Result<()> {
-        use tessl::dispatch::set_gpu_buf_offset;
-        let interleaved = self.layout == HotGemvLayout::Interleaved4;
-        let entry = if interleaved {
-            "gemv_q4_mlx_simd_add_i4"
-        } else {
-            "gemv_q4_mlx_simd_add"
-        };
-        let p = gpu.rt.pipeline(entry).map_err(map_metal)?;
-        let (tptg, n_tg) = simd_tg_geometry(self.rows);
-        let x_off = (mi as usize) * (self.cols as usize) * 2;
-        let y_off = (mi as usize) * (self.rows as usize) * 4;
-        let (rows_off, cols_off, gs_off) =
-            push_gemv_dims(gpu, self.rows, self.cols, self.group_size)?;
-        gpu.rt
-            .with_binder(|bnd| {
-                bnd.set_pipeline(&p);
-                set_gpu_buf(bnd, &self.packed, 0);
-                set_gpu_buf(bnd, &self.scales, 1);
-                set_gpu_buf(bnd, &self.zeros, 2);
-                set_gpu_buf_offset(bnd, x_bf16, x_off, 3);
-                set_gpu_buf_offset(bnd, resid, y_off, 4);
-                gpu.icb_scalars.bind_u32(bnd, rows_off, 5);
-                gpu.icb_scalars.bind_u32(bnd, cols_off, 6);
-                gpu.icb_scalars.bind_u32(bnd, gs_off, 7);
-                set_gpu_buf_offset(bnd, resid, y_off, 8);
-                bnd.dispatch(
-                    tessl::runtime::mtl_size(n_tg, 1, 1),
-                    tessl::runtime::mtl_size(tptg, 1, 1),
-                );
-                Ok(())
-            })
-            .map_err(map_metal)
     }
 
     fn gemv_add_into_impl(
@@ -3416,6 +3961,19 @@ pub fn fuse_dual_norm_enabled() -> bool {
     static V: OnceLock<bool> = OnceLock::new();
     *V.get_or_init(
         || match std::env::var("GEMMA_METAL_FUSE_DUAL_NORM").ok().as_deref() {
+            Some("0") | Some("false") | Some("off") => false,
+            _ => true,
+        },
+    )
+}
+
+/// Gemma4 residual tails also write the next GEMV's bf16 input
+/// ([`rms_norm_residual_add_emit_bf16`]): no separate pre-FFN norm, per-layer gate cast or
+/// next-layer input norm. Default ON; `GEMMA_METAL_EMIT_BF16_TAIL=0` restores them.
+pub fn emit_bf16_tail_enabled() -> bool {
+    static V: OnceLock<bool> = OnceLock::new();
+    *V.get_or_init(
+        || match std::env::var("GEMMA_METAL_EMIT_BF16_TAIL").ok().as_deref() {
             Some("0") | Some("false") | Some("off") => false,
             _ => true,
         },
@@ -4474,6 +5032,89 @@ pub fn softcap_logits(gpu: &GemmaGpu, logits: &GpuBuffer, softcap: f32, n: u32) 
 
 const ARGMAX_TG: u32 = 256;
 
+/// Threadgroups in [`softcap_argmax_two_pass_encode`]'s first pass (and lanes in its fold).
+const ARGMAX_TWO_PASS_GROUPS: u32 = 256;
+
+/// Greedy decode's argmax as two GPU-wide dispatches instead of one threadgroup scanning the
+/// whole vocabulary. Default ON; `GEMMA_METAL_ARGMAX_TWO_PASS=0` restores the one-pass kernel.
+pub fn argmax_two_pass_enabled() -> bool {
+    static V: OnceLock<bool> = OnceLock::new();
+    *V.get_or_init(
+        || match std::env::var("GEMMA_METAL_ARGMAX_TWO_PASS").ok().as_deref() {
+            Some("0") | Some("false") | Some("off") => false,
+            _ => true,
+        },
+    )
+}
+
+/// Softcap+argmax of `logits[0..n]` into `out_token[0]` (no sync): 256 threadgroups each
+/// reduce a contiguous span to one (value, index), then one threadgroup folds those. Same
+/// result as `softcap_argmax_one_pass`: the largest finite softcapped value, the smallest
+/// index among equals, `u32::MAX` when no logit is finite.
+pub fn softcap_argmax_two_pass_encode(
+    gpu: &GemmaGpu,
+    logits: &GpuBuffer,
+    softcap: f32,
+    n: u32,
+    scratch: &mut ArgmaxScratch,
+    out_token: &GpuBuffer,
+) -> Result<()> {
+    if n == 0 {
+        return Err(Error::Metal("softcap_argmax_two_pass: n == 0".into()));
+    }
+    if logits.nbytes() < n as usize * 4 || out_token.nbytes() < 4 {
+        return Err(Error::Metal(format!(
+            "softcap_argmax_two_pass: logits {} B for n={n}, out_token {} B",
+            logits.nbytes(),
+            out_token.nbytes()
+        )));
+    }
+    let groups = ARGMAX_TWO_PASS_GROUPS;
+    let span = n.div_ceil(groups);
+    scratch.ensure(gpu, groups as usize)?;
+    let (part_idx, part_val) = {
+        let (i, v) = scratch.tier(0);
+        (i.clone(), v.clone())
+    };
+    let p1 = gpu
+        .rt
+        .pipeline(KernelId::ArgmaxTwoPassPartials.entry_name())
+        .map_err(map_metal)?;
+    let p2 = gpu
+        .rt
+        .pipeline(KernelId::ArgmaxTwoPassFinal.entry_name())
+        .map_err(map_metal)?;
+    gpu.icb_scalars.set_softcap(softcap);
+    gpu.rt
+        .with_binder(|bnd| {
+            bnd.set_pipeline(&p1);
+            set_gpu_buf(bnd, logits, 0);
+            set_gpu_buf(bnd, &part_idx, 1);
+            set_gpu_buf(bnd, &part_val, 2);
+            set_gpu_buf(bnd, &gpu.icb_scalars.softcap, 3);
+            set_u32(bnd, n, 4);
+            set_u32(bnd, span, 5);
+            bnd.dispatch(
+                tessl::runtime::mtl_size(groups as usize, 1, 1),
+                tessl::runtime::mtl_size(ARGMAX_TG as usize, 1, 1),
+            );
+            if bnd.needs_explicit_barriers() {
+                bnd.barrier();
+            }
+            bnd.set_pipeline(&p2);
+            set_gpu_buf(bnd, &part_idx, 0);
+            set_gpu_buf(bnd, &part_val, 1);
+            set_gpu_buf(bnd, out_token, 2);
+            set_u32(bnd, groups, 3);
+            bnd.dispatch(
+                tessl::runtime::mtl_size(1, 1, 1),
+                tessl::runtime::mtl_size(ARGMAX_TG as usize, 1, 1),
+            );
+            Ok(())
+        })
+        .map_err(map_metal)
+}
+
 /// Softcap then multi-pass GPU argmax — works for full E4B vocab (262_144).
 ///
 /// First pass fuses softcap on-read (no separate write of 262k logits). Original
@@ -4550,6 +5191,9 @@ pub fn softcap_argmax_encode_offset(
             }
         })
     };
+    if !want_multipass && logits_byte_off == 0 && out_byte_off == 0 && argmax_two_pass_enabled() {
+        return softcap_argmax_two_pass_encode(gpu, logits, softcap, n, scratch, out_token);
+    }
     if !want_multipass && logits_byte_off == 0 && out_byte_off == 0 {
         let p = gpu
             .rt
@@ -4778,25 +5422,36 @@ pub fn copy_f32_range(
     .map_err(map_metal)
 }
 
-/// `out_bf16[i] = gelu_tanh(gate[i]) * up[up_elem_offset + i]` for `i < n`: tessl's
-/// `mlp_gelu_tanh_bf16` with `up` bound at an offset, so one row of a packed `[rows, n]`
-/// f32 buffer feeds the multiply without a copy (Gemma4's per-layer inputs).
+/// `out_bf16[out_off + i] = gelu_tanh(gate[gate_off + i]) * up[up_off + i]` for `i < n`
+/// (element offsets): tessl's `mlp_gelu_tanh_bf16` with each buffer bound at an offset, so
+/// one row of a packed `[rows, n]` buffer feeds it without a copy (Gemma4's per-layer
+/// inputs: row `li` at decode, row `(m, li)` of the verify block).
 pub fn mlp_gelu_tanh_bf16_up_at(
     gpu: &GemmaGpu,
     gate: &GpuBuffer,
+    gate_elem_offset: usize,
     up: &GpuBuffer,
     up_elem_offset: usize,
     out_bf16: &GpuBuffer,
+    out_elem_offset: usize,
     n: u32,
 ) -> Result<()> {
     if n == 0 {
         return Ok(());
     }
-    let bytes = (n as usize) * 4;
-    let up_off = up_elem_offset.saturating_mul(4);
-    if up_off + bytes > up.nbytes() || bytes > gate.nbytes() || bytes / 2 > out_bf16.nbytes() {
+    let n_us = n as usize;
+    let fits = |off: usize, elem_bytes: usize, buf: &GpuBuffer| {
+        off.checked_add(n_us)
+            .and_then(|end| end.checked_mul(elem_bytes))
+            .is_some_and(|end| end <= buf.nbytes())
+    };
+    if !fits(gate_elem_offset, 4, gate)
+        || !fits(up_elem_offset, 4, up)
+        || !fits(out_elem_offset, 2, out_bf16)
+    {
         return Err(Error::Metal(format!(
-            "mlp_gelu_tanh_bf16_up_at: n={n} up off={up_elem_offset} OOB (gate {} B, up {} B, out {} B)",
+            "mlp_gelu_tanh_bf16_up_at: n={n} offsets gate={gate_elem_offset} up={up_elem_offset} \
+             out={out_elem_offset} OOB (gate {} B, up {} B, out {} B)",
             gate.nbytes(),
             up.nbytes(),
             out_bf16.nbytes()
@@ -4804,11 +5459,63 @@ pub fn mlp_gelu_tanh_bf16_up_at(
     }
     let p = gpu.rt.pipeline("mlp_gelu_tanh_bf16").map_err(map_metal)?;
     let n_off = gpu.icb_scalars.push_u32(n)?;
-    dispatch_1d(&gpu.rt, &p, n as usize, |bnd| {
-        set_gpu_buf(bnd, gate, 0);
-        set_gpu_buf_offset(bnd, up, up_off, 1);
-        set_gpu_buf(bnd, out_bf16, 2);
+    dispatch_1d(&gpu.rt, &p, n_us, |bnd| {
+        set_gpu_buf_offset(bnd, gate, gate_elem_offset * 4, 0);
+        set_gpu_buf_offset(bnd, up, up_elem_offset * 4, 1);
+        set_gpu_buf_offset(bnd, out_bf16, out_elem_offset * 2, 2);
         gpu.icb_scalars.bind_u32(bnd, n_off, 3);
+    })
+    .map_err(map_metal)
+}
+
+/// [`mlp_gelu_tanh_bf16_up_at`] for `rows` rows in one dispatch (`kernels/gelu_mul_rows.metal`):
+/// `out_bf16[r * n + i] = gelu_tanh(gate[r * n + i]) * up[up_off + r * up_stride + i]`.
+pub fn gelu_mul_rows_bf16(
+    gpu: &GemmaGpu,
+    gate: &GpuBuffer,
+    up: &GpuBuffer,
+    up_off: usize,
+    up_stride: usize,
+    out_bf16: &GpuBuffer,
+    n: u32,
+    rows: u32,
+) -> Result<()> {
+    if n == 0 || rows == 0 {
+        return Ok(());
+    }
+    let (n_us, r_us) = (n as usize, rows as usize);
+    let up_end = (r_us - 1)
+        .checked_mul(up_stride)
+        .and_then(|v| v.checked_add(up_off))
+        .and_then(|v| v.checked_add(n_us));
+    let total = n_us * r_us;
+    let ok = up_end.is_some_and(|e| e * 4 <= up.nbytes())
+        && total * 4 <= gate.nbytes()
+        && total * 2 <= out_bf16.nbytes();
+    let (up_off_u32, up_stride_u32) = match (u32::try_from(up_off), u32::try_from(up_stride)) {
+        (Ok(a), Ok(b)) if ok => (a, b),
+        _ => {
+            return Err(Error::Metal(format!(
+                "gelu_mul_rows_bf16: n={n} rows={rows} up_off={up_off} up_stride={up_stride} OOB \
+                 (gate {} B, up {} B, out {} B)",
+                gate.nbytes(),
+                up.nbytes(),
+                out_bf16.nbytes()
+            )))
+        }
+    };
+    let p = gpu
+        .rt
+        .pipeline(KernelId::GeluMulRowsBf16.entry_name())
+        .map_err(map_metal)?;
+    dispatch_1d(&gpu.rt, &p, total, |bnd| {
+        set_gpu_buf(bnd, gate, 0);
+        set_gpu_buf(bnd, up, 1);
+        set_gpu_buf(bnd, out_bf16, 2);
+        set_u32(bnd, n, 3);
+        set_u32(bnd, rows, 4);
+        set_u32(bnd, up_off_u32, 5);
+        set_u32(bnd, up_stride_u32, 6);
     })
     .map_err(map_metal)
 }

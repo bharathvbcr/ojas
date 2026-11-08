@@ -7,7 +7,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{Backend, Tensor};
+use ojas_core::{BackendModule, Tensor};
 use ojas_metal::MetalBackend;
 
 /// The forward/backward attention tolerance of `backend_parity.rs`.

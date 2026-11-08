@@ -6,8 +6,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use ojas_core::{
-    exp_exact, sdpa_scale, Backend, Budget, GdnInputs, Numerics, OjasError, Tensor,
-    GDN_CHECKPOINT_TOKENS, GDN_L2NORM_EPS, RMS_NORM_EPS,
+    exp_exact, sdpa_scale, BackendFloat, BackendModule, Budget, GdnInputs, Numerics, OjasError,
+    Tensor, GDN_CHECKPOINT_TOKENS, GDN_L2NORM_EPS, RMS_NORM_EPS,
 };
 use ojas_cpu::CpuBackend;
 

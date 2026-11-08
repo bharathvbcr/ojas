@@ -12,7 +12,7 @@ mod common;
 use std::sync::Arc;
 
 use common::*;
-use ojas_core::{Backend, Budget, OjasError, Tensor};
+use ojas_core::{BackendCore, BackendFloat, BackendModule, Budget, OjasError, Tensor};
 use ojas_wgpu::WgpuBackend;
 
 const OP: &str = "accumulate_grad";

@@ -34,8 +34,8 @@
 use std::time::Instant;
 
 use ojas_core::{
-    Autocast, AutocastMode, Backend, Budget, CeChunk, CeGrads, MuonNs5Config, Ns5Precision,
-    OjasError, Tensor,
+    Autocast, AutocastMode, Backend, BackendCore, Budget, CeChunk, CeGrads, MuonNs5Config,
+    Ns5Precision, OjasError, Tensor,
 };
 use ojas_cpu::{CosineSchedule, LrSchedule, OptimGroup};
 use ojas_data::TokenBin;

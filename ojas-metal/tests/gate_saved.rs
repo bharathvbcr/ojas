@@ -9,7 +9,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{Backend, OjasError, Tensor};
+use ojas_core::{BackendCore, BackendModule, OjasError, Tensor};
 
 const GEMM_ATOL: f32 = 2e-5;
 const GEMM_RTOL: f32 = 2e-4;

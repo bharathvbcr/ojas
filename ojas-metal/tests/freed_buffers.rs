@@ -12,7 +12,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{Backend, Budget, Tensor};
+use ojas_core::{BackendCore, BackendFloat, Budget, Tensor};
 use ojas_metal::{MetalBackend, WaitCounts};
 
 const MIB: u64 = 1 << 20;

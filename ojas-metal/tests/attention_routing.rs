@@ -17,7 +17,7 @@ mod common;
 use std::time::Instant;
 
 use common::*;
-use ojas_core::{AttentionOpts, Backend, OjasError, Tensor};
+use ojas_core::{AttentionOpts, BackendCore, BackendModule, OjasError, Tensor};
 use ojas_metal::MetalBackend;
 
 fn tol(tk: usize) -> f32 {

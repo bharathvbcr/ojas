@@ -18,7 +18,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use ojas_core::{Backend, Budget, GdnInputs, Numerics, OjasError, Tensor};
+use ojas_core::{BackendModule, Budget, GdnInputs, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 use ojas_oracle::gdn::{forward_f64, Inputs, Shape};
 

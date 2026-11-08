@@ -4,7 +4,8 @@
 //! for the matmul-class ops, and only from a caller that holds it.
 
 use ojas_core::{
-    round_f32_to_bf16, Autocast, AutocastMode, Backend, Budget, CeChunk, CeGrads, Numerics, Tensor,
+    round_f32_to_bf16, Autocast, AutocastMode, BackendCore, BackendModule, Budget, CeChunk,
+    CeGrads, Numerics, Tensor,
 };
 use ojas_cpu::CpuBackend;
 

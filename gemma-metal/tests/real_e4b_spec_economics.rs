@@ -1,12 +1,9 @@
-//! Can speculative decoding beat plain decode on real E4B? The three numbers that decide it,
-//! measured before porting the per-layer input block to the batched verify path:
-//! - verify(M): `step_verify` over M tokens (the batched path still has the old per-layer
-//!   input stand-in, so its tokens are wrong, but its bytes and dispatch graph are within a
-//!   few percent of the corrected one: timing only);
-//! - draft cost: one `MtpSession::draft_from_hidden` call (host forward of the assistant);
-//! - accept rate: `generate_mtp_smoke`, which verifies drafts with the corrected T = 1
-//!   `step`; `equal_to_greedy` reports whether its output matches plain greedy decode
-//!   (on 2026-11-04 it did not: 0 of 44 drafts accepted, see the README there).
+//! Can speculative decoding beat plain decode on real E4B? The three numbers that decide it:
+//! - verify(M): `step_verify` over M tokens (its tokens are checked against sequential decode
+//!   by `tests/real_e4b_verify_exact.rs`);
+//! - draft cost: one `MtpSession::assistant_step` (host f32 forward of the assistant);
+//! - accept rate per draft position: `generate_mtp_smoke`, which verifies drafts with the
+//!   T = 1 `step`, so its output must equal plain greedy decode (asserted).
 //!
 //! `GEMMA_E4B_DIR=... GEMMA_E4B_ASSISTANT_DIR=... cargo test --release \
 //!   --test real_e4b_spec_economics -- --ignored --nocapture`
@@ -78,33 +75,59 @@ fn speculative_decode_economics() {
         println!("verify M={m}: {ms:.2} ms ({:.2}x M=1)", ms / v1);
     }
 
-    for (pi, p) in prompts.iter().enumerate() {
-        let greedy = sess.generate(p, 64).expect("greedy");
-        let t0 = Instant::now();
-        let (out, verifies) = sess.generate_mtp_smoke(p, 64, &mut mtp).expect("mtp");
-        let wall = t0.elapsed().as_secs_f64() * 1e3;
-        let drafted: usize = verifies.iter().map(|v| v.drafted).sum();
-        let accepted: usize = verifies.iter().map(|v| v.accepted).sum();
-        let n = out.len().min(greedy.len());
-        let same = out[..n] == greedy[..n];
+    // Accept rate per draft length: P(draft position k accepted | positions < k accepted).
+    let greedy: Vec<Vec<u32>> = prompts
+        .iter()
+        .map(|p| sess.generate(p, 64).expect("greedy"))
+        .collect();
+    for draft_len in 1..=4usize {
+        let mut reached = vec![0usize; draft_len];
+        let mut hit = vec![0usize; draft_len];
+        let (mut rounds, mut new_tokens, mut wall) = (0usize, 0usize, 0.0f64);
+        for (pi, p) in prompts.iter().enumerate() {
+            let t0 = Instant::now();
+            let (out, verifies) = sess
+                .generate_mtp_smoke(p, 64, draft_len, &mut mtp)
+                .expect("mtp");
+            wall += t0.elapsed().as_secs_f64() * 1e3;
+            assert_eq!(
+                out, greedy[pi],
+                "speculative output must equal greedy (prompt {pi})"
+            );
+            for v in &verifies {
+                for k in 0..v.drafted.min(draft_len) {
+                    if k > v.accepted {
+                        break;
+                    }
+                    reached[k] += 1;
+                    hit[k] += (k < v.accepted) as usize;
+                }
+            }
+            rounds += verifies.len();
+            new_tokens += out.len() - p.len();
+        }
+        let rates: Vec<String> = (0..draft_len)
+            .map(|k| format!("{:.2}", hit[k] as f64 / reached[k].max(1) as f64))
+            .collect();
         println!(
-            "prompt {pi}: rounds={} drafted={drafted} accepted={accepted} ({:.1}%) \
-             tokens/round={:.2} mtp_wall={wall:.0} ms equal_to_greedy={same}",
-            verifies.len(),
-            100.0 * accepted as f64 / drafted.max(1) as f64,
-            (out.len() - p.len()) as f64 / verifies.len().max(1) as f64,
+            "draft_len={draft_len}: accept by position [{}] tokens/round={:.2} rounds={rounds} \
+             wall={wall:.0} ms (host drafter, sequential verify)",
+            rates.join(", "),
+            new_tokens as f64 / rounds.max(1) as f64,
         );
     }
 
-    // Draft cost: the host assistant forward from one backbone hidden vector.
-    let h = vec![0.01f32; mtp.assistant.backbone_hidden_size];
-    let _ = mtp.draft_from_hidden(&h).expect("draft");
-    let t0 = Instant::now();
+    // Draft cost: one assistant step (host, f32) on the last synced target state.
+    let hidden = sess.final_hidden_f32().expect("hidden");
+    sess.sync_mtp_cross_kv(&mut mtp).expect("sync");
+    let embed = sess.target_embed_row(3).expect("embed");
+    let pos = sess.pos();
+    let _ = mtp.assistant_step(&embed, &hidden, pos).expect("step");
     let reps = 20;
-    let mut len = 0;
+    let t0 = Instant::now();
     for _ in 0..reps {
-        len = mtp.draft_from_hidden(&h).expect("draft").len();
+        let _ = mtp.assistant_step(&embed, &hidden, pos).expect("step");
     }
     let ms = t0.elapsed().as_secs_f64() * 1e3 / reps as f64;
-    println!("draft_from_hidden: {ms:.2} ms per call, {len} tokens per draft");
+    println!("assistant_step: {ms:.2} ms per drafted token (host f32)");
 }

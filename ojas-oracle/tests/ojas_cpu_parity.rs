@@ -2,7 +2,7 @@
 //! against what the torch fixtures record. (ojas-cpu is this crate's
 //! existing dev-dependency.)
 
-use ojas_core::{Backend, Budget, MuonNs5Config, Ns5Precision, Numerics, Tensor};
+use ojas_core::{BackendModule, Budget, MuonNs5Config, Ns5Precision, Numerics, Tensor};
 use ojas_cpu::{
     optim_group, CosineSchedule, CpuBackend, OptimGroup, WsdSchedule, ADAM_HYBRID_WEIGHT_DECAY,
     COSINE_FLOOR_FRAC, MUON_MOMENTUM, MUON_WEIGHT_DECAY, WSD_DECAY_FRAC,

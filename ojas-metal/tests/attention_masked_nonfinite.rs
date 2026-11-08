@@ -28,7 +28,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{Backend, Tensor};
+use ojas_core::{BackendCore, BackendFloat, BackendModule, Tensor};
 use ojas_metal::MetalBackend;
 
 /// `B = 1`, 4 query heads over 2 KV heads, `T = 96`, `D = 64`, window 10.

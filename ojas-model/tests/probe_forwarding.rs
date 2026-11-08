@@ -10,7 +10,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use common::Probe;
-use ojas_core::{forward_backend_methods, Backend, BackendId, Budget, OjasError, Tensor};
+use ojas_core::{
+    forward_backend_methods, BackendCore, BackendFloat, BackendId, BackendInt, BackendModule,
+    Budget, OjasError, Tensor,
+};
 use ojas_cpu::CpuBackend;
 use reach::{call, op_names, Reach};
 
@@ -30,10 +33,31 @@ struct Spy {
     recomputes: AtomicUsize,
 }
 
-impl Backend for Spy {
+impl BackendCore for Spy {
     ojas_core::with_backend_methods!(
         forward_backend_methods,
-        { self, self.inner, none, all_but_recompute }
+        { self, self.inner, none, all_but_recompute, core}
+    );
+}
+
+impl BackendFloat for Spy {
+    ojas_core::with_backend_methods!(
+        forward_backend_methods,
+        { self, self.inner, none, all_but_recompute, float}
+    );
+}
+
+impl BackendInt for Spy {
+    ojas_core::with_backend_methods!(
+        forward_backend_methods,
+        { self, self.inner, none, all_but_recompute, int}
+    );
+}
+
+impl BackendModule for Spy {
+    ojas_core::with_backend_methods!(
+        forward_backend_methods,
+        { self, self.inner, none, all_but_recompute, module}
     );
     fn causal_sdpa_backward_recompute(
         &self,

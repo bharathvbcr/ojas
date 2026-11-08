@@ -151,6 +151,7 @@
 <h1 id="ojas-metal">ojas-metal <a class="anchor" href="#ojas-metal" aria-label="Link to this section">#</a></h1>
 <p><code>ojas-metal</code> provides the native Apple Silicon GPU backend for <strong>ojas</strong>, executing the full deep learning training pipeline and inference directly on Apple M-series chips via <strong>Metal 4</strong>.</p>
 <p>It bridges high-throughput GEMM, normalization, and flash-attention kernels from <code>tessl</code> with custom MSL (Metal Shading Language) shaders for attention output gating.</p>
+<p>Numerics default to <code>Fast</code>: linear GEMMs use tessl TensorOps. <code>with_numerics(Numerics::Exact)</code> sends linear products and the grouped conv2d GEMM through tessl <code>gemm_fixed_order_*</code> (one thread per output, ascending <code>k</code>, contraction off). The bf16-accumulation flag does not redirect that path. Depthwise conv, attention, and the other reductions stay on their existing kernels.</p>
 <hr>
 <h2 id="metal-execution--memory-residency">Metal Execution &amp; Memory Residency <a class="anchor" href="#metal-execution--memory-residency" aria-label="Link to this section">#</a></h2>
 <p>Tensors remain device-resident across the entire forward, backward, and optimizer cycle, reading back only the final scalar loss (4 bytes) or greedy logits (8 bytes) to host memory:</p>
@@ -453,6 +454,8 @@
 <li><strong>Deferred Faults</strong> (<code>docs/metal-deferred-faults.md</code>): an op whose kernels find a NaN or infinity returns <code>Ok</code>; the next <code>sync</code>, <code>download</code> or <code>clip_grad_norm</code> on the backend returns <code>OjasError::NonFinite</code> naming the first such op in recording order, once. Shape, dtype, placement, capacity, head-dim, range and token-id refusals stay immediate. Ops are recorded into one command buffer and wait only at those sync points, at reads and uploads made while work is recorded, and at memory and status-slab caps.
 </li>
 <li><strong>Memory Cap (<code>set_mem_cap</code>/<code>mem_cap</code>):</strong> the cap is the bytes allocated since the last waited commit at which the backend commits and waits. A lower cap trades resident memory for more waited commits; lowering it below the bytes already allocated, with work recorded, waits for one commit. A zero or over-budget cap is refused and leaves the cap unchanged, and the resource plan sets aside the uncharged <code>mem_cap</code> bytes (<code>tests/mem_cap_setter.rs</code>).
+</li>
+<li><strong>Overlap commits (<code>set_overlap_dispatches</code>):</strong> the dispatches recorded before the device commits them to the GPU without waiting (256 when a backend opens). A smaller count starts the GPU sooner while the host records or computes, at one commit each time; it moves when work reaches the GPU, not its bits (<code>set_overlap_dispatches_refuses_zero_and_keeps_the_bits</code>). Zero is refused. SpikeTrack&#39;s E29 A/B at 32, 8 and 1 kept predictions byte-identical but found no frame-time gain it could read on a contended machine.
 </li>
 </ol>
 </aside>

@@ -44,8 +44,11 @@
 mod bench {
     use std::time::Instant;
 
-    use ojas_core::{Autocast, AutocastMode, Backend, Budget, Conv2dParams, DType, Tensor};
-    use ojas_metal::MetalBackend;
+    use ojas_core::{
+        Autocast, AutocastMode, BackendCore, BackendFloat, BackendModule, Budget, Conv2dParams,
+        DType, Tensor,
+    };
+    use ojas_metal::{Conv2dTensorOps, MetalBackend};
 
     fn values(n: usize, seed: u64, scale: f32) -> Vec<f32> {
         let mut s = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(1);
@@ -412,6 +415,23 @@ mod bench {
                     Box::new(|| drop(metal.linear_forward(&cols, &w2).expect("gemm"))),
                 ),
             ];
+            // tessl's matrix-unit convolution (3x3 stride 1 only; any other
+            // shape keeps im2col, so these arms then repeat the f32 arm).
+            for (name, mode) in [
+                ("conv2d tensorops f32 (tessl::conv)", Conv2dTensorOps::F32),
+                ("conv2d tensorops f16 (tessl::conv)", Conv2dTensorOps::F16),
+            ] {
+                let (metal, x, wt, bias) = (&metal, &x, &wt, &bias);
+                arms.push((
+                    name,
+                    Box::new(move || {
+                        metal.set_conv2d_tensorops(mode);
+                        let y = metal.conv2d_forward(x, wt, Some(bias), params);
+                        metal.set_conv2d_tensorops(Conv2dTensorOps::Off);
+                        drop(y.expect("conv tensorops"));
+                    }),
+                ));
+            }
             arms.push((
                 "conv2d bf16-exact (conv2d_forward's route, bf16 lane)",
                 Box::new(|| {

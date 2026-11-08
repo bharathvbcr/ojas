@@ -12,7 +12,7 @@
 //! Tolerances are normalized the way `ojas-cpu/benches/torch_ops.py`
 //! normalizes them: `max |got - ref| / max |ref|` over the tensor.
 
-use ojas_core::{exp_exact, Backend, Budget, Numerics, OjasError, Tensor};
+use ojas_core::{exp_exact, BackendFloat, BackendModule, Budget, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 
 mod common;

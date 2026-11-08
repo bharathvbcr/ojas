@@ -11,8 +11,8 @@
 
 use ojas_autograd::Tape;
 use ojas_core::{
-    gelu_tanh_backward_exact, gelu_tanh_exact, AttentionOpts, Backend, Budget, Numerics, OjasError,
-    Tensor,
+    gelu_tanh_backward_exact, gelu_tanh_exact, AttentionOpts, BackendFloat, BackendModule, Budget,
+    Numerics, OjasError, Tensor,
 };
 use ojas_cpu::CpuBackend;
 

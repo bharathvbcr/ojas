@@ -10,7 +10,7 @@ use std::sync::{Arc, Barrier};
 use std::thread;
 
 use common::f32t;
-use ojas_core::{Backend, Budget, Numerics, OjasError, Tensor};
+use ojas_core::{BackendFloat, Budget, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 
 fn cpu(threads: usize) -> CpuBackend {

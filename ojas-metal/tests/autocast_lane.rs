@@ -11,7 +11,7 @@
 mod common;
 
 use common::{close, cpu, down, host, metal, ok, rand, up};
-use ojas_core::{Autocast, Backend, Budget, Conv2dParams, OjasError, Tensor};
+use ojas_core::{Autocast, BackendCore, BackendModule, Budget, Conv2dParams, OjasError, Tensor};
 use ojas_metal::MetalBackend;
 
 const ROWS: usize = 256;

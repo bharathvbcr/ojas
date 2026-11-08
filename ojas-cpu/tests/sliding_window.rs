@@ -7,7 +7,7 @@
 //! backward from the saved output and lse equals the recomputing backward
 //! bit for bit, and a window of 0 is refused.
 
-use ojas_core::{Backend, Budget, Numerics, OjasError, Tensor};
+use ojas_core::{BackendCore, BackendModule, Budget, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 
 fn backend(threads: usize, numerics: Numerics) -> CpuBackend {

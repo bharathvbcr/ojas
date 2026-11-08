@@ -15,8 +15,8 @@
 
 use ojas_core::{
     round_f32_to_bf16, AffineGrad, AttentionOpts, Autocast, AutocastClass, AutocastMode, Backend,
-    Budget, Conv2dParams, ConvTranspose2dParams, DType, Numerics, OjasError, Tensor,
-    BACKEND_METHODS, SAM_AUTOCAST_POLICY,
+    BackendCore, BackendModule, Budget, Conv2dParams, ConvTranspose2dParams, DType, Numerics,
+    OjasError, Tensor, BACKEND_METHODS, SAM_AUTOCAST_POLICY,
 };
 use ojas_cpu::CpuBackend;
 

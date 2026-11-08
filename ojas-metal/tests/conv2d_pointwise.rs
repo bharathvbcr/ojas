@@ -13,7 +13,7 @@
 mod common;
 
 use common::*;
-use ojas_core::{Autocast, Backend, Budget, Conv2dParams, OjasError, Tensor};
+use ojas_core::{Autocast, BackendCore, BackendModule, Budget, Conv2dParams, OjasError, Tensor};
 use ojas_metal::MetalBackend;
 
 const IM2COL: &str = "ojas_im2col";

@@ -1,7 +1,7 @@
 //! Wall-time matrix for the linear and attention kernels. Ignored by default:
 //! `cargo test -p ojas-cpu --release --test bench_cpu -- --ignored --nocapture --test-threads=1`.
 
-use ojas_core::{Backend, Budget, Numerics};
+use ojas_core::{BackendModule, Budget, Numerics};
 use ojas_cpu::CpuBackend;
 
 mod common;

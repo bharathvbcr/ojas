@@ -1,0 +1,285 @@
+diff --git a/ojas-metal/examples/attention_flash_bench.rs b/ojas-metal/examples/attention_flash_bench.rs
+index 124b62e..95310ee 100644
+--- a/ojas-metal/examples/attention_flash_bench.rs
++++ b/ojas-metal/examples/attention_flash_bench.rs
+@@ -27,6 +27,13 @@
+ //! 1 to 2048 over Tk 5184 and 15584, and the last `# floor rule` line derives
+ //! `FLASH_MIN_GROUPS` from them by the rule.
+ //!
++//! The `sam xattn Tk=..` rows (`bench/results/2026-11-02-sam-xattn-q2/rules.md`)
++//! time the same three arms at Tq 5184 over SAM's 3 to 7 memory frames, print
++//! the faster of flash and split-K per row (`# xattn`) and the kernels every
++//! timed call encoded; `sam xattn bf16 Tk=36400` adds the forced flash call
++//! under bf16 accumulation, its time and its error against the f32 call and
++//! the CPU (`# bf16`), outside the correctness verdict.
++//!
+ //! Every arm of a row runs twice per round (A, then A'), odd rounds in reverse
+ //! order. Rows give p10, median and p90 of the A pass in ms, the A' median,
+ //! the A-vs-A' gap and the pair's spread, and `ok` when the gap is within the
+@@ -111,8 +118,19 @@ mod bench {
+         /// Whether this is a short-Q sweep row (flash forced against split-K
+         /// and the dispatcher; sets `FLASH_MIN_GROUPS` by the rules).
+         sweep: bool,
++        /// Whether this is a SAM memory-frame row
++        /// (`bench/results/2026-11-02-sam-xattn-q2/rules.md`): flash forced
++        /// against split-K and the dispatcher, not feeding the floor rule.
++        forced: bool,
++        /// Whether the row also times the forced flash call under bf16
++        /// accumulation (and prints its error against the f32 call).
++        bf16: bool,
+     }
+ 
++    /// The SAM memory-frame rows' key lengths: `F * 5184 + 16 * F` for F = 3
++    /// to 7 (one 16-token object-pointer group per frame), and 36464.
++    const SAM_TK: [usize; 6] = [15600, 20800, 26000, 31200, 36400, 36464];
++
+     /// The sweep's query lengths and key lengths (rules.md, addendum 2).
+     const SWEEP_TQ: [usize; 8] = [1, 8, 32, 64, 201, 512, 1024, 2048];
+     const SWEEP_TK: [usize; 2] = [5184, 15584];
+@@ -128,6 +146,8 @@ mod bench {
+             padq: true,
+             cross,
+             sweep: false,
++            forced: false,
++            bf16: false,
+         };
+         let mut rows = vec![
+             gate("memory cross m=5200", 5200, true),
+@@ -145,6 +165,8 @@ mod bench {
+                 padq: false,
+                 cross: false,
+                 sweep: false,
++                forced: false,
++                bf16: false,
+             },
+             Row {
+                 name: "decoder D16 [1,8,80,16]x5184".to_string(),
+@@ -156,6 +178,8 @@ mod bench {
+                 padq: false,
+                 cross: false,
+                 sweep: false,
++                forced: false,
++                bf16: false,
+             },
+         ];
+         for &tk in &SWEEP_TK {
+@@ -170,9 +194,29 @@ mod bench {
+                     padq: false,
+                     cross: false,
+                     sweep: true,
++                    forced: false,
++                    bf16: false,
+                 });
+             }
+         }
++        // Appended after every other row: a row's seeds follow its index.
++        let sam = |name: String, tk: usize, bf16: bool| Row {
++            name,
++            h: 8,
++            tq: 5184,
++            tk,
++            d: 32,
++            bias: false,
++            padq: false,
++            cross: false,
++            sweep: false,
++            forced: true,
++            bf16,
++        };
++        for &tk in &SAM_TK {
++            rows.push(sam(format!("sam xattn Tk={tk}"), tk, false));
++        }
++        rows.push(sam("sam xattn bf16 Tk=36400".to_string(), 36400, true));
+         rows
+     }
+ 
+@@ -489,7 +533,10 @@ mod bench {
+                     }
+                 }
+             }
+-            if r.sweep {
++            // The bf16-accumulation call's output and lse, held against the
++            // CPU plane below; never part of the correctness verdict.
++            let mut bf16_out: Option<(Vec<f32>, Vec<f32>)> = None;
++            if r.sweep || r.forced {
+                 let (fl, fl_lse) = metal
+                     .attention_forward_saving_flash(&q, &k, &v, opts())
+                     .expect("forced flash");
+@@ -521,6 +568,49 @@ mod bench {
+                         failed = true;
+                     }
+                 }
++                if r.bf16 {
++                    metal.sync().expect("sync");
++                    let before = snapshot(&metal);
++                    metal.set_bf16_accumulation(true);
++                    let got = metal.attention_forward_saving_flash(&q, &k, &v, opts());
++                    metal.set_bf16_accumulation(false);
++                    let (bo, bl) = got.expect("bf16 flash");
++                    metal.sync().expect("sync");
++                    let now = snapshot(&metal);
++                    let bov = bo
++                        .to_host(&budget)
++                        .expect("host")
++                        .to_f32_vec()
++                        .expect("f32");
++                    let blv = bl
++                        .to_host(&budget)
++                        .expect("host")
++                        .to_f32_vec()
++                        .expect("f32");
++                    let mean_abs = |a: &[f32], b: &[f32]| {
++                        a.iter()
++                            .zip(b)
++                            .map(|(x, y)| f64::from((x - y).abs()))
++                            .sum::<f64>()
++                            / a.len().max(1) as f64
++                    };
++                    println!(
++                        "# bf16 {} | bf16-accum flash vs f32 flash: out max abs {:.3e} mean abs {:.3e} rel to peak {:.3e}; lse max abs {:.3e} mean abs {:.3e}; kernels encoded {:?}",
++                        r.name,
++                        max_abs(&bov, &flv),
++                        mean_abs(&bov, &flv),
++                        rel_to_peak(&bov, &flv),
++                        max_abs(&blv, &fll),
++                        mean_abs(&blv, &fll),
++                        Ran {
++                            flash: now.flash - before.flash,
++                            scalar: now.scalar - before.scalar,
++                            part: now.part - before.part,
++                            combine: now.combine - before.combine,
++                        }
++                    );
++                    bf16_out = Some((bov, blv));
++                }
+             }
+             if r.padq {
+                 let pq = metal
+@@ -559,6 +649,17 @@ mod bench {
+                 .expect("cpu");
+             let want = want.to_f32_vec().expect("f32");
+             let want_lse = want_lse.to_f32_vec().expect("f32");
++            if let Some((bov, blv)) = &bf16_out {
++                println!(
++                    "# bf16 {} | first head plane against the CPU (exact f32): bf16-accum out max abs {:.3e} rel to peak {:.3e}, lse max abs {:.3e}; f32 dispatcher out max abs {:.3e}, lse max abs {:.3e}",
++                    r.name,
++                    max_abs(&bov[..tq * d], &want),
++                    rel_to_peak(&bov[..tq * d], &want),
++                    max_abs(&blv[..tq], &want_lse),
++                    max_abs(&s2v[..tq * d], &want),
++                    max_abs(&s2l[..tq], &want_lse)
++                );
++            }
+             for (what, got, w, tkk) in [
+                 ("output", &s2v[..tq * d], &want, tk),
+                 ("lse", &s2l[..tq], &want_lse, tk),
+@@ -681,7 +782,7 @@ mod bench {
+             drop((s2, sk, s2_lse, sk_lse));
+ 
+             let mut arms: Vec<Arm<'_>> = vec![
+-                if r.sweep {
++                if r.sweep || r.forced {
+                     (
+                         "flash (forced)",
+                         Box::new(|| {
+@@ -719,7 +820,7 @@ mod bench {
+                     }),
+                 ),
+             ];
+-            if r.sweep {
++            if r.sweep || r.forced {
+                 arms.push((
+                     "dispatcher",
+                     Box::new(|| {
+@@ -731,6 +832,17 @@ mod bench {
+                     }),
+                 ));
+             }
++            if r.bf16 {
++                arms.push((
++                    "flash bf16-accum (forced)",
++                    Box::new(|| {
++                        metal.set_bf16_accumulation(true);
++                        let out = metal.attention_forward_saving_flash(&q, &k, &v, opts());
++                        metal.set_bf16_accumulation(false);
++                        drop(out.expect("bf16 flash"));
++                    }),
++                ));
++            }
+             if r.padq {
+                 arms.push((
+                     "pad-q",
+@@ -795,6 +907,73 @@ mod bench {
+                 sweep_results.push((groups, tk, won));
+                 continue;
+             }
++            if r.forced {
++                // The faster of flash and split-K by more than the larger
++                // p90 - p10 spread of the two, else a tie; the dispatcher
++                // against the forced flash call with the same bar.
++                let (fl, sk_, dp) = (stats[0], stats[1], stats[2]);
++                let bar = (fl.2 - fl.1).max(sk_.2 - sk_.1);
++                let faster = if sk_.0 - fl.0 > bar {
++                    "flash"
++                } else if fl.0 - sk_.0 > bar {
++                    "split-K"
++                } else {
++                    "tie (within noise)"
++                };
++                let dbar = (dp.2 - dp.1).max(fl.2 - fl.1);
++                let rate = |ms: f64| flops / (ms * 1e-3) / 1e12;
++                println!("# checks {} | {note}", r.name);
++                println!(
++                    "# xattn {} | groups {groups} | flash {:.3} ms ({:.2} TFLOP/s), split-K {:.3} ms ({:.2} TFLOP/s), split-K - flash = {:.3} ms (noise bar {bar:.3}): faster {faster} | dispatcher - flash = {:.3} ms (noise bar {dbar:.3})",
++                    r.name,
++                    fl.0,
++                    rate(fl.0),
++                    sk_.0,
++                    rate(sk_.0),
++                    sk_.0 - fl.0,
++                    dp.0 - fl.0,
++                );
++                // Every timed call's kernels: forced flash and the dispatcher
++                // (and the bf16 arm) encode the flash pipeline once per call;
++                // split-K its partials and combine once each.
++                let calls = (2 * (warmups + runs)) as u64;
++                let flash_arms = if r.bf16 { 3 } else { 2 };
++                let observed = Ran {
++                    flash: encoded.flash - encoded_before.flash,
++                    scalar: encoded.scalar - encoded_before.scalar,
++                    part: encoded.part - encoded_before.part,
++                    combine: encoded.combine - encoded_before.combine,
++                };
++                let want = Ran {
++                    flash: flash_arms * calls,
++                    scalar: 0,
++                    part: calls,
++                    combine: calls,
++                };
++                println!(
++                    "# kernels {} | timed rounds encoded {observed:?}, expected {want:?} ({calls} calls per arm)",
++                    r.name
++                );
++                if observed != want {
++                    println!(
++                        "# DISPATCH FAIL {}: the timed arms did not encode the expected kernels",
++                        r.name
++                    );
++                    failed = true;
++                }
++                if r.bf16 {
++                    let bf = stats[3];
++                    println!(
++                        "# bf16 {} | bf16-accum flash {:.3} ms ({:.2} TFLOP/s) against f32 flash {:.3} ms: x{:.2}",
++                        r.name,
++                        bf.0,
++                        rate(bf.0),
++                        fl.0,
++                        bf.0 / fl.0
++                    );
++                }
++                continue;
++            }
+             let (s2m, skm) = (stats[0], stats[1]);
+             if let Some(si) = scalar_arm {
+                 // Each arm ran `2 * (warmups + runs)` calls: the scalar arm

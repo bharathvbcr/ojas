@@ -14,8 +14,8 @@ mod common;
 
 use common::*;
 use ojas_core::{
-    AttentionOpts, Backend, BackendId, Conv2dParams, ConvTranspose2dParams, DType, OjasError,
-    Tensor, SAM_AUTOCAST_POLICY,
+    AttentionOpts, BackendFloat, BackendId, BackendModule, Conv2dParams, ConvTranspose2dParams,
+    DType, OjasError, Tensor, SAM_AUTOCAST_POLICY,
 };
 
 /// A device tensor of `shape` filled from `seed`.

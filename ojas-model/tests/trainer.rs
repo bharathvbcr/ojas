@@ -6,7 +6,9 @@
 mod common;
 
 use common::{bits, snapshot, token_bin, Fault, OptCall, Probe, Resident, Snapshot, TempBin};
-use ojas_core::{Autocast, AutocastMode, Backend, Budget, DataCursor, Numerics, OjasError, Tensor};
+use ojas_core::{
+    Autocast, AutocastMode, Backend, BackendCore, Budget, DataCursor, Numerics, OjasError, Tensor,
+};
 use ojas_cpu::{
     CosineSchedule, CpuBackend, HybridOptimizer, HybridParam, LrSchedule, OptimGroup, WsdSchedule,
 };

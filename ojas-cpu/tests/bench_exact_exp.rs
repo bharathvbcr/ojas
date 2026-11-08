@@ -10,7 +10,7 @@
 
 use std::time::{Duration, Instant};
 
-use ojas_core::{Backend, Budget, Numerics, OjasError, Tensor};
+use ojas_core::{BackendFloat, BackendModule, Budget, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
 
 mod common;

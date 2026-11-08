@@ -11,7 +11,9 @@
 //! - A NaN or infinity in any operand, a shape that does not fit and an
 //!   over-budget output are refused with the variant every op uses.
 
-use ojas_core::{erf_f64, Backend, Budget, DType, Numerics, OjasError, Tensor};
+use ojas_core::{
+    erf_f64, BackendCore, BackendFloat, BackendModule, Budget, DType, Numerics, OjasError, Tensor,
+};
 use ojas_cpu::CpuBackend;
 
 mod common;

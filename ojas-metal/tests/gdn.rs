@@ -9,8 +9,8 @@ mod common;
 
 use common::*;
 use ojas_core::{
-    Autocast, AutocastMode, Backend, GdnForward, GdnGrad, GdnInputs, OjasError, Tensor,
-    METAL_GDN_KEY_DIM,
+    Autocast, AutocastMode, Backend, BackendCore, BackendModule, GdnForward, GdnGrad, GdnInputs,
+    OjasError, Tensor, METAL_GDN_KEY_DIM,
 };
 
 /// `max |metal - cpu| / max |cpu|` per tensor. tessl holds its kernels to
