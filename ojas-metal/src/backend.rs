@@ -60,7 +60,10 @@
 //! im2col and pointwise GEMMs of `conv2d_forward` (and of
 //! `conv2d_via_im2col`, which shares its route), and nothing else. Every
 //! other op keeps its fast kernel under `Exact` (see
-//! [`MetalBackend::with_numerics`] for the list).
+//! [`MetalBackend::with_numerics`] for the list). The fixed-order GEMMs also
+//! flush every subnormal value to zero, so bit-identity with CPU Exact holds
+//! only when no operand, product, partial sum or result is subnormal (see
+//! `with_numerics`).
 //! A Fast linear GEMM whose two operands are both [`Tensor::bf16_exact`] (what
 //! [`ojas_core::Autocast`] hands this backend in a bf16 region) runs on
 //! tessl's bf16 lane, the 4-simdgroup cooperative kernels, instead of the
@@ -295,6 +298,15 @@ impl MetalBackend {
     /// counts fixed-order dispatches per op, and
     /// `exact_numerics_lane_sites_are_the_documented_ones` pins the source
     /// sites for the ops that test does not drive.
+    ///
+    /// Subnormals: the fixed-order GEMMs flush every subnormal value to zero
+    /// (operands, products, partial sums and results). That is a property of
+    /// the Apple GPU path, hardware or driver, not of a build setting, and no
+    /// compile option changes it (tessl card ft-02eec315). Bit-identity with
+    /// CPU Exact therefore holds only when no operand, product, partial sum
+    /// or result is subnormal.
+    /// `metal_exact_matches_cpu_exact_except_for_flushed_subnormals` pins it:
+    /// every divergence from CPU Exact must be a subnormal flushed to zero.
     ///
     /// The choice stays on this handle: clones share the device thread, and a
     /// Fast handle is not changed by an Exact one.

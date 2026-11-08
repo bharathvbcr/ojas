@@ -87,7 +87,7 @@ On Apple Silicon, one authoritative root ledger (`ojas_core::Budget`) manages un
 - **No sparse primitives duplicated in ojas.** Sparse representations (CSR/CSC), deterministic SpMV, and affine scans live strictly in `sparsl`.
 - **No tessl or sparsl copy of ojas types.** Neither tessl nor sparsl grows its own `Budget`, typed error, or `Tape`. Conversely ojas does not grow Metal runtime code.
 
-What stays separate on purpose: the CPU reference for every op, the wgpu, CUDA and HIP backends, tessl's inference engines, and sparsl's event-driven sparse kernels. On Metal, `Numerics::Exact` is opt-in and covers linear products and the grouped conv2d GEMM: `ojas-metal` calls tessl `gemm_fixed_order_{nn,nt,tn}` (one thread per output, ascending `k`, contraction off), so those products match the CPU fold bit for bit. The default stays `Numerics::Fast` (TensorOps, its own reduction order). The bf16-accumulation flag does not redirect the Exact path. Depthwise conv, attention, and the other reductions stay on their existing kernels.
+What stays separate on purpose: the CPU reference for every op, the wgpu, CUDA and HIP backends, tessl's inference engines, and sparsl's event-driven sparse kernels. On Metal, `Numerics::Exact` is opt-in and covers linear products and the grouped conv2d GEMM: `ojas-metal` calls tessl `gemm_fixed_order_{nn,nt,tn}` (one thread per output, ascending `k`, contraction off), so those products match the CPU fold bit for bit. Metal's fixed-order GEMMs flush every subnormal value to zero (operands, products, partial sums and results), so bit-identity with CPU Exact holds only when no operand, product, partial sum or result is subnormal; this is a property of the Apple GPU path (hardware or driver), not a build setting (tessl card ft-02eec315). The default stays `Numerics::Fast` (TensorOps, its own reduction order). The bf16-accumulation flag does not redirect the Exact path. Depthwise conv, attention, and the other reductions stay on their existing kernels.
 
 ---
 
@@ -107,7 +107,7 @@ flowchart TD
 ```
 
 > [!IMPORTANT]
-> **Radical Determinism:** Deep learning research requires exact reproducibility. ojas enforces bit-identical outputs across single-threaded CPU runs and across SIMD backends in the Exact tier, avoiding nondeterministic thread reduction tree races.
+> **Radical Determinism:** Deep learning research requires exact reproducibility. ojas enforces bit-identical outputs across single-threaded CPU runs and across SIMD backends in the Exact tier, avoiding nondeterministic thread reduction tree races. (On Metal, the fixed-order GEMMs flush every subnormal value to zero, so bit-identity with CPU Exact holds only when no operand, product, partial sum or result is subnormal; tessl card ft-02eec315.)
 > 
 > **Zero Silent Fallback Guarantee:** When an accelerator backend is selected (Metal, wgpu, CUDA, HIP), driver initialization failures produce immediate, explicit errors—**never silently falling back to host CPU execution**.
 

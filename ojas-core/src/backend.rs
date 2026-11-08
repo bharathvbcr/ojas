@@ -54,7 +54,11 @@ pub enum GemmProvider {
     /// Packed ascending-index `f32` product. The CPU exact kernel.
     CpuReference,
     /// Tessl's fixed-order f32 GEMM: one output per thread, ascending `k`,
-    /// a precise multiply then a precise add. Not TensorOps. Exact on Metal.
+    /// a precise multiply then a precise add. Not TensorOps. Exact on Metal,
+    /// except that the Apple GPU path (hardware or driver, not a build
+    /// setting) flushes every subnormal value to zero there: operands,
+    /// products, partial sums and results. Bit-identity with CPU Exact holds
+    /// only when none of those is subnormal (tessl card ft-02eec315).
     TesslFixedOrder,
     /// Tessl TensorOps. Its reduction order is not the exact contract.
     TesslTensorOps,
