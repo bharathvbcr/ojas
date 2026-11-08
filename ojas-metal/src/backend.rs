@@ -2269,7 +2269,7 @@ impl Backend for MetalBackend {
         let ids = match tensor.dtype() {
             DType::U32 => {
                 if tensor.mapped_buffer().is_some() {
-                    let view = tensor.host_view()?;
+                    let view = tensor.host_view_window()?;
                     Some(Ids::Host(Arc::from(view.as_u32()?)))
                 } else {
                     Some(Ids::Host(Arc::from(tensor.u32_slice()?)))

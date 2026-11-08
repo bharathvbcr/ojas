@@ -1183,17 +1183,54 @@ impl Tensor {
 
     /// Acquire a shared read lease over mapped or host memory.
     ///
-    /// The lease covers this view's window, not the base allocation. A mapped
-    /// tensor's lease is the zero-copy borrow [`MappedBuffer::host_read`]
-    /// gives (it waits for the device's last write and holds the buffer's
-    /// fence while it lives), narrowed to the view's `byte_offset` and
-    /// contiguous length; no bytes are copied and no budget is charged. A
-    /// non-contiguous mapped view is [`OjasError::Shape`]: its window is not
-    /// one run of bytes, so [`Tensor::to_host`] is the way to read it.
+    /// For a mapped tensor the lease is [`MappedBuffer::host_read`] as given:
+    /// it covers the base allocation, not this view's window, and the caller
+    /// applies [`Tensor::byte_offset`] and the strides itself. Nothing is
+    /// copied and no budget is charged, and a non-contiguous view is not
+    /// refused. A host tensor's lease holds the view's window as a copy. Use
+    /// [`Tensor::host_view_window`] for a lease narrowed to the window.
     pub fn host_view(&self) -> Result<Box<dyn HostLease>, OjasError> {
         match &self.storage.payload {
+            Payload::Mapped(mbuf) => mbuf.host_read().map_err(|e| e.into_ojas(mbuf.backend())),
+            Payload::Host(_) => {
+                let bytes = self.to_ne_bytes()?;
+                let f32s = if self.dtype == DType::F32 {
+                    Some(self.f32_slice()?.to_vec())
+                } else {
+                    None
+                };
+                let u32s = if self.dtype == DType::U32 {
+                    Some(self.u32_slice()?.to_vec())
+                } else {
+                    None
+                };
+                Ok(Box::new(HostSliceLease { bytes, f32s, u32s }))
+            }
+            Payload::Device(buf) => Err(OjasError::Placement {
+                op: "Tensor::host_view",
+                expected: None,
+                found: Some(buf.backend()),
+            }),
+        }
+    }
+
+    /// Acquire a shared read lease narrowed to this view's window.
+    ///
+    /// A mapped tensor's lease is the zero-copy borrow
+    /// [`MappedBuffer::host_read`] gives (it waits for the device's last
+    /// write and holds the buffer's fence while it lives), sliced to the
+    /// view's `byte_offset` and contiguous length; no bytes are copied and no
+    /// budget is charged. A non-contiguous mapped view is
+    /// [`OjasError::Shape`], since its window is not one run of bytes
+    /// ([`Tensor::to_host`] is the way to read it), and a window past the
+    /// lease is [`OjasError::OutOfRange`]. A host tensor's lease already holds
+    /// exactly its window, so it is [`Tensor::host_view`] unchanged (a
+    /// non-contiguous host view is refused there); a device tensor is
+    /// [`OjasError::Placement`].
+    pub fn host_view_window(&self) -> Result<Box<dyn HostLease>, OjasError> {
+        match &self.storage.payload {
             Payload::Mapped(mbuf) => {
-                const OP: &str = "Tensor::host_view";
+                const OP: &str = "Tensor::host_view_window";
                 if !self.is_contiguous()? {
                     return Err(OjasError::Shape {
                         op: OP,
@@ -1226,25 +1263,7 @@ impl Tensor {
                     end,
                 }))
             }
-            Payload::Host(_) => {
-                let bytes = self.to_ne_bytes()?;
-                let f32s = if self.dtype == DType::F32 {
-                    Some(self.f32_slice()?.to_vec())
-                } else {
-                    None
-                };
-                let u32s = if self.dtype == DType::U32 {
-                    Some(self.u32_slice()?.to_vec())
-                } else {
-                    None
-                };
-                Ok(Box::new(HostSliceLease { bytes, f32s, u32s }))
-            }
-            Payload::Device(buf) => Err(OjasError::Placement {
-                op: "Tensor::host_view",
-                expected: None,
-                found: Some(buf.backend()),
-            }),
+            Payload::Host(_) | Payload::Device(_) => self.host_view(),
         }
     }
 

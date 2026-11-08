@@ -2,8 +2,8 @@
 //!
 //! Validates:
 //! 1. UMA pointer equivalence (`host_ptr == device_ptr`).
-//! 2. `Tensor::host_view` on `Payload::Mapped` is the zero-copy path: a lease over
-//!    the view's window, no budget charge. `Tensor::to_host` is a host snapshot:
+//! 2. `Tensor::host_view_window` on `Payload::Mapped` is the zero-copy path: a lease over
+//!    the view's window, no budget charge (`host_view` is the whole-allocation lease). `Tensor::to_host` is a host snapshot:
 //!    it charges the window, drops the lease, and is unchanged by later device writes.
 //! 3. Copy tracking confirms 0 calls to `DeviceBuffer::read_bytes` (the snapshot reads
 //!    through the fenced lease, not `read_bytes`).
@@ -11,7 +11,7 @@
 //! 5. Fail-closed placement: direct CPU access is refused with `OjasError::Placement`.
 //! 6. Host access is safely mediated via timeline-fenced zero-copy leases (`Tensor::host_view`).
 //! 7. GPU timeline synchronization drains in-flight device writes before host observation.
-//! 8. Narrow and strided views: the lease is windowed, a strided view is refused, a snapshot keeps strides.
+//! 8. Narrow and strided views: `host_view_window` is windowed, a strided view is refused, a snapshot keeps strides.
 
 use ojas_core::{
     BackendId, Budget, DType, DeviceBuffer, FenceError, HostLease, HostLeaseMut, MappedBuffer,
@@ -497,7 +497,7 @@ fn test_timeline_drain_on_to_host() {
 }
 
 #[test]
-fn test_narrow_view_snapshot_is_the_window_and_host_view_is_windowed() {
+fn test_narrow_view_snapshot_is_the_window_and_host_view_window_is_windowed() {
     let budget = Budget::new(4096);
     let values: Vec<f32> = (0..32).map(|i| i as f32 * 1.0).collect();
     let raw_bytes: Vec<u8> = values.iter().flat_map(|v| v.to_ne_bytes()).collect();
@@ -520,7 +520,9 @@ fn test_narrow_view_snapshot_is_the_window_and_host_view_is_windowed() {
     assert_eq!(budget.device_readbacks(), (1, 64));
 
     // host_view of the mapped view is exactly the window, not the allocation.
-    let lease = narrowed.host_view().expect("narrowed host_view");
+    let lease = narrowed
+        .host_view_window()
+        .expect("narrowed host_view_window");
     assert_eq!(lease.as_bytes().len(), 64);
     assert_eq!(lease.as_f32().expect("window as f32"), &values[8..24]);
     assert_eq!(budget.live_bytes().unwrap(), 128 + 64, "a lease is free");
@@ -534,7 +536,7 @@ fn test_narrow_view_snapshot_is_the_window_and_host_view_is_windowed() {
 }
 
 #[test]
-fn test_strided_mapped_view_is_refused_by_host_view_and_snapshotted_by_to_host() {
+fn test_strided_mapped_view_is_refused_by_host_view_window_and_snapshotted_by_to_host() {
     let budget = Budget::new(4096);
     let values: Vec<f32> = (0..16).map(|i| i as f32).collect();
     let raw_bytes: Vec<u8> = values.iter().flat_map(|v| v.to_ne_bytes()).collect();
@@ -545,12 +547,12 @@ fn test_strided_mapped_view_is_refused_by_host_view_and_snapshotted_by_to_host()
     let strided = tensor.view(&[4, 4], &[1, 4], 0).expect("strided view");
     assert!(!strided.is_contiguous().unwrap());
 
-    let err = strided.host_view().map(|_| ()).unwrap_err();
+    let err = strided.host_view_window().map(|_| ()).unwrap_err();
     assert!(
         matches!(
             err,
             OjasError::Shape {
-                op: "Tensor::host_view",
+                op: "Tensor::host_view_window",
                 ..
             }
         ),
@@ -589,6 +591,7 @@ struct ArcMapped {
 struct Snap {
     bytes: Vec<u8>,
     f32s: Vec<f32>,
+    u32s: Vec<u32>,
 }
 
 impl Snap {
@@ -596,6 +599,15 @@ impl Snap {
         Arc::new(Self {
             bytes: values.iter().flat_map(|v| v.to_ne_bytes()).collect(),
             f32s: values.to_vec(),
+            u32s: Vec::new(),
+        })
+    }
+
+    fn of_u32(values: &[u32]) -> Arc<Self> {
+        Arc::new(Self {
+            bytes: values.iter().flat_map(|v| v.to_ne_bytes()).collect(),
+            f32s: Vec::new(),
+            u32s: values.to_vec(),
         })
     }
 }
@@ -613,6 +625,9 @@ impl HostLease for ArcLease {
     fn as_f32(&self) -> Result<&[f32], OjasError> {
         Ok(&self.snap.f32s)
     }
+    fn as_u32(&self) -> Result<&[u32], OjasError> {
+        Ok(&self.snap.u32s)
+    }
 }
 
 impl Drop for ArcLease {
@@ -625,6 +640,15 @@ impl ArcMapped {
     fn new(values: &[f32]) -> Arc<Self> {
         Arc::new(Self {
             snap: RwLock::new(Snap::of(values)),
+            live_leases: Arc::new(AtomicUsize::new(0)),
+            timeline: MockTimeline::new(1, 1),
+            short_by: 0,
+        })
+    }
+
+    fn new_u32(values: &[u32]) -> Arc<Self> {
+        Arc::new(Self {
+            snap: RwLock::new(Snap::of_u32(values)),
             live_leases: Arc::new(AtomicUsize::new(0)),
             timeline: MockTimeline::new(1, 1),
             short_by: 0,
@@ -690,7 +714,7 @@ impl MappedBuffer for ArcMapped {
 }
 
 #[test]
-fn host_view_is_zero_copy_over_the_view_window_and_holds_the_fence() {
+fn host_view_window_is_zero_copy_over_the_view_window_and_holds_the_fence() {
     let budget = Budget::new(4096);
     let values: Vec<f32> = (0..32).map(|i| i as f32).collect();
     let buf = ArcMapped::new(&values);
@@ -699,7 +723,7 @@ fn host_view_is_zero_copy_over_the_view_window_and_holds_the_fence() {
 
     // Row 2: byte_offset 64, 8 elements. The lease is that row, at that address.
     let row = tensor.narrow(64, &[8], &[1]).expect("row view");
-    let lease = row.host_view().expect("row host_view");
+    let lease = row.host_view_window().expect("row host_view_window");
     assert_eq!(
         lease.as_bytes().len(),
         32,
@@ -752,7 +776,7 @@ fn to_host_is_a_snapshot_unchanged_by_a_later_device_write_and_released_on_drop(
     buf.device_write(&rewritten).expect("device write");
     assert_eq!(snap.to_f32_vec().unwrap(), &values[16..24]);
     assert_eq!(
-        row.host_view().unwrap().as_f32().unwrap(),
+        row.host_view_window().unwrap().as_f32().unwrap(),
         &rewritten[16..24],
         "the leased view does see the new bytes"
     );
@@ -778,6 +802,61 @@ fn a_lease_shorter_than_the_buffer_is_a_backend_error_and_charges_nothing() {
     assert!(matches!(err, OjasError::Backend { .. }), "got {err:?}");
     assert_eq!(budget.live_bytes().unwrap(), 32, "no snapshot kept");
     assert_eq!(budget.device_readbacks(), (0, 0));
-    let err = tensor.host_view().map(|_| ()).unwrap_err();
+    let err = tensor.host_view_window().map(|_| ()).unwrap_err();
     assert!(matches!(err, OjasError::OutOfRange { .. }), "got {err:?}");
+}
+
+/// Pins `host_view`'s contract for a mapped view: the lease is the base
+/// allocation and the caller applies `byte_offset` (SpikeTrack's
+/// `view_f32_with_budget` does exactly this). A view at byte offset 8 gets the
+/// base lease, and the view's data is at `base[2..4]`.
+#[test]
+fn host_view_on_a_mapped_view_is_the_whole_allocation_and_the_caller_applies_the_offset() {
+    let budget = Budget::new(4096);
+    let values: Vec<f32> = (0..8).map(|i| i as f32).collect();
+    let buf = ArcMapped::new(&values);
+    let tensor = Tensor::from_mapped(buf.clone(), &[8], DType::F32, &budget).unwrap();
+    let view = tensor.narrow(8, &[2], &[1]).expect("view at byte offset 8");
+    assert_eq!(view.byte_offset(), 8);
+
+    let lease = view.host_view().expect("host_view");
+    let base = lease.as_f32().unwrap();
+    assert_eq!(base, &values[..], "the base allocation, not the window");
+    assert_eq!(lease.as_bytes().as_ptr(), buf.base_ptr());
+    let start = view.byte_offset() / 4;
+    assert_eq!(&base[start..start + 2], &[2.0, 3.0]);
+
+    // A non-contiguous view is not refused by host_view: the caller owns the strides.
+    let strided = tensor.view(&[2, 2], &[4, 1], 0).expect("view");
+    assert!(strided.host_view().is_ok());
+}
+
+/// The arithmetic behind the Metal U32 ids upload (`MetalBackend::upload`
+/// reads `host_view_window().as_u32()`): a narrowed mapped ids view at a
+/// non-zero offset yields exactly its window. This is an ojas-core test of the
+/// same call; ojas-metal has no mapped-ids upload test to extend, and the
+/// Metal upload adopts the whole buffer on the device side anyway.
+#[test]
+fn a_narrowed_mapped_ids_view_at_a_nonzero_offset_reads_its_own_ids() {
+    let budget = Budget::new(4096);
+    let ids: Vec<u32> = (100..112).collect();
+    let buf = ArcMapped::new_u32(&ids);
+    let tensor = Tensor::from_mapped(buf, &[12], DType::U32, &budget).unwrap();
+    let row = tensor
+        .narrow(16, &[4], &[1])
+        .expect("ids view at byte offset 16");
+
+    let lease = row.host_view_window().expect("host_view_window");
+    assert_eq!(lease.as_u32().unwrap(), &ids[4..8]);
+    assert_eq!(lease.as_bytes().len(), 16);
+}
+
+/// A host tensor's lease is already its window; `host_view_window` is the same.
+#[test]
+fn host_view_window_on_a_host_view_is_the_window() {
+    let budget = Budget::new(4096);
+    let values: Vec<f32> = (0..8).map(|i| i as f32).collect();
+    let t = Tensor::from_f32(&values, &[8], &budget).unwrap();
+    let w = t.narrow(8, &[2], &[1]).unwrap();
+    assert_eq!(w.host_view_window().unwrap().as_f32().unwrap(), &[2.0, 3.0]);
 }
