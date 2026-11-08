@@ -54,7 +54,11 @@ pub enum GemmProvider {
     /// Packed ascending-index `f32` product. The CPU exact kernel.
     CpuReference,
     /// Tessl's fixed-order f32 GEMM: one output per thread, ascending `k`,
-    /// a precise multiply then a precise add. Not TensorOps. Exact on Metal.
+    /// a precise multiply then a precise add. Not TensorOps. Exact on Metal,
+    /// except that the Apple GPU path (hardware or driver, not a build
+    /// setting) flushes every subnormal value to zero there: operands,
+    /// products, partial sums and results. Bit-identity with CPU Exact holds
+    /// only when none of those is subnormal (tessl card ft-02eec315).
     TesslFixedOrder,
     /// Tessl TensorOps. Its reduction order is not the exact contract.
     TesslTensorOps,
@@ -839,11 +843,15 @@ pub trait BackendCore {
     /// Budget this backend charges for outputs and scratch probes.
     fn budget(&self) -> &Budget;
 
-    /// Arithmetic contract of every op on this backend.
+    /// Arithmetic contract this backend reports.
     ///
     /// The default is [`Numerics::Exact`]. A GPU backend whose reductions
     /// are not ascending-index `f32` without fused multiply-add must
-    /// override this to return [`Numerics::Fast`].
+    /// override this to return [`Numerics::Fast`]. A backend may report
+    /// `Exact` for fewer ops than the whole trait: the Metal backend's
+    /// `Exact` covers its linear products and `conv2d_forward` GEMMs only
+    /// (see `MetalBackend::with_numerics`), and every other op still runs
+    /// its fast kernel. Read the backend's own documentation for the set.
     fn numerics(&self) -> Numerics {
         Numerics::Exact
     }
@@ -2560,9 +2568,9 @@ impl<T: BackendFloat + BackendInt + BackendModule> Backend for T {}
 /// `kind` is `op` (a computation, which an admission hook may gate) or `pure`
 /// (an accessor or size query that is never gated).
 ///
-/// `backend.rs`'s `trait_and_method_list_agree` test reads this trait's
-/// source and fails when a method here is missing from the list, or the list
-/// names a method the trait does not have.
+/// `backend.rs`'s `the_method_list_names_every_trait_method` test reads the
+/// capability traits' source and fails when a method there is missing from
+/// the list, or the list names a method no trait has.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! with_backend_methods {
@@ -2694,6 +2702,26 @@ mod backend_method_names {
 /// Emit `$then` when `$name` belongs to the capability `$group`
 /// (`core`, `float`, `int`, or `module`). Forwarding wrappers pass a
 /// group so each capability trait receives only its own methods.
+///
+/// An unknown group is a compile error:
+///
+/// ```compile_fail
+/// ojas_core::emit_in_group!(flaot, mul_forward, fn never_emitted() {});
+/// ```
+///
+/// A known group emits only its own methods:
+///
+/// ```
+/// ojas_core::emit_in_group!(float, mul_forward, fn emitted() {});
+/// ojas_core::emit_in_group!(module, mul_forward, fn not_emitted() {});
+/// emitted();
+/// ```
+///
+/// The mismatch arms cannot tell a method of another group from a method
+/// that is in no group at all. A listed method with no row here would run
+/// the trait default on every wrapper, so
+/// `the_method_list_names_every_trait_method` checks that each listed
+/// method has exactly one row, in the group of the trait that declares it.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! emit_in_group {
@@ -2803,7 +2831,20 @@ macro_rules! emit_in_group {
     (module, linear_cross_entropy_mean, $($then:tt)*) => { $($then)* };
     (module, cached_attention_forward, $($then:tt)*) => { $($then)* };
     (module, kv_cache_write, $($then:tt)*) => { $($then)* };
-    ($group:ident, $name:ident, $($then:tt)*) => {};
+    // A method of another group emits nothing. One arm per known group, so
+    // a misspelled target group falls through to the `compile_error!` below
+    // instead of silently emitting nothing for every method.
+    (core, $name:ident, $($then:tt)*) => {};
+    (float, $name:ident, $($then:tt)*) => {};
+    (int, $name:ident, $($then:tt)*) => {};
+    (module, $name:ident, $($then:tt)*) => {};
+    ($group:ident, $name:ident, $($then:tt)*) => {
+        compile_error!(concat!(
+            "emit_in_group!: unknown capability group `",
+            stringify!($group),
+            "` (expected core, float, int, or module)"
+        ));
+    };
 }
 
 /// Generates forwarding impls of every [`Backend`] method from
@@ -4030,6 +4071,41 @@ pub(crate) mod tests {
         let mut deduped = listed.clone();
         deduped.dedup();
         assert_eq!(deduped, listed, "a method is listed twice");
+        // Every listed method has exactly one `emit_in_group!` row, in the
+        // group of the trait that declares it. Markers are built at runtime
+        // so this test does not match itself.
+        let macro_start = source
+            .find(concat!("macro_rules! emit_in_", "group {"))
+            .expect("emit_in_group definition");
+        let macro_end = macro_start + source[macro_start..].find("\n}\n").unwrap();
+        let mut rows: Vec<(&str, &str)> = source[macro_start..macro_end]
+            .lines()
+            .filter_map(|line| {
+                let inner = line.trim().strip_prefix('(')?;
+                let (group, rest) = inner.split_once(", ")?;
+                let (name, tail) = rest.split_once(", ")?;
+                tail.starts_with("$($then:tt)*) => { $($then)* };")
+                    .then_some((group, name))
+            })
+            .collect();
+        let mut expected_rows: Vec<(&str, &str)> = Vec::new();
+        for (trait_name, methods) in groups {
+            let group = match *trait_name {
+                "BackendCore" => "core",
+                "BackendFloat" => "float",
+                "BackendInt" => "int",
+                "BackendModule" => "module",
+                other => panic!("no emit_in_group group for {other}"),
+            };
+            expected_rows.extend(methods.iter().map(|m| (group, *m)));
+        }
+        rows.sort_unstable();
+        expected_rows.sort_unstable();
+        assert_eq!(
+            rows, expected_rows,
+            "emit_in_group! rows disagree with the capability traits: a method \
+             with no row is dropped from every wrapper"
+        );
         // Built at runtime so this assertion is not itself a match.
         let bare_backend = concat!("pub trait Backend ", "{");
         assert!(

@@ -55,7 +55,15 @@
 //! one output per thread, ascending k, a precise multiply then a precise add.
 //! That path is not TensorOps and not split-K. It is what
 //! [`ojas_core::GemmProvider::TesslFixedOrder`] names, and the bf16-accumulation
-//! flag does not redirect it.
+//! flag does not redirect it. It covers the GEMMs of `linear_forward`,
+//! `linear_backward`, `linear_backward_input`, `linear_bias_forward` and the
+//! im2col and pointwise GEMMs of `conv2d_forward` (and of
+//! `conv2d_via_im2col`, which shares its route), and nothing else. Every
+//! other op keeps its fast kernel under `Exact` (see
+//! [`MetalBackend::with_numerics`] for the list). The fixed-order GEMMs also
+//! flush every subnormal value to zero, so bit-identity with CPU Exact holds
+//! only when no operand, product, partial sum or result is subnormal (see
+//! `with_numerics`).
 //! A Fast linear GEMM whose two operands are both [`Tensor::bf16_exact`] (what
 //! [`ojas_core::Autocast`] hands this backend in a bf16 region) runs on
 //! tessl's bf16 lane, the 4-simdgroup cooperative kernels, instead of the
@@ -288,9 +296,39 @@ impl MetalBackend {
 
     /// Same device and budget, different arithmetic contract.
     ///
-    /// [`Numerics::Exact`] sends linear GEMMs through tessl's fixed-order
-    /// kernels. The choice stays on this handle: clones share the device
-    /// thread, and a Fast handle is not changed by an Exact one.
+    /// [`Numerics::Exact`] sends the GEMMs of `linear_forward`,
+    /// `linear_backward`, `linear_backward_input`, `linear_bias_forward` and
+    /// `conv2d_forward` (its im2col and pointwise routes; the public
+    /// `conv2d_via_im2col` reaches the same route) through tessl's
+    /// fixed-order kernels, and nothing else.
+    ///
+    /// Not covered, and still on the fast kernels under `Exact`: reductions
+    /// and `softmax`; every attention op (`causal_sdpa_*`, `attention_*`,
+    /// `cached_attention_forward`); the norms (`rms_*`, `layer_norm_*`,
+    /// `channel_layer_norm_*`, `group_norm_*`, `gated_rms_norm_*`);
+    /// `conv_transpose2d_*`, `conv2d_backward` and the depthwise convolution;
+    /// the GDN ops; the losses (`cross_entropy_mean_*`,
+    /// `linear_cross_entropy_mean`); the optimizer steps (`adamw_step`,
+    /// `muon_ns5_step`) and `clip_grad_norm`; and the elementwise, rope,
+    /// gate and embedding ops. `Backend::numerics` still reports `Exact`,
+    /// so a caller that needs bit-exact results from an op outside the first
+    /// list must use the CPU backend. Tests pin the covered set:
+    /// `exact_numerics_dispatches_fixed_order_only_for_the_documented_ops`
+    /// counts fixed-order dispatches per op, and
+    /// `exact_numerics_lane_sites_are_the_documented_ones` pins the source
+    /// sites for the ops that test does not drive.
+    ///
+    /// Subnormals: the fixed-order GEMMs flush every subnormal value to zero
+    /// (operands, products, partial sums and results). That is a property of
+    /// the Apple GPU path, hardware or driver, not of a build setting, and no
+    /// compile option changes it (tessl card ft-02eec315). Bit-identity with
+    /// CPU Exact therefore holds only when no operand, product, partial sum
+    /// or result is subnormal.
+    /// `metal_exact_matches_cpu_exact_except_for_flushed_subnormals` pins it:
+    /// every divergence from CPU Exact must be a subnormal flushed to zero.
+    ///
+    /// The choice stays on this handle: clones share the device thread, and a
+    /// Fast handle is not changed by an Exact one.
     pub fn with_numerics(mut self, numerics: Numerics) -> Self {
         self.numerics = numerics;
         self
@@ -4558,6 +4596,252 @@ mod tests {
     use ojas_core::METAL_GDN_KEY_DIM;
 
     use super::*;
+
+    /// `source` with its `//` comments (doc comments included) removed.
+    fn without_comments(source: &str) -> String {
+        source
+            .lines()
+            .map(|line| line.split("//").next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn is_ident(c: char) -> bool {
+        c.is_alphanumeric() || c == '_'
+    }
+
+    /// The name of the last `fn` item in `head`: the one a position just past
+    /// `head` sits in, whatever qualifiers (`pub`, `pub(crate)`) precede it.
+    fn enclosing_fn(head: &str) -> String {
+        let mut end = head.len();
+        while let Some(at) = head[..end].rfind("fn ") {
+            if head[..at].chars().next_back().is_none_or(|c| !is_ident(c)) {
+                return head[at + 3..]
+                    .chars()
+                    .take_while(|&c| is_ident(c))
+                    .collect();
+            }
+            end = at;
+        }
+        String::new()
+    }
+
+    /// The enclosing fn of each mention of the identifier `word` in `source`,
+    /// in order. A comment, a longer identifier and the definition
+    /// `fn word` are not mentions; `self.word(`, `Self::word(`, a call split
+    /// over lines and a bare path all are.
+    fn sites(source: &str, word: &str) -> Vec<String> {
+        let src = without_comments(source);
+        src.match_indices(word)
+            .filter(|&(at, _)| {
+                let before = src[..at].chars().next_back();
+                let after = src[at + word.len()..].chars().next();
+                !before.is_some_and(is_ident)
+                    && !after.is_some_and(is_ident)
+                    && !src[..at].trim_end().ends_with("fn")
+            })
+            .map(|(at, _)| enclosing_fn(&src[..at]))
+            .collect()
+    }
+
+    /// Every `.rs` file under this crate's `src`, as `(path under src,
+    /// source before its test module)`.
+    fn crate_sources() -> Vec<(String, String)> {
+        fn walk(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<(String, String)>) {
+            let mut paths: Vec<_> = std::fs::read_dir(dir)
+                .expect("read src")
+                .map(|entry| entry.expect("dir entry").path())
+                .collect();
+            paths.sort();
+            for path in paths {
+                if path.is_dir() {
+                    walk(&path, root, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let text = std::fs::read_to_string(&path).expect("read source");
+                    let cut = text.find("\nmod tests {").unwrap_or(text.len());
+                    let rel = path.strip_prefix(root).expect("under src");
+                    out.push((rel.to_string_lossy().into_owned(), text[..cut].to_string()));
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut out = Vec::new();
+        walk(&root, &root, &mut out);
+        out
+    }
+
+    /// The scanner behind the source pin finds a call in every form the
+    /// first version of the pin missed (a `pub fn` or `pub(crate) fn` caller
+    /// taken for the fn before it, `Self::lane_of(self, ..)`, a call split
+    /// over lines) and ignores a definition, a comment and a longer name.
+    #[test]
+    fn the_lane_scanner_sees_every_call_form() {
+        let wrap = |body: &str, qualifier: &str| {
+            format!("impl X {{\n    fn first(&self) {{}}\n    {qualifier}fn a(&self) {{\n        {body}\n    }}\n}}")
+        };
+        for qualifier in ["", "pub ", "pub(crate) "] {
+            for body in [
+                "self.lane_of(x, y);",
+                "Self::lane_of(self, x, y);",
+                "self\n            .lane_of(x, y);",
+                "let f = MetalBackend::lane_of;",
+            ] {
+                let src = wrap(body, qualifier);
+                assert_eq!(sites(&src, "lane_of"), ["a"], "{src}");
+            }
+        }
+        let none = "impl X {\n    fn lane_of(&self) {}\n    fn b(&self) {\n        // self.lane_of(x, y)\n        self.lane_of_x(y);\n    }\n}";
+        assert!(sites(none, "lane_of").is_empty(), "{none}");
+    }
+
+    /// `Numerics::Exact` reaches `Lane::FixedOrder` through one seam,
+    /// `MetalBackend::lane_of`. This pins, over every source file of the
+    /// crate, which fns call it and how many places name `FixedOrder`, so a
+    /// new route (a `pub fn`, a helper, `Self::lane_of`, a literal in another
+    /// file) fails here and is the cue to update the `with_numerics` and
+    /// module docs. It is the backstop for the ops the dispatch-count test
+    /// does not drive; that test is the one that cannot be fooled by syntax.
+    #[test]
+    fn exact_numerics_lane_sites_are_the_documented_ones() {
+        let mut callers: Vec<String> = Vec::new();
+        let mut named: Vec<(String, usize)> = Vec::new();
+        for (path, source) in crate_sources() {
+            callers.extend(
+                sites(&source, "lane_of")
+                    .into_iter()
+                    .map(|name| format!("{path}::{name}")),
+            );
+            let n = sites(&source, "FixedOrder").len();
+            if n > 0 {
+                named.push((path, n));
+            }
+        }
+        callers.sort_unstable();
+        callers.dedup();
+        assert_eq!(
+            callers,
+            [
+                "backend.rs::conv2d_routed",
+                "backend.rs::linear_backward",
+                "backend.rs::linear_backward_input",
+                "backend.rs::linear_bias_forward",
+                "backend.rs::linear_forward",
+            ],
+            "the fns that take a GEMM lane changed: update the with_numerics and module docs"
+        );
+        named.sort();
+        assert_eq!(
+            named,
+            [
+                ("backend.rs".to_string(), 1),
+                ("device.rs".to_string(), 8),
+                ("link.rs".to_string(), 2),
+            ],
+            "FixedOrder is named in new places: is it a new route? update the docs"
+        );
+    }
+
+    /// Under `Numerics::Exact`, a fixed-order GEMM kernel is dispatched by
+    /// exactly the documented ops. Each op is driven and the three
+    /// `matmul_fixed_order_*_f32` counters are read after `sync`, so the
+    /// answer does not depend on how the source is written. The uncovered
+    /// ops driven here are a sample (their dispatch must not move); the
+    /// source pin covers the rest.
+    #[test]
+    fn exact_numerics_dispatches_fixed_order_only_for_the_documented_ops() {
+        let host = Budget::new(1 << 24);
+        let m = MetalBackend::new(Budget::new(1 << 26))
+            .expect("Metal device")
+            .with_numerics(Numerics::Exact);
+        let t = |shape: &[usize]| {
+            let n: usize = shape.iter().product();
+            m.upload(&Tensor::from_f32(&vec![0.25; n], shape, &host).expect("host"))
+                .expect("upload")
+        };
+        let fixed = || -> u64 {
+            ["nt", "nn", "tn"]
+                .iter()
+                .map(|k| m.kernel_dispatches(&format!("matmul_fixed_order_{k}_f32")))
+                .sum()
+        };
+        let (x, w, bias, gy) = (t(&[4, 8]), t(&[6, 8]), t(&[6]), t(&[4, 6]));
+        let (norm_w, norm_b) = (t(&[8]), t(&[8]));
+        let (img, kern) = (t(&[1, 3, 8, 8]), t(&[4, 3, 3, 3]));
+        let (pw_img, pw_kern) = (t(&[1, 3, 4, 4]), t(&[4, 3, 1, 1]));
+        let (dw_img, dw_kern) = (t(&[1, 3, 6, 6]), t(&[3, 1, 3, 3]));
+        let conv = Conv2dParams::new();
+        let depthwise = Conv2dParams {
+            groups: 3,
+            ..Conv2dParams::new()
+        };
+        let mut seen: Vec<(&str, bool)> = Vec::new();
+        let mut probe = |name: &'static str, run: &dyn Fn() -> Result<(), OjasError>| {
+            let before = fixed();
+            run().unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            m.sync().expect("sync");
+            seen.push((name, fixed() > before));
+        };
+        probe("linear_forward", &|| m.linear_forward(&x, &w).map(drop));
+        probe("linear_backward", &|| {
+            m.linear_backward(&x, &w, &gy).map(drop)
+        });
+        probe("linear_backward_input", &|| {
+            m.linear_backward_input(&x, &w, &gy).map(drop)
+        });
+        probe("linear_bias_forward", &|| {
+            m.linear_bias_forward(&x, &w, &bias).map(drop)
+        });
+        probe("conv2d_forward_im2col", &|| {
+            m.conv2d_forward(&img, &kern, None, conv).map(drop)
+        });
+        probe("conv2d_forward_pointwise", &|| {
+            m.conv2d_forward(&pw_img, &pw_kern, None, conv).map(drop)
+        });
+        probe("conv2d_via_im2col", &|| {
+            m.conv2d_via_im2col(&pw_img, &pw_kern, None, conv).map(drop)
+        });
+        probe("conv2d_forward_depthwise", &|| {
+            m.conv2d_forward(&dw_img, &dw_kern, None, depthwise)
+                .map(drop)
+        });
+        probe("softmax_forward", &|| m.softmax_forward(&x).map(drop));
+        probe("mul_forward", &|| m.mul_forward(&x, &x).map(drop));
+        probe("silu_forward", &|| m.silu_forward(&x).map(drop));
+        probe("rms_norm_forward", &|| {
+            m.rms_norm_forward(&x, &norm_w, 1e-6).map(drop)
+        });
+        probe("layer_norm_forward", &|| {
+            m.layer_norm_forward(&x, &norm_w, &norm_b, 1e-5).map(drop)
+        });
+        let mut dispatched: Vec<&str> = seen.iter().filter(|s| s.1).map(|s| s.0).collect();
+        let mut not_dispatched: Vec<&str> = seen.iter().filter(|s| !s.1).map(|s| s.0).collect();
+        dispatched.sort_unstable();
+        not_dispatched.sort_unstable();
+        assert_eq!(
+            dispatched,
+            [
+                "conv2d_forward_im2col",
+                "conv2d_forward_pointwise",
+                "conv2d_via_im2col",
+                "linear_backward",
+                "linear_backward_input",
+                "linear_bias_forward",
+                "linear_forward",
+            ],
+            "the ops that dispatch a fixed-order GEMM changed: update the with_numerics and module docs"
+        );
+        assert_eq!(
+            not_dispatched,
+            [
+                "conv2d_forward_depthwise",
+                "layer_norm_forward",
+                "mul_forward",
+                "rms_norm_forward",
+                "silu_forward",
+                "softmax_forward",
+            ]
+        );
+    }
 
     /// Run `f` on its own thread; panic if it neither returns nor panics in
     /// time, so a hang is a failure rather than a stuck test run.

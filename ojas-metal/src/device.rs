@@ -2424,8 +2424,27 @@ impl Worker {
         k: usize,
         mode: u32,
     ) -> Res<()> {
-        if m == 0 || n == 0 {
-            return Ok(());
+        // The refusals of the other two lanes, before anything is encoded.
+        // tessl's `validate_gemm` is private, so its rules are restated here
+        // and held to it by the lane-parity test: no empty dimension (so no
+        // early `Ok` and no k = 0 launch), and each operand's view inside its
+        // buffer (`tt` checks bounds without the copy `mat` would make: this
+        // kernel takes any element offset).
+        if m == 0 || n == 0 || k == 0 {
+            return Err(metal_err(format!(
+                "ojas_gemm_bf16_accum: GEMM requires nonempty rank-2 tensors (m {m}, n {n}, k {k})"
+            )));
+        }
+        let (a_shape, b_shape) = match mode {
+            0 => ([m, k], [k, n]),
+            1 => ([k, m], [k, n]),
+            _ => ([m, k], [n, k]),
+        };
+        self.tt(a, &a_shape)?;
+        self.tt(b, &b_shape)?;
+        self.tt(c, &[m, n])?;
+        if let Some(bias) = bias {
+            self.tt(bias, &[n])?;
         }
         let (m_u, n_u, k_u) = (u32_of(m)?, u32_of(n)?, u32_of(k)?);
         let mode_flags = mode | if bias.is_some() { 4 } else { 0 };
@@ -2455,9 +2474,10 @@ impl Worker {
         n: usize,
     ) -> Res<()> {
         if lane == Lane::FixedOrder {
-            if m == 0 || n == 0 {
-                return Ok(());
-            }
+            // No empty-shape early return: tessl's fixed-order entry runs the
+            // same `validate_gemm` as the exact-f32 lane, so both lanes refuse
+            // the same calls (an empty dimension, a buffer smaller than its
+            // shape).
             return self.fixed_order("matmul_fixed_order_nt_f32", || {
                 tessl::gemm::gemm_fixed_order_nt(
                     &self.mat(a, m, k)?,
@@ -2492,9 +2512,10 @@ impl Worker {
         n: usize,
     ) -> Res<()> {
         if lane == Lane::FixedOrder {
-            if m == 0 || n == 0 {
-                return Ok(());
-            }
+            // No empty-shape early return: tessl's fixed-order entry runs the
+            // same `validate_gemm` as the exact-f32 lane, so both lanes refuse
+            // the same calls (an empty dimension, a buffer smaller than its
+            // shape).
             return self.fixed_order("matmul_fixed_order_nn_f32", || {
                 tessl::gemm::gemm_fixed_order_nn(
                     &self.mat(a, m, k)?,
@@ -2529,9 +2550,10 @@ impl Worker {
         n: usize,
     ) -> Res<()> {
         if lane == Lane::FixedOrder {
-            if m == 0 || n == 0 {
-                return Ok(());
-            }
+            // No empty-shape early return: tessl's fixed-order entry runs the
+            // same `validate_gemm` as the exact-f32 lane, so both lanes refuse
+            // the same calls (an empty dimension, a buffer smaller than its
+            // shape).
             return self.fixed_order("matmul_fixed_order_tn_f32", || {
                 tessl::gemm::gemm_fixed_order_tn(
                     &self.mat(a, k, m)?,
@@ -5748,7 +5770,7 @@ mod gemma_dev;
 mod tests {
     use super::*;
 
-    use ojas_core::{BackendModule, Budget, Tensor};
+    use ojas_core::{BackendCore, BackendModule, Budget, Tensor};
 
     /// The bias-gradient grid is one SIMD-group per head, and a head count
     /// whose grid does not fit `usize` is refused, not wrapped.
@@ -6023,6 +6045,506 @@ mod tests {
         // A batch that fills the GPU runs one pass and writes no partials.
         assert_eq!(cached_attn_part(96, 1024, 64), Some(0));
         assert_eq!(cached_attn_part(12, 1024, usize::MAX), None);
+    }
+
+    /// The three GEMM lanes (exact-f32 Fast, FixedOrder, bf16 accumulation)
+    /// refuse exactly the same calls. FixedOrder and Bf16Accum used to return
+    /// `Ok` for `m == 0 || n == 0` before any shape check (Bf16Accum let
+    /// k = 0 reach the kernel too), so a call whose buffers were smaller than
+    /// its shape, or an empty one, passed there while the Fast lane's tessl
+    /// validation refused it. FixedOrder now goes through tessl's
+    /// `validate_gemm`; Bf16Accum restates its rules in one place.
+    /// (The backend never sends an empty operand: `MetalBackend::f32` refuses
+    /// it first, so this drives the device thread's commands directly.)
+    /// Each case is `(rows, kin, nout)` over 64-element buffers, so
+    /// `(0, 100, 4)` names a `[4, 100]` weight the buffer cannot hold.
+    #[test]
+    fn the_fixed_order_gemm_lane_refuses_what_the_fast_lane_refuses() {
+        let mut w =
+            Worker::open(Arc::new(Waits::default()), Budget::new(8 << 30)).expect("Metal device");
+        let x = upload(&mut w, &pattern(64, 1));
+        let wt = upload(&mut w, &pattern(64, 2));
+        let gy = upload(&mut w, &pattern(64, 3));
+        // (rows, kin, nout, whether the call is valid)
+        let cases: [(usize, usize, usize, bool); 8] = [
+            (4, 4, 4, true),
+            (4, 1, 4, true),
+            (3, 5, 4, true),
+            (0, 4, 4, false),
+            (4, 4, 0, false),
+            (4, 0, 4, false),
+            (0, 0, 0, false),
+            (0, 100, 4, false),
+        ];
+        for (rows, kin, nout, valid) in cases {
+            for op in ["linear", "linear_bwd_input", "linear_bwd"] {
+                let mut ran = [false; 3];
+                for (i, lane) in [Lane::ExactF32, Lane::FixedOrder, Lane::Bf16Accum]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let cmd = match op {
+                        "linear" => Cmd::Linear {
+                            x,
+                            w: wt,
+                            rows,
+                            kin,
+                            nout,
+                            lane,
+                        },
+                        "linear_bwd_input" => Cmd::LinearBwdInput {
+                            x,
+                            w: wt,
+                            gy,
+                            rows,
+                            kin,
+                            nout,
+                            lane,
+                        },
+                        _ => Cmd::LinearBwd {
+                            x,
+                            w: wt,
+                            gy,
+                            rows,
+                            kin,
+                            nout,
+                            gx_lane: lane,
+                            gw_lane: lane,
+                        },
+                    };
+                    ran[i] = w.run(cmd).is_ok();
+                }
+                let case = format!("{op} rows {rows} kin {kin} nout {nout}");
+                assert!(
+                    ran[0] == ran[1] && ran[1] == ran[2],
+                    "{case}: Fast {} FixedOrder {} Bf16Accum {}",
+                    ran[0],
+                    ran[1],
+                    ran[2]
+                );
+                if valid {
+                    assert!(ran[0], "{case}: a valid call was refused");
+                }
+                if (rows, kin, nout) == (0, 100, 4) {
+                    assert!(
+                        !ran.contains(&true),
+                        "{case}: a lane accepted a buffer too small for its shape: {ran:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// One `(m, k, n)` linear problem: `x` `[m, k]`, `w` `[n, k]`, `gy` `[m, n]`.
+    struct LinearCase {
+        m: usize,
+        k: usize,
+        n: usize,
+        x: Vec<f32>,
+        w: Vec<f32>,
+        gy: Vec<f32>,
+    }
+
+    /// The four products a linear layer computes, in the order
+    /// `linear_forward`, `linear_backward_input`, `linear_backward`'s `gx`
+    /// and its `gw`.
+    const LINEAR_PRODUCTS: [&str; 4] = [
+        "linear_forward",
+        "linear_backward_input",
+        "linear_backward.gx",
+        "linear_backward.gw",
+    ];
+
+    /// `v` with every subnormal replaced by zero: keeping its sign
+    /// (`keep_sign`) or as `+0.0`.
+    fn flush_subnormals(v: &[f32], keep_sign: bool) -> Vec<f32> {
+        v.iter()
+            .map(|&x| match (x.is_subnormal(), keep_sign) {
+                (false, _) => x,
+                (true, true) => 0.0f32.copysign(x),
+                (true, false) => 0.0,
+            })
+            .collect()
+    }
+
+    /// CPU Exact's four products of `c`, each `Err` where the CPU backend
+    /// refuses it (it refuses a non-finite input to `linear_backward`).
+    fn cpu_exact_linear(c: &LinearCase) -> Result<[Result<Vec<f32>, String>; 4], String> {
+        let cpu = ojas_cpu::CpuBackend::new(Budget::new(1 << 30))
+            .with_numerics(ojas_core::Numerics::Exact);
+        let host = Budget::new(1 << 30);
+        let t = |v: &[f32], shape: &[usize]| {
+            Tensor::from_f32(v, shape, &host).map_err(|e| format!("{e:?}"))
+        };
+        let (x, w, gy) = (
+            t(&c.x, &[c.m, c.k])?,
+            t(&c.w, &[c.n, c.k])?,
+            t(&c.gy, &[c.m, c.n])?,
+        );
+        let values = |r: Result<Tensor, OjasError>| -> Result<Vec<f32>, String> {
+            r.and_then(|t| t.to_f32_vec()).map_err(|e| format!("{e:?}"))
+        };
+        let (gx, gw) = match cpu.linear_backward(&x, &w, &gy) {
+            Ok((gx, gw)) => (values(Ok(gx)), values(Ok(gw))),
+            Err(e) => (Err(format!("{e:?}")), Err(format!("{e:?}"))),
+        };
+        Ok([
+            values(cpu.linear_forward(&x, &w)),
+            values(cpu.linear_backward_input(&x, &w, &gy)),
+            gx,
+            gw,
+        ])
+    }
+
+    /// Whether `MetalBackend` under `Numerics::Exact` reports `NonFinite`
+    /// (from the op or from the `sync` after it) for product `product` of
+    /// `c`: the Metal side of a product the CPU backend refuses.
+    fn metal_backend_reports_nonfinite(c: &LinearCase, product: usize) -> bool {
+        let host = Budget::new(1 << 30);
+        let m = crate::MetalBackend::new(Budget::new(1 << 30))
+            .expect("Metal device")
+            .with_numerics(ojas_core::Numerics::Exact);
+        let run = || -> Result<(), OjasError> {
+            let up = |v: &[f32], shape: &[usize]| {
+                m.upload(&Tensor::from_f32(v, shape, &host).expect("host"))
+            };
+            let (x, w, gy) = (
+                up(&c.x, &[c.m, c.k])?,
+                up(&c.w, &[c.n, c.k])?,
+                up(&c.gy, &[c.m, c.n])?,
+            );
+            match product {
+                0 => m.linear_forward(&x, &w).map(drop),
+                1 => m.linear_backward_input(&x, &w, &gy).map(drop),
+                _ => m.linear_backward(&x, &w, &gy).map(drop),
+            }?;
+            m.sync()
+        };
+        matches!(run(), Err(OjasError::NonFinite { .. }))
+    }
+
+    fn run_bufs(dev: &mut Worker, cmd: Cmd) -> Result<Vec<NewBuf>, String> {
+        match dev.run(cmd) {
+            Ok(Reply::Bufs(b)) => Ok(b),
+            other => Err(format!("{other:?}")),
+        }
+    }
+
+    /// The four products of `c` on the device thread's FixedOrder lane, read
+    /// raw (a raw read does not turn a non-finite value into a fault, so
+    /// this sees the kernel's bits).
+    fn metal_fixed_order_linear(dev: &mut Worker, c: &LinearCase) -> Result<[Vec<f32>; 4], String> {
+        let (x, wt, gy) = (upload(dev, &c.x), upload(dev, &c.w), upload(dev, &c.gy));
+        let (rows, kin, nout, lane) = (c.m, c.k, c.n, Lane::FixedOrder);
+        let y = run_bufs(
+            dev,
+            Cmd::Linear {
+                x,
+                w: wt,
+                rows,
+                kin,
+                nout,
+                lane,
+            },
+        )?;
+        let y = read(dev, y[0].id, c.m * c.n);
+        let gxi = run_bufs(
+            dev,
+            Cmd::LinearBwdInput {
+                x,
+                w: wt,
+                gy,
+                rows,
+                kin,
+                nout,
+                lane,
+            },
+        )?;
+        let gxi = read(dev, gxi[0].id, c.m * c.k);
+        let bwd = run_bufs(
+            dev,
+            Cmd::LinearBwd {
+                x,
+                w: wt,
+                gy,
+                rows,
+                kin,
+                nout,
+                gx_lane: lane,
+                gw_lane: lane,
+            },
+        )?;
+        if bwd.len() != 2 {
+            return Err(format!("linear_backward returned {} buffers", bwd.len()));
+        }
+        let gx = read(dev, bwd[0].id, c.m * c.k);
+        let gw = read(dev, bwd[1].id, c.n * c.k);
+        Ok([y, gxi, gx, gw])
+    }
+
+    /// How one product of the device compares with CPU Exact, element by
+    /// element (any NaN matches a NaN).
+    #[derive(Default)]
+    struct Tally {
+        equal: usize,
+        /// Differs from CPU Exact, and a subnormal flushed to zero explains
+        /// it: the device gave zero where CPU Exact's value is subnormal (a
+        /// subnormal result, or a product or partial sum that was), or it
+        /// equals CPU Exact on the inputs with their subnormal operands
+        /// flushed to zero.
+        flushed: usize,
+        /// Products the CPU backend refuses as `NonFinite` and
+        /// `MetalBackend` refuses the same way.
+        both_refused: usize,
+        /// Neither: a divergence the flush does not explain.
+        unexplained: usize,
+        first_unexplained: Option<String>,
+    }
+
+    fn classify(metal: &[f32], cpu: &[f32], flushed: &[&[f32]]) -> Tally {
+        assert_eq!(metal.len(), cpu.len());
+        let same = |a: f32, b: f32| a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan());
+        let mut t = Tally::default();
+        for (i, (&m, &c)) in metal.iter().zip(cpu).enumerate() {
+            if same(m, c) {
+                t.equal += 1;
+            } else if (m == 0.0 && c.is_subnormal()) || flushed.iter().any(|f| same(m, f[i])) {
+                t.flushed += 1;
+            } else {
+                t.unexplained += 1;
+                t.first_unexplained.get_or_insert_with(|| {
+                    format!(
+                        "idx {i}: metal {:#010x} cpu {:#010x}",
+                        m.to_bits(),
+                        c.to_bits()
+                    )
+                });
+            }
+        }
+        t
+    }
+
+    /// Metal's FixedOrder lane against CPU Exact on inputs sprinkled with
+    /// each class of special value (CPU's own list: NaN, infinities, signed
+    /// zeros, `f32::MAX`, subnormals), one class per run so a divergence is
+    /// attributed to it, plus a mix and four structured flush cases. A
+    /// divergence is explained when the device gave zero where CPU Exact's
+    /// value is subnormal, or (for a case with subnormal operands) when it
+    /// matches CPU Exact on the flushed operands (sign-preserving or `+0.0`).
+    /// Returns `(label, tally)` per case, product and shape.
+    fn compare_fixed_order_with_cpu_exact() -> Vec<(String, Tally)> {
+        let tiny = f32::MIN_POSITIVE;
+        let classes: [(&str, bool, &[f32]); 7] = [
+            ("normal", false, &[]),
+            (
+                "subnormal",
+                true,
+                &[
+                    tiny / 8.0,
+                    -tiny / 8.0,
+                    tiny / 2.0,
+                    f32::from_bits(1),
+                    -f32::from_bits(0x007f_ffff),
+                ],
+            ),
+            ("signed_zero", false, &[0.0, -0.0]),
+            ("inf", false, &[f32::INFINITY, f32::NEG_INFINITY]),
+            ("nan", false, &[f32::NAN]),
+            ("max", false, &[f32::MAX, -f32::MAX]),
+            (
+                "mixed",
+                true,
+                &[
+                    f32::NAN,
+                    f32::INFINITY,
+                    f32::NEG_INFINITY,
+                    0.0,
+                    -0.0,
+                    f32::MAX,
+                    -f32::MAX,
+                    tiny / 8.0,
+                ],
+            ),
+        ];
+        let sprinkle = |len: usize, seed: u64, every: usize, specials: &[f32]| {
+            let mut v = pattern(len, seed);
+            if !specials.is_empty() {
+                for (j, i) in (0..len).step_by(every).enumerate() {
+                    v[i] = specials[j % specials.len()];
+                }
+            }
+            v
+        };
+        let mut dev =
+            Worker::open(Arc::new(Waits::default()), Budget::new(8 << 30)).expect("Metal device");
+        let mut out = Vec::new();
+        // `(class, has subnormal operands, case)`. Single-term products
+        // (n = 1, m = 1) put a subnormal operand alone in an output; the wider
+        // shape sums many terms.
+        let mut cases: Vec<(String, bool, LinearCase)> = Vec::new();
+        for (name, has_subnormals, specials) in classes {
+            for (m, k, n) in [(7usize, 17usize, 9usize), (1, 33, 1), (9, 5, 1)] {
+                cases.push((
+                    name.to_string(),
+                    has_subnormals,
+                    LinearCase {
+                        m,
+                        k,
+                        n,
+                        x: sprinkle(m * k, 11, 11, specials),
+                        w: sprinkle(n * k, 12, 13, specials),
+                        gy: sprinkle(m * n, 13, 17, specials),
+                    },
+                ));
+            }
+        }
+        // Each is `y = x0 * w0 + x1 * w1` with `gy = 1`, so `gx` is `w` and
+        // `gw` is `x`. The first three have no subnormal operand: a sum of
+        // normal values that is subnormal, a product that is, and a
+        // subnormal that cancels to nothing.
+        let n = |bits: u32| f32::from_bits(bits);
+        for (name, has_subnormals, x, w) in [
+            (
+                "result_of_normals",
+                false,
+                [n(0x0080_0001), -f32::MIN_POSITIVE],
+                [1.0, 1.0],
+            ),
+            (
+                "product_of_normals",
+                false,
+                [2f32.powi(-100), 0.0],
+                [2f32.powi(-30), 0.0],
+            ),
+            (
+                "subnormal_operand_normal_result",
+                true,
+                [2f32.powi(-130), 0.0],
+                [2f32.powi(10), 0.0],
+            ),
+            (
+                "sum_of_subnormals",
+                true,
+                [f32::MIN_POSITIVE / 8.0, f32::MIN_POSITIVE / 8.0],
+                [1.0, 1.0],
+            ),
+        ] {
+            cases.push((
+                name.to_string(),
+                has_subnormals,
+                LinearCase {
+                    m: 1,
+                    k: 2,
+                    n: 1,
+                    x: x.to_vec(),
+                    w: w.to_vec(),
+                    gy: vec![1.0],
+                },
+            ));
+        }
+        for (name, has_subnormals, case) in cases {
+            {
+                let (m, k, n) = (case.m, case.k, case.n);
+                let cpu = cpu_exact_linear(&case)
+                    .unwrap_or_else(|e| panic!("{name} {m}x{k}x{n}: CPU tensors: {e}"));
+                let metal = metal_fixed_order_linear(&mut dev, &case)
+                    .unwrap_or_else(|e| panic!("{name} {m}x{k}x{n}: device refused: {e}"));
+                let flushed: Vec<[Result<Vec<f32>, String>; 4]> = if has_subnormals {
+                    [true, false]
+                        .map(|keep_sign| {
+                            let f = LinearCase {
+                                m,
+                                k,
+                                n,
+                                x: flush_subnormals(&case.x, keep_sign),
+                                w: flush_subnormals(&case.w, keep_sign),
+                                gy: flush_subnormals(&case.gy, keep_sign),
+                            };
+                            cpu_exact_linear(&f).expect("CPU Exact on flushed inputs")
+                        })
+                        .into()
+                } else {
+                    Vec::new()
+                };
+                for (p, product) in LINEAR_PRODUCTS.iter().enumerate() {
+                    let label = format!("{name:<11} {product:<22} m{m} k{k} n{n}");
+                    let tally = match &cpu[p] {
+                        Ok(cpu_values) => {
+                            let alts: Vec<&[f32]> = flushed
+                                .iter()
+                                .filter_map(|f| f[p].as_deref().ok())
+                                .collect();
+                            classify(&metal[p], cpu_values, &alts)
+                        }
+                        // The CPU oracle refuses this product, so there are no
+                        // bits to compare: both sides must refuse it.
+                        Err(e) if e.contains("NonFinite") => {
+                            if metal_backend_reports_nonfinite(&case, p) {
+                                Tally {
+                                    both_refused: 1,
+                                    ..Tally::default()
+                                }
+                            } else {
+                                Tally {
+                                    unexplained: 1,
+                                    first_unexplained: Some(format!(
+                                        "CPU refused ({e}) but MetalBackend did not report NonFinite"
+                                    )),
+                                    ..Tally::default()
+                                }
+                            }
+                        }
+                        Err(e) => panic!("{label}: CPU Exact refused: {e}"),
+                    };
+                    out.push((label, tally));
+                }
+            }
+        }
+        out
+    }
+
+    fn print_tallies(tallies: &[(String, Tally)]) {
+        for (label, t) in tallies {
+            println!(
+                "SUBNORMAL-PIN {label}: equal {} flushed {} both_refused {} unexplained {} {}",
+                t.equal,
+                t.flushed,
+                t.both_refused,
+                t.unexplained,
+                t.first_unexplained.as_deref().unwrap_or("")
+            );
+        }
+    }
+
+    /// The documented deviation of Metal Exact from CPU Exact, pinned: on
+    /// every class of special value the device's FixedOrder GEMMs give CPU
+    /// Exact's bits, except that a subnormal (an operand, a product, a
+    /// partial sum or the result) is flushed to zero. Normal-range inputs,
+    /// signed zeros, infinities, NaNs and `f32::MAX` must match exactly, and
+    /// the structured cases cover a subnormal result of normal operands, a
+    /// subnormal product of normal operands, a subnormal operand with a
+    /// normal result and a sum of subnormals. A divergence that a flushed
+    /// subnormal does not explain (a NaN or infinity handled differently, the
+    /// sign of a zero) fails this test.
+    #[test]
+    fn metal_exact_matches_cpu_exact_except_for_flushed_subnormals() {
+        let tallies = compare_fixed_order_with_cpu_exact();
+        print_tallies(&tallies);
+        let bad: Vec<String> = tallies
+            .iter()
+            .filter(|(_, t)| t.unexplained > 0)
+            .map(|(label, t)| {
+                format!(
+                    "{label}: {} {}",
+                    t.unexplained,
+                    t.first_unexplained.as_deref().unwrap_or("")
+                )
+            })
+            .collect();
+        assert!(
+            bad.is_empty(),
+            "divergences the subnormal flush does not explain: {bad:#?}"
+        );
     }
 
     fn pattern(n: usize, seed: u64) -> Vec<f32> {
