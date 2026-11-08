@@ -58,7 +58,9 @@ trait Work: Send + Sync {
 struct BatchState<T> {
     results: Vec<Option<T>>,
     finished: usize,
-    panic: Option<String>,
+    /// The panic of the lowest-indexed task that panicked, so which text a
+    /// batch reports does not depend on which thread got there first.
+    panic: Option<(usize, String)>,
 }
 
 type Task<T> = Arc<dyn Fn(usize) -> T + Send + Sync>;
@@ -84,10 +86,12 @@ impl<T: Send> Work for Batch<T> {
         // not taken the closure. This task's clone is dropped before it counts
         // as finished, so the caller's clone is the last one once all are.
         let task = lock(&self.task).clone();
+        // The payload is read and dropped inside `caught`, before the state
+        // lock is taken, so a payload whose `Drop` panics cannot kill this
+        // worker between claiming the task and counting it finished.
         let outcome = match task {
-            Some(task) => catch_unwind(AssertUnwindSafe(|| task(index))),
-            None => Err(Box::new("batch closure was taken before its task ran")
-                as Box<dyn std::any::Any + Send>),
+            Some(task) => caught(|| task(index)),
+            None => Err("batch closure was taken before its task ran".to_string()),
         };
         let mut state = lock(&self.state);
         match outcome {
@@ -96,9 +100,9 @@ impl<T: Send> Work for Batch<T> {
                     *slot = Some(value);
                 }
             }
-            Err(payload) => {
-                if state.panic.is_none() {
-                    state.panic = Some(panic_text(payload.as_ref()));
+            Err(text) => {
+                if state.panic.as_ref().is_none_or(|(first, _)| index < *first) {
+                    state.panic = Some((index, text));
                 }
             }
         }
@@ -309,11 +313,8 @@ impl Pool {
         let task = lock(&batch.task).take();
         drop(task);
         let mut state = lock(&batch.state);
-        if let Some(text) = state.panic.take() {
-            return Err(OjasError::Backend {
-                id: BackendId::Cpu,
-                detail: format!("worker task panicked: {text}"),
-            });
+        if let Some((_, text)) = state.panic.take() {
+            return Err(task_panic(&text));
         }
         let mut out = Vec::with_capacity(count);
         for slot in state.results.iter_mut() {
@@ -403,11 +404,8 @@ impl<T: Send> Handoff<T> {
         let task = lock(&self.batch.task).take();
         drop(task);
         let mut state = lock(&self.batch.state);
-        if let Some(text) = state.panic.take() {
-            return Err(OjasError::Backend {
-                id: BackendId::Cpu,
-                detail: format!("worker task panicked: {text}"),
-            });
+        if let Some((_, text)) = state.panic.take() {
+            return Err(task_panic(&text));
         }
         match state.results.first_mut().and_then(Option::take) {
             Some(value) => Ok(value),
@@ -530,6 +528,48 @@ fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
     }
 }
 
+/// The text of a caught panic payload, which is then dropped here.
+///
+/// A payload is arbitrary user data and its `Drop` can panic. That panic is
+/// caught too, and a second payload that cannot be dropped quietly is leaked
+/// rather than dropped again, so no panic ever leaves this function.
+pub(crate) fn payload_text(payload: Box<dyn std::any::Any + Send>) -> String {
+    let text = panic_text(payload.as_ref());
+    if let Err(second) = catch_unwind(AssertUnwindSafe(move || drop(payload))) {
+        std::mem::forget(second);
+    }
+    text
+}
+
+/// The one error a panicking task becomes, whichever thread ran it and
+/// whether it ran inline, on a pool worker or on a scoped thread.
+pub(crate) fn task_panic(text: &str) -> OjasError {
+    OjasError::Backend {
+        id: BackendId::Cpu,
+        detail: format!("worker task panicked: {text}"),
+    }
+}
+
+/// Run `f`; a panic in it is `Err` carrying its text, whatever its payload.
+///
+/// `AssertUnwindSafe`: a caller that gets `Err` must treat everything `f`
+/// was writing as unspecified. Owned buffers and partial results are
+/// discarded with the error, but an in-place output the caller passed in may
+/// hold the pieces that ran before the panic. No pool lock is held while a
+/// task runs (the pool's own `lock` also tolerates poison), so the next op
+/// starts from a consistent pool.
+pub(crate) fn caught<T>(f: impl FnOnce() -> T) -> Result<T, String> {
+    catch_unwind(AssertUnwindSafe(f)).map_err(payload_text)
+}
+
+/// [`caught`] for a closure that returns [`OjasError`]: a panic becomes
+/// [`OjasError::Backend`] carrying the panic text, so an inline branch
+/// reports a panicking task exactly as the threaded paths do instead of
+/// unwinding into the caller.
+pub(crate) fn guarded<T>(f: impl FnOnce() -> Result<T, OjasError>) -> Result<T, OjasError> {
+    caught(f).unwrap_or_else(|text| Err(task_panic(&text)))
+}
+
 /// Pool and arithmetic contract one op runs under.
 #[derive(Clone, Copy)]
 pub(crate) struct Exec<'a> {
@@ -561,7 +601,7 @@ impl Exec<'_> {
         if count > 1 && self.pool.threads() > 1 && work >= min_work {
             self.pool.run(count, task)
         } else {
-            Ok((0..count).map(task).collect())
+            guarded(|| Ok((0..count).map(task).collect()))
         }
     }
 }
@@ -585,6 +625,12 @@ pub(crate) fn ranges(len: usize, pieces: usize) -> Vec<Range<usize>> {
     }
     out
 }
+
+#[cfg(test)]
+mod guard_bench;
+
+#[cfg(test)]
+mod panic_tests;
 
 #[cfg(test)]
 mod tests {

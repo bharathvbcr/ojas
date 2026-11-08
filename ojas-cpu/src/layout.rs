@@ -496,7 +496,9 @@ impl Runs {
             let mut guard = HandoffJoin {
                 handoff: Some(handoff),
             };
-            let written = caller.write();
+            // A panic in the caller's half is the error the worker's half
+            // gives; `?` leaves `guard`, which joins the worker first.
+            let written = crate::pool::guarded(move || Ok(caller.write()))?;
             let handoff = guard
                 .handoff
                 .take()

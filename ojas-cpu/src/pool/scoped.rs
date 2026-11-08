@@ -46,13 +46,12 @@
 //! `trainer.rs` / `optim.rs`, which this cut does not.
 
 use std::ops::Range;
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use ojas_core::{BackendId, OjasError};
 
-use super::{ranges, Exec, ROW_MIN_ELEMS, WORKER_STACK_BYTES};
+use super::{guarded, payload_text, ranges, task_panic, Exec, ROW_MIN_ELEMS, WORKER_STACK_BYTES};
 
 fn backend(detail: String) -> OjasError {
     OjasError::Backend {
@@ -61,8 +60,9 @@ fn backend(detail: String) -> OjasError {
     }
 }
 
-/// `task(i)` for `i` in `0..count`, results in index order; the first error
-/// in index order wins.
+/// `task(i)` for `i` in `0..count`, results in index order; the first failure
+/// in index order wins, whether it is an `Err` or a panic, at any thread
+/// count.
 pub(crate) fn map<T, F>(exec: Exec<'_>, count: usize, task: F) -> Result<Vec<T>, OjasError>
 where
     T: Send,
@@ -70,7 +70,7 @@ where
 {
     let threads = exec.pool.threads().min(count);
     if threads <= 1 {
-        return (0..count).map(task).collect();
+        return guarded(|| (0..count).map(task).collect());
     }
     let next = AtomicUsize::new(0);
     let work = || {
@@ -80,11 +80,13 @@ where
             if i >= count {
                 return done;
             }
-            done.push((i, task(i)));
+            // A panic is this task's own failure, recorded at its index like
+            // an `Err`, so the lowest failing index wins at any thread count.
+            done.push((i, guarded(|| task(i))));
         }
     };
     let mut slots: Vec<Option<Result<T, OjasError>>> = (0..count).map(|_| None).collect();
-    let mut panicked = false;
+    let mut panicked: Option<OjasError> = None;
     std::thread::scope(|scope| {
         let mut handles = Vec::with_capacity(threads - 1);
         for _ in 1..threads {
@@ -97,9 +99,13 @@ where
                 Err(_) => break,
             }
         }
-        let mut parts = vec![catch_unwind(AssertUnwindSafe(work))];
+        let mut parts = vec![guarded(|| Ok(work()))];
         for handle in handles {
-            parts.push(handle.join());
+            parts.push(
+                handle
+                    .join()
+                    .map_err(|payload| task_panic(&payload_text(payload))),
+            );
         }
         for part in parts {
             match part {
@@ -108,18 +114,23 @@ where
                         slots[i] = Some(result);
                     }
                 }
-                Err(_) => panicked = true,
+                // A thread that failed outside a task; the first one reports.
+                Err(error) => {
+                    panicked.get_or_insert(error);
+                }
             }
         }
     });
-    if panicked {
-        return Err(backend("scoped worker task panicked".to_string()));
-    }
     let mut out = Vec::with_capacity(count);
     for slot in slots {
         match slot {
             Some(result) => out.push(result?),
-            None => return Err(backend("scoped task finished without a result".to_string())),
+            // Only a thread that died outside any task leaves a slot empty.
+            None => {
+                return Err(panicked.unwrap_or_else(|| {
+                    backend("scoped task finished without a result".to_string())
+                }))
+            }
         }
     }
     Ok(out)
@@ -245,11 +256,13 @@ where
         slices.push(piece);
     }
     if parts.len() == 1 || exec.pool.threads() <= 1 || small {
-        return parts
-            .into_iter()
-            .zip(slices)
-            .map(|(range, part)| task(range, part))
-            .collect();
+        return guarded(|| {
+            parts
+                .into_iter()
+                .zip(slices)
+                .map(|(range, part)| task(range, part))
+                .collect()
+        });
     }
     fill_parts(exec, slices, |i, part| task(parts[i].clone(), part))
 }
@@ -428,24 +441,6 @@ mod tests {
                 chunks_into_n(e, [&mut a, &mut b], 4, [1, 3], 1, |_, _| Ok(()))
             });
             assert_eq!(got.is_ok(), ok, "second output of {len_b} for 4 items of 3");
-        }
-    }
-
-    #[test]
-    fn a_panicking_task_is_a_backend_error() {
-        for threads in [1usize, 4] {
-            let got = with(threads, |e| {
-                std::panic::catch_unwind(AssertUnwindSafe(|| {
-                    map(e, 8, |i| if i == 5 { panic!("task five") } else { Ok(i) })
-                }))
-            });
-            match (threads, got) {
-                // One thread runs inline, like the pool's caller: the panic
-                // propagates.
-                (1, Err(_)) => {}
-                (_, Ok(Err(OjasError::Backend { .. }))) => {}
-                (t, other) => panic!("threads {t}: {:?}", other.map(|r| r.map(drop))),
-            }
         }
     }
 

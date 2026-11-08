@@ -133,8 +133,12 @@ pub(crate) fn grad_norm(
 /// with nothing scaled. Each gradient's blocks are then scaled where they
 /// are, on the pool. `scale` is in `[0, 1)` ([`ojas_core::clip_scale`]) and
 /// the values are finite (the norm pass scanned them), so every product is
-/// finite, and a [`scoped::fill`] task that does not panic is never refused:
-/// no gradient is left half scaled.
+/// finite, and a [`scoped::fill`] task never refuses: a refusal leaves
+/// nothing scaled, and nothing else can stop the pass part-way except a
+/// panic. A panic in a task returns `Err(Backend)`, and then the gradients
+/// and the pieces of the current gradient written before it stay scaled
+/// (which later pieces ran depends on the thread count), so after an `Err`
+/// the gradients are unspecified, not unchanged.
 pub(crate) fn scale_in_place(
     exec: Exec<'_>,
     grads: &mut [Tensor],

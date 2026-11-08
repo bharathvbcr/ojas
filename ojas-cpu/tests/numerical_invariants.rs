@@ -226,7 +226,7 @@ fn t3_t4_attention_backward_key_translation_gauge_invariance_and_row_sum() {
     let qg = f32t(&be_exact, &rng.vec(gn, 0.5), &g_shape);
     let kg0_vec = rng.vec(gn, 0.5);
     let mut kg1_vec = kg0_vec.clone();
-    for row in kg1_vec.chunks_exact_mut(16) {
+    for row in kg1_vec.as_chunks_mut::<16>().0.iter_mut() {
         for (d_idx, slot) in row.iter_mut().enumerate() {
             *slot += (d_idx as f32 - 7.5) * 4.0;
         }

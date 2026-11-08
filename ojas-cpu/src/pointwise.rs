@@ -1292,16 +1292,20 @@ fn overlapped_fast_gate(
             return Ok(None);
         };
 
-        let mut z1 = match fast_row_logits(
-            op,
-            exec,
-            &input[in0..in0 + in1],
-            weight,
-            bias,
-            rest,
-            din,
-            heads,
-        ) {
+        // A panic in the caller's half is the error the worker's half gives,
+        // and the worker is joined below either way.
+        let mut z1 = match crate::pool::guarded(|| {
+            fast_row_logits(
+                op,
+                exec,
+                &input[in0..in0 + in1],
+                weight,
+                bias,
+                rest,
+                din,
+                heads,
+            )
+        }) {
             Ok(z) => z,
             Err(err) => {
                 let _ = handoff.join();

@@ -39,7 +39,7 @@ use std::sync::Arc;
 
 use ojas_core::{BackendId, Numerics, OjasError};
 
-use crate::pool::{scoped, Exec};
+use crate::pool::{guarded, scoped, Exec};
 use crate::validate::{product, shape};
 
 /// Register tile rows (A panel width).
@@ -558,7 +558,9 @@ fn packed_into(
     let tiles = plan(exec, m, n, k);
     let cancel = exec.pool.cancel_hook();
     if tiles.count() == 1 {
-        return macro_tile(&pa, &pb, 0..m, 0..n, k, bl, c, cancel.as_ref(), accumulate);
+        // The one tile runs here, so a panic in it (a cancel hook can) is the
+        // error the pooled tiles would have returned.
+        return guarded(|| macro_tile(&pa, &pb, 0..m, 0..n, k, bl, c, cancel.as_ref(), accumulate));
     }
     let init = accumulate.then(|| Arc::new(c.to_vec()));
     let parts = exec.pool.run(tiles.count(), {
@@ -870,7 +872,9 @@ fn pack<const W: usize>(
     let per_chunk = panels.div_ceil(pieces).max(1);
     let chunk_count = panels.div_ceil(per_chunk);
     let chunks = if chunk_count <= 1 {
-        vec![pack_range::<W>(data, groups, gs, depth, ds, 0..panels)]
+        vec![guarded(|| {
+            Ok(pack_range::<W>(data, groups, gs, depth, ds, 0..panels))
+        })?]
     } else {
         scoped::map(exec, chunk_count, |c| {
             let start = c * per_chunk;
@@ -1748,6 +1752,36 @@ mod tests {
             assert_eq!(made, 2, "one check before each Accelerate call");
         } else {
             assert!(made >= 2, "{made}");
+        }
+    }
+
+    /// A product of one tile runs on the caller. A panic in it (here the
+    /// cancel hook, which `macro_tile` calls) is `Err(Backend)` with its text,
+    /// as it is from the pooled tiles, not an unwind into the caller.
+    #[test]
+    fn a_panic_in_the_single_tile_product_is_a_backend_error() {
+        let (m, k, n) = (4usize, 8usize, 4usize);
+        let (a, b) = (random(m * k, 1), random(k * n, 2));
+        for threads in [1usize, 4] {
+            let pool = Arc::new(Pool::new(threads).unwrap());
+            pool.set_cancel(Arc::new(|| panic!("cancel hook exploded")));
+            let exec = Exec {
+                pool: &pool,
+                numerics: Numerics::Exact,
+            };
+            let got = gemm(
+                "test",
+                exec,
+                &Mat::row_major(&a, m, k),
+                &Mat::row_major(&b, k, n),
+            );
+            match got {
+                Err(OjasError::Backend { detail, .. }) => assert!(
+                    detail.contains("cancel hook exploded"),
+                    "threads {threads}: {detail}"
+                ),
+                other => panic!("threads {threads}: expected Backend, got {other:?}"),
+            }
         }
     }
 
