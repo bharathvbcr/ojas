@@ -2331,12 +2331,27 @@ impl BackendCore for MetalBackend {
                     found: Some(mbuf.backend()),
                 });
             }
+            // The device adopts the buffer as a whole and applies no view
+            // offset, so a mapped view that is not the entire allocation
+            // would upload the base's bytes instead of its own window.
+            if tensor.byte_offset() != 0 || len != mbuf.byte_len() {
+                return Err(OjasError::Unsupported {
+                    op: OP,
+                    detail: format!(
+                        "a mapped view ({len} bytes at byte offset {}) of a {}-byte buffer \
+                         cannot be uploaded: the device adopts the whole buffer and ignores \
+                         the view's window; upload a host snapshot (Tensor::to_host) instead",
+                        tensor.byte_offset(),
+                        mbuf.byte_len()
+                    ),
+                });
+            }
         }
         let reservation = self.budget.try_reserve(len as u64)?;
         let ids = match tensor.dtype() {
             DType::U32 => {
                 if tensor.mapped_buffer().is_some() {
-                    let view = tensor.host_view()?;
+                    let view = tensor.host_view_window()?;
                     Some(Ids::Host(Arc::from(view.as_u32()?)))
                 } else {
                     Some(Ids::Host(Arc::from(tensor.u32_slice()?)))

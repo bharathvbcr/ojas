@@ -351,7 +351,9 @@ pub trait Timeline: Send + Sync {
 /// thread; the implementation that makes that sound is the device
 /// extension's, not this crate's.
 pub trait HostLease: Send + Sync {
-    /// The buffer's bytes, the whole allocation.
+    /// The leased bytes. A lease from [`MappedBuffer::host_read`] covers the
+    /// whole allocation, as `Tensor::host_view` hands it out;
+    /// `Tensor::host_view_window` narrows it to the view's window.
     fn as_bytes(&self) -> &[u8];
 
     /// The bytes as `f32`. [`OjasError::Shape`] if the length is not a
