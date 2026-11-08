@@ -38,6 +38,16 @@ fn check_bank(op: &str, table: &AdamwTable, bufs: &[(&str, usize)]) -> Result<()
 /// waits. On an error part-way the buffers are partly stepped and the counts
 /// are not committed: the bank is dead, and a later step on it is refused
 /// before any launch is queued (see [`AdamwBank`]).
+///
+/// **Known gap: the device kernel does not refuse non-finite updates.** The
+/// host emulation ([`AdamwBank::step_f32`]) refuses, writing nothing, a step
+/// whose stored first moment, second moment or parameter would be NaN or
+/// infinite (a non-finite gradient, a corrupt `m` or `v`, an overflow of the
+/// stored `(one_minus_beta2 * g) * g`). `qd_adamw_window_f32` has no such
+/// check: it stores whatever the arithmetic produces, so on the same inputs
+/// the device commits NaN or infinite moments and the bank stays live. This
+/// is inferred from the kernel source, not run: there is no CUDA device on
+/// the machine this was written on. A device-side refusal needs its own card.
 #[allow(clippy::too_many_arguments)]
 pub fn adamw_step(
     rt: &CudaRuntime,
