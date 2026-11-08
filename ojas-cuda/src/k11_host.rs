@@ -187,7 +187,110 @@ pub fn entry_scalars(
     })
 }
 
+/// One element's update: the new `(p, m, v)` the kernel stores, every
+/// operation one IEEE f32 rounding. The one place the arithmetic is written;
+/// the refusing scan and the storing pass both read it, so what is checked is
+/// exactly what is stored.
+#[inline(always)]
+fn update_element(
+    p: f32,
+    g: f32,
+    m: f32,
+    v: f32,
+    e: &EntryScalars,
+    s: &StepScalars,
+) -> (f32, f32, f32) {
+    let w = p * e.decay_mul;
+    let gi = g * s.grad_scale;
+    let d = gi - m;
+    let mi = if s.lerp_w < 0.5 {
+        m + s.lerp_w * d
+    } else {
+        gi - d * (1.0 - s.lerp_w)
+    };
+    let vi = v * s.beta2 + (s.one_minus_beta2 * gi) * gi;
+    let denom = vi.sqrt() / e.bc2_sqrt + s.eps;
+    (w + (-e.step_size) * (mi / denom), mi, vi)
+}
+
+/// Which stored quantities of one element would be non-finite.
+#[inline(always)]
+fn nonfinite_bits(p: f32, g: f32, m: f32, v: f32, e: &EntryScalars, s: &StepScalars) -> u8 {
+    let (pi, mi, vi) = update_element(p, g, m, v, e, s);
+    u8::from(!mi.is_finite()) | (u8::from(!vi.is_finite()) << 1) | (u8::from(!pi.is_finite()) << 2)
+}
+
+/// Read-only: `None` when every value the update would store over this
+/// window is finite, else the description of the first element whose stored
+/// first moment, second moment or parameter is not (the quantities, the
+/// element and its inputs). A finite gradient whose bare `g * g` overflows is
+/// not refused when the stored `(one_minus_beta2 * g) * g` is finite: only
+/// what the update stores is judged. The hot scan ORs over every element with
+/// no early exit; the element search runs only after it tripped.
+fn first_nonfinite_update(
+    p: &[f32],
+    g: &[f32],
+    m: &[f32],
+    v: &[f32],
+    e: &EntryScalars,
+    s: &StepScalars,
+) -> Option<String> {
+    let mut any = 0u8;
+    for k in 0..p.len() {
+        any |= nonfinite_bits(p[k], g[k], m[k], v[k], e, s);
+    }
+    if any == 0 {
+        return None;
+    }
+    (0..p.len()).find_map(|k| {
+        let bits = nonfinite_bits(p[k], g[k], m[k], v[k], e, s);
+        if bits == 0 {
+            return None;
+        }
+        let what: Vec<&str> = [(1, "first moment"), (2, "second moment"), (4, "parameter")]
+            .into_iter()
+            .filter(|(bit, _)| bits & bit != 0)
+            .map(|(_, name)| name)
+            .collect();
+        Some(format!(
+            "element {k}: the updated {} would be non-finite (parameter {}, gradient {}, first \
+             moment {}, second moment {}); nothing was written",
+            what.join(" and "),
+            p[k],
+            g[k],
+            m[k],
+            v[k]
+        ))
+    })
+}
+
+/// Store the update over one window of equal-length slices. Callers have
+/// checked the lengths and that nothing stored is non-finite.
+fn store_update(
+    p: &mut [f32],
+    g: &[f32],
+    m: &mut [f32],
+    v: &mut [f32],
+    e: &EntryScalars,
+    s: &StepScalars,
+) {
+    for k in 0..p.len() {
+        let (pi, mi, vi) = update_element(p[k], g[k], m[k], v[k], e, s);
+        p[k] = pi;
+        m[k] = mi;
+        v[k] = vi;
+    }
+}
+
 /// The kernel's per-element update, in place, bit for bit. Lengths must match.
+///
+/// Refused, with nothing written to any of the four slices, when a value the
+/// update would store (the first moment, the second moment or the parameter)
+/// is non-finite: a NaN or infinite gradient, a corrupt `m` or `v` or `p`, or
+/// a finite gradient large enough that the stored `(one_minus_beta2 * g) * g`
+/// overflows. The error names the first such element and the quantities. A
+/// finite update is unchanged bit for bit. The device kernel does not refuse
+/// yet (see `k11::adamw_step`).
 pub fn adamw_update_f32(
     p: &mut [f32],
     g: &[f32],
@@ -203,21 +306,10 @@ pub fn adamw_update_f32(
             format!("lengths p {n}, g {}, m {}, v {}", g.len(), m.len(), v.len()),
         ));
     }
-    for k in 0..n {
-        let w = p[k] * e.decay_mul;
-        let gi = g[k] * s.grad_scale;
-        let d = gi - m[k];
-        let mi = if s.lerp_w < 0.5 {
-            m[k] + s.lerp_w * d
-        } else {
-            gi - d * (1.0 - s.lerp_w)
-        };
-        let vi = v[k] * s.beta2 + (s.one_minus_beta2 * gi) * gi;
-        let denom = vi.sqrt() / e.bc2_sqrt + s.eps;
-        p[k] = w + (-e.step_size) * (mi / denom);
-        m[k] = mi;
-        v[k] = vi;
+    if let Some(detail) = first_nonfinite_update(p, g, m, v, &e, &s) {
+        return Err(CudaError::invalid("adamw_update_f32", detail));
     }
+    store_update(p, g, m, v, &e, &s);
     Ok(())
 }
 
@@ -440,8 +532,10 @@ impl AdamwBank {
     /// Plan a step, hand `launch` each active entry (its index, its scalars
     /// and the shared ones) in table order, and commit the counts once every
     /// call returned Ok. The first error is returned as it is and the bank
-    /// stays dead (see [`Self::plan_step`]). Both the device and the host
-    /// emulation carry a step out through here.
+    /// stays dead (see [`Self::plan_step`]). The device carries a step out
+    /// through here; the host emulation ([`Self::step_f32`]) plans and commits
+    /// itself, because it must scan every window before it writes any.
+    #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
     pub(crate) fn run_step<F>(
         &mut self,
         h: &AdamwHyper,
@@ -462,6 +556,16 @@ impl AdamwBank {
 
     /// One step of the f32 emulation over host banks: what the device does,
     /// bit for bit. An inactive entry's window is untouched.
+    ///
+    /// Every active window is scanned, read-only, before any is written. If an
+    /// update would store a non-finite first moment, second moment or
+    /// parameter in any of them, the step is refused naming the entry and the
+    /// first element, and nothing is written to any window of any bank.
+    /// **The bank is then dead**, exactly as after a failed launch: the plan
+    /// was handed out and is never committed, the counts stay as they were,
+    /// and every later step is refused before it touches a buffer. A
+    /// non-finite gradient or moment means the run is already corrupt, and the
+    /// device cannot pre-scan, so one rule (fail closed, no retry) covers both.
     pub fn step_f32(
         &mut self,
         p: &mut [f32],
@@ -478,17 +582,37 @@ impl AdamwBank {
                 format!("banks must hold {len} f32s"),
             ));
         }
-        self.run_step(h, active, |e, sc, shared| {
+        let plan = self.plan_step(h, active)?;
+        for (e, sc) in self.table.entries().iter().zip(&plan.per_entry) {
+            let Some(sc) = sc else { continue };
             let r = e.offset..e.offset + e.len;
-            adamw_update_f32(
+            if let Some(detail) = first_nonfinite_update(
+                &p[r.clone()],
+                &g[r.clone()],
+                &m[r.clone()],
+                &v[r],
+                sc,
+                &plan.shared,
+            ) {
+                return Err(CudaError::invalid(
+                    "AdamwBank::step_f32",
+                    format!("entry {}: {detail}", e.name),
+                ));
+            }
+        }
+        for (e, sc) in self.table.entries().iter().zip(&plan.per_entry) {
+            let Some(sc) = sc else { continue };
+            let r = e.offset..e.offset + e.len;
+            store_update(
                 &mut p[r.clone()],
                 &g[r.clone()],
                 &mut m[r.clone()],
                 &mut v[r],
-                *sc,
-                *shared,
-            )
-        })
+                sc,
+                &plan.shared,
+            );
+        }
+        self.commit(plan.next)
     }
 }
 
