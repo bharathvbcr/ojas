@@ -3498,19 +3498,35 @@ mod tests {
         );
         assert_eq!(host(&p), before, "a refused step changes nothing");
 
-        // An uncaptured error already queued.
-        gpu.ctx.push_uncaptured("queued-uncaptured-error");
-        let r = gpu.adamw_step(&mut p, &g, &mut m, &mut v, 1, cfg);
-        assert!(
-            matches!(&r, Err(OjasError::Backend { detail, .. }) if detail.contains("queued-uncaptured-error")),
-            "{r:?}"
-        );
-        assert_eq!(host(&p), before, "a refused step changes nothing");
-
         // Nothing pending: the step applies.
         gpu.adamw_step(&mut p, &g, &mut m, &mut v, 1, cfg).unwrap();
         gpu.sync().unwrap();
-        assert_ne!(host(&p), before, "a clean step applies");
+        let applied = host(&p);
+        assert_ne!(applied, before, "a clean step applies");
+
+        // An uncaptured error is sticky for the context: every step refuses.
+        gpu.ctx.push_uncaptured("queued-uncaptured-error");
+        for _ in 0..2 {
+            let r = gpu.adamw_step(&mut p, &g, &mut m, &mut v, 2, cfg);
+            assert!(
+                matches!(&r, Err(OjasError::Backend { detail, .. }) if detail.contains("queued-uncaptured-error")),
+                "{r:?}"
+            );
+        }
+        assert_eq!(gpu.ctx.take_faults(), (0, 0));
+    }
+
+    #[test]
+    fn a_backend_sharing_the_context_fails_with_the_uncaptured_error_too() {
+        // `rebudget` backends share the context, so the sticky error is theirs too.
+        let budget = Budget::new(1 << 20);
+        let a = WgpuBackend::open(budget.clone()).expect("wgpu adapter");
+        let b = WgpuBackend::with_context(a.ctx.clone(), Budget::new(1 << 10));
+        a.sync().unwrap();
+        a.ctx.push_uncaptured("shared-uncaptured-error");
+        assert!(a.sync().is_err(), "the first backend");
+        assert!(b.sync().is_err(), "the backend sharing the context");
+        assert!(a.sync().is_err(), "sticky for the first backend again");
     }
 
     #[test]

@@ -2821,7 +2821,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_read_carries_the_queued_uncaptured_error() {
+    fn a_failed_read_carries_the_sticky_uncaptured_error() {
         // Pre-fix, a map failure returned before `check_errors`, so the
         // uncaptured error stayed queued for an unrelated later call.
         let ctx = WgpuContext::open().expect("wgpu adapter");
@@ -2831,8 +2831,10 @@ mod tests {
         let text = format!("{err:?}");
         assert!(text.contains("injected read failure"), "{text}");
         assert!(text.contains("queued-uncaptured-error"), "{text}");
-        ctx.check_errors()
-            .expect("the error went with the failure, not to a later call");
+        // Sticky per context: the error is carried here and is still
+        // reported afterwards.
+        let again = ctx.check_errors().expect_err("sticky until reopen");
+        assert!(format!("{again:?}").contains("queued-uncaptured-error"));
     }
 
     #[test]
@@ -2863,7 +2865,12 @@ mod tests {
             text.contains("and 4 more uncaptured errors dropped"),
             "the drop is silent: {text}"
         );
-        ctx.check_errors().expect("reported once, count reset");
+        let again = ctx.check_errors().expect_err("sticky: reported again");
+        let again = format!("{again:?}");
+        assert!(
+            again.contains("err-15") && again.contains("and 4 more"),
+            "{again}"
+        );
         // The real device callback shares the cap and the count.
         for _ in 0..20 {
             let _ = ctx.device().create_buffer(&wgpu::BufferDescriptor {
@@ -2878,6 +2885,45 @@ mod tests {
             format!("{err:?}").contains("more uncaptured errors dropped"),
             "{err:?}"
         );
+    }
+
+    fn bad_buffer(ctx: &WgpuContext) {
+        let _ = ctx.device().create_buffer(&wgpu::BufferDescriptor {
+            label: Some("empty-usage"),
+            size: 4,
+            usage: wgpu::BufferUsages::empty(),
+            mapped_at_creation: false,
+        });
+    }
+
+    #[test]
+    fn an_uncaptured_error_fails_every_later_sync_on_every_thread() {
+        // Pre-fix, the first checker drained the queue: B got Err and the
+        // thread that caused the error got Ok.
+        let a = WgpuContext::open().expect("wgpu adapter");
+        let b = a.clone();
+        std::thread::scope(|s| s.spawn(|| bad_buffer(&a)).join().unwrap());
+        let on_b = std::thread::scope(|s| s.spawn(|| b.sync()).join().unwrap());
+        assert!(matches!(on_b, Err(OjasError::Backend { .. })), "{on_b:?}");
+        let on_a = a.sync();
+        assert!(
+            matches!(on_a, Err(OjasError::Backend { .. })),
+            "the thread that caused the error got {on_a:?}"
+        );
+        assert!(
+            b.sync().is_err() && a.sync().is_err(),
+            "sticky until reopen"
+        );
+    }
+
+    #[test]
+    fn two_consecutive_syncs_after_an_uncaptured_error_both_fail() {
+        let ctx = WgpuContext::open().expect("wgpu adapter");
+        bad_buffer(&ctx);
+        assert!(ctx.sync().is_err());
+        assert!(ctx.sync().is_err(), "the second sync returned Ok");
+        // A reopened context is clean.
+        WgpuContext::open().expect("wgpu adapter").sync().unwrap();
     }
 
     /// Characterization, not a fix: the loss record is permanent, and every
