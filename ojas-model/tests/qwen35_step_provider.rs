@@ -1111,6 +1111,124 @@ fn scale_zero_with_rows_is_not_refused_and_a_bad_scale_still_is() {
     }
 }
 
+/// A scale the tape's seed check refuses must be refused on every arm that
+/// back-propagates the rows, the combined one included, and a refused Add
+/// leaves the bank's sum as it was.
+#[test]
+fn a_subnormal_row_scale_is_refused_on_the_combined_arm_as_on_the_rows_only_arm() {
+    let mut p = open(16, true);
+    p.accumulate(&job(8, 2, 1.0, false).view(), BankMode::Overwrite, None)
+        .unwrap();
+    let before = bits_all(&p.read_gradients().unwrap());
+    let ran = std::cell::Cell::new(0usize);
+    let mut ext = |a: &[u32], h: &[f32]| -> Result<Vec<f32>, StepError> {
+        ran.set(ran.get() + 1);
+        outside(a, h)
+    };
+    // The seed is `scale * 4` for these four rows, so both stay subnormal.
+    for tiny in [1e-40f32, f32::MIN_POSITIVE / 8.0] {
+        let rows_only = p
+            .accumulate(&job(8, 3, tiny, false).view(), BankMode::Add, None)
+            .expect_err("rows only accepted a subnormal scale");
+        let combined = p
+            .accumulate(&job(8, 3, tiny, true).view(), BankMode::Add, Some(&mut ext))
+            .expect_err("rows plus outside loss accepted a subnormal scale");
+        assert_eq!(
+            rows_only.to_string(),
+            combined.to_string(),
+            "the two arms refuse with different errors"
+        );
+        assert!(p.bank().is_complete());
+        assert_eq!(
+            bits_all(&p.read_gradients().unwrap()),
+            before,
+            "the refused combined sequence wrote a gradient"
+        );
+    }
+    assert!(ran.get() > 0, "the combined arm never reached its callback");
+}
+
+/// Scale 0 with rows stays legal whatever sits beside it, and the arms that
+/// do not multiply a scale in are unchanged.
+#[test]
+fn zero_and_bad_scales_on_the_combined_arm_and_the_other_arms_are_unchanged() {
+    let mut p = open(16, true);
+    let mut ext = outside;
+    // Scale 0 with rows and an outside loss: the outside loss alone.
+    p.accumulate(
+        &job(8, 2, 0.0, true).view(),
+        BankMode::Overwrite,
+        Some(&mut ext),
+    )
+    .unwrap();
+    // Scale 0 with rows and nothing else: value only, a zero gradient.
+    p.accumulate(&job(8, 2, 0.0, false).view(), BankMode::Overwrite, None)
+        .unwrap();
+    assert!(p
+        .read_gradients()
+        .unwrap()
+        .iter()
+        .flatten()
+        .all(|x| *x == 0.0));
+    // Negative, NaN and infinite scales are refused on the combined arm too.
+    for bad in [-1.0f32, -1e-40, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let mut ext = outside;
+        assert!(
+            p.accumulate(
+                &job(8, 2, bad, true).view(),
+                BankMode::Overwrite,
+                Some(&mut ext)
+            )
+            .is_err(),
+            "scale {bad} was accepted"
+        );
+    }
+    // An outside loss alone takes no scale.
+    let dh_only = Job {
+        positions: Vec::new(),
+        targets: Vec::new(),
+        ..job(8, 2, 1.0, true)
+    };
+    let mut ext = outside;
+    p.accumulate(&dh_only.view(), BankMode::Overwrite, Some(&mut ext))
+        .unwrap();
+}
+
+/// A normal scale on the combined arm is the rows-only seeded gradient plus
+/// the outside gradient, and repeating it is bit-identical.
+#[test]
+fn a_normal_scale_on_the_combined_arm_is_the_seeded_rows_gradient_plus_the_outside_one() {
+    for scale in [1.0f32, 0.25, 1e-3] {
+        let both = grads_after(&job(10, 4, scale, true), true);
+        assert_eq!(
+            bits_all(&both),
+            bits_all(&grads_after(&job(10, 4, scale, true), true)),
+            "the combined arm is not deterministic at scale {scale}"
+        );
+        let rows = grads_after(
+            &Job {
+                hidden: Vec::new(),
+                ..job(10, 4, scale, true)
+            },
+            false,
+        );
+        let dh = grads_after(
+            &Job {
+                positions: Vec::new(),
+                targets: Vec::new(),
+                ..job(10, 4, scale, true)
+            },
+            true,
+        );
+        let sum: Vec<Vec<f32>> = rows
+            .iter()
+            .zip(&dh)
+            .map(|(a, b)| a.iter().zip(b).map(|(x, y)| x + y).collect())
+            .collect();
+        assert!(max_rel(&both, &sum) < 1e-4, "scale {scale}");
+    }
+}
+
 fn tiny_calibration() -> Calibration {
     Calibration::from_points(
         "tiny",

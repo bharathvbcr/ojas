@@ -24,7 +24,9 @@
 //! head): `linear(reshape(H, [1, n d]), frozen(reshape(dh, [1, n d])))`, a dot
 //! product whose gradient at `H` is exactly `dh`, which the provider does not
 //! scale. Both: `scale_constant * ce_mean + that dot product`, one backward,
-//! no change to the autograd core. Scale 0 takes the value from
+//! no change to the autograd core; the combined arm still refuses every scale
+//! the rows-only seed would (a subnormal one included), by running the tape's
+//! own seed check before its backward. Scale 0 takes the value from
 //! [`ojas_autograd::Tape::linear_cross_entropy_value`] (no node, no `[V, d]`
 //! gradient), and with no outside loss runs no backward at all: the bank gets
 //! zero gradients, so an `Overwrite` still replaces the previous step's sums.
@@ -397,6 +399,20 @@ fn gather<B: Backend>(
     tape.embedding(table, ids)
 }
 
+/// Refuse a row seed that [`Tape::backward_seeded`] would refuse.
+///
+/// The rows-only arm seeds its backward with `seed`, so the tape's own seed
+/// check applies. The combined arm multiplies `seed` into the CE term and
+/// seeds the root with 1, which would let a subnormal scale through. This
+/// runs the tape's check, not a copy of it, on a one-leaf scratch tape, so
+/// both arms refuse the same scales with the same error. It runs before the
+/// combined backward and writes no gradient anywhere real.
+fn refuse_unseedable<K: Backend>(backend: &K, seed: f32, budget: &Budget) -> Result<(), OjasError> {
+    let mut probe = Tape::new(backend);
+    let leaf = probe.leaf(Tensor::from_f32(&[0.0], &[1], budget)?)?;
+    probe.backward_seeded(leaf, seed)
+}
+
 /// One sequence forward and backward on a fresh tape over `backend`, which is
 /// dropped before this returns. See the module docs for the backward's root.
 fn run_sequence<K: Backend>(
@@ -527,6 +543,7 @@ fn run_sequence<K: Backend>(
             true
         }
         (Some(c), Some(e)) => {
+            refuse_unseedable(backend, seed, &budget)?;
             let k = tape.frozen_leaf(Tensor::from_f32(&[seed], &[1, 1], &budget)?)?;
             let c = tape.reshape(c, &[1, 1])?;
             let scaled = tape.mul(k, c)?;
