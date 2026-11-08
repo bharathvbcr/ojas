@@ -2423,8 +2423,27 @@ impl Worker {
         k: usize,
         mode: u32,
     ) -> Res<()> {
-        if m == 0 || n == 0 {
-            return Ok(());
+        // The refusals of the other two lanes, before anything is encoded.
+        // tessl's `validate_gemm` is private, so its rules are restated here
+        // and held to it by the lane-parity test: no empty dimension (so no
+        // early `Ok` and no k = 0 launch), and each operand's view inside its
+        // buffer (`tt` checks bounds without the copy `mat` would make: this
+        // kernel takes any element offset).
+        if m == 0 || n == 0 || k == 0 {
+            return Err(metal_err(format!(
+                "ojas_gemm_bf16_accum: GEMM requires nonempty rank-2 tensors (m {m}, n {n}, k {k})"
+            )));
+        }
+        let (a_shape, b_shape) = match mode {
+            0 => ([m, k], [k, n]),
+            1 => ([k, m], [k, n]),
+            _ => ([m, k], [n, k]),
+        };
+        self.tt(a, &a_shape)?;
+        self.tt(b, &b_shape)?;
+        self.tt(c, &[m, n])?;
+        if let Some(bias) = bias {
+            self.tt(bias, &[n])?;
         }
         let (m_u, n_u, k_u) = (u32_of(m)?, u32_of(n)?, u32_of(k)?);
         let mode_flags = mode | if bias.is_some() { 4 } else { 0 };
@@ -6027,11 +6046,13 @@ mod tests {
         assert_eq!(cached_attn_part(12, 1024, usize::MAX), None);
     }
 
-    /// The FixedOrder GEMM lane refuses exactly what the exact-f32 (Fast)
-    /// lane refuses. FixedOrder used to return `Ok` for `m == 0 || n == 0`
-    /// before any shape check, so a call whose buffers were smaller than its
-    /// shape, or an empty one, passed there while the Fast lane's tessl
-    /// validation refused it. Both go through tessl's `validate_gemm` now.
+    /// The three GEMM lanes (exact-f32 Fast, FixedOrder, bf16 accumulation)
+    /// refuse exactly the same calls. FixedOrder and Bf16Accum used to return
+    /// `Ok` for `m == 0 || n == 0` before any shape check (Bf16Accum let
+    /// k = 0 reach the kernel too), so a call whose buffers were smaller than
+    /// its shape, or an empty one, passed there while the Fast lane's tessl
+    /// validation refused it. FixedOrder now goes through tessl's
+    /// `validate_gemm`; Bf16Accum restates its rules in one place.
     /// (The backend never sends an empty operand: `MetalBackend::f32` refuses
     /// it first, so this drives the device thread's commands directly.)
     /// Each case is `(rows, kin, nout)` over 64-element buffers, so
@@ -6056,8 +6077,11 @@ mod tests {
         ];
         for (rows, kin, nout, valid) in cases {
             for op in ["linear", "linear_bwd_input", "linear_bwd"] {
-                let mut ran = [false; 2];
-                for (i, lane) in [Lane::ExactF32, Lane::FixedOrder].into_iter().enumerate() {
+                let mut ran = [false; 3];
+                for (i, lane) in [Lane::ExactF32, Lane::FixedOrder, Lane::Bf16Accum]
+                    .into_iter()
+                    .enumerate()
+                {
                     let cmd = match op {
                         "linear" => Cmd::Linear {
                             x,
@@ -6090,18 +6114,20 @@ mod tests {
                     ran[i] = w.run(cmd).is_ok();
                 }
                 let case = format!("{op} rows {rows} kin {kin} nout {nout}");
-                assert_eq!(
-                    ran[0], ran[1],
-                    "{case}: Fast {} FixedOrder {}",
-                    ran[0], ran[1]
+                assert!(
+                    ran[0] == ran[1] && ran[1] == ran[2],
+                    "{case}: Fast {} FixedOrder {} Bf16Accum {}",
+                    ran[0],
+                    ran[1],
+                    ran[2]
                 );
                 if valid {
                     assert!(ran[0], "{case}: a valid call was refused");
                 }
                 if (rows, kin, nout) == (0, 100, 4) {
                     assert!(
-                        !ran[1],
-                        "{case}: FixedOrder accepted a buffer too small for its shape"
+                        !ran.contains(&true),
+                        "{case}: a lane accepted a buffer too small for its shape: {ran:?}"
                     );
                 }
             }
