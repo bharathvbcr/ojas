@@ -6849,3 +6849,20 @@ mod tests {
 #[cfg(test)]
 #[path = "adversarial_oom.rs"]
 mod adversarial_oom;
+
+#[cfg(test)]
+mod adv_ws {
+    use super::*;
+    #[test]
+    fn ws_limit_of_edges() {
+        for ws in [0u64, 1, 2, 3, 4, 5, 7, 8, u64::MAX, u64::MAX - 1, 48 << 30] {
+            eprintln!("ws_limit_of({ws}) = {:?}", ws_limit_of(ws));
+        }
+        assert_eq!(ws_limit_of(0), None);
+        assert_eq!(ws_limit_of(1), Some(0));
+        assert_eq!(ws_limit_of(3), Some(0));
+        assert_eq!(ws_limit_of(4), Some(3));
+        assert_eq!(ws_limit_of(48 << 30), Some(36 << 30));
+        assert!(ws_limit_of(u64::MAX).is_some());
+    }
+}

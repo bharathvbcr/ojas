@@ -6395,4 +6395,29 @@ mod tests {
             "head dim 64 stays scalar"
         );
     }
+
+    /// adversarial 757madv: a tiny reported figure is a real (zero) limit.
+    #[test]
+    fn adv_ws_tiny_figure_waits_zero_figure_does_not_huge_figure_does_not() {
+        let m = MetalBackend::new(Budget::new(4 << 30)).expect("Metal device");
+        let one = put(&m, &[0.5], &[1]);
+        m.sync().expect("settle");
+        m.set_mem_cap(4 << 30).expect("cap");
+        let big = put(&m, &vec![0.5; 8 << 20], &[8 << 20]);
+        let mut seen = Vec::new();
+        for (label, fig) in [("1", Some(1u64)), ("0", Some(0)), ("max", Some(u64::MAX)), ("3", Some(3)), ("4", Some(4))] {
+            tune(&m, None, fig, (0, 0));
+            let before = m.wait_counts().working_set;
+            let kept: Vec<Tensor> = (0..12).map(|_| m.silu_forward(&big).expect("big")).collect();
+            for _ in 0..200 {
+                drop(m.silu_forward(&one).expect("tiny"));
+            }
+            let d = m.wait_counts().working_set - before;
+            eprintln!("ADV ws figure {label}: working_set waits {d}");
+            seen.push((label, d));
+            drop(kept);
+            m.sync().expect("sync");
+        }
+        eprintln!("ADV ws summary {seen:?}");
+    }
 }
