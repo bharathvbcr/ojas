@@ -190,7 +190,7 @@ fn describe(path: &Path) -> String {
 pub fn handle_sha256_hex(file: &File) -> Result<String, IoError> {
     let meta = file
         .metadata()
-        .map_err(|e| IoError::new(format!("metadata: {e}")))?;
+        .map_err(|e| IoError::io(format!("metadata: {e}"), e))?;
     if !meta.is_file() {
         return Err(IoError::new("not a regular file"));
     }
@@ -224,12 +224,12 @@ fn digest_exact(file: &File, len: u64, reader: &mut impl Read) -> Result<String,
                 done += n as u64;
             }
             Err(e) if e.kind() == ErrorKind::Interrupted => {}
-            Err(e) => return Err(IoError::new(format!("read at byte {done}: {e}"))),
+            Err(e) => return Err(IoError::io(format!("read at byte {done}: {e}"), e)),
         }
     }
     let after = file
         .metadata()
-        .map_err(|e| IoError::new(format!("metadata after hashing: {e}")))?
+        .map_err(|e| IoError::io(format!("metadata after hashing: {e}"), e))?
         .len();
     if after != len {
         return Err(IoError::new(format!(
@@ -259,16 +259,16 @@ pub fn open_sha256_hex(path: &Path) -> Result<(File, String), IoError> {
     // judged by `stat` (which follows links) before it is opened; the handle is
     // judged again in `handle_sha256_hex`.
     let meta =
-        std::fs::metadata(path).map_err(|e| IoError::new(format!("{}: {e}", describe(path))))?;
+        std::fs::metadata(path).map_err(|e| IoError::io(format!("{}: {e}", describe(path)), e))?;
     if !meta.is_file() {
         return Err(IoError::new(format!(
             "{}: not a regular file",
             describe(path)
         )));
     }
-    let file = File::open(path).map_err(|e| IoError::new(format!("{}: {e}", describe(path))))?;
+    let file = File::open(path).map_err(|e| IoError::io(format!("{}: {e}", describe(path)), e))?;
     let hex = handle_sha256_hex(&file)
-        .map_err(|e| IoError::new(format!("{}: {}", describe(path), e.detail())))?;
+        .map_err(|e| IoError::wrap(format!("{}: {}", describe(path), e.detail()), e))?;
     Ok((file, hex))
 }
 
