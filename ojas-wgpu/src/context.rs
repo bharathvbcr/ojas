@@ -1848,7 +1848,7 @@ impl WgpuContext {
     /// Submit everything recorded and wait for it. This boundary returns no
     /// mask, so a fault it observes is deferred to the shared pair and the
     /// next `sync`, `download`, `clip_grad_norm` or `adamw_step` of the
-    /// backend takes it. `WgpuBackend::sync` uses [`Self::sync_observed`]
+    /// backend takes it. `WgpuBackend::sync` uses `Self::sync_observed`
     /// instead and reports its own observation itself.
     pub fn sync(&self) -> Result<(), OjasError> {
         self.read(&self.inner.fault, 0, 0).map(|_| ())
