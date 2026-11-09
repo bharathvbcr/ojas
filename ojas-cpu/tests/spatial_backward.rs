@@ -1,4 +1,4 @@
-//! `Backend::group_norm_backward` and `Backend::interpolate_bilinear_backward`
+//! `ojas_core::BackendModule::group_norm_backward` and `ojas_core::BackendModule::interpolate_bilinear_backward`
 //! on the CPU.
 //!
 //! - Gradcheck: GroupNorm's three gradients are held to central differences

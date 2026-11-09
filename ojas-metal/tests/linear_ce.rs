@@ -1,4 +1,4 @@
-//! `Backend::linear_cross_entropy_mean` on Metal (T3, gate G3): the mean
+//! `ojas_core::BackendModule::linear_cross_entropy_mean` on Metal (T3, gate G3): the mean
 //! cross-entropy of `input @ weight^T` and both gradients, with at most
 //! `chunk.rows * chunk.cols` logits alive at once.
 //!

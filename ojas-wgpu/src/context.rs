@@ -326,7 +326,7 @@ struct Recorder {
     encoder: Option<wgpu::CommandEncoder>,
     scratch: Vec<Scratch>,
     /// Bytes in `scratch`. One call's figure is what
-    /// [`ojas_core::Backend::optimizer_scratch_bytes`] bounds; a later call
+    /// [`ojas_core::BackendCore::optimizer_scratch_bytes`] bounds; a later call
     /// that cannot reserve beside this submits and retries once.
     scratch_bytes: u64,
     dispatches: usize,
@@ -2005,7 +2005,7 @@ impl Job<'_> {
     /// submission must live in a buffer the caller holds (a tensor from the
     /// backend's `out`), not in scratch.
     ///
-    /// [`ojas_core::Backend::optimizer_scratch_bytes`] is an upper bound on
+    /// [`ojas_core::BackendCore::optimizer_scratch_bytes`] is an upper bound on
     /// what one call reserves. Scratch from an earlier call stays charged
     /// until that call is submitted, so a budget sized to the operands plus
     /// one call's figure can refuse a later call. That refusal, and only

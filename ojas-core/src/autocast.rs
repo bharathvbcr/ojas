@@ -4,7 +4,7 @@
 //! global. Inside a [`AutocastMode::Bf16`] region, matmul-class ops round
 //! untagged f32 operands and their activation outputs, into rounded `F32`
 //! copies. A `Bf16` tensor the caller holds passes through to the
-//! matmul-class ops that take it ([`Backend::bf16_operands`]); the region
+//! matmul-class ops that take it ([`crate::BackendCore::bf16_operands`]); the region
 //! itself never makes `Bf16` storage, since every backend would widen it
 //! back to `f32`. Outputs stay `F32`, rounded. The storage
 //! compute tag records that the bits are already rounded, so a second cast
@@ -513,7 +513,7 @@ impl<B: Backend> Autocast<B> {
     /// already-rounded `F32` one as it is, otherwise a rounded `F32` copy
     /// (`cast_bf16`). `Bf16` storage reaches a kernel only when the caller
     /// holds it (a resident bf16 tensor, which only the matmul-class ops of
-    /// [`Backend::bf16_operands`] take). The copy is never `Bf16`, even when
+    /// [`crate::BackendCore::bf16_operands`] take). The copy is never `Bf16`, even when
     /// the inner backend takes it: every backend widens a `Bf16` operand
     /// back to `f32`, so a `Bf16` copy would cost 2 bytes plus the op's
     /// 4-byte widened scratch per element, where this one costs 4, for the
@@ -770,7 +770,7 @@ impl<B: Backend> BackendFloat for Autocast<B> {
         self.promote(on, tagged, out)
     }
 
-    /// Pointwise, like [`Backend::gelu_erf_forward`].
+    /// Pointwise, like [`crate::BackendFloat::gelu_erf_forward`].
     fn gelu_tanh_forward(&self, input: &Tensor) -> Result<Tensor, OjasError> {
         let on = self.region()?;
         let tagged = input.compute_tag() == COMPUTE_BF16;
@@ -839,7 +839,7 @@ impl<B: Backend> BackendFloat for Autocast<B> {
         self.promote(on, tagged, out)
     }
 
-    /// Pointwise, like [`Backend::residual_add_forward`]: rounded and
+    /// Pointwise, like [`crate::BackendFloat::residual_add_forward`]: rounded and
     /// tagged only when both operands are bf16-tagged.
     fn broadcast_add_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
         let on = self.region()?;
@@ -848,7 +848,7 @@ impl<B: Backend> BackendFloat for Autocast<B> {
         self.promote(on, tagged, out)
     }
 
-    /// Pointwise, like [`Backend::mul_forward`].
+    /// Pointwise, like [`crate::BackendFloat::mul_forward`].
     fn broadcast_mul_forward(&self, a: &Tensor, b: &Tensor) -> Result<Tensor, OjasError> {
         let on = self.region()?;
         let tagged = a.compute_tag() == COMPUTE_BF16 && b.compute_tag() == COMPUTE_BF16;
@@ -856,7 +856,7 @@ impl<B: Backend> BackendFloat for Autocast<B> {
         self.promote(on, tagged, out)
     }
 
-    /// Pointwise on one operand, like [`Backend::silu_forward`].
+    /// Pointwise on one operand, like [`crate::BackendFloat::silu_forward`].
     fn scale_forward(&self, input: &Tensor, scale: f32) -> Result<Tensor, OjasError> {
         let on = self.region()?;
         let tagged = input.compute_tag() == COMPUTE_BF16;
@@ -878,7 +878,7 @@ impl<B: Backend> BackendFloat for Autocast<B> {
         Ok(self.keep_f32(out))
     }
 
-    /// Pointwise, like [`Backend::silu_backward`]: rounded and tagged only
+    /// Pointwise, like [`crate::BackendFloat::silu_backward`]: rounded and tagged only
     /// when the input and the incoming gradient are both bf16-tagged.
     fn gelu_erf_backward(&self, input: &Tensor, grad_output: &Tensor) -> Result<Tensor, OjasError> {
         let on = self.region()?;
@@ -888,7 +888,7 @@ impl<B: Backend> BackendFloat for Autocast<B> {
         self.promote(on, tagged, out)
     }
 
-    /// Pointwise, like [`Backend::gelu_erf_backward`].
+    /// Pointwise, like [`crate::BackendFloat::gelu_erf_backward`].
     fn gelu_tanh_backward(
         &self,
         input: &Tensor,
@@ -945,7 +945,7 @@ impl<B: Backend> BackendFloat for Autocast<B> {
         Ok(self.keep_f32(out))
     }
 
-    /// Pointwise, like [`Backend::residual_add_backward`]: rounded and
+    /// Pointwise, like [`crate::BackendFloat::residual_add_backward`]: rounded and
     /// tagged only when both operands and the incoming gradient are
     /// bf16-tagged.
     fn broadcast_add_backward(
@@ -962,7 +962,7 @@ impl<B: Backend> BackendFloat for Autocast<B> {
         Ok((self.promote(on, tagged, ga)?, self.promote(on, tagged, gb)?))
     }
 
-    /// Pointwise, like [`Backend::mul_backward`].
+    /// Pointwise, like [`crate::BackendFloat::mul_backward`].
     fn broadcast_mul_backward(
         &self,
         a: &Tensor,
@@ -1003,7 +1003,7 @@ impl<B: Backend> BackendFloat for Autocast<B> {
     /// Outside a region, or for an operand not tagged bf16, the inner sum,
     /// recorded f32 (a trainer's micro-batch accumulators, which it adds
     /// with the region closed). Inside a region two bf16-tagged gradients
-    /// add as [`Backend::residual_add_forward`] does here, the sum rounded:
+    /// add as [`crate::BackendFloat::residual_add_forward`] does here, the sum rounded:
     /// that is a tape's gradient fan-in, which composed that op until
     /// 2026-10-07 and keeps its bits.
     fn accumulate_grad(&self, acc: &mut Tensor, grad: &Tensor) -> Result<(), OjasError> {
@@ -1656,7 +1656,7 @@ impl<B: Backend> BackendModule for Autocast<B> {
         self.promote(on, tagged, out)
     }
 
-    /// As [`Backend::linear_backward`]: the operands rounded, the input
+    /// As [`crate::BackendModule::linear_backward`]: the operands rounded, the input
     /// gradient emitted rounded, the weight and bias gradients kept f32.
     fn conv2d_backward(
         &self,
@@ -1729,7 +1729,7 @@ impl<B: Backend> BackendModule for Autocast<B> {
         self.promote(on, tagged, out)
     }
 
-    /// Pointwise, like [`Backend::max_pool2d_backward`]: gated on the
+    /// Pointwise, like [`crate::BackendModule::max_pool2d_backward`]: gated on the
     /// incoming gradient, since the input is read for its shape only.
     fn interpolate_bilinear_backward(
         &self,
@@ -1814,7 +1814,7 @@ impl<B: Backend> BackendModule for Autocast<B> {
         Ok(self.keep_f32(out))
     }
 
-    /// A reduction like [`Backend::group_norm_forward`]: the group statistics
+    /// A reduction like [`crate::BackendModule::group_norm_forward`]: the group statistics
     /// and the sums stay `f32` and no gradient is rounded.
     fn group_norm_backward(
         &self,
@@ -1833,7 +1833,7 @@ impl<B: Backend> BackendModule for Autocast<B> {
     }
 
     /// A matmul-class op: the operands round in a region and the output
-    /// rounds, as [`Backend::linear_forward`] does. The bias stays `f32`.
+    /// rounds, as [`crate::BackendModule::linear_forward`] does. The bias stays `f32`.
     fn linear_bias_forward(
         &self,
         input: &Tensor,
@@ -1846,7 +1846,7 @@ impl<B: Backend> BackendModule for Autocast<B> {
         self.emit(out)
     }
 
-    /// Reductions like [`Backend::layer_norm_forward`]: the statistics and
+    /// Reductions like [`crate::BackendModule::layer_norm_forward`]: the statistics and
     /// the three sums stay `f32` and no gradient is rounded.
     fn layer_norm_backward(
         &self,
@@ -1878,7 +1878,7 @@ impl<B: Backend> BackendModule for Autocast<B> {
         Ok(self.keep_affine_f32(grad))
     }
 
-    /// As [`Backend::linear_backward`]: the operands rounded, the input
+    /// As [`crate::BackendModule::linear_backward`]: the operands rounded, the input
     /// gradient emitted rounded, the weight and bias gradients kept `f32`.
     /// The bias is read for its shape only, so it is not rounded.
     fn linear_bias_backward(
@@ -2064,7 +2064,7 @@ mod tests {
             }
         }
 
-        /// Report [`Backend::bf16_operands`], as the CPU and wgpu do. The
+        /// Report [`crate::BackendCore::bf16_operands`], as the CPU and wgpu do. The
         /// recorded ops still read their operands as `F32`.
         fn taking_bf16(mut self) -> Self {
             self.bf16_ops = true;
@@ -3205,7 +3205,7 @@ mod tests {
     /// region's operand copy is rounded `F32` storage there too: one 4-byte
     /// copy (`cast_bf16`), not a 2-byte `to_bf16` copy the op then widens
     /// into 4 more bytes. The bits are the same either way
-    /// ([`Backend::bf16_operands`]).
+    /// ([`crate::BackendCore::bf16_operands`]).
     #[test]
     fn a_region_rounds_in_f32_storage_even_when_the_backend_takes_bf16() {
         let budget = Budget::new(1 << 16);

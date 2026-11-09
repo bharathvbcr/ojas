@@ -5,7 +5,7 @@
 //!
 //! Every probe runs its variants in the same process, `rounds` rounds of
 //! `iters` timed iterations after `warmup`, alternating which variant goes
-//! first each round. Each iteration ends with `Backend::sync`, so a time is
+//! first each round. Each iteration ends with `ojas_core::BackendCore::sync`, so a time is
 //! device-complete. One JSON line per (probe, variant, round) goes to
 //! `OJAS_PROBE_OUT` with that round's min and median. Per variant, report the
 //! min of the round minimums and the spread (max / min of the round minimums);

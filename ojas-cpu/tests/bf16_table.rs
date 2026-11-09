@@ -1,4 +1,4 @@
-//! The tied-table lane on the CPU (`Backend::bf16_operands`): a `Bf16`
+//! The tied-table lane on the CPU (`ojas_core::BackendCore::bf16_operands`): a `Bf16`
 //! embedding table and fused cross-entropy weight are read in place. Each
 //! test runs the op on a bf16-exact `F32` table and on its `Bf16` twin and
 //! pins three things: the bits are the `F32` table's, the charge has no

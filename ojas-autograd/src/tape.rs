@@ -64,7 +64,7 @@ enum Rec {
         lse: Option<Tensor>,
         window: Option<usize>,
     },
-    /// General attention ([`Backend::attention_forward_saving`]): `bias` is
+    /// General attention ([`ojas_core::BackendModule::attention_forward_saving`]): `bias` is
     /// a differentiable input, `key_lens` a constant. `out` and `lse` are as
     /// [`Rec::Sdpa`]'s.
     Attn {
@@ -215,7 +215,7 @@ enum Rec {
         targets: Tensor,
         ignore: Option<u32>,
     },
-    /// Fused `linear` → `cross_entropy` (`Backend::linear_cross_entropy_mean`).
+    /// Fused `linear` → `cross_entropy` (`ojas_core::BackendModule::linear_cross_entropy_mean`).
     /// `grads` holds the seed-1 `(input, weight)` gradients from the forward
     /// call, each `None` when its operand is frozen ([`Tape::fused_ce`]).
     /// Backward moves them out, so the leaf gradient it produces is not
@@ -287,19 +287,19 @@ enum Rec {
     Relu {
         x: usize,
     },
-    /// The tanh-approximate GELU ([`Backend::gelu_tanh_forward`]).
+    /// The tanh-approximate GELU ([`ojas_core::BackendFloat::gelu_tanh_forward`]).
     GeluTanh {
         x: usize,
     },
     /// The masked mean over time of a batch of sequences
-    /// ([`Backend::seq_mean_forward`]). `key_lens` is a `U32` constant, as
+    /// ([`ojas_core::BackendFloat::seq_mean_forward`]). `key_lens` is a `U32` constant, as
     /// `Rec::Embed`'s ids are: it takes no gradient.
     SeqMean {
         x: usize,
         key_lens: Tensor,
     },
     /// `x / max(||x||, eps)` over the last axis
-    /// ([`Backend::l2_normalize_forward`]).
+    /// ([`ojas_core::BackendFloat::l2_normalize_forward`]).
     L2Norm {
         x: usize,
         eps: f32,
@@ -634,7 +634,7 @@ impl<B: Backend> Tape<B> {
     /// No gradient is ever stored for it, so [`Tape::grad`] and
     /// [`Tape::take_grad`] return `None` (absent, not zero), and the
     /// backward skips the work only it would have used: a [`Tape::linear`]
-    /// whose weight is frozen runs [`Backend::linear_backward_input`] (no
+    /// whose weight is frozen runs [`ojas_core::BackendModule::linear_backward_input`] (no
     /// weight gradient), a [`Tape::linear_cross_entropy`] with a frozen head
     /// asks the backend for no head gradient, and an embedding with a frozen
     /// table runs no backward at all. A frozen leaf seen through [`Tape::reshape`] or
@@ -693,7 +693,7 @@ impl<B: Backend> Tape<B> {
     /// Move `var`'s gradient out of the tape without copying it.
     ///
     /// The tape keeps no handle to the returned tensor, so a trainer can
-    /// pass it to [`Backend::accumulate_grad`] or an in-place op and then
+    /// pass it to [`ojas_core::BackendFloat::accumulate_grad`] or an in-place op and then
     /// [`Tape::clear`] the tape. The tensor is uniquely owned as long as the
     /// backend returned a separate allocation for each gradient output, as
     /// `CpuBackend` does: the one gradient the tape itself shares between
@@ -768,10 +768,10 @@ impl<B: Backend> Tape<B> {
     }
 
     /// EmbeddingGemma 2's per-head Q/K/V RMSNorm
-    /// ([`Backend::rms_qkv_norm_forward`]) as three [`Tape::rms_norm`]
+    /// ([`ojas_core::BackendModule::rms_qkv_norm_forward`]) as three [`Tape::rms_norm`]
     /// records: Q and K against their weights when they have one and
     /// weightless when they do not, and V always weightless. The gradients
-    /// are [`Backend::rms_norm_backward`]'s, so this needs no backward of
+    /// are [`ojas_core::BackendModule::rms_norm_backward`]'s, so this needs no backward of
     /// its own on any backend and no second RMSNorm gradient anywhere.
     ///
     /// Every variable is checked before any record is made, so a refusal
@@ -811,7 +811,7 @@ impl<B: Backend> Tape<B> {
         self.record(Rec::Rope { x, cos, sin })
     }
 
-    /// Causal attention ([`Backend::causal_sdpa_forward`]): `q` `[B, H, T, D]`,
+    /// Causal attention ([`ojas_core::BackendModule::causal_sdpa_forward`]): `q` `[B, H, T, D]`,
     /// `k` and `v` `[B, Hkv, T, D]`, and an optional sliding `window`. The
     /// row log-sum-exp is kept on the tape for the backward.
     pub fn causal_sdpa(
@@ -834,7 +834,7 @@ impl<B: Backend> Tape<B> {
         })
     }
 
-    /// General attention ([`Backend::attention_forward_saving`]): bidirectional
+    /// General attention ([`ojas_core::BackendModule::attention_forward_saving`]): bidirectional
     /// unless `causal`, `q` `[B, H, Tq, D]`, `k` and `v` `[B, Hkv, Tk, D]`,
     /// an optional additive score `bias` (a variable, so it takes a gradient
     /// unless it is frozen), optional `U32` `key_lens` `[B]`, and an optional
@@ -914,7 +914,7 @@ impl<B: Backend> Tape<B> {
         self.record(Rec::Vres { v, v0, lambda })
     }
 
-    /// The gated delta rule (`Backend::chunked_gdn_forward`) from a zero
+    /// The gated delta rule (`ojas_core::BackendModule::chunked_gdn_forward`) from a zero
     /// initial state: `q`, `k` `[B, T, H, Dk]`, `v` `[B, T, H, Dv]`, `g` (log
     /// decay) and `beta` `[B, T, H]`. The result is the output `[B, T, H,
     /// Dv]`; the final state is dropped. The record keeps the forward's
@@ -947,7 +947,7 @@ impl<B: Backend> Tape<B> {
     }
 
     /// Depthwise causal conv over time then SiLU
-    /// ([`Backend::causal_conv1d_silu_forward`]): `x` `[B, T, C]`, `w`
+    /// ([`ojas_core::BackendModule::causal_conv1d_silu_forward`]): `x` `[B, T, C]`, `w`
     /// `[C, K]`, from a zero state.
     pub fn causal_conv1d_silu(&mut self, x: Var, w: Var) -> Result<Var, OjasError> {
         let x = self.index(x, "Tape::causal_conv1d_silu")?;
@@ -955,7 +955,7 @@ impl<B: Backend> Tape<B> {
         self.record(Rec::Conv1d { x, w })
     }
 
-    /// Gated RMSNorm ([`Backend::gated_rms_norm_forward`]): `x` normalized
+    /// Gated RMSNorm ([`ojas_core::BackendModule::gated_rms_norm_forward`]): `x` normalized
     /// over its last axis, times `w`, times `silu(z)`.
     pub fn gated_rms_norm(&mut self, x: Var, z: Var, w: Var, eps: f32) -> Result<Var, OjasError> {
         const OP: &str = "Tape::gated_rms_norm";
@@ -963,7 +963,7 @@ impl<B: Backend> Tape<B> {
         self.record(Rec::GatedRms { x, z, w, eps })
     }
 
-    /// Partial RoPE ([`Backend::rope_partial_forward`]): `x` `[B, T, H, D]`,
+    /// Partial RoPE ([`ojas_core::BackendModule::rope_partial_forward`]): `x` `[B, T, H, D]`,
     /// `cos` and `sin` `[T, R]`; the leading `R` of each head turn. Text-only
     /// MRoPE tables come from `ojas_core::mrope_text_tables`.
     pub fn rope_partial(&mut self, x: Var, cos: Tensor, sin: Tensor) -> Result<Var, OjasError> {
@@ -973,13 +973,13 @@ impl<B: Backend> Tape<B> {
         self.record(Rec::RopePartial { x, cos, sin })
     }
 
-    /// Elementwise sigmoid ([`Backend::sigmoid_forward`]).
+    /// Elementwise sigmoid ([`ojas_core::BackendFloat::sigmoid_forward`]).
     pub fn sigmoid(&mut self, x: Var) -> Result<Var, OjasError> {
         let x = self.index(x, "Tape::sigmoid")?;
         self.record(Rec::Sigmoid { x })
     }
 
-    /// The gated delta rule's log decay ([`Backend::gdn_log_decay_forward`]):
+    /// The gated delta rule's log decay ([`ojas_core::BackendModule::gdn_log_decay_forward`]):
     /// `-exp(a_log) * softplus(a + dt_bias)`, `a` `[..., H]`, `a_log` and
     /// `dt_bias` `[H]`. Its output is the `g` of [`Tape::chunked_gdn`].
     pub fn gdn_log_decay(&mut self, a: Var, a_log: Var, dt_bias: Var) -> Result<Var, OjasError> {
@@ -997,7 +997,7 @@ impl<B: Backend> Tape<B> {
         self.record(Rec::Silu { x })
     }
 
-    /// 2D convolution ([`Backend::conv2d_forward`]): `x` `[N, C, H, W]`, `w`
+    /// 2D convolution ([`ojas_core::BackendModule::conv2d_forward`]): `x` `[N, C, H, W]`, `w`
     /// `[O, C / groups, kh, kw]` and an optional bias `b` `[O]`.
     pub fn conv2d(
         &mut self,
@@ -1012,7 +1012,7 @@ impl<B: Backend> Tape<B> {
         self.record(Rec::Conv2d { x, w, b, params })
     }
 
-    /// Transposed 2D convolution ([`Backend::conv_transpose2d_forward`]):
+    /// Transposed 2D convolution ([`ojas_core::BackendModule::conv_transpose2d_forward`]):
     /// `x` `[N, C, H, W]`, `w` `[C, O, kh, kw]` and an optional bias `b`
     /// `[O]`.
     pub fn conv_transpose2d(
@@ -1028,7 +1028,7 @@ impl<B: Backend> Tape<B> {
         self.record(Rec::ConvTranspose2d { x, w, b, params })
     }
 
-    /// Max pooling ([`Backend::max_pool2d_forward`]) of `x` `[N, C, H, W]`.
+    /// Max pooling ([`ojas_core::BackendModule::max_pool2d_forward`]) of `x` `[N, C, H, W]`.
     pub fn max_pool2d(
         &mut self,
         x: Var,
@@ -1039,7 +1039,7 @@ impl<B: Backend> Tape<B> {
         self.record(Rec::MaxPool2d { x, kernel, stride })
     }
 
-    /// LayerNorm ([`Backend::layer_norm_forward`]) of `x` `[..., dim]` over
+    /// LayerNorm ([`ojas_core::BackendModule::layer_norm_forward`]) of `x` `[..., dim]` over
     /// its last axis, with `w` and `b` `[dim]`.
     pub fn layer_norm(&mut self, x: Var, w: Var, b: Var, eps: f32) -> Result<Var, OjasError> {
         const OP: &str = "Tape::layer_norm";
@@ -1047,7 +1047,7 @@ impl<B: Backend> Tape<B> {
         self.record(Rec::LayerNorm { x, w, b, eps })
     }
 
-    /// LayerNorm across the channel axis ([`Backend::channel_layer_norm_forward`])
+    /// LayerNorm across the channel axis ([`ojas_core::BackendModule::channel_layer_norm_forward`])
     /// of `x` `[N, C, ...]`, with `w` and `b` `[C]`.
     pub fn channel_layer_norm(
         &mut self,
@@ -1061,7 +1061,7 @@ impl<B: Backend> Tape<B> {
         self.record(Rec::ChannelLayerNorm { x, w, b, eps })
     }
 
-    /// GroupNorm ([`Backend::group_norm_forward`]) of `x` `[N, C, H, W]`
+    /// GroupNorm ([`ojas_core::BackendModule::group_norm_forward`]) of `x` `[N, C, H, W]`
     /// into `groups` channel groups, with `w` and `b` `[C]`.
     pub fn group_norm(
         &mut self,
@@ -1082,7 +1082,7 @@ impl<B: Backend> Tape<B> {
         })
     }
 
-    /// Bilinear resampling ([`Backend::interpolate_bilinear_forward`]) of
+    /// Bilinear resampling ([`ojas_core::BackendModule::interpolate_bilinear_forward`]) of
     /// `x` `[N, C, H, W]` to `out_size`.
     pub fn interpolate_bilinear(
         &mut self,
@@ -1098,7 +1098,7 @@ impl<B: Backend> Tape<B> {
         })
     }
 
-    /// Interleaved RoPE ([`Backend::rope_interleaved_forward`]): `x` `[..., D]`
+    /// Interleaved RoPE ([`ojas_core::BackendModule::rope_interleaved_forward`]): `x` `[..., D]`
     /// rotated pairwise with `cos` and `sin`.
     pub fn rope_interleaved(&mut self, x: Var, cos: Tensor, sin: Tensor) -> Result<Var, OjasError> {
         let x = self.index(x, "Tape::rope_interleaved")?;
@@ -1107,7 +1107,7 @@ impl<B: Backend> Tape<B> {
         self.record(Rec::RopeInterleaved { x, cos, sin })
     }
 
-    /// Concatenate `inputs` along `axis` ([`Backend::concat`]).
+    /// Concatenate `inputs` along `axis` ([`ojas_core::BackendFloat::concat`]).
     pub fn concat(&mut self, inputs: &[Var], axis: usize) -> Result<Var, OjasError> {
         const OP: &str = "Tape::concat";
         if inputs.is_empty() {
@@ -1137,7 +1137,7 @@ impl<B: Backend> Tape<B> {
         })
     }
 
-    /// Narrow `x` to rows `start..start + len` along `axis` ([`Backend::slice`]).
+    /// Narrow `x` to rows `start..start + len` along `axis` ([`ojas_core::BackendFloat::slice`]).
     pub fn slice(
         &mut self,
         x: Var,
@@ -1156,12 +1156,12 @@ impl<B: Backend> Tape<B> {
         })
     }
 
-    /// The masked mean over time ([`Backend::seq_mean_forward`]): `x`
+    /// The masked mean over time ([`ojas_core::BackendFloat::seq_mean_forward`]): `x`
     /// `[B, T, D]` and `U32` `key_lens` `[B]`, giving `[B, D]`. The lengths
     /// are a constant, placed on the backend like [`Tape::rope`]'s tables,
     /// and the gradient reaching `x` is
     /// `grad[b, d] / min(key_lens[b], T)` on the rows the mean read and zero
-    /// past them ([`Backend::seq_mean_backward`]).
+    /// past them ([`ojas_core::BackendFloat::seq_mean_backward`]).
     pub fn seq_mean(&mut self, x: Var, key_lens: Tensor) -> Result<Var, OjasError> {
         let x = self.index(x, "Tape::seq_mean")?;
         let key_lens = self.place(key_lens)?;
@@ -1169,36 +1169,36 @@ impl<B: Backend> Tape<B> {
     }
 
     /// `x / max(||x||, eps)` over the last axis of `x` `[rows, dim]`
-    /// ([`Backend::l2_normalize_forward`]). A Matryoshka prefix is
+    /// ([`ojas_core::BackendFloat::l2_normalize_forward`]). A Matryoshka prefix is
     /// [`Tape::slice`] first and then this, so both halves of the embedding
     /// head take a gradient. Below the clamp the gradient is
     /// `grad / eps`, the Jacobian of the linear `x / eps` the forward
-    /// computed there ([`Backend::l2_normalize_backward`]).
+    /// computed there ([`ojas_core::BackendFloat::l2_normalize_backward`]).
     pub fn l2_normalize(&mut self, x: Var, eps: f32) -> Result<Var, OjasError> {
         let x = self.index(x, "Tape::l2_normalize")?;
         self.record(Rec::L2Norm { x, eps })
     }
 
-    /// The exact ReLU (`max(x, 0)`) ([`Backend::relu_forward`]).
+    /// The exact ReLU (`max(x, 0)`) ([`ojas_core::BackendFloat::relu_forward`]).
     pub fn relu(&mut self, x: Var) -> Result<Var, OjasError> {
         let x = self.index(x, "Tape::relu")?;
         self.record(Rec::Relu { x })
     }
 
-    /// The exact GELU ([`Backend::gelu_erf_forward`]).
+    /// The exact GELU ([`ojas_core::BackendFloat::gelu_erf_forward`]).
     pub fn gelu_erf(&mut self, x: Var) -> Result<Var, OjasError> {
         let x = self.index(x, "Tape::gelu_erf")?;
         self.record(Rec::Gelu { x })
     }
 
-    /// The tanh-approximate GELU ([`Backend::gelu_tanh_forward`]), torch's
+    /// The tanh-approximate GELU ([`ojas_core::BackendFloat::gelu_tanh_forward`]), torch's
     /// `F.gelu(x, approximate="tanh")`.
     pub fn gelu_tanh(&mut self, x: Var) -> Result<Var, OjasError> {
         let x = self.index(x, "Tape::gelu_tanh")?;
         self.record(Rec::GeluTanh { x })
     }
 
-    /// `x @ w^T + b` ([`Backend::linear_bias_forward`]): `x` `[..., in]`, `w`
+    /// `x @ w^T + b` ([`ojas_core::BackendModule::linear_bias_forward`]): `x` `[..., in]`, `w`
     /// `[out, in]` and `b` `[out]`.
     pub fn linear_bias(&mut self, x: Var, w: Var, b: Var) -> Result<Var, OjasError> {
         const OP: &str = "Tape::linear_bias";
@@ -1206,7 +1206,7 @@ impl<B: Backend> Tape<B> {
         self.record(Rec::LinearBias { x, w, b })
     }
 
-    /// `a + b` with numpy broadcasting ([`Backend::broadcast_add_forward`]).
+    /// `a + b` with numpy broadcasting ([`ojas_core::BackendFloat::broadcast_add_forward`]).
     /// Each operand's gradient is summed back to its own shape.
     pub fn broadcast_add(&mut self, a: Var, b: Var) -> Result<Var, OjasError> {
         let a = self.index(a, "Tape::broadcast_add")?;
@@ -1214,21 +1214,21 @@ impl<B: Backend> Tape<B> {
         self.record(Rec::BroadcastAdd { a, b })
     }
 
-    /// `a * b` with numpy broadcasting ([`Backend::broadcast_mul_forward`]).
+    /// `a * b` with numpy broadcasting ([`ojas_core::BackendFloat::broadcast_mul_forward`]).
     pub fn broadcast_mul(&mut self, a: Var, b: Var) -> Result<Var, OjasError> {
         let a = self.index(a, "Tape::broadcast_mul")?;
         let b = self.index(b, "Tape::broadcast_mul")?;
         self.record(Rec::BroadcastMul { a, b })
     }
 
-    /// `x * scale` ([`Backend::scale_forward`]) for a finite constant
+    /// `x * scale` ([`ojas_core::BackendFloat::scale_forward`]) for a finite constant
     /// `scale`; its gradient is the incoming one times `scale`.
     pub fn scale(&mut self, x: Var, scale: f32) -> Result<Var, OjasError> {
         let x = self.index(x, "Tape::scale")?;
         self.record(Rec::Scale { x, scale })
     }
 
-    /// Softmax over the last axis ([`Backend::softmax_forward`]).
+    /// Softmax over the last axis ([`ojas_core::BackendFloat::softmax_forward`]).
     pub fn softmax(&mut self, x: Var) -> Result<Var, OjasError> {
         let x = self.index(x, "Tape::softmax")?;
         self.record(Rec::Softmax { x, out: 0 })
@@ -1288,7 +1288,7 @@ impl<B: Backend> Tape<B> {
     }
 
     /// Mean cross-entropy of `linear(x, w)` through the backend's fused
-    /// [`Backend::linear_cross_entropy_mean`], which never holds the full
+    /// [`ojas_core::BackendModule::linear_cross_entropy_mean`], which never holds the full
     /// `[N, V]` logits.
     ///
     /// `x` is `[N, d]`, `w` is `[V, d]` (the tied embedding), `targets` is
@@ -1896,7 +1896,7 @@ impl<B: Backend> Tape<B> {
     /// has dropped, so a gradient still shared here is one that two leaves
     /// reached (two leaves added, or one through a reshape view). Each such
     /// leaf after the first that holds it gets a copy with the same bits
-    /// ([`Backend::residual_add_backward`], the copy that op made before
+    /// ([`ojas_core::BackendFloat::residual_add_backward`], the copy that op made before
     /// 2026-10-07). No other graph pays anything here.
     fn unshare_leaf_grads(&mut self) -> Result<(), OjasError> {
         let Self { backend, grads, .. } = self;
@@ -2428,7 +2428,7 @@ impl<B: Backend> Tape<B> {
     ///
     /// A loss at the root knows its seed on the host (`seed`): 1 returns
     /// `raw` as is, and any other seed (a trainer's `1 / K`) is
-    /// [`Backend::scale_grad`], which the CPU does in place with no copy
+    /// [`ojas_core::BackendFloat::scale_grad`], which the CPU does in place with no copy
     /// (before 2026-10-07 the CPU path copied `raw` out to a `Vec`, scaled
     /// it and built a new tensor, for a fused loss including the
     /// vocab-by-d_model weight gradient). A loss below the root scales by
@@ -2497,7 +2497,7 @@ impl<B: Backend> Tape<B> {
     }
 
     /// Add `grad` into node `id`'s gradient. The first gradient is kept as
-    /// it is. A later one is added with [`Backend::accumulate_grad`] into
+    /// it is. A later one is added with [`ojas_core::BackendFloat::accumulate_grad`] into
     /// whichever of the two this tape holds alone, the existing gradient
     /// unless only the incoming one is unshared, so a fan-in allocates
     /// nothing while either is solely owned; with both shared (both came
@@ -2507,7 +2507,7 @@ impl<B: Backend> Tape<B> {
     /// fan-in built a new tensor with `residual_add_forward`.
     ///
     /// A gradient whose shape is not the forward value's is
-    /// [`OjasError::Backend`] and is not stored. [`Backend::accumulate_grad`]
+    /// [`OjasError::Backend`] and is not stored. [`ojas_core::BackendFloat::accumulate_grad`]
     /// only compares two gradients with each other, so two wrong gradients
     /// of one shape would otherwise add and stay. A frozen node still drops
     /// its gradient without consulting the shape: nothing is kept either way.

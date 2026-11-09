@@ -128,7 +128,7 @@ fn im2col(exec: Exec<'_>, d: &Conv2dDims, x: &[f32], cols: &mut [f32]) -> Result
     Ok(())
 }
 
-/// [`ojas_core::Backend::conv2d_forward`].
+/// [`ojas_core::BackendModule::conv2d_forward`].
 ///
 /// A group with one input channel (depthwise, and its channel multipliers)
 /// is a direct loop over the taps in `(kh, kw)` order. Any other group is
@@ -239,7 +239,7 @@ pub(crate) fn conv2d_forward(
     })
 }
 
-/// [`ojas_core::Backend::conv_transpose2d_forward`]: per image, the GEMM
+/// [`ojas_core::BackendModule::conv_transpose2d_forward`]: per image, the GEMM
 /// `cols[O * kh * kw, H * W] = weight^T[O * kh * kw, C] . x[C, H * W]`
 /// (`weight` is `[C, O * kh * kw]`, read transposed in place), then a gather:
 /// output pixel `(oh, ow)` of channel `oc` sums `cols[(oc, i, j), (ih, iw)]`
@@ -329,7 +329,7 @@ fn source(o: usize, k: usize, stride: usize, pad: usize, size: usize) -> Option<
         .filter(|&i| i < size)
 }
 
-/// [`ojas_core::Backend::conv2d_backward`].
+/// [`ojas_core::BackendModule::conv2d_backward`].
 ///
 /// Per image and group, with `K = cg * kh * kw` and `P = Ho * Wo`: the
 /// weight gradient accumulates `dY[Og, P] . cols^T[P, K]` over the images in
@@ -495,7 +495,7 @@ fn channel_sums(
     })
 }
 
-/// [`ojas_core::Backend::conv_transpose2d_backward`].
+/// [`ojas_core::BackendModule::conv_transpose2d_backward`].
 ///
 /// The column gradient `dcols[(oc, i, j), (ih, iw)] = dY[oc, ih * stride + i
 /// - pad, iw * stride + j - pad]` (zero off the output) is [`im2col`] of
@@ -614,7 +614,7 @@ fn covering(i: usize, kernel: usize, stride: usize, count: usize) -> std::ops::R
     (i + 1).saturating_sub(kernel).div_ceil(stride)..(i / stride + 1).min(count)
 }
 
-/// [`ojas_core::Backend::max_pool2d_forward`].
+/// [`ojas_core::BackendModule::max_pool2d_forward`].
 pub(crate) fn max_pool2d_forward(
     op: &'static str,
     budget: &Budget,
@@ -654,7 +654,7 @@ pub(crate) fn max_pool2d_forward(
     )
 }
 
-/// [`ojas_core::Backend::max_pool2d_backward`]: a gather. Input `(ih, iw)`
+/// [`ojas_core::BackendModule::max_pool2d_backward`]: a gather. Input `(ih, iw)`
 /// visits the windows that cover it in ascending `(oh, ow)` and sums the
 /// `grad_output` of those whose [`window_argmax`] it is. Each window's
 /// argmax is found again from `x` rather than stored by the forward.
@@ -741,7 +741,7 @@ fn bilinear_axis(size: usize, out: usize, align_corners: bool) -> Vec<BilinearTa
         .collect()
 }
 
-/// [`ojas_core::Backend::interpolate_bilinear_forward`]: per output value
+/// [`ojas_core::BackendModule::interpolate_bilinear_forward`]: per output value
 /// `(1 - ly) * ((1 - lx) * v00 + lx * v01) + ly * ((1 - lx) * v10 + lx *
 /// v11)`.
 pub(crate) fn interpolate_bilinear_forward(
@@ -845,7 +845,7 @@ impl AxisGather {
     }
 }
 
-/// [`ojas_core::Backend::interpolate_bilinear_backward`]: a gather. Input
+/// [`ojas_core::BackendModule::interpolate_bilinear_backward`]: a gather. Input
 /// `(ih, iw)` sums `dy[oh, ow] * wy * wx` over the output rows that read
 /// row `ih` and the output columns that read column `iw`, in ascending `(oh,
 /// ow)`, as one `f64` sum rounded once. `wy` and `wx` are the forward's
@@ -921,8 +921,8 @@ pub(crate) fn interpolate_bilinear_backward(
     )
 }
 
-/// [`ojas_core::Backend::rope_interleaved_forward`] (`inverse == false`) and
-/// [`ojas_core::Backend::rope_interleaved_backward`] (`inverse == true`, the
+/// [`ojas_core::BackendModule::rope_interleaved_forward`] (`inverse == false`) and
+/// [`ojas_core::BackendModule::rope_interleaved_backward`] (`inverse == true`, the
 /// rotation by `-angle`).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn rope_interleaved(

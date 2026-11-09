@@ -1,4 +1,4 @@
-//! `Backend::concat` and `Backend::slice` on the CPU.
+//! `ojas_core::BackendFloat::concat` and `ojas_core::BackendFloat::slice` on the CPU.
 //!
 //! - Values are held to a coordinate-by-coordinate reference written here,
 //!   bit for bit, on inputs of random finite bit patterns (every exponent,

@@ -1,5 +1,5 @@
 //! `adamw_all_or_nothing`: with every gradient finite it is bit for bit
-//! `Backend::adamw_step` called per tensor; with a bad one in tensor `k > 0`
+//! `ojas_core::BackendModule::adamw_step` called per tensor; with a bad one in tensor `k > 0`
 //! no tensor and no moment moves and the error names `k`. The last test of
 //! the CPU half shows the per-tensor loop is not all or nothing, which is
 //! why the two passes exist.

@@ -51,7 +51,7 @@ pub(crate) trait Forward {
     /// [`ranked_candidates`] gives them: finite `(id, logit)` pairs ranked by
     /// (logit desc, index asc), the refusals of [`sample_token`].
     /// [`crate::DeviceDecoder`] overrides it to select where the logits are
-    /// (`Backend::topk_rows`) and read back only the `k` leaders.
+    /// (`ojas_core::BackendInt::topk_rows`) and read back only the `k` leaders.
     fn forward_top(&mut self, tokens: &[u32], k: usize) -> Result<Vec<(u32, f32)>, OjasError> {
         ranked_candidates(&self.forward(tokens)?, Some(k))
     }

@@ -19,7 +19,7 @@
 //!    stale (`spec` differs) or failing reference is reported and the row is
 //!    NOT timed;
 //! 3. warms up `warmup` times and times `iters` iterations, each one the op
-//!    followed by `Backend::sync`, which waits for the recorded work and
+//!    followed by `ojas_core::BackendCore::sync`, which waits for the recorded work and
 //!    reports any deferred fault on both Metal and wgpu.
 //!    Outputs are held until after the synchronize, then dropped.
 //!

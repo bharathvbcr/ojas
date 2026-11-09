@@ -207,7 +207,7 @@ pub fn causal_attention<G: Graph>(
 /// `attn(g, q, k, v)` receives, in time-major `[B, T, heads, D]` layout:
 /// - `q` `[B, T, n_head, head_dim]` after QK-norm and RoPE;
 /// - `k` `[B, T, n_kv_head, head_dim]` after QK-norm and RoPE, the layout
-///   `Backend::kv_cache_write` takes;
+///   `ojas_core::BackendModule::kv_cache_write` takes;
 /// - `v` `[B, T, n_kv_head, head_dim]` after the value residual (the blended
 ///   `v`, which is what a KV cache holds; the raw `v` is in [`BlockOut`]).
 ///

@@ -7,7 +7,7 @@
 //! 2. For each of K micro-batches: clear the tape, bind every parameter as a
 //!    leaf, forward through every block and the fused head,
 //!    `backward_seeded(loss, 1/K)`, then `take_grad` and
-//!    [`Backend::accumulate_grad`] into trainer-owned buffers. Losses are
+//!    [`ojas_core::BackendFloat::accumulate_grad`] into trainer-owned buffers. Losses are
 //!    summed on the device.
 //! 3. Clear the tape, so the in-place optimizer owns each parameter alone.
 //! 4. `clip_grad_norm(grads, grad_clip)`.
@@ -308,7 +308,7 @@ pub struct Trainer<B: Backend> {
     /// 16 lowercase hex digits; see the module docs.
     pub(crate) run: String,
     /// The most scratch any one optimizer call of this trainer charges
-    /// ([`Backend::optimizer_scratch_bytes`]); 0 where the backend does not
+    /// ([`ojas_core::BackendCore::optimizer_scratch_bytes`]); 0 where the backend does not
     /// say.
     pub(crate) optimizer_scratch: u64,
     /// The budget a completed step took above its starting live bytes, and
@@ -802,7 +802,7 @@ impl<B: Backend> Trainer<B> {
             .collect()
     }
 
-    /// Bf16 enters a region. Off does not call [`Backend::autocast_region`].
+    /// Bf16 enters a region. Off does not call [`ojas_core::BackendCore::autocast_region`].
     fn enter_autocast(backend: &B, mode: AutocastMode) -> Result<Option<AutocastGuard>, OjasError> {
         match mode {
             AutocastMode::Off => Ok(None),
@@ -955,7 +955,7 @@ enum StepConfig {
 }
 
 /// A new allocation on `backend` holding `host`'s values, owned by the
-/// caller alone. A host tensor is required: on the CPU, `Backend::upload`
+/// caller alone. A host tensor is required: on the CPU, `ojas_core::BackendCore::upload`
 /// of a host tensor shares it, so the values are copied instead.
 fn fresh<B: Backend + ?Sized>(backend: &B, host: &Tensor) -> Result<Tensor, OjasError> {
     if host.device().is_some() {

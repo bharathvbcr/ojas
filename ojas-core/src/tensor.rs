@@ -1269,7 +1269,7 @@ impl Tensor {
 
     /// Host copy with the same shape. A host tensor is returned as a cheap
     /// clone that shares storage. A device or mapped tensor is read back into
-    /// a [`Payload::Host`] snapshot and counted in
+    /// a `Payload::Host` snapshot and counted in
     /// [`crate::Budget::device_readbacks`] on `budget`; the result has
     /// `device() == None` and is unchanged by any later device write. A
     /// contiguous view copies only its window; a strided one copies the whole

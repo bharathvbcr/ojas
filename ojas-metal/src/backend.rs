@@ -1,10 +1,10 @@
 //! [`MetalBackend`]: `ojas_core::Backend` on device-resident Metal tensors.
 //!
 //! Every input must already live on this backend's device (see
-//! [`Backend::upload`]); a host tensor or another device's tensor is
+//! [`ojas_core::BackendCore::upload`]); a host tensor or another device's tensor is
 //! [`OjasError::Placement`]. Outputs are fresh device buffers wrapped with
 //! [`Tensor::from_device_reserved`], so nothing comes back to the host until
-//! [`Tensor::to_host`] or [`Backend::download`].
+//! [`Tensor::to_host`] or [`ojas_core::BackendCore::download`].
 //!
 //! Each op reserves its output and scratch bytes in the [`Budget`] before the
 //! device allocates anything, and refuses with
@@ -75,8 +75,8 @@
 //!
 //! Faults are deferred (`docs/metal-deferred-faults.md`). Ops are recorded
 //! into tessl's command buffer and return without waiting. A NaN or infinity
-//! a kernel finds does not fail its op: the next [`Backend::sync`],
-//! [`Backend::download`] or [`Backend::clip_grad_norm`] on this backend
+//! a kernel finds does not fail its op: the next [`ojas_core::BackendCore::sync`],
+//! [`ojas_core::BackendCore::download`] or [`ojas_core::BackendFloat::clip_grad_norm`] on this backend
 //! returns [`OjasError::NonFinite`] naming the first faulting op in
 //! recording order, once. Everything the host can decide stays immediate:
 //! shape, dtype, placement, capacity, limits, token ids (checked against the
@@ -310,7 +310,7 @@ impl MetalBackend {
     /// the GDN ops; the losses (`cross_entropy_mean_*`,
     /// `linear_cross_entropy_mean`); the optimizer steps (`adamw_step`,
     /// `muon_ns5_step`) and `clip_grad_norm`; and the elementwise, rope,
-    /// gate and embedding ops. `Backend::numerics` still reports `Exact`,
+    /// gate and embedding ops. `ojas_core::BackendCore::numerics` still reports `Exact`,
     /// so a caller that needs bit-exact results from an op outside the first
     /// list must use the CPU backend. Tests pin the covered set:
     /// `exact_numerics_dispatches_fixed_order_only_for_the_documented_ops`
@@ -483,7 +483,7 @@ impl MetalBackend {
     /// `kv_cache_write` that targets it is refused with
     /// [`OjasError::Backend`] before it records anything. The scan is
     /// recorded like any other: a NaN or infinity is [`OjasError::NonFinite`]
-    /// at the next [`Backend::sync`], and the mark is then withdrawn, so a
+    /// at the next [`ojas_core::BackendCore::sync`], and the mark is then withdrawn, so a
     /// buffer that was not finite is scanned by every later op as before.
     /// Freed with its buffer. Freezing a window of a buffer marks only that
     /// window.
@@ -545,7 +545,7 @@ impl MetalBackend {
         self.link.kernel_dispatches(name)
     }
 
-    /// [`Backend::permute`] on the generic one-thread-per-element kernel
+    /// [`ojas_core::BackendFloat::permute`] on the generic one-thread-per-element kernel
     /// whatever the pattern planner would pick: the reference arm of the
     /// pattern tests and the permute bench. Not a stable API.
     #[doc(hidden)]
@@ -554,7 +554,7 @@ impl MetalBackend {
         self.one("permute", &out, 0, cmd)
     }
 
-    /// [`Backend::conv2d_forward`] through im2col whatever the shape: the
+    /// [`ojas_core::BackendModule::conv2d_forward`] through im2col whatever the shape: the
     /// route a 1 x 1 stride 1 unpadded convolution took before it skipped
     /// im2col, the reference arm of the pointwise tests and the conv bench.
     /// Not a stable API.
@@ -569,7 +569,7 @@ impl MetalBackend {
         self.conv2d_routed(input, weight, bias, params, false)
     }
 
-    /// [`Backend::conv2d_forward`], taking the pointwise route where
+    /// [`ojas_core::BackendModule::conv2d_forward`], taking the pointwise route where
     /// `allow_pointwise` and [`pointwise_conv`] agree.
     fn conv2d_routed(
         &self,
@@ -655,7 +655,7 @@ impl MetalBackend {
         self.one(OP, &dims.out_shape(), scratch, cmd)
     }
 
-    /// [`Backend::attention_forward_saving`] on the split-K tiled kernels
+    /// [`ojas_core::BackendModule::attention_forward_saving`] on the split-K tiled kernels
     /// (the scalar kernel where they cannot run) whatever the dispatcher
     /// would pick: the split-K reference arm of the flash tests and bench.
     /// Not a stable API.
@@ -670,7 +670,7 @@ impl MetalBackend {
         self.saving_with(q, k, v, opts, AttnKernel::SplitK)
     }
 
-    /// [`Backend::attention_forward_saving`] on the TensorOps flash kernel
+    /// [`ojas_core::BackendModule::attention_forward_saving`] on the TensorOps flash kernel
     /// wherever it covers the call, below the threadgroup floor the
     /// dispatcher keeps (`FLASH_MIN_GROUPS`) as well: how the bench measures
     /// short-Q calls against split-K. A call the kernel does not cover runs
@@ -686,7 +686,7 @@ impl MetalBackend {
         self.saving_with(q, k, v, opts, AttnKernel::Flash)
     }
 
-    /// [`Backend::attention_forward_saving`] on the scalar `ojas_attn_gen_fwd`
+    /// [`ojas_core::BackendModule::attention_forward_saving`] on the scalar `ojas_attn_gen_fwd`
     /// whatever the dispatcher would pick: the oracle arm of the flash tests.
     /// Not a stable API.
     #[doc(hidden)]
@@ -722,7 +722,7 @@ impl MetalBackend {
         )
     }
 
-    /// [`Backend::attention_forward`] with the pad ratio bound lifted, so
+    /// [`ojas_core::BackendModule::attention_forward`] with the pad ratio bound lifted, so
     /// tessl's `encoder_attn` runs wherever its other conditions hold: the
     /// pad-q arm of the flash bench above `ENCODER_ATTN_MAX_PAD_RATIO`. Not a
     /// stable API.
@@ -785,7 +785,7 @@ impl MetalBackend {
         })
     }
 
-    /// The kernel [`Backend::permute`] of `input` by `dims` runs on:
+    /// The kernel [`ojas_core::BackendFloat::permute`] of `input` by `dims` runs on:
     /// `"runs"`, `"transpose"` or `"generic"` (`src/permute.rs`). Validates
     /// as `permute` does and records nothing. Not a stable API.
     #[doc(hidden)]
@@ -1011,7 +1011,7 @@ impl MetalBackend {
         self.arg(op, t, DType::F32)
     }
 
-    /// An operand of a matmul-class op ([`Backend::bf16_operands`]): a
+    /// An operand of a matmul-class op ([`ojas_core::BackendCore::bf16_operands`]): a
     /// `Bf16` tensor widened exactly into a new `F32` one charged to the
     /// budget, which lives for the call; any other tensor as it is, for the
     /// op's own checks. The op then runs on `f32` values only, so a `Bf16`

@@ -1,7 +1,7 @@
 //! The gated delta rule (Gated DeltaNet) at transformers' training seam, in
 //! `f64`, and the published goldens it and the backends are checked against.
 //!
-//! [`forward_f64`] is the forward of `Backend::chunked_gdn_forward`: per
+//! [`forward_f64`] is the forward of `ojas_core::BackendModule::chunked_gdn_forward`: per
 //! `(b, h)`, with the state `S` `[Dk, Dv]` starting at `s0` or zeros,
 //!
 //! ```text

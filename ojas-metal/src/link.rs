@@ -30,7 +30,7 @@ pub(crate) enum Wait {
     Upload,
     /// A raw read of a device buffer (`download`, `to_host`).
     Read,
-    /// `Backend::sync`.
+    /// `ojas_core::BackendCore::sync`.
     Sync,
     /// `clip_grad_norm`, which returns the norm to the host.
     ClipNorm,

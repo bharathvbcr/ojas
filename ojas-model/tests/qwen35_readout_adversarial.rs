@@ -455,7 +455,7 @@ mod metal {
 
     /// A NaN embedding row at a padding id fails closed on Metal as on CPU:
     /// `embedding_forward` records the fault, and it surfaces as `NonFinite`
-    /// naming the op at the first `Backend::download` (a sync point) the step
+    /// naming the op at the first `ojas_core::BackendCore::download` (a sync point) the step
     /// reads through. Raw `Tensor::to_host` would not report it.
     #[test]
     fn a_nan_padding_row_fails_closed_on_metal() {

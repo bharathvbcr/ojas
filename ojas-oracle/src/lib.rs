@@ -17,9 +17,9 @@
 //! - [`sam_fixtures`]: parity of the encoder, spatial and attention ops against
 //!   SpikeTrack's SAM 3.1 activation fixtures, generic over the backend.
 //! - [`bf16_operands`]: the bf16 operand contract of
-//!   `Backend::bf16_operands`, run on any backend that reports it.
+//!   `ojas_core::BackendCore::bf16_operands`, run on any backend that reports it.
 //! - [`gdn`]: the gated delta rule's f64 forward and transformers' published
-//!   goldens for it (`Backend::chunked_gdn_forward` / `_backward`).
+//!   goldens for it (`ojas_core::BackendModule::chunked_gdn_forward` / `_backward`).
 //! - [`encoder_golden`]: the encoder backwards (LayerNorm, channel LayerNorm,
 //!   GELU, biased linear, broadcast add and multiply, softmax) against torch
 //!   autograd (`fixtures/encoder_bwd/golden.txt`), generic over the backend.

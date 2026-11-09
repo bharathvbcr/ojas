@@ -14,9 +14,9 @@ use crate::buffer::CudaDeviceBuffer;
 #[cfg(feature = "cuda")]
 use crate::runtime::{CudaRuntime, RuntimeConfig};
 
-/// Device-resident [`Backend`] over NVIDIA CUDA.
+/// Device-resident [`ojas_core::Backend`] over NVIDIA CUDA.
 ///
-/// Its [`Backend::budget`] is its runtime's (`CudaRuntime::budget`): the
+/// Its [`ojas_core::BackendCore::budget`] is its runtime's (`CudaRuntime::budget`): the
 /// tensors it uploads, the runtime's kernel buffers and the cuBLAS workspace
 /// are charged to one [`Budget`], so together they never pass its cap.
 #[derive(Clone)]

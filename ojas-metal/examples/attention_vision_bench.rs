@@ -10,7 +10,7 @@
 //!
 //! Two arms on identical host data:
 //! - **ojas**: `attention_forward` on device tensors uploaded once, then
-//!   `Backend::sync`.
+//!   `ojas_core::BackendCore::sync`.
 //! - **tessl**: what a route through `tessl::embedgemma2::encoder_attn` costs
 //!   end to end: `[B, H, T, D]` to `[B, T, H, D]` permutes of q, k and v,
 //!   the kernel, the output permuted back, then `synchronize`. The kernel

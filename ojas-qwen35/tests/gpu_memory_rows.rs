@@ -23,7 +23,7 @@
 //!   and a bf16 table), rank 16 / alpha 16 adapters (f32, `A` random and `B`
 //!   zero) on the ten `LoraKind` linears of every layer, `forward_loss_lora`
 //!   (the fused tied head over every position), `backward`, and one
-//!   `Backend::adamw_step` per adapter tensor with both moments resident.
+//!   `ojas_core::BackendModule::adamw_step` per adapter tensor with both moments resident.
 //!   `QWEN35_MEM_CKPT` is `on` (every layer a checkpointed segment, the
 //!   default) or `off`. One warmup step, then three timed steps: the row
 //!   carries the first step's wall, every step's wall, tokens/s as the mean

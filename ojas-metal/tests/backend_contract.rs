@@ -564,7 +564,7 @@ fn over_budget_outputs_are_capacity_exceeded_before_device_allocation() {
     assert_ne!(down(&p), before);
 }
 
-/// `Backend::download` charges the backend's own budget, so a count read
+/// `ojas_core::BackendCore::download` charges the backend's own budget, so a count read
 /// there moves exactly when this backend reads back, whatever other threads
 /// and backends do at the same time; a copy into another budget does not
 /// move it.

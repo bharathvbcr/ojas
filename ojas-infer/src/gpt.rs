@@ -101,8 +101,8 @@ pub(crate) fn check_params(
 /// the next token goes at absolute position `len`.
 ///
 /// Each layer has a key and a value tensor `[1, slots, n_kv_head,
-/// head_dim]`, time-major, the layout `Backend::kv_cache_write` and
-/// `Backend::cached_attention_forward` take. `slots` is `max_len`, or, for
+/// head_dim]`, time-major, the layout `ojas_core::BackendModule::kv_cache_write` and
+/// `ojas_core::BackendModule::cached_attention_forward` take. `slots` is `max_len`, or, for
 /// a model with a sliding window `W` below `max_len` ([`Self::for_model`]),
 /// `2W - 1`: a ring that keeps the positions the next call attends to.
 /// Together the tensors are `2 * n_layer * slots * n_kv_head * head_dim`

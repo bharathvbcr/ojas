@@ -4,10 +4,10 @@
 //! Every layer is [`ojas_model::block_with`] on [`ojas_model::Eval`], so the
 //! block is the model crate's one definition. Only its attention step is
 //! this crate's: for both prefill and decode, write the new positions'
-//! post-RoPE keys and blended values with `Backend::kv_cache_write`, then
-//! [`Graph::cached_attn`] (`Backend::cached_attention_forward`) with
+//! post-RoPE keys and blended values with `ojas_core::BackendModule::kv_cache_write`, then
+//! [`Graph::cached_attn`] (`ojas_core::BackendModule::cached_attention_forward`) with
 //! `kv_len = len + Tn`. With `kv_len == Tn` that is causal SDPA
-//! (`Backend::cached_attention_forward`'s contract), and it folds in GQA.
+//! (`ojas_core::BackendModule::cached_attention_forward`'s contract), and it folds in GQA.
 //!
 //! Logits are the last position's only: its hidden row is a view of the
 //! `[Tn, n_embd]` hidden state, normed and projected. What is read back of
@@ -218,7 +218,7 @@ impl<B: Backend> DeviceDecoder<B> {
     }
 
     /// [`Self::forward`] for greedy decoding: the argmax of the last
-    /// position's logits is taken on the device (`Backend::argmax_rows`),
+    /// position's logits is taken on the device (`ojas_core::BackendInt::argmax_rows`),
     /// so the one readback is the 4-byte id, not the `[vocab]` row. Ties go
     /// to the lowest id and a non-finite logit is [`OjasError::NonFinite`],
     /// as [`crate::argmax_token`]. The id's device tensor is kept: when the next
@@ -251,7 +251,7 @@ impl<B: Backend> DeviceDecoder<B> {
     /// the vocabulary keeps every finite logit), with the same refusals.
     ///
     /// With `k` = 1 the leader is selected on the device
-    /// (`Backend::topk_rows`), so the readback is its value and id, 8 bytes,
+    /// (`ojas_core::BackendInt::topk_rows`), so the readback is its value and id, 8 bytes,
     /// and its id is kept on the device for the next call, as
     /// [`Self::forward_greedy`]'s is. A `-inf` leader (an all-masked row) is
     /// refused as `ranked_candidates` refuses it. With `k` > 1 the `[vocab]`

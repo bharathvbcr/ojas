@@ -467,7 +467,7 @@ fn device_decoder_follows_the_shared_decode_loop() {
 
 /// A sampled decode that needs only the leaders (temperature 0, or a
 /// `top_k`) goes through `forward_top`: one leader is selected where the
-/// logits are (`Backend::topk_rows`), more are ranked from the row. On
+/// logits are (`ojas_core::BackendInt::topk_rows`), more are ranked from the row. On
 /// `CpuBackend` nothing is a device tensor, so nothing is read back either
 /// way (`tests/device.rs` `check_top` pins the GPU readbacks). With one
 /// leader (temperature 0, as Go's `GenerateIDs` asks, or `top_k` 1) its id

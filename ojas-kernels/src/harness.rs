@@ -2,7 +2,7 @@
 //! Bit-exact agreement is not assumed across GPU backends.
 //!
 //! Inputs are built on the host and moved with each backend's own
-//! [`Backend::upload`]; results come back with [`Backend::download`]. A
+//! [`ojas_core::BackendCore::upload`]; results come back with [`ojas_core::BackendCore::download`]. A
 //! device-resident backend therefore runs its kernels, and a deferred
 //! device fault surfaces as that download's error.
 

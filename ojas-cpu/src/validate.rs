@@ -166,7 +166,7 @@ pub(crate) fn scan_matmul_operand(
 /// Values per block of the bf16 finite scan and of the widening pass.
 const WIDEN_BLOCK: usize = 1 << 17;
 
-/// The operands of a matmul-class op ([`ojas_core::Backend::bf16_operands`]),
+/// The operands of a matmul-class op ([`ojas_core::BackendCore::bf16_operands`]),
 /// each `F32` or `Bf16`.
 ///
 /// With no `Bf16` operand this is [`f32_operands`]. Otherwise every

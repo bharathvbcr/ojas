@@ -1,4 +1,4 @@
-//! [`ojas_core::Backend::attention_backward`] on Metal: the general tiled
+//! [`ojas_core::BackendModule::attention_backward`] on Metal: the general tiled
 //! backward (`attn_gen_bwd.metal`, run by `Worker::attn_gen_bwd`).
 //!
 //! Bidirectional or causal attention with a window, a query length that

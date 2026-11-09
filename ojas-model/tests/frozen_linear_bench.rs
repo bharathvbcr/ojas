@@ -1,5 +1,5 @@
-//! A/B wall time of `Backend::linear_backward` against
-//! `Backend::linear_backward_input` (the frozen-weight backward) at the
+//! A/B wall time of `ojas_core::BackendModule::linear_backward` against
+//! `ojas_core::BackendModule::linear_backward_input` (the frozen-weight backward) at the
 //! Qwen3.5-2B linear shapes (hidden 2048, intermediate 6144, 8 query heads
 //! of 256 over 2 KV heads, 16 GDN heads of 128) with T = 2048 rows, on CPU
 //! (Fast, 6 threads) and Metal. Ignored by default.

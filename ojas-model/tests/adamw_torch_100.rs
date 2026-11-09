@@ -1,4 +1,4 @@
-//! `Backend::adamw_step` against `torch.optim.AdamW` over 100 steps, on the
+//! `ojas_core::BackendModule::adamw_step` against `torch.optim.AdamW` over 100 steps, on the
 //! LoRA recipe's hyperparameters (Lappi campaign/lora-2b-preregistered.json:
 //! betas (0.9, 0.999), eps 1e-8, decoupled weight decay 0.01, lr 2e-4 for the
 //! adapters and 1e-4 for D17 and the span head).

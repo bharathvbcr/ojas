@@ -180,7 +180,7 @@ impl CpuBackend {
 
     /// Bytes `muon_ns5_step` reserves for a `[rows, cols]` matrix: the most
     /// heap scratch its phases hold at once (optim.rs `muon_scratch`). The
-    /// step and [`Backend::optimizer_scratch_bytes`] both read this.
+    /// step and [`ojas_core::BackendCore::optimizer_scratch_bytes`] both read this.
     fn muon_headroom(&self, op: &'static str, rows: usize, cols: usize) -> Result<u64, OjasError> {
         payload_bytes(op, muon_scratch(op, self.exec(), rows, cols)?)
     }
@@ -286,8 +286,8 @@ impl CpuBackend {
         Ok((grad_x, grad_w))
     }
 
-    /// The body of [`Backend::linear_backward`] after its validator, and of
-    /// [`Backend::linear_bias_backward`]: the input and weight gradients,
+    /// The body of [`ojas_core::BackendModule::linear_backward`] after its validator, and of
+    /// [`ojas_core::BackendModule::linear_bias_backward`]: the input and weight gradients,
     /// and, for a `bias`, `sum(grad_output)` over the rows, from the same
     /// widened operands. Refusals name `op`.
     fn linear_bwd(

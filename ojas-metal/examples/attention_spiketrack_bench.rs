@@ -36,7 +36,7 @@
 //!
 //! Arms:
 //! - **ojas**: `attention_forward` on device tensors uploaded once, then
-//!   `Backend::sync`.
+//!   `ojas_core::BackendCore::sync`.
 //! - **tessl**: what a route through `tessl::embedgemma2::encoder_attn` costs
 //!   end to end: the `[B, H, T, D]` to `[B, T, H, D]` permutes of q, k and v
 //!   (each preceded by the finite check `MetalBackend::permute` runs), the

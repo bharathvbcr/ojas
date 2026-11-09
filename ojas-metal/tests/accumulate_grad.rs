@@ -1,4 +1,4 @@
-//! `Backend::accumulate_grad` on Metal (T2, gate G2): `acc += grad` in place
+//! `ojas_core::BackendFloat::accumulate_grad` on Metal (T2, gate G2): `acc += grad` in place
 //! when `acc` solely owns its device buffer, bit-identical to the CPU
 //! reference, and a non-finite sum leaves `acc` bit-identical.
 #![cfg(all(target_os = "macos", feature = "metal"))]

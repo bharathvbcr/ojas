@@ -1,4 +1,4 @@
-//! `Backend::group_norm_forward` on the CPU, torch's `nn.GroupNorm`.
+//! `ojas_core::BackendModule::group_norm_forward` on the CPU, torch's `nn.GroupNorm`.
 //!
 //! - Values are held to an `f64` reference written here from the definition
 //!   (statistics over the `C / G` channels and every position of one image,

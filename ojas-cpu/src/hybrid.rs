@@ -47,7 +47,7 @@ fn conv_pre(d: Conv1dDims, x: &[f32], w: &[f32], b: usize, t: usize, c: usize) -
     acc
 }
 
-/// [`ojas_core::Backend::causal_conv1d_silu_forward`].
+/// [`ojas_core::BackendModule::causal_conv1d_silu_forward`].
 pub(crate) fn conv1d_silu_forward(
     op: &'static str,
     budget: &Budget,
@@ -69,7 +69,7 @@ pub(crate) fn conv1d_silu_forward(
     })
 }
 
-/// [`ojas_core::Backend::causal_conv1d_silu_backward`]: `(grad_input,
+/// [`ojas_core::BackendModule::causal_conv1d_silu_backward`]: `(grad_input,
 /// grad_weight)`. `da = gy * silu'(a)` is formed once; then
 /// `gx[b, s, c] = sum_j w[c, j] * da[b, s + (K - 1) - j, c]` and
 /// `gw[c, j] = sum_(b, t) da[b, t, c] * x[b, t + j - (K - 1), c]`, each in
@@ -187,7 +187,7 @@ fn rstd(op: &'static str, row: &[f32], eps: f32) -> Result<f32, OjasError> {
     Ok(r)
 }
 
-/// [`ojas_core::Backend::gated_rms_norm_forward`]:
+/// [`ojas_core::BackendModule::gated_rms_norm_forward`]:
 /// `out = (w * (x * rstd)) * silu(z)`, transformers' order.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn gated_rms_forward(
@@ -214,7 +214,7 @@ pub(crate) fn gated_rms_forward(
     })
 }
 
-/// [`ojas_core::Backend::gated_rms_norm_backward`]: with `n = x * rstd`,
+/// [`ojas_core::BackendModule::gated_rms_norm_backward`]: with `n = x * rstd`,
 /// `g = silu(z)` and `dn = gy * w * g`,
 /// `dx = rstd * (dn - n * sum(dn * n) / dim)`, `dz = gy * w * n * silu'(z)`
 /// and `dw = sum_rows gy * n * g`.
@@ -304,7 +304,7 @@ pub(crate) enum Turn {
     Backward,
 }
 
-/// [`ojas_core::Backend::rope_partial_forward`] and its backward: the
+/// [`ojas_core::BackendModule::rope_partial_forward`] and its backward: the
 /// half-split rotation of [`crate::norm`]'s RoPE, in its expressions, on the
 /// leading `rotary` values of each head, the rest copied.
 #[allow(clippy::too_many_arguments)]
@@ -354,7 +354,7 @@ pub(crate) fn rope_partial(
     })
 }
 
-/// [`ojas_core::Backend::sigmoid_forward`]: [`sigmoid`] of each value.
+/// [`ojas_core::BackendFloat::sigmoid_forward`]: [`sigmoid`] of each value.
 pub(crate) fn sigmoid_forward(
     op: &'static str,
     budget: &Budget,
@@ -370,7 +370,7 @@ pub(crate) fn sigmoid_forward(
     })
 }
 
-/// [`ojas_core::Backend::sigmoid_backward`]: `gy * s(x) * s(-x)`, which is
+/// [`ojas_core::BackendFloat::sigmoid_backward`]: `gy * s(x) * s(-x)`, which is
 /// `s * (1 - s)` without the cancellation: above `x` ~ 17 `s` rounds to 1
 /// in f32 and `1 - s` to 0, while `s(-x)` keeps the slope.
 pub(crate) fn sigmoid_backward(
@@ -402,7 +402,7 @@ fn softplus(x: f32) -> f32 {
     }
 }
 
-/// [`ojas_core::Backend::gdn_log_decay_forward`]:
+/// [`ojas_core::BackendModule::gdn_log_decay_forward`]:
 /// `g = -exp(a_log[h]) * softplus(a + dt_bias[h])`, `exp(a_log)` once per
 /// head.
 pub(crate) fn gdn_log_decay_forward(
@@ -426,7 +426,7 @@ pub(crate) fn gdn_log_decay_forward(
     })
 }
 
-/// [`ojas_core::Backend::gdn_log_decay_backward`]: `(da, da_log, ddt_bias)`.
+/// [`ojas_core::BackendModule::gdn_log_decay_backward`]: `(da, da_log, ddt_bias)`.
 /// `da = gy * -exp(a_log) * softplus'(a + dt_bias)`, with `softplus' = 1`
 /// above 20 and [`sigmoid`] below; `ddt_bias[h]` sums `da` and `da_log[h]`
 /// sums `gy * g` over rows in ascending order from `+0.0`, each head on one

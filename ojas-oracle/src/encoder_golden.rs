@@ -5,7 +5,7 @@
 //! LayerNorm, the exact GELU, a biased linear, broadcast add and multiply, and
 //! softmax, the operands, the incoming gradient and torch's gradients in
 //! float32 and in float64. [`check`] runs a backend's forward and backward on
-//! every case, through [`Backend::upload`], and measures each gradient
+//! every case, through [`ojas_core::BackendCore::upload`], and measures each gradient
 //! against both torch results. The CPU test
 //! (`ojas-cpu/tests/encoder_backward.rs`) and the Metal one
 //! (`ojas-metal/tests/encoder_backward.rs`) call it with their own

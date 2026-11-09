@@ -1,5 +1,5 @@
 //! The convolution backward passes on the device thread
-//! (`Backend::conv2d_backward`, `Backend::conv_transpose2d_backward`).
+//! (`ojas_core::BackendModule::conv2d_backward`, `ojas_core::BackendModule::conv_transpose2d_backward`).
 //!
 //! A one-group convolution is the forward's GEMM turned around: `ojas_im2col`
 //! forms `cols [pixels, c kh kw]`, `gy` is permuted from NCHW to `gy' [pixels,

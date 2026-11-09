@@ -86,7 +86,7 @@ use crate::validate::{
 
 const OP: &str = "linear_cross_entropy_mean";
 
-/// [`ojas_core::Backend::linear_cross_entropy_mean`] on the CPU.
+/// [`ojas_core::BackendModule::linear_cross_entropy_mean`] on the CPU.
 ///
 /// Every operand is validated before the first charge, then read in place:
 /// the input rows and weight blocks of each tile are views, not copies (a

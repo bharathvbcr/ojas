@@ -4,7 +4,7 @@
 //! (their ignored `bench_*` tests).
 //!
 //! The shape is nanolab's: 4096 rows (batch 4 x 1024), d_model 768, 12
-//! heads of 64. Each sample is one call plus `Backend::sync`, so it is the
+//! heads of 64. Each sample is one call plus `ojas_core::BackendCore::sync`, so it is the
 //! device time of that call with the submit and wait. A round times every
 //! variant once per iteration, alternating which goes first, so drift and
 //! thermal state hit both sides alike. Reported: min and median over all

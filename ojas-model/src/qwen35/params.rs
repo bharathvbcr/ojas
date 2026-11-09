@@ -425,7 +425,7 @@ fn load_runs(
 /// BF16 checkpoint as stored, never widened, and from an F32 or F16 one
 /// rounded once to nearest even. A `Bf16` table feeds the gather and the
 /// fused LM head, which read it in place
-/// ([`ojas_core::Backend::bf16_operands`]'s tied-table lane: 1.02 GB instead
+/// ([`ojas_core::BackendCore::bf16_operands`]'s tied-table lane: 1.02 GB instead
 /// of 2.03 GB at 2B). Every norm weight, the convolutions, `A_log` and
 /// `dt_bias` are `F32` either way: their ops do not take bf16 operands. Any
 /// other `linears` or `table` dtype is [`OjasError::Dtype`].

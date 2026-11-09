@@ -1,5 +1,5 @@
 //! A3 `Tape::linear_cross_entropy`: the fused head through
-//! `Backend::linear_cross_entropy_mean`.
+//! `ojas_core::BackendModule::linear_cross_entropy_mean`.
 //!
 //! The tape-mechanics tests run on the `Resident` doubles (`tests/common`),
 //! whose fused op composes the unfused CPU kernels, so the fused tape and the

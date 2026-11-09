@@ -1,4 +1,4 @@
-//! Softmax Collapse through `Backend::linear_cross_entropy_mean` on wgpu
+//! Softmax Collapse through `ojas_core::BackendModule::linear_cross_entropy_mean` on wgpu
 //! (`lce_stats`, `lce_finish`, `lce_grad`; ft-f40eeed8), on a real adapter.
 //!
 //! A row keeps the standard form bit for bit unless its target logit is the

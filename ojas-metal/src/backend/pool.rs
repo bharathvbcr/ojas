@@ -34,7 +34,7 @@ fn geometry(op: &'static str, dims: &MaxPool2dDims) -> Res<PoolGeom> {
 }
 
 impl MetalBackend {
-    /// [`ojas_core::Backend::max_pool2d_forward`] on `ojas_max_pool2d_fwd`.
+    /// [`ojas_core::BackendModule::max_pool2d_forward`] on `ojas_max_pool2d_fwd`.
     pub(super) fn pool_forward(
         &self,
         input: &Tensor,
@@ -48,7 +48,7 @@ impl MetalBackend {
         self.one(OP, &dims.out_shape(), 0, Cmd::MaxPool2d { x, geom })
     }
 
-    /// [`ojas_core::Backend::max_pool2d_backward`] on `ojas_max_pool2d_bwd`.
+    /// [`ojas_core::BackendModule::max_pool2d_backward`] on `ojas_max_pool2d_bwd`.
     pub(super) fn pool_backward(
         &self,
         input: &Tensor,
