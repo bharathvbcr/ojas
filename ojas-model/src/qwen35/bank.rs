@@ -57,8 +57,11 @@
 //! # One read per gradient per step
 //!
 //! [`AdapterBank::scan`] reads each stored gradient to the host once and keeps
-//! only a summary of it (the running squared norm, the largest finite
-//! magnitude, whether a non-finite value was seen). The summary is dropped by
+//! only a summary of it (the largest magnitude, whether a non-finite
+//! value was seen, and, when the scan was asked for it, the running squared
+//! norm). The optimiser's check needs no norm, so a step with no prior norm
+//! does not pay for one; a summary scanned without a norm is never served as a
+//! norm (a later norm re-reads). The summary is dropped by
 //! every operation that changes a slot, so it never describes a sum the bank
 //! no longer holds. The squared norm
 //! ([`AdapterBank::sq_norm_scanned`]) and the optimiser's finiteness check
@@ -177,33 +180,48 @@ enum Slot {
 pub struct GradScan {
     /// The squared L2 norm of every gradient up to and including this one
     /// (the running f64 accumulator of [`AdapterBank::sq_norm`]); a non-finite
-    /// value adds nothing.
-    pub running_sq: f64,
-    /// The largest `|g|` among this gradient's finite values.
+    /// value makes it meaningless. `None` when the scan was made without a norm.
+    pub running_sq: Option<f64>,
+    /// The largest `|g|`; meaningless when `non_finite`.
     pub max_abs: f32,
     /// A NaN or infinity was seen.
     pub non_finite: bool,
 }
 
-/// Fold `values` into the running accumulator `running`, widening to f64,
-/// elements in row-major order.
-fn scan_values(values: &[f32], running: f64) -> GradScan {
-    let mut acc = running;
-    let mut max_abs = 0.0f32;
-    let mut non_finite = false;
-    for &x in values {
-        if !x.is_finite() {
-            non_finite = true;
-            continue;
+/// Bits of `|x|` at and above which an f32 is infinite or NaN.
+const NON_FINITE_BITS: u32 = 0x7f80_0000;
+
+/// Summarise `values`. With `running` (the accumulator so far) the squared
+/// norm is folded in, widening to f64, elements in row-major order; with
+/// `None` only the magnitude and finiteness are read.
+///
+/// The magnitude is the largest `|x|` as bits: for non-negative floats the
+/// bit order is the value order, so the reduction is an integer `max` (which
+/// vectorises, where a float `max` with a finiteness branch does not), and a
+/// result at or above [`NON_FINITE_BITS`] is the finiteness test. When a
+/// non-finite value is present `max_abs` and the running norm are meaningless.
+fn scan_values(values: &[f32], running: Option<f64>) -> GradScan {
+    let mut max_bits = 0u32;
+    let running_sq = match running {
+        Some(mut acc) => {
+            for &x in values {
+                let w = f64::from(x);
+                acc += w * w;
+                max_bits = max_bits.max(x.to_bits() & 0x7fff_ffff);
+            }
+            Some(acc)
         }
-        let w = f64::from(x);
-        acc += w * w;
-        max_abs = max_abs.max(x.abs());
-    }
+        None => {
+            for &x in values {
+                max_bits = max_bits.max(x.to_bits() & 0x7fff_ffff);
+            }
+            None
+        }
+    };
     GradScan {
-        running_sq: acc,
-        max_abs,
-        non_finite,
+        running_sq,
+        max_abs: f32::from_bits(max_bits),
+        non_finite: max_bits >= NON_FINITE_BITS,
     }
 }
 
@@ -213,9 +231,9 @@ fn scan_values(values: &[f32], running: f64) -> GradScan {
 pub struct AdapterBank {
     entries: Vec<BankEntry>,
     slots: Vec<Slot>,
-    /// [`AdapterBank::scan`]'s result for the slots as they are now; every
-    /// change to a slot drops it.
-    scans: Option<Vec<GradScan>>,
+    /// [`AdapterBank::scan`]'s result for the slots as they are now, and
+    /// whether it carries the norm; every change to a slot drops it.
+    scans: Option<(bool, Vec<GradScan>)>,
 }
 
 fn elements(name: &str, shape: &[usize]) -> Result<usize, BankError> {
@@ -408,54 +426,76 @@ impl AdapterBank {
     /// Read every stored gradient to the host once and summarise it
     /// ([`GradScan`], entries in order). A marker is read as zeros without a
     /// readback. The result is kept until a slot changes, so a second call
-    /// (the optimiser's, after the norm's) reads nothing. The first empty slot
-    /// is [`BankError::Unfilled`]; a non-finite value is reported in the
-    /// summary, not as an error.
-    pub fn scan<B: Backend + ?Sized>(&mut self, backend: &B) -> Result<&[GradScan], BankError> {
-        if self.scans.is_none() {
+    /// (the optimiser's, after the norm's) reads nothing. `norm` asks for the
+    /// running squared norm ([`GradScan::running_sq`]); a cached scan made
+    /// without one does not serve a call that wants it (it re-reads), and one
+    /// made with it serves both. The first empty slot is
+    /// [`BankError::Unfilled`]; a non-finite value is reported in the summary,
+    /// not as an error.
+    pub fn scan<B: Backend + ?Sized>(
+        &mut self,
+        backend: &B,
+        norm: bool,
+    ) -> Result<&[GradScan], BankError> {
+        if !self.scans.as_ref().is_some_and(|(has, _)| *has || !norm) {
             let mut out = Vec::with_capacity(self.slots.len());
-            let mut running = 0.0f64;
+            let mut running = norm.then_some(0.0f64);
             for (entry, (e, slot)) in self.entries.iter().zip(&self.slots).enumerate() {
-                let one =
-                    match slot {
-                        Slot::Empty => {
-                            return Err(BankError::Unfilled {
-                                entry,
-                                name: e.name.clone(),
-                            })
-                        }
-                        Slot::Zero => scan_values(&[], running),
-                        Slot::Filled(t) => {
-                            let values = backend.download(t).and_then(|h| h.to_f32_vec()).map_err(
-                                |source| BankError::Core {
-                                    entry,
-                                    name: e.name.clone(),
-                                    source,
-                                },
-                            )?;
-                            scan_values(&values, running)
-                        }
-                    };
+                let one = match slot {
+                    Slot::Empty => {
+                        return Err(BankError::Unfilled {
+                            entry,
+                            name: e.name.clone(),
+                        })
+                    }
+                    Slot::Zero => scan_values(&[], running),
+                    Slot::Filled(t) => {
+                        let host = backend.download(t).map_err(|source| BankError::Core {
+                            entry,
+                            name: e.name.clone(),
+                            source,
+                        })?;
+                        let values = host.f32_slice().map_err(|source| BankError::Core {
+                            entry,
+                            name: e.name.clone(),
+                            source,
+                        })?;
+                        scan_values(values, running)
+                    }
+                };
                 running = one.running_sq;
                 out.push(one);
             }
-            self.scans = Some(out);
+            self.scans = Some((norm, out));
         }
-        Ok(self.scans.as_deref().unwrap_or(&[]))
+        Ok(self.scans.as_ref().map_or(&[][..], |(_, v)| v.as_slice()))
     }
 
     /// [`AdapterBank::sq_norm`] through [`AdapterBank::scan`]: the same value
     /// and the same refusals, and the readback is shared with the optimiser's
     /// finiteness check.
     pub fn sq_norm_scanned<B: Backend + ?Sized>(&mut self, backend: &B) -> Result<f64, BankError> {
-        let scans = self.scan(backend)?;
+        self.scan(backend, true)?;
+        let Some((_, scans)) = self.scans.as_ref() else {
+            return Ok(0.0);
+        };
         if let Some(entry) = scans.iter().position(|s| s.non_finite) {
             return Err(BankError::NonFinite {
                 entry,
                 name: self.entries[entry].name.clone(),
             });
         }
-        Ok(scans.last().map_or(0.0, |s| s.running_sq))
+        match scans.last() {
+            None => Ok(0.0),
+            Some(last) => last.running_sq.ok_or_else(|| BankError::Core {
+                entry: scans.len() - 1,
+                name: self.entries[scans.len() - 1].name.clone(),
+                source: OjasError::OutOfRange {
+                    op: "AdapterBank::sq_norm_scanned",
+                    detail: "the scan carries no norm".into(),
+                },
+            }),
+        }
     }
 
     /// The summed gradient of `entry`: a share of the slot's allocation.
@@ -540,14 +580,14 @@ impl AdapterBank {
                         })?
                 }
             };
-            let one = scan_values(&values, acc);
+            let one = scan_values(&values, Some(acc));
             if one.non_finite {
                 return Err(BankError::NonFinite {
                     entry,
                     name: e.name.clone(),
                 });
             }
-            acc = one.running_sq;
+            acc = one.running_sq.unwrap_or(acc);
         }
         Ok(acc)
     }

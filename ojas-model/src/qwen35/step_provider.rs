@@ -108,9 +108,13 @@
 //! it was and the step count unchanged. The norm
 //! ([`StepProvider::grad_sq_norm`]) and that check share one host readback of
 //! each gradient ([`AdapterBank::scan`]), so a step costs one download per
-//! gradient, not two. A refusal after the update has begun (the backend
-//! refusing one entry, [`OptimError::Applied`]) has already consumed the
-//! sums: those are not recoverable.
+//! gradient, not two; the check reads only each gradient's magnitude and
+//! finiteness, so a step that asks for no norm does not compute one. The clip
+//! scale is applied to local copies before the bank lets go, so a backend
+//! refusing it ([`StepProvider::adamw_step`] returns the error) also leaves the
+//! sums. A refusal after the update has begun (the backend refusing one entry,
+//! [`OptimError::Applied`]) has already consumed the sums: those are not
+//! recoverable.
 
 use std::collections::BTreeSet;
 use std::ops::Range;
@@ -1298,7 +1302,7 @@ impl<B: Backend> StepProvider for TapeStepProvider<B> {
         // first, if no norm was asked for).
         let known: Vec<GradKnown> = self
             .bank
-            .scan(&self.backend)
+            .scan(&self.backend, false)
             .map_err(bank_err)?
             .iter()
             .map(|s| GradKnown {
@@ -1328,13 +1332,15 @@ impl<B: Backend> StepProvider for TapeStepProvider<B> {
             )
             .map_err(|e: OptimError| StepError::Backend(e.to_string()))?;
         }
-        // Accepted: the update begins, and the bank gives its sums up.
-        self.bank.clear();
+        // `scale_grad` replaces the local handle with a new tensor and writes
+        // nothing the bank holds, so a refusal here leaves the sums in place.
         if scale != 1.0 {
             for g in &mut grads {
                 self.backend.scale_grad(g, scale).map_err(core_err)?;
             }
         }
+        // Accepted and scaled: the update begins, and the bank gives its sums up.
+        self.bank.clear();
         let mut batch = adamw_batch(
             &mut self.leaves,
             &mut self.moments,

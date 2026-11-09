@@ -30,7 +30,11 @@
 //! # What "safe" means, and what it costs
 //!
 //! `Backend` has no finite-check op, so pass 1 reads every gradient to the
-//! host ([`Tensor::to_host`], after one [`Backend::sync`]) and scans it: a
+//! host ([`Tensor::to_host`], after one [`Backend::sync`]) and scans it. (A
+//! caller that already read a gradient passes its [`GradKnown`] summary, and
+//! [`check_all`] then skips that gradient's readback when the summary shows it
+//! safe by the rule below, applied to its largest magnitude times the scale; an
+//! entry the summary does not clear is read as described here.) A
 //! value is safe when `g * g` is a finite f32, i.e. `g` is finite and
 //! `|g| <= `[`GRAD_ABS_LIMIT`] (`2^64 - 2^40`). That is exactly the
 //! condition for the second moment `v' = b2 v + (1 - b2) g^2` and the first
@@ -62,7 +66,7 @@ use ojas_core::{
 /// `sqrt(f32::MAX)`): the largest gradient magnitude pass 1 accepts.
 pub const GRAD_ABS_LIMIT: f32 = 1.844_674_3e19;
 
-/// What a caller already read from a gradient (its largest finite magnitude and
+/// What a caller already read from a gradient (its largest magnitude and
 /// whether it held a NaN or infinity), so [`check_all`] need not read it again.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GradKnown {
