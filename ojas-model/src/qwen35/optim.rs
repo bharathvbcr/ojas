@@ -17,10 +17,24 @@
 //! **Pass 2** calls [`ojas_core::BackendModule::adamw_step`] on each entry in order, then
 //! [`ojas_core::BackendCore::sync`] so a deferring backend's fault surfaces here.
 //!
+//! The passes are public separately: [`check_all`] is pass 1 and [`apply_all`]
+//! is pass 2, and [`adamw_all_or_nothing`] is the two in a row. A caller that
+//! owns the gradients somewhere a refusal must not lose them (the step
+//! provider's bank) runs [`check_all`] while they are still there and
+//! [`apply_all`] only after it has let go of them. `check_all` is the one place
+//! the refusal rule lives. It also takes the gradient's already-scanned
+//! summary ([`GradKnown`]) and scale: a gradient the caller has read once for
+//! its norm is not read again, and a `grad_scale` the caller will apply is
+//! judged on the scaled values, as if it had been applied.
+//!
 //! # What "safe" means, and what it costs
 //!
 //! `Backend` has no finite-check op, so pass 1 reads every gradient to the
-//! host ([`Tensor::to_host`], after one [`ojas_core::BackendCore::sync`]) and scans it: a
+//! host ([`Tensor::to_host`], after one [`ojas_core::BackendCore::sync`]) and scans it. (A
+//! caller that already read a gradient passes its [`GradKnown`] summary, and
+//! [`check_all`] then skips that gradient's readback when the summary shows it
+//! safe by the rule below, applied to its largest magnitude times the scale; an
+//! entry the summary does not clear is read as described here.) A
 //! value is safe when `g * g` is a finite f32, i.e. `g` is finite and
 //! `|g| <= `[`GRAD_ABS_LIMIT`] (`2^64 - 2^40`). That is exactly the
 //! condition for the second moment `v' = b2 v + (1 - b2) g^2` and the first
@@ -51,6 +65,14 @@ use ojas_core::{
 /// The largest f32 whose square is a finite f32 (`2^64 - 2^40`, just under
 /// `sqrt(f32::MAX)`): the largest gradient magnitude pass 1 accepts.
 pub const GRAD_ABS_LIMIT: f32 = 1.844_674_3e19;
+
+/// What a caller already read from a gradient (its largest magnitude and
+/// whether it held a NaN or infinity), so [`check_all`] need not read it again.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GradKnown {
+    pub max_abs: f32,
+    pub non_finite: bool,
+}
 
 /// One tensor's step: its parameter, gradient, both moments and the config
 /// (already carrying this entry's learning rate and weight decay).
@@ -150,10 +172,58 @@ pub fn adamw_all_or_nothing<B: Backend + ?Sized>(
     step: u64,
     budget: &Budget,
 ) -> Result<(), OptimError> {
+    check_all(backend, entries, step, budget, 1.0, None)?;
+    apply_all(backend, entries, step)
+}
+
+/// Pass 1 alone: refuse the batch, or accept it, writing nothing.
+///
+/// `grad_scale` is a factor the caller will multiply every gradient by before
+/// [`apply_all`]; the gradients are judged as `g * grad_scale` (f32, the
+/// product the backend's `scale_grad` forms), not as stored, so a scale that
+/// pushes a finite gradient over the limit is refused here, before the caller
+/// has scaled anything. `known`, when given, holds one [`GradKnown`] per entry
+/// and spares the gradient's readback whenever it already shows the scaled
+/// gradient safe; an entry it does not clear is read (and the first bad value
+/// located) as usual, so the error is the same either way.
+pub fn check_all<B: Backend + ?Sized>(
+    backend: &B,
+    entries: &mut [AdamWEntry<'_>],
+    step: u64,
+    budget: &Budget,
+    grad_scale: f32,
+    known: Option<&[GradKnown]>,
+) -> Result<(), OptimError> {
+    if let Some(k) = known {
+        if k.len() != entries.len() {
+            return Err(OptimError::Refused {
+                entry: 0,
+                name: String::new(),
+                source: OjasError::OutOfRange {
+                    op: "check_all",
+                    detail: format!(
+                        "{} gradient summaries for {} entries",
+                        k.len(),
+                        entries.len()
+                    ),
+                },
+            });
+        }
+    }
     backend.sync().map_err(OptimError::Sync)?;
     for (i, e) in entries.iter_mut().enumerate() {
-        check_entry(i, e, step, budget)?;
+        check_entry(i, e, step, budget, grad_scale, known.map(|k| k[i]))?;
     }
+    Ok(())
+}
+
+/// Pass 2 alone: step every entry in order, then synchronise. Call it only on
+/// a batch [`check_all`] accepted.
+pub fn apply_all<B: Backend + ?Sized>(
+    backend: &B,
+    entries: &mut [AdamWEntry<'_>],
+    step: u64,
+) -> Result<(), OptimError> {
     for (i, e) in entries.iter_mut().enumerate() {
         backend
             .adamw_step(e.param, e.grad, e.moment1, e.moment2, step, e.config)
@@ -192,6 +262,8 @@ fn check_entry(
     e: &mut AdamWEntry<'_>,
     step: u64,
     budget: &Budget,
+    grad_scale: f32,
+    known: Option<GradKnown>,
 ) -> Result<(), OptimError> {
     let name: &str = e.name;
     let refused = |source: OjasError| OptimError::Refused {
@@ -213,9 +285,19 @@ fn check_entry(
     for t in [&mut *e.param, &mut *e.moment1, &mut *e.moment2] {
         updatable(t).map_err(refused)?;
     }
+    if let Some(k) = known {
+        let worst = k.max_abs * grad_scale;
+        if !k.non_finite && (worst * worst).is_finite() {
+            return Ok(());
+        }
+    }
     let host = e.grad.to_host(budget).map_err(refused)?;
     let values = host.f32_slice().map_err(refused)?;
-    match values.iter().position(|g| !(g * g).is_finite()) {
+    let unsafe_at = |g: &f32| {
+        let scaled = g * grad_scale;
+        !(scaled * scaled).is_finite()
+    };
+    match values.iter().position(unsafe_at) {
         None => Ok(()),
         Some(position) => Err(OptimError::NonFiniteGrad {
             entry: i,

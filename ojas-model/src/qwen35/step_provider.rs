@@ -29,7 +29,10 @@
 //! own seed check before its backward. Scale 0 takes the value from
 //! [`ojas_autograd::Tape::linear_cross_entropy_value`] (no node, no `[V, d]`
 //! gradient), and with no outside loss runs no backward at all: the bank gets
-//! zero gradients, so an `Overwrite` still replaces the previous step's sums.
+//! zero markers ([`AdapterBank::accumulate_zero`]: no tensor is allocated, so a
+//! full fine-tune's `[V, d]` embedding gradient is never materialised for a
+//! step that has none), and an `Overwrite` still replaces the previous step's
+//! sums. The update materialises a marker as zeros for its own duration only.
 //!
 //! D17 and the span head are not here. The loop's objective owns them and
 //! checkpoints them itself; this provider's entries are the adapters.
@@ -88,6 +91,30 @@
 //! missing hook means the backend has no such notion, not that the step
 //! skipped it. `freeze` is applied once to each frozen base tensor when the
 //! LoRA provider opens, then the backend is synchronised.
+//!
+//! The pre-flight's dry run measures only what the backend `rebind` returns
+//! charges to the budget it was handed. An allocation made on any other budget
+//! (the original backend's, a hook that ignores its argument) is invisible to
+//! the measured peak, and the pre-flight still passes: the hook is trusted to
+//! rebind, and cannot be checked for it here.
+//!
+//! # The update
+//!
+//! [`StepProvider::adamw_step`] judges the whole batch before the bank gives
+//! anything up: [`crate::qwen35::optim::check_all`] (the one owner of the
+//! refusal rule) runs on the bank's gradients, scaled as the clip scale will
+//! scale them, and only an accepted batch empties the bank and is applied. A
+//! refused update therefore leaves every gradient sum, parameter and moment as
+//! it was and the step count unchanged. The norm
+//! ([`StepProvider::grad_sq_norm`]) and that check share one host readback of
+//! each gradient ([`AdapterBank::scan`]), so a step costs one download per
+//! gradient, not two; the check reads only each gradient's magnitude and
+//! finiteness, so a step that asks for no norm does not compute one. The clip
+//! scale is applied to local copies before the bank lets go, so a backend
+//! refusing it ([`StepProvider::adamw_step`] returns the error) also leaves the
+//! sums. A refusal after the update has begun (the backend refusing one entry,
+//! [`OptimError::Applied`]) has already consumed the sums: those are not
+//! recoverable.
 
 use std::collections::BTreeSet;
 use std::ops::Range;
@@ -110,7 +137,7 @@ use crate::qwen35::adapters::{
     MOMENTS_FILE,
 };
 use crate::qwen35::bank::{AdapterBank, BankEntry, BankError};
-use crate::qwen35::optim::{adamw_all_or_nothing, AdamWEntry, OptimError};
+use crate::qwen35::optim::{apply_all, check_all, AdamWEntry, GradKnown, OptimError};
 use crate::qwen35::{
     bind_frozen, forward_hidden_lora, fuse_grads, hf_tensors, load_hf_pinned, HfKind, LoraForward,
     LoraTarget, Qwen35Lora, Qwen35Mixer, Qwen35Params, Qwen35Spec, Qwen35Tables,
@@ -360,11 +387,33 @@ struct Seq<'a> {
     chunk: CeChunk,
 }
 
+/// One leaf's gradient out of a sequence.
+enum LeafGrad {
+    /// `F32`, placed on the backend.
+    Dense(Tensor),
+    /// All zeros, not allocated ([`AdapterBank::accumulate_zero`]).
+    Zero,
+}
+
+/// Fold one leaf's gradient into `bank`.
+fn fold_grad<K: Backend>(
+    bank: &mut AdapterBank,
+    backend: &K,
+    entry: usize,
+    mode: BankMode,
+    grad: LeafGrad,
+) -> Result<(), BankError> {
+    match grad {
+        LeafGrad::Dense(g) => bank.accumulate(backend, entry, mode, g),
+        LeafGrad::Zero => bank.accumulate_zero(entry, mode),
+    }
+}
+
 struct SeqOut {
     /// The unscaled sum of the row cross-entropies.
     value: f64,
-    /// One gradient per leaf, in leaf order, `F32`, placed on the backend.
-    grads: Vec<Tensor>,
+    /// One gradient per leaf, in leaf order.
+    grads: Vec<LeafGrad>,
 }
 
 fn leaf_at(leaves: &[Tensor], at: usize) -> Result<&Tensor, OjasError> {
@@ -557,20 +606,16 @@ fn run_sequence<K: Backend>(
         leaf_vars
             .iter()
             .map(|v| {
-                tape.take_grad(*v).ok_or_else(|| OjasError::OutOfRange {
-                    op: "TapeStepProvider",
-                    detail: format!("leaf {} has no gradient after the backward", v.0),
-                })
+                tape.take_grad(*v)
+                    .map(LeafGrad::Dense)
+                    .ok_or_else(|| OjasError::OutOfRange {
+                        op: "TapeStepProvider",
+                        detail: format!("leaf {} has no gradient after the backward", v.0),
+                    })
             })
             .collect::<Result<Vec<_>, _>>()?
     } else {
-        seq.leaves
-            .iter()
-            .map(|leaf| {
-                let zeros = Tensor::zeros(leaf.shape(), DType::F32, &budget)?;
-                backend.upload(&zeros)
-            })
-            .collect::<Result<Vec<_>, _>>()?
+        seq.leaves.iter().map(|_| LeafGrad::Zero).collect()
     };
     backend.sync()?;
     drop(tape);
@@ -929,7 +974,7 @@ impl<B: Backend> TapeStepProvider<B> {
         let out =
             run_sequence(&self.backend, &self.seq(), job, external).map_err(Fail::into_step)?;
         for (i, grad) in out.grads.into_iter().enumerate() {
-            if let Err(e) = self.bank.accumulate(&self.backend, i, mode, grad) {
+            if let Err(e) = fold_grad(&mut self.bank, &self.backend, i, mode, grad) {
                 // A half-written bank must not look complete.
                 self.bank.clear();
                 return Err(bank_err(e));
@@ -1042,7 +1087,7 @@ impl<B: Backend> TapeStepProvider<B> {
             .map(|e| {
                 let mut parts = Vec::new();
                 for i in e.leaves.clone() {
-                    parts.push(self.host(&self.bank.grad(i).map_err(bank_err)?)?);
+                    parts.push(self.host(&self.bank.grad_on(&self.backend, i).map_err(bank_err)?)?);
                 }
                 Ok(self.fuse(e.role, parts))
             })
@@ -1063,7 +1108,11 @@ impl<B: Backend> TapeStepProvider<B> {
     /// one hidden position, with a zero outside gradient, so it exercises
     /// every part of a step but allocates what the widest sequence does.
     /// Without a rebind hook the dry run could measure nothing, so the
-    /// pre-flight refuses rather than pass unmeasured.
+    /// pre-flight refuses rather than pass unmeasured. The dry run sees only
+    /// what the rebound backend charges to the budget the hook is handed
+    /// ([`preflight::dry_run`]): an allocation made through the original
+    /// backend, or by a hook that ignores its budget, is invisible to the
+    /// measured peak and the pre-flight still passes.
     pub fn preflight(
         &mut self,
         calibration: &Calibration,
@@ -1130,7 +1179,7 @@ impl<B: Backend> TapeStepProvider<B> {
                 let mut bank =
                     AdapterBank::new(self.bank.entries().to_vec()).map_err(bank_to_ojas)?;
                 for (i, g) in out.grads.into_iter().enumerate() {
-                    bank.accumulate(&scratch, i, BankMode::Overwrite, g)
+                    fold_grad(&mut bank, &scratch, i, BankMode::Overwrite, g)
                         .map_err(bank_to_ojas)?;
                 }
                 Ok(out.value)
@@ -1140,6 +1189,43 @@ impl<B: Backend> TapeStepProvider<B> {
         self.preflighted = true;
         Ok(plan)
     }
+}
+
+/// One AdamW entry per leaf, each with its entry's learning rate and weight
+/// decay. Takes the provider's fields separately so the caller can keep
+/// borrowing its backend.
+#[allow(clippy::too_many_arguments)]
+fn adamw_batch<'a>(
+    leaves: &'a mut [Tensor],
+    moments: &'a mut [(Tensor, Tensor)],
+    grads: &'a [Tensor],
+    names: &'a [String],
+    leaf_entry: &'a [usize],
+    hyper: &AdamWHyper,
+    lr_scale: &[f64],
+    weight_decay: &[f64],
+) -> Vec<AdamWEntry<'a>> {
+    leaves
+        .iter_mut()
+        .zip(moments.iter_mut())
+        .zip(grads)
+        .zip(names)
+        .zip(leaf_entry)
+        .map(|((((param, (m1, m2)), grad), name), &entry)| AdamWEntry {
+            name: name.as_str(),
+            param,
+            grad,
+            moment1: m1,
+            moment2: m2,
+            config: AdamWConfig {
+                lr: hyper.lr * lr_scale[entry],
+                beta1: hyper.beta1,
+                beta2: hyper.beta2,
+                eps: hyper.eps,
+                weight_decay: weight_decay[entry],
+            },
+        })
+        .collect()
 }
 
 fn load_base<B: Backend>(backend: &B, cfg: &OpenConfig) -> Result<Qwen35Params<Tensor>, StepError> {
@@ -1186,7 +1272,7 @@ impl<B: Backend> StepProvider for TapeStepProvider<B> {
     }
 
     fn grad_sq_norm(&mut self) -> Result<f64, StepError> {
-        self.bank.sq_norm(&self.backend).map_err(bank_err)
+        self.bank.sq_norm_scanned(&self.backend).map_err(bank_err)
     }
 
     fn supports_lr_scale(&self) -> bool {
@@ -1209,37 +1295,63 @@ impl<B: Backend> StepProvider for TapeStepProvider<B> {
                 self.step + 1
             )));
         }
-        let mut grads = self.bank.take_grads().map_err(bank_err)?;
-        if hyper.grad_scale != 1.0 {
-            for g in &mut grads {
-                self.backend
-                    .scale_grad(g, hyper.grad_scale as f32)
-                    .map_err(core_err)?;
-            }
-        }
-        let mut batch: Vec<AdamWEntry<'_>> = self
-            .leaves
-            .iter_mut()
-            .zip(self.moments.iter_mut())
-            .zip(grads.iter())
-            .zip(&self.leaf_names)
-            .zip(&self.leaf_entry)
-            .map(|((((param, (m1, m2)), grad), name), &entry)| AdamWEntry {
-                name: name.as_str(),
-                param,
-                grad,
-                moment1: m1,
-                moment2: m2,
-                config: AdamWConfig {
-                    lr: hyper.lr * lr_scale[entry],
-                    beta1: hyper.beta1,
-                    beta2: hyper.beta2,
-                    eps: hyper.eps,
-                    weight_decay: weight_decay[entry],
-                },
+        let scale = hyper.grad_scale as f32;
+        // Everything that can refuse runs while the bank still holds the sums:
+        // the finiteness and shape rule is `check_all`, on the gradients as the
+        // clip scale will leave them, and the readback is the norm's (or the
+        // first, if no norm was asked for).
+        let known: Vec<GradKnown> = self
+            .bank
+            .scan(&self.backend, false)
+            .map_err(bank_err)?
+            .iter()
+            .map(|s| GradKnown {
+                max_abs: s.max_abs,
+                non_finite: s.non_finite,
             })
             .collect();
-        adamw_all_or_nothing(&self.backend, &mut batch, self.step, self.backend.budget())
+        let mut grads = self.bank.grads_on(&self.backend).map_err(bank_err)?;
+        {
+            let mut batch = adamw_batch(
+                &mut self.leaves,
+                &mut self.moments,
+                &grads,
+                &self.leaf_names,
+                &self.leaf_entry,
+                hyper,
+                lr_scale,
+                weight_decay,
+            );
+            check_all(
+                &self.backend,
+                &mut batch,
+                self.step,
+                self.backend.budget(),
+                scale,
+                Some(&known),
+            )
+            .map_err(|e: OptimError| StepError::Backend(e.to_string()))?;
+        }
+        // `scale_grad` replaces the local handle with a new tensor and writes
+        // nothing the bank holds, so a refusal here leaves the sums in place.
+        if scale != 1.0 {
+            for g in &mut grads {
+                self.backend.scale_grad(g, scale).map_err(core_err)?;
+            }
+        }
+        // Accepted and scaled: the update begins, and the bank gives its sums up.
+        self.bank.clear();
+        let mut batch = adamw_batch(
+            &mut self.leaves,
+            &mut self.moments,
+            &grads,
+            &self.leaf_names,
+            &self.leaf_entry,
+            hyper,
+            lr_scale,
+            weight_decay,
+        );
+        apply_all(&self.backend, &mut batch, self.step)
             .map_err(|e: OptimError| StepError::Backend(e.to_string()))?;
         self.step += 1;
         Ok(())
