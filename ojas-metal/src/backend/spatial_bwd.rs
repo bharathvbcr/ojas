@@ -18,8 +18,9 @@ use ojas_core::{
 };
 
 use super::{
-    conv_geom, copied_elems, metal_err, plus, product, refuse_unsupported_conv2d,
-    refuse_unsupported_conv_transpose2d, u32_dim, Cmd, ConvGeom, MetalBackend, ReadAs, Res,
+    conv2d_fits, conv_geom, conv_transpose2d_fits, copied_elems, metal_err, plus, product,
+    refuse_unsupported_conv2d, refuse_unsupported_conv_transpose2d, u32_dim, Cmd, ConvGemm,
+    ConvGeom, MetalBackend, ReadAs, Res,
 };
 
 /// The forward's geometry of a transposed convolution (`conv_transpose2d_forward`
@@ -58,6 +59,12 @@ impl MetalBackend {
         const OP: &str = "conv2d_backward";
         let dims = conv2d_backward_dims(input, weight, bias, grad_output, params)?;
         refuse_unsupported_conv2d(OP, &dims)?;
+        if dims.params.groups == 1 {
+            // The backward GEMMs see the im2col matrix, the weight and the
+            // output gradient as `[rows, c kh kw]`, `[o, c kh kw]` and
+            // `[rows, o]`.
+            conv2d_fits(OP, &dims, ConvGemm::Im2col)?;
+        }
         let (input, weight) = (self.widened(input)?, self.widened(weight)?);
         let grad_output = self.widened(grad_output)?;
         let bias = bias.map(|b| self.widened(b)).transpose()?;
@@ -122,6 +129,7 @@ impl MetalBackend {
         const OP: &str = "conv_transpose2d_backward";
         let dims = conv_transpose2d_backward_dims(input, weight, bias, grad_output, params)?;
         refuse_unsupported_conv_transpose2d(OP, &dims)?;
+        conv_transpose2d_fits(OP, &dims)?;
         let (input, weight) = (self.widened(input)?, self.widened(weight)?);
         let grad_output = self.widened(grad_output)?;
         let bias = bias.map(|b| self.widened(b)).transpose()?;

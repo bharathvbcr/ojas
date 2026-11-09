@@ -131,10 +131,10 @@ use ojas_core::{
 use crate::layout::{CONV1D_BWD_ROWS, CONV1D_WIDTHS, GATED_RMS_BWD_MAX_DIM, GATED_RMS_BWD_ROWS};
 use crate::link::Conv2dTensorOps;
 use crate::link::{
-    cached_attn_origin, cached_attn_part, check_mem_cap, check_overlap_dispatches, metal_err,
-    norm_chunks, rms_w_chunks, Arg, AttnExtra, AttnGeom, BilinearGeom, Cmd, Conv1dGeom, ConvGeom,
-    EmbedRows, EncAttnGeom, GdnArgs, GroupNormGeom, Lane, LceGeom, Link, ReadAs, Reply, Res,
-    RmsSide, RopeMode, SdpaGeom, WaitCounts, Waits, SQ_OUT_WORDS,
+    cached_attn_origin, cached_attn_part, check_mem_cap, check_overlap_dispatches, copied_at,
+    metal_err, norm_chunks, rms_w_chunks, Arg, AttnExtra, AttnGeom, BilinearGeom, Cmd, Conv1dGeom,
+    ConvGeom, EmbedRows, EncAttnGeom, GdnArgs, GroupNormGeom, Lane, LceGeom, Link, ReadAs, Reply,
+    Res, RmsSide, RopeMode, SdpaGeom, WaitCounts, Waits, SQ_OUT_WORDS,
 };
 use crate::permute;
 
@@ -582,12 +582,41 @@ impl MetalBackend {
         const OP: &str = "conv2d_forward";
         let dims = conv2d_forward_dims(input, weight, bias, params)?;
         refuse_unsupported_conv2d(OP, &dims)?;
+        let geom = conv_geom(OP, &dims)?;
+        // One read of the mode: the route and its charge must agree.
+        let mode = self.conv2d_tensorops();
+        let tops_elems = if dims.params.groups > 1 {
+            None
+        } else {
+            crate::device::conv2d_tops_scratch_elems(mode, &geom)?
+        };
+        // The route is fixed by the shapes and by where the input window
+        // starts: a `Bf16` input is widened into a new buffer at offset 0, any
+        // other keeps its own offset. So the GEMM's i32 extents are bounded
+        // for the route the call will take, before anything is widened,
+        // reserved or dispatched; the check after widening only confirms it.
+        let x_off = if input.dtype() == DType::Bf16 {
+            0
+        } else {
+            input.byte_offset()
+        };
+        let pointwise = allow_pointwise && pointwise_conv(&dims, x_off);
+        let tops_scratch = if pointwise { None } else { tops_elems };
+        if dims.params.groups == 1 {
+            let route = if pointwise {
+                ConvGemm::Pointwise
+            } else if tops_scratch.is_some() {
+                ConvGemm::Tops
+            } else {
+                ConvGemm::Im2col
+            };
+            conv2d_fits(OP, &dims, route)?;
+        }
         let lane = self.lane_of(input, weight);
         let (input, weight) = (self.widened(input)?, self.widened(weight)?);
         let bias = bias.map(|b| self.widened(b)).transpose()?;
         let (x, w) = (self.f32(OP, &input)?, self.f32(OP, &weight)?);
         let bias_arg = bias.as_ref().map(|b| self.f32(OP, b)).transpose()?;
-        let geom = conv_geom(OP, &dims)?;
         if dims.params.groups > 1 {
             // Depthwise: one direct kernel, no im2col matrix and no scratch.
             u32_dim(OP, product(OP, &dims.out_shape())?)?;
@@ -600,14 +629,11 @@ impl MetalBackend {
             };
             return self.one(OP, &dims.out_shape(), 0, cmd);
         }
-        let pointwise = allow_pointwise && pointwise_conv(&dims, x);
-        // One read of the mode: the route and its charge must agree.
-        let mode = self.conv2d_tensorops();
-        let tops_scratch = if pointwise {
-            None
-        } else {
-            crate::device::conv2d_tops_scratch_elems(mode, &geom)?
-        };
+        if (allow_pointwise && pointwise_conv(&dims, x.off)) != pointwise {
+            return Err(metal_err(format!(
+                "{OP}: the operand's window moved after the route was bounded"
+            )));
+        }
         let scratch = if let Some(elems) = tops_scratch {
             // tessl's padded NHWC input copy and HWIO weights, in f16 or f32:
             // no im2col matrix and no product.
@@ -1716,6 +1742,122 @@ fn row_major_strides(shape: &[usize]) -> Vec<usize> {
     strides
 }
 
+/// tessl refuses a GEMM operand or output of more than `i32::MAX` elements
+/// (`require_i32_extent`, `../tessl/src/gemm.rs`), but only on the device
+/// thread, after the output was reserved and allocated. This is the same
+/// bound on the host: `what` holding `elems` elements past it is
+/// [`OjasError::Unsupported`], raised before any reservation, allocation or
+/// dispatch. `elems` is wide so a product of two `usize` dims cannot wrap.
+///
+/// The bound is the same for every numerics mode, though the bf16-accumulation
+/// kernel's own limit is wider (u32 indexing): a call must not succeed on one
+/// lane and be refused on another, so that lane is held to tessl's.
+pub(crate) fn require_i32_elems(op: &'static str, what: &str, elems: u128) -> Res<()> {
+    if elems > i32::MAX as u128 {
+        return Err(OjasError::Unsupported {
+            op,
+            detail: format!(
+                "{what} holds {elems} elements, past the i32 indexing limit {}",
+                i32::MAX
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// [`require_i32_elems`] for the three matrices of an `[rows, k] x [n, k]^T`
+/// GEMM family (linear forward and backward, the per-head gate): the
+/// `[rows, k]` input, the `[n, k]` weight and the `[rows, n]` output or
+/// output gradient. Each is bounded on its own element count, as tessl
+/// does, so a leading dimension wider than `k` is not counted twice.
+fn gemm_operands_fit(op: &'static str, rows: usize, k: usize, n: usize) -> Res<()> {
+    let elems = |a: usize, b: usize| a as u128 * b as u128;
+    require_i32_elems(op, "the input", elems(rows, k))?;
+    require_i32_elems(op, "the weight", elems(n, k))?;
+    require_i32_elems(op, "the output", elems(rows, n))
+}
+
+/// The matrices a convolution's GEMMs, or tessl's TensorOps convolution,
+/// index with i32 extents, by the route the call takes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ConvGemm {
+    /// `W [o, c] @ X_n [c, pixels]` once per image: per-image matrices.
+    Pointwise,
+    /// tessl's `conv2d_nchw`, which refuses (`int_scratch`,
+    /// `../tessl/src/conv.rs`) a convolution whose input, output or weights
+    /// hold more than `i32::MAX` elements. Its padded NHWC copy is also
+    /// bounded there, but that size is private to tessl, so it is the one
+    /// size the host cannot see; it is no smaller than the input, which is
+    /// bounded.
+    Tops,
+    /// `im2col [rows, c kh kw] @ W^T [c kh kw, o]`.
+    Im2col,
+}
+
+/// Whether `d`'s shape alone allows the pointwise route: a 1 x 1, stride 1,
+/// unpadded, ungrouped convolution.
+fn pointwise_shape(d: &Conv2dDims) -> bool {
+    let p = d.params;
+    d.kernel == [1, 1] && p.stride == [1, 1] && p.padding == [0, 0] && p.groups == 1
+}
+
+/// The product of `dims`, saturating, wide enough that no `usize` product
+/// wraps.
+fn wide(dims: &[usize]) -> u128 {
+    dims.iter()
+        .fold(1u128, |acc, &d| acc.saturating_mul(d as u128))
+}
+
+/// [`require_i32_elems`] for every matrix a one-group convolution of `d`
+/// hands to a GEMM on `route`.
+fn conv2d_fits(op: &'static str, d: &Conv2dDims, route: ConvGemm) -> Res<()> {
+    let [kh, kw] = d.kernel;
+    match route {
+        ConvGemm::Pointwise => {
+            let px = wide(&[d.out_height, d.out_width]);
+            require_i32_elems(op, "the weight", wide(&[d.out_channels, d.in_channels]))?;
+            require_i32_elems(op, "an image", wide(&[d.in_channels]) * px)?;
+            require_i32_elems(op, "an output image", wide(&[d.out_channels]) * px)
+        }
+        ConvGemm::Tops => {
+            require_i32_elems(
+                op,
+                "the input",
+                wide(&[d.batch, d.in_channels, d.height, d.width]),
+            )?;
+            require_i32_elems(
+                op,
+                "the output",
+                wide(&[d.batch, d.out_channels, d.out_height, d.out_width]),
+            )?;
+            require_i32_elems(
+                op,
+                "the weight",
+                wide(&[d.out_channels, d.in_channels, kh, kw]),
+            )
+        }
+        ConvGemm::Im2col => {
+            let rows = wide(&[d.batch, d.out_height, d.out_width]);
+            let width = wide(&[d.in_channels, kh, kw]);
+            require_i32_elems(op, "the im2col matrix", rows * width)?;
+            require_i32_elems(op, "the weight", wide(&[d.out_channels]) * width)?;
+            require_i32_elems(op, "the product", rows * wide(&[d.out_channels]))
+        }
+    }
+}
+
+/// [`require_i32_elems`] for the three matrices of a transposed
+/// convolution's GEMM (forward and backward alike): the `[rows, c]` input
+/// pixels, the `[c, o kh kw]` weight and the `[rows, o kh kw]` columns.
+pub(crate) fn conv_transpose2d_fits(op: &'static str, d: &ConvTranspose2dDims) -> Res<()> {
+    let rows = wide(&[d.batch, d.height, d.width]);
+    let okk = wide(&[d.out_channels, d.kernel[0], d.kernel[1]]);
+    let c = wide(&[d.in_channels]);
+    require_i32_elems(op, "the input pixels", rows * c)?;
+    require_i32_elems(op, "the weight", c * okk)?;
+    require_i32_elems(op, "the column matrix", rows * okk)
+}
+
 fn u32_dim(op: &'static str, n: usize) -> Res<u32> {
     u32::try_from(n).map_err(|_| OjasError::Unsupported {
         op,
@@ -1766,12 +1908,11 @@ fn refuse_unsupported_conv2d(op: &'static str, d: &Conv2dDims) -> Res<()> {
 /// not here) and, past one image, so must every image after the first (`c`
 /// times the pixels, and `o` times them for the output, a multiple of 4).
 /// Anything else takes im2col, which reads any window.
-fn pointwise_conv(d: &Conv2dDims, x: Arg) -> bool {
-    let p = d.params;
-    if d.kernel != [1, 1] || p.stride != [1, 1] || p.padding != [0, 0] || p.groups != 1 {
+fn pointwise_conv(d: &Conv2dDims, x_off: usize) -> bool {
+    if !pointwise_shape(d) {
         return false;
     }
-    if x.copied(ReadAs::Matrix) {
+    if copied_at(x_off, ReadAs::Matrix) {
         return false;
     }
     let pixels = d.out_height.checked_mul(d.out_width);
@@ -2160,6 +2301,7 @@ impl MetalBackend {
     ) -> Res<(Tensor, Option<Tensor>)> {
         const OP: &str = "per_head_sigmoid_gate_forward";
         let dims = per_head_sigmoid_gate_forward_dims(input, weight, bias, attn_out)?;
+        gemm_operands_fit(OP, dims.rows, dims.d_model, dims.heads)?;
         let (x, w, b, a) = (
             self.f32(OP, input)?,
             self.f32(OP, weight)?,
@@ -2201,6 +2343,7 @@ impl MetalBackend {
     ) -> Res<PerHeadGateGrad> {
         const OP: &str = "per_head_sigmoid_gate_backward";
         let dims = per_head_sigmoid_gate_backward_dims(input, weight, bias, attn_out, grad_output)?;
+        gemm_operands_fit(OP, dims.rows, dims.d_model, dims.heads)?;
         if let Some(s) = scales {
             if s.shape() != [dims.rows, dims.heads] {
                 return Err(shape(
@@ -3056,6 +3199,7 @@ impl BackendModule for MetalBackend {
     fn linear_forward(&self, input: &Tensor, weight: &Tensor) -> Result<Tensor, OjasError> {
         const OP: &str = "linear_forward";
         let dims = linear_forward_dims(input, weight)?;
+        gemm_operands_fit(OP, dims.rows, dims.in_features, dims.out_features)?;
         let lane = self.lane_of(input, weight);
         let (input, weight) = (self.widened(input)?, self.widened(weight)?);
         let x = self.f32(OP, &input)?;
@@ -3089,6 +3233,7 @@ impl BackendModule for MetalBackend {
     ) -> Result<(Tensor, Tensor), OjasError> {
         const OP: &str = "linear_backward";
         let dims = linear_backward_dims(input, weight, grad_output)?;
+        gemm_operands_fit(OP, dims.rows, dims.in_features, dims.out_features)?;
         let gx_lane = self.lane_of(grad_output, weight);
         let gw_lane = self.lane_of(grad_output, input);
         let input = self.widened(input)?;
@@ -3135,6 +3280,7 @@ impl BackendModule for MetalBackend {
     ) -> Result<Tensor, OjasError> {
         const OP: &str = "linear_backward_input";
         let dims = linear_backward_dims(input, weight, grad_output)?;
+        gemm_operands_fit(OP, dims.rows, dims.in_features, dims.out_features)?;
         let lane = self.lane_of(grad_output, weight);
         let input = self.widened(input)?;
         let weight = self.widened(weight)?;
@@ -3769,6 +3915,7 @@ impl BackendModule for MetalBackend {
         const OP: &str = "conv_transpose2d_forward";
         let dims = conv_transpose2d_forward_dims(input, weight, bias, params)?;
         refuse_unsupported_conv_transpose2d(OP, &dims)?;
+        conv_transpose2d_fits(OP, &dims)?;
         let (input, weight) = (self.widened(input)?, self.widened(weight)?);
         let bias = bias.map(|b| self.widened(b)).transpose()?;
         let (x, w) = (self.f32(OP, &input)?, self.f32(OP, &weight)?);
@@ -4087,6 +4234,7 @@ impl BackendModule for MetalBackend {
     ) -> Result<Tensor, OjasError> {
         const OP: &str = "linear_bias_forward";
         let dims = linear_bias_forward_dims(input, weight, bias)?;
+        gemm_operands_fit(OP, dims.rows, dims.in_features, dims.out_features)?;
         let lane = self.lane_of(input, weight);
         if (lane != Lane::Bf16 || self.link.has_tensorops()) && bias.shape() == [dims.out_features]
         {
@@ -4174,6 +4322,7 @@ impl BackendModule for MetalBackend {
     ) -> Result<LinearCe, OjasError> {
         const OP: &str = "linear_cross_entropy_mean";
         let dims = linear_ce_dims(input, weight, targets, chunk)?;
+        let (rt, ct) = LceGeom::tiles(OP, dims.rows, dims.model_dim, dims.vocab, chunk)?;
         let x = self.f32(OP, input)?;
         let w_half = weight.dtype() == DType::Bf16;
         let w = self.arg(OP, weight, weight.dtype())?;
@@ -4185,8 +4334,8 @@ impl BackendModule for MetalBackend {
             dims.rows,
             dims.model_dim,
             dims.vocab,
-            chunk.rows,
-            chunk.cols,
+            rt,
+            ct,
             x.off,
             w.off,
             grads,
@@ -4351,6 +4500,7 @@ impl BackendModule for MetalBackend {
     ) -> Result<(), OjasError> {
         const OP: &str = "muon_ns5_step";
         let dims = muon_ns5_step_dims(param, grad, momentum)?;
+        require_i32_elems(OP, "the parameter", dims.rows as u128 * dims.cols as u128)?;
         let (p, g, m) = (
             self.f32(OP, param)?,
             self.f32(OP, grad)?,
@@ -5233,6 +5383,134 @@ mod tests {
         assert!(
             (1..=3).contains(&grew),
             "192 MiB allocated above the threshold waited {grew} times (one per 64 MiB expected)"
+        );
+        assert_eq!(pending(&m), None);
+        drop(kept);
+    }
+
+    #[test]
+    fn gemm_bound_is_tessls_i32_element_count_per_matrix() {
+        const OP: &str = "linear_forward";
+        let max = i32::MAX as usize;
+        // Exactly i32::MAX elements in any one matrix is accepted.
+        assert!(gemm_operands_fit(OP, 1, max, 1).is_ok());
+        assert!(gemm_operands_fit(OP, max, 1, 1).is_ok());
+        assert!(gemm_operands_fit(OP, 1, 1, max).is_ok());
+        // One past it, in each of the input, weight and output, is refused.
+        for (rows, k, n, which) in [
+            (1usize, max + 1, 1usize, "input"),
+            (max + 1, 1, 1, "input"),
+            (1, 1, max + 1, "weight"),
+            (2, 1, max / 2 + 1, "output"),
+            (65537, 1, 32768, "output"),
+        ] {
+            match gemm_operands_fit(OP, rows, k, n) {
+                Err(OjasError::Unsupported { op: OP, detail }) => {
+                    assert!(detail.contains("i32"), "{detail}");
+                    assert!(detail.contains(which), "{which}: {detail}");
+                }
+                other => panic!("{rows} {k} {n}: {other:?}"),
+            }
+        }
+        // Products that wrap u32 and usize are refused, not wrapped.
+        assert!(gemm_operands_fit(OP, 1 << 17, 1 << 17, 1).is_err());
+        assert!(gemm_operands_fit(OP, usize::MAX, usize::MAX, usize::MAX).is_err());
+        // Zero-sized dims stay in bound (the empty-shape refusal is elsewhere).
+        assert!(gemm_operands_fit(OP, 0, usize::MAX, 0).is_ok());
+        require_i32_elems("muon_ns5_step", "the parameter", i32::MAX as u128).expect("max");
+        assert!(matches!(
+            require_i32_elems("muon_ns5_step", "the parameter", i32::MAX as u128 + 1),
+            Err(OjasError::Unsupported { .. })
+        ));
+    }
+
+    #[test]
+    fn conv_bounds_follow_the_route_and_tessls_per_matrix_count() {
+        use ojas_core::Conv2dParams;
+        let dims = |batch, c, h, w, o, k: usize| Conv2dDims {
+            batch,
+            in_channels: c,
+            height: h,
+            width: w,
+            out_channels: o,
+            kernel: [k, k],
+            params: Conv2dParams::new(),
+            out_height: h + 1 - k,
+            out_width: w + 1 - k,
+        };
+        const OP: &str = "conv2d_forward";
+        // Pointwise is per image: a batch of 4 whose whole output is past i32
+        // still runs, one image of it does not.
+        let big_batch = dims(4, 1, 256, 256, 8192, 1);
+        assert!(conv2d_fits(OP, &big_batch, ConvGemm::Pointwise).is_ok());
+        assert!(conv2d_fits(OP, &big_batch, ConvGemm::Im2col).is_err());
+        assert!(conv2d_fits(OP, &big_batch, ConvGemm::Tops).is_err());
+        let image = dims(1, 1, 256, 256, 32768, 1);
+        for route in [ConvGemm::Pointwise, ConvGemm::Im2col, ConvGemm::Tops] {
+            assert!(
+                matches!(
+                    conv2d_fits(OP, &image, route),
+                    Err(OjasError::Unsupported { .. })
+                ),
+                "{route:?}"
+            );
+        }
+        // Exactly i32::MAX elements in the im2col matrix is accepted.
+        let edge = dims(1, 1, 2, 2, 1, 1);
+        assert!(conv2d_fits(OP, &edge, ConvGemm::Im2col).is_ok());
+    }
+
+    #[test]
+    fn linear_ce_tiles_keep_every_matrix_within_i32() {
+        const OP: &str = "linear_cross_entropy_mean";
+        let limit = i32::MAX as usize;
+        let chunk = |rows, cols| CeChunk { rows, cols };
+        // A small call is tiled as asked.
+        assert_eq!(
+            LceGeom::tiles(OP, 100, 64, 1000, chunk(8, 16)).expect("tiles"),
+            (8, 16)
+        );
+        // A wide model dim shrinks both tiles: [rt, d] and [ct, d] fit.
+        for (n, d, v) in [(1 << 20, 1 << 20, 1 << 20), (1 << 22, 1 << 14, 1 << 22)] {
+            let (rt, ct) = LceGeom::tiles(OP, n, d, v, chunk(1 << 20, 1 << 20)).expect("tiles");
+            assert!(rt >= 1 && ct >= 1);
+            for (what, a, b) in [("x", rt, d), ("w", ct, d), ("logits", rt, ct)] {
+                assert!(a as u128 * b as u128 <= limit as u128, "{what} {rt} {ct}");
+            }
+        }
+        // One row exactly at the limit still tiles; one past does not.
+        assert_eq!(
+            LceGeom::tiles(OP, 8, limit, 8, chunk(8, 8)).expect("tiles"),
+            (1, 1)
+        );
+        assert!(matches!(
+            LceGeom::tiles(OP, 8, limit + 1, 8, chunk(8, 8)),
+            Err(OjasError::Unsupported { .. })
+        ));
+    }
+
+    /// A backend whose device reports no working set (tessl's `0`) has no
+    /// threshold to be over: growing past `WS_GROWTH` must never settle for
+    /// the working set.
+    #[test]
+    fn an_unreported_working_set_never_triggers_a_working_set_wait() {
+        let m = MetalBackend::new(Budget::new(4 << 30)).expect("Metal device");
+        let one = put(&m, &[0.5], &[1]);
+        m.sync().expect("settle");
+        m.set_mem_cap(4 << 30).expect("memory cap at the budget");
+        tune(&m, None, Some(0), (0, 0));
+        let before = m.wait_counts().working_set;
+        let big = put(&m, &vec![0.5; 8 << 20], &[8 << 20]);
+        let kept: Vec<Tensor> = (0..12)
+            .map(|_| m.silu_forward(&big).expect("big op"))
+            .collect();
+        for _ in 0..200 {
+            drop(m.silu_forward(&one).expect("tiny op"));
+        }
+        assert_eq!(
+            m.wait_counts().working_set - before,
+            0,
+            "a working-set wait with no reported working set"
         );
         assert_eq!(pending(&m), None);
         drop(kept);
@@ -6294,5 +6572,38 @@ mod tests {
             .is_none(),
             "head dim 64 stays scalar"
         );
+    }
+
+    /// adversarial 757madv: a tiny reported figure is a real (zero) limit.
+    #[test]
+    fn adv_ws_tiny_figure_waits_zero_figure_does_not_huge_figure_does_not() {
+        let m = MetalBackend::new(Budget::new(4 << 30)).expect("Metal device");
+        let one = put(&m, &[0.5], &[1]);
+        m.sync().expect("settle");
+        m.set_mem_cap(4 << 30).expect("cap");
+        let big = put(&m, &vec![0.5; 8 << 20], &[8 << 20]);
+        let mut seen = Vec::new();
+        for (label, fig) in [
+            ("1", Some(1u64)),
+            ("0", Some(0)),
+            ("max", Some(u64::MAX)),
+            ("3", Some(3)),
+            ("4", Some(4)),
+        ] {
+            tune(&m, None, fig, (0, 0));
+            let before = m.wait_counts().working_set;
+            let kept: Vec<Tensor> = (0..12)
+                .map(|_| m.silu_forward(&big).expect("big"))
+                .collect();
+            for _ in 0..200 {
+                drop(m.silu_forward(&one).expect("tiny"));
+            }
+            let d = m.wait_counts().working_set - before;
+            eprintln!("ADV ws figure {label}: working_set waits {d}");
+            seen.push((label, d));
+            drop(kept);
+            m.sync().expect("sync");
+        }
+        eprintln!("ADV ws summary {seen:?}");
     }
 }

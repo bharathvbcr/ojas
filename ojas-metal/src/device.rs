@@ -174,6 +174,18 @@ fn gate_dbias_threads(n_head: usize) -> Res<usize> {
 const WS_NUM: u64 = 3;
 const WS_DEN: u64 = 4;
 const WS_GROWTH: u64 = 64 << 20;
+
+/// The device bytes past which commands settle for the working set, from
+/// the reported `recommended_working_set`; `None` for `0`, which tessl
+/// reports when it has no figure.
+///
+/// A reported figure of 1 to 3 bytes gives `Some(0)`, a limit every
+/// allocation is over: a real device never reports one that small, and
+/// reading it as "unreported" would hide a figure the device did give.
+fn ws_limit_of(ws: u64) -> Option<u64> {
+    (ws != 0).then(|| ws / WS_DEN * WS_NUM)
+}
+
 /// Tiled attention geometry, as `ATT_THREADS` (four simdgroups) and
 /// `ATT_BQ` / `ATT_BK` (rows per threadgroup) in the Metal source.
 /// The forward kernel's key tile is wider (`ATT_FWD_BK`); its grid is
@@ -457,13 +469,11 @@ fn bind(b: &mut Binder<'_>, v: &V, index: usize) {
 /// The attention kernels' matrix-unit tensors index one `[T, D]` plane with
 /// i32 extents.
 fn attn_plane_fits(op: &'static str, t: u32, d: u32) -> Res<()> {
-    if u64::from(t) * u64::from(d) > i32::MAX as u64 {
-        return Err(OjasError::Unsupported {
-            op,
-            detail: format!("a [T, D] = [{t}, {d}] plane exceeds i32 indexing"),
-        });
-    }
-    Ok(())
+    crate::backend::require_i32_elems(
+        op,
+        &format!("a [T, D] = [{t}, {d}] plane"),
+        u128::from(t) * u128::from(d),
+    )
 }
 
 /// RMSNorm geometry, as `RMS_ROWS_PER_TG` (one simdgroup per row) and
@@ -561,7 +571,10 @@ struct Book {
     clean: HashMap<u64, Clean>,
     overlap: usize,
     mem_cap: u64,
-    ws_limit: u64,
+    /// Device bytes past which a command settles for the working set; `None`
+    /// when the device reports no working set (tessl's `0`), where there is
+    /// no threshold to be over.
+    ws_limit: Option<u64>,
     bf16_accum: bool,
     #[cfg(test)]
     /// Allocations to let through, then allocations to fail.
@@ -649,8 +662,27 @@ struct Worker {
     _lease: crate::gauge::Lease,
 }
 
+/// The cap of the device-wide pool ledger from the reported
+/// `recommended_working_set`: the figure itself, or no cap for `0`, which
+/// tessl reports when it has no figure. A zero cap would refuse every pool
+/// allocation, so an unreported working set must not become one; the
+/// backend's own [`Budget`] still bounds what it holds.
+fn device_ledger_cap(ws: u64) -> u64 {
+    if ws == 0 {
+        u64::MAX
+    } else {
+        ws
+    }
+}
+
 impl Worker {
     fn open(waits: Arc<Waits>, budget: Budget) -> Res<Self> {
+        Self::open_reporting(waits, budget, |ws| ws)
+    }
+
+    /// [`Self::open`], reading the device's `recommended_working_set`
+    /// through `report`: a test hook for a device that reports none (`0`).
+    fn open_reporting(waits: Arc<Waits>, budget: Budget, report: impl Fn(u64) -> u64) -> Res<Self> {
         #[cfg(test)]
         let lease = crate::gauge::lease();
         let rt = GpuRuntime::new().map_err(metal_err)?;
@@ -658,8 +690,8 @@ impl Worker {
         let pool_cap_usize = usize::try_from(pool_cap).unwrap_or(usize::MAX);
         rt.set_pool_cache_cap_bytes(pool_cap_usize);
 
-        let ws = rt.memory_info().recommended_working_set;
-        let device_budget = Budget::new(ws);
+        let ws = report(rt.memory_info().recommended_working_set);
+        let device_budget = Budget::new(device_ledger_cap(ws));
         let ledger = BudgetLedger::new(&device_budget, pool_cap);
         rt.set_pool_ledger(Some(ledger.as_pool_ledger()))
             .map_err(metal_err)?;
@@ -687,7 +719,7 @@ impl Worker {
         let spare = rt
             .alloc_internal_buffer(NORM_SLOTS * 4)
             .map_err(metal_err)?;
-        let ws = rt.memory_info().recommended_working_set;
+        let ws = report(rt.memory_info().recommended_working_set);
         let book = Book {
             used: 0,
             pending: Vec::new(),
@@ -702,7 +734,7 @@ impl Worker {
             clean: HashMap::new(),
             overlap: OVERLAP_DISPATCHES,
             mem_cap: MEM_CAP_CEILING.min(budget.cap_bytes() / 4),
-            ws_limit: ws / WS_DEN * WS_NUM,
+            ws_limit: ws_limit_of(ws),
             bf16_accum: false,
             #[cfg(test)]
             fail_allocs: (0, 0),
@@ -923,7 +955,7 @@ impl Worker {
         if alloc > cap {
             return self.settle(Scan::All, Wait::MemCap);
         }
-        if alloc > WS_GROWTH && self.rt.current_allocated_bytes() > limit {
+        if alloc > WS_GROWTH && limit.is_some_and(|l| self.rt.current_allocated_bytes() > l) {
             return self.settle(Scan::All, Wait::WorkingSet);
         }
         if since >= overlap {
@@ -1613,7 +1645,8 @@ impl Worker {
             } => {
                 let mut book = self.book.borrow_mut();
                 book.overlap = overlap.unwrap_or(book.overlap);
-                book.ws_limit = ws_limit.unwrap_or(book.ws_limit);
+                // `Some(0)` is tessl's "no figure": the unreported state.
+                book.ws_limit = ws_limit.map_or(book.ws_limit, ws_limit_of);
                 book.fail_allocs = fail_allocs;
                 Ok(Reply::Done)
             }
@@ -6839,3 +6872,37 @@ mod tests {
 #[cfg(test)]
 #[path = "adversarial_oom.rs"]
 mod adversarial_oom;
+
+#[cfg(test)]
+mod adv_ws {
+    use super::*;
+    /// A device that reports no working set must still allocate: its pool
+    /// ledger is uncapped, not capped at zero. A reported figure is the cap.
+    #[test]
+    fn an_unreported_working_set_leaves_the_pool_ledger_uncapped() {
+        assert_eq!(device_ledger_cap(0), u64::MAX);
+        assert_eq!(device_ledger_cap(48 << 30), 48 << 30);
+        assert_eq!(device_ledger_cap(1), 1);
+        let w = Worker::open_reporting(Arc::new(Waits::default()), Budget::new(1 << 30), |_| 0)
+            .expect("Metal device");
+        assert_eq!(w.book.borrow().ws_limit, None);
+        w.alloc(1 << 20)
+            .expect("an allocation on a device that reports no working set");
+    }
+
+    /// Characterization, not a rule to change: a reported working set of 1
+    /// to 3 bytes gives the limit `Some(0)`, not `None`. A real device never
+    /// reports a figure that small; `0` alone means unreported.
+    #[test]
+    fn ws_limit_of_edges() {
+        for ws in [0u64, 1, 2, 3, 4, 5, 7, 8, u64::MAX, u64::MAX - 1, 48 << 30] {
+            eprintln!("ws_limit_of({ws}) = {:?}", ws_limit_of(ws));
+        }
+        assert_eq!(ws_limit_of(0), None);
+        assert_eq!(ws_limit_of(1), Some(0));
+        assert_eq!(ws_limit_of(3), Some(0));
+        assert_eq!(ws_limit_of(4), Some(3));
+        assert_eq!(ws_limit_of(48 << 30), Some(36 << 30));
+        assert!(ws_limit_of(u64::MAX).is_some());
+    }
+}
