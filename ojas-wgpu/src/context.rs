@@ -16,9 +16,19 @@
 //! after the host has seen the copy does it record `fault_release`, which
 //! clears exactly what it saw. A read that fails between the two (a poll
 //! timeout, a failed map) therefore leaves the fault held for the next read
-//! instead of losing it. The bits collect in [`WgpuContext::take_faults`].
-//! Two reads on different threads can both copy the same held bits before
-//! either release lands, so a fault may be reported twice; it is never lost.
+//! instead of losing it.
+//!
+//! A read hands the mask it observed to its own caller ([`WgpuContext::read_observing`],
+//! [`WgpuContext::sync_observed`]), which reports it itself. The two
+//! boundaries that cannot return a mask ([`WgpuContext::read`], which backs
+//! `DeviceBuffer::read_bytes`, and the public [`WgpuContext::sync`]) defer it
+//! to one shared pair that [`WgpuContext::take_faults`] takes once, for
+//! whichever caller asks next. A mask is delivered by exactly one of the two
+//! channels, never both. Two reads on different threads can both copy the
+//! same held bits before either release lands, so a fault may then be
+//! reported to both. A caller whose data came from a faulting op after the
+//! fault was released and reported elsewhere is not told again: that needs
+//! per-buffer attribution, which is a follow-up.
 //!
 //! A lost device is recorded apart from the capped uncaptured-error queue,
 //! every later error check reports it, every error from a device call
@@ -42,7 +52,6 @@
 //! no wgpu object and pops no error scope. [`CacheStats`] counts what is
 //! still created and every blocking error-scope pop.
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::num::NonZeroU64;
 #[cfg(test)]
@@ -676,14 +685,16 @@ fn admits_adapter(kind: wgpu::DeviceType, opt_in: Option<&str>) -> bool {
 /// Uncaptured wgpu errors whose text is kept.
 const UNCAPTURED_CAP: usize = 16;
 
-/// Entries of this thread's own fault record that are kept ([`Faults`]).
-const OWN_FAULTS_CAP: usize = 64;
+/// Bytes kept of one uncaptured-error message; a longer one is cut and
+/// marked, so the record is bounded in bytes as well as in count.
+const UNCAPTURED_MSG_BYTES: usize = 4096;
 
 /// The uncaptured-error record of a context. Sticky: an error is never
 /// removed, so every later check on every thread and clone reports it until
 /// the context is reopened, as for the device-lost record. The cap bounds
-/// the stored text only: an error past it is counted, and the count is
-/// reported with the rest.
+/// the record: at most [`UNCAPTURED_CAP`] messages of at most
+/// [`UNCAPTURED_MSG_BYTES`] bytes are kept, and an error past the count cap
+/// is counted and reported as a number, its text discarded.
 #[derive(Default)]
 struct ErrorQueue {
     msgs: Vec<String>,
@@ -691,12 +702,21 @@ struct ErrorQueue {
 }
 
 impl ErrorQueue {
-    fn push(&mut self, msg: String) {
-        if self.msgs.len() < UNCAPTURED_CAP {
-            self.msgs.push(msg);
-        } else {
+    fn push(&mut self, mut msg: String) {
+        if self.msgs.len() >= UNCAPTURED_CAP {
             self.dropped = self.dropped.saturating_add(1);
+            return;
         }
+        if msg.len() > UNCAPTURED_MSG_BYTES {
+            let total = msg.len();
+            let mut cut = UNCAPTURED_MSG_BYTES;
+            while !msg.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            msg.truncate(cut);
+            msg.push_str(&format!("... [truncated, {total} bytes]"));
+        }
+        self.msgs.push(msg);
     }
 
     /// Every message kept, then a line naming how many were dropped; empty
@@ -713,101 +733,45 @@ impl ErrorQueue {
     }
 }
 
-static NEXT_FAULTS_ID: AtomicU64 = AtomicU64::new(1);
-
-thread_local! {
-    /// What reads on this thread saw, per [`Faults`] id: `(id, bits, first)`.
-    static OWN_FAULTS: RefCell<Vec<(u64, u64, u32)>> = const { RefCell::new(Vec::new()) };
-}
-
-/// What reads have seen of the device fault words and the host has not yet
-/// taken: the op mask and the first op (+ 1) among its bits, 0 when none.
-///
-/// The pair lives under one mutex, so a taker sees a mask with the first op
-/// that belongs to it, never half of one record. A read also keeps its own
-/// copy on the thread that made it: the caller of a read that copied
-/// faulted values takes that copy with [`Faults::take`] even when another
-/// clone's caller has already taken the shared pair. A fault is therefore
-/// reported to every thread whose read saw it and to the first taker among
-/// the others, and a thread's own copy is dropped when that thread takes.
-struct Faults {
-    id: u64,
-    shared: Mutex<(u64, u32)>,
-    /// Test seam: runs inside [`Faults::take`], between reading the mask and
-    /// reading the first op.
-    #[cfg(test)]
-    pause: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
-}
-
-impl Default for Faults {
-    fn default() -> Self {
-        Self {
-            id: NEXT_FAULTS_ID.fetch_add(1, Ordering::Relaxed),
-            shared: Mutex::new((0, 0)),
-            #[cfg(test)]
-            pause: Mutex::new(None),
-        }
+/// A fault pair as the host reports it: the op mask and the first op (+ 1),
+/// consistent with each other. The device writes the two in separate words
+/// of one copy and a read can catch them torn, so a first op whose bit is
+/// absent from the mask (including a mask of 0) gets its bit added, and a
+/// mask with no first op names its lowest bit, as `WgpuBackend::faults`
+/// does. Fails closed: anything non-zero stays reported. A first op past
+/// the mask (a corrupted word) is kept as it is, for the caller to refuse.
+/// The words released to the device are the raw ones, not these.
+fn normalize_fault_words(bits: u64, first: u32) -> (u64, u32) {
+    match first {
+        0 if bits == 0 => (0, 0),
+        0 => (bits, bits.trailing_zeros() + 1),
+        1..=64 => (bits | (1u64 << (first - 1)), first),
+        _ => (bits, first),
     }
+}
+
+/// Faults a read saw that its caller could not be handed: the shared pair of
+/// the boundaries that return only bytes (`DeviceBuffer::read_bytes`, the
+/// public [`WgpuContext::sync`]) and of a read that failed after it observed
+/// them. The next `sync`, `download`, `clip_grad_norm` or `adamw_step` on
+/// any thread takes it, once. The pair lives under one mutex, so a taker
+/// never sees half of a record.
+#[derive(Default)]
+struct Faults {
+    pending: Mutex<(u64, u32)>,
 }
 
 impl Faults {
     fn record(&self, bits: u64, first: u32) {
-        {
-            let mut shared = lock(&self.shared);
-            shared.0 |= bits;
-            if shared.1 == 0 {
-                shared.1 = first;
-            }
+        let mut pending = lock(&self.pending);
+        pending.0 |= bits;
+        if pending.1 == 0 {
+            pending.1 = first;
         }
-        // A thread being torn down has no record to keep; the shared pair
-        // above already holds the fault.
-        let _ = OWN_FAULTS.try_with(|own| {
-            let mut own = own.borrow_mut();
-            if let Some(entry) = own.iter_mut().find(|e| e.0 == self.id) {
-                entry.1 |= bits;
-                if entry.2 == 0 {
-                    entry.2 = first;
-                }
-            } else {
-                if own.len() >= OWN_FAULTS_CAP {
-                    // Evicted bits stay in the shared pair of their context.
-                    own.remove(0);
-                }
-                own.push((self.id, bits, first));
-            }
-        });
     }
 
     fn take(&self) -> (u64, u32) {
-        let (shared_bits, shared_first) = {
-            let mut shared = lock(&self.shared);
-            let bits = shared.0;
-            #[cfg(test)]
-            if let Some(pause) = lock(&self.pause).clone() {
-                pause();
-            }
-            let first = shared.1;
-            *shared = (0, 0);
-            (bits, first)
-        };
-        let (own_bits, own_first) = OWN_FAULTS
-            .try_with(|own| {
-                let mut own = own.borrow_mut();
-                match own.iter().position(|e| e.0 == self.id) {
-                    Some(i) => {
-                        let entry = own.swap_remove(i);
-                        (entry.1, entry.2)
-                    }
-                    None => (0, 0),
-                }
-            })
-            .unwrap_or((0, 0));
-        let first = if shared_first != 0 {
-            shared_first
-        } else {
-            own_first
-        };
-        (shared_bits | own_bits, first)
+        std::mem::take(&mut *lock(&self.pending))
     }
 }
 
@@ -1668,15 +1632,36 @@ impl WgpuContext {
             .map_err(|err| self.failure(format!("poll: {err}")))
     }
 
-    /// Copy `len` bytes at `offset` of `buf` to the host after all recorded
-    /// work, in pieces of at most [`read_piece`] bytes. The fault words ride
-    /// in each piece's copy.
+    /// [`Self::read_observing`] for a boundary that can return only bytes
+    /// (`DeviceBuffer::read_bytes`): the fault mask the read observed is
+    /// deferred to the shared pair, for [`Self::take_faults`].
     pub(crate) fn read(
         &self,
         buf: &wgpu::Buffer,
         offset: u64,
         len: u64,
     ) -> Result<Vec<u8>, OjasError> {
+        let (out, bits, first) = self.read_observing(buf, offset, len)?;
+        if bits != 0 || first != 0 {
+            self.inner.faults.record(bits, first);
+        }
+        Ok(out)
+    }
+
+    /// Copy `len` bytes at `offset` of `buf` to the host after all recorded
+    /// work, in pieces of at most [`read_piece`] bytes. The fault words ride
+    /// in each piece's copy. Returns the bytes with the fault mask this read
+    /// observed and its first op (+ 1), normalized
+    /// ([`normalize_fault_words`]): the caller reports them itself, and they
+    /// are not recorded anywhere else. A read that fails after it observed
+    /// a fault defers it to the shared pair, since no caller gets a mask
+    /// from an `Err`.
+    pub(crate) fn read_observing(
+        &self,
+        buf: &wgpu::Buffer,
+        offset: u64,
+        len: u64,
+    ) -> Result<(Vec<u8>, u64, u32), OjasError> {
         let piece = read_piece(self.inner.limits.max_buffer_size);
         let end = offset
             .checked_add(len)
@@ -1693,21 +1678,43 @@ impl WgpuContext {
                 cap: 0,
                 live: 0,
             })?;
+        let (mut bits, mut first) = (0u64, 0u32);
         let mut at = offset;
         while at < end {
             // Each piece starts on a word at or before `at` and spans at most
             // `piece` bytes, so its staging buffer fits.
             let to = ((at & !3) + piece).min(end);
-            out.extend_from_slice(&self.read_once(buf, at, to - at)?);
+            match self.read_once(buf, at, to - at) {
+                Ok((bytes, b, f)) => {
+                    out.extend_from_slice(&bytes);
+                    bits |= b;
+                    if first == 0 {
+                        first = f;
+                    }
+                }
+                Err(err) => {
+                    if bits != 0 || first != 0 {
+                        self.inner.faults.record(bits, first);
+                    }
+                    return Err(err);
+                }
+            }
             at = to;
         }
-        Ok(out)
+        Ok((out, bits, first))
     }
 
     /// One piece of [`Self::read`]: its span, rounded out to words, plus the
     /// 16 fault bytes fit one staging buffer. The fault words ride in the
-    /// same copy and are cleared.
-    fn read_once(&self, buf: &wgpu::Buffer, offset: u64, len: u64) -> Result<Vec<u8>, OjasError> {
+    /// same copy and are cleared. Returns the bytes and the normalized mask
+    /// this piece observed; if the release or the error check after it
+    /// fails, the mask is deferred to the shared pair and the error returned.
+    fn read_once(
+        &self,
+        buf: &wgpu::Buffer,
+        offset: u64,
+        len: u64,
+    ) -> Result<(Vec<u8>, u64, u32), OjasError> {
         let start = offset & !3;
         let end = (offset + len).div_ceil(4) * 4;
         let span = end - start;
@@ -1794,10 +1801,10 @@ impl WgpuContext {
         staging.unmap();
         // Unmapped and idle again: the next read may take it.
         self.staging_back(staging);
-        if bits != 0 || first != 0 {
-            self.inner.faults.record(bits, first);
-            // Seen: now, and only now, clear exactly these from `held`.
-            // The release allocates nothing, so it charges an empty budget.
+        let released = if bits != 0 || first != 0 {
+            // Seen: now, and only now, clear exactly these from `held`, as
+            // read (not as normalized). The release allocates nothing, so it
+            // charges an empty budget.
             let none = Budget::new(0);
             let mut job = self.job(&none, 0);
             job.dispatch(
@@ -1805,19 +1812,38 @@ impl WgpuContext {
                 &[bits as u32, (bits >> 32) as u32, first],
                 &[&self.inner.held],
                 (1, 1, 1),
-            )?;
-            job.commit()?;
-        }
+            )
+            .and_then(|()| job.commit())
+        } else {
+            Ok(())
+        };
+        let (bits, first) = normalize_fault_words(bits, first);
         let c = &self.inner.counters;
         c.reads.fetch_add(1, Ordering::Relaxed);
         c.read_bytes.fetch_add(len, Ordering::Relaxed);
-        self.check_errors()?;
-        Ok(out)
+        if let Err(err) = released.and_then(|()| self.check_errors()) {
+            if bits != 0 || first != 0 {
+                self.inner.faults.record(bits, first);
+            }
+            return Err(err);
+        }
+        Ok((out, bits, first))
     }
 
-    /// Submit everything recorded and wait for it, collecting the fault word.
+    /// Submit everything recorded and wait for it. This boundary returns no
+    /// mask, so a fault it observes is deferred to the shared pair and the
+    /// next `sync`, `download`, `clip_grad_norm` or `adamw_step` of the
+    /// backend takes it. `WgpuBackend::sync` uses [`Self::sync_observed`]
+    /// instead and reports its own observation itself.
     pub fn sync(&self) -> Result<(), OjasError> {
         self.read(&self.inner.fault, 0, 0).map(|_| ())
+    }
+
+    /// [`Self::sync`] handing the fault mask and first op (+ 1) it observed
+    /// to the caller, who reports them; nothing is recorded.
+    pub(crate) fn sync_observed(&self) -> Result<(u64, u32), OjasError> {
+        let (_, bits, first) = self.read_observing(&self.inner.fault, 0, 0)?;
+        Ok((bits, first))
     }
 
     /// Queue one uncaptured-error message as the device callback would.
@@ -1838,12 +1864,19 @@ impl WgpuContext {
         self.inner.fail_next_read.store(true, Ordering::Relaxed);
     }
 
-    /// `(bits, first)` seen by reads since the last call, then cleared:
-    /// every faulting op's bit (bit `i` for op index `i`), and the fault id
-    /// (index plus one) of the first of them in recording order, 0 when no
-    /// fault was seen.
+    /// `(bits, first)` deferred to the shared pair since the last call, then
+    /// cleared: every faulting op's bit (bit `i` for op index `i`), and the
+    /// fault id (index plus one) of the first of them, 0 when none. Only
+    /// the boundaries that return no mask (and failed reads) put anything
+    /// here; a read that hands its mask to its caller does not.
     pub(crate) fn take_faults(&self) -> (u64, u32) {
         self.inner.faults.take()
+    }
+
+    /// Defer a mask a caller observed through [`Self::read_observing`] but
+    /// cannot report (its own read failed afterwards) to the shared pair.
+    pub(crate) fn defer_faults(&self, bits: u64, first: u32) {
+        self.inner.faults.record(bits, first);
     }
 
     /// The error for a failed device call (a wait, a map, or a buffer,
@@ -2786,78 +2819,6 @@ mod tests {
     // ---- ft-757cb6b2 criteria 10, 13 and 14 ----
 
     #[test]
-    fn take_faults_never_pairs_a_mask_with_another_reads_first_op() {
-        // Pre-fix, `take` swapped the mask and the first op one after the
-        // other: a read recording between the two swaps gave (0, first) or a
-        // first op whose bit was not in the mask.
-        use std::sync::mpsc;
-        use std::time::Duration;
-        let faults = Arc::new(Faults::default());
-        let (paused_tx, paused_rx) = mpsc::channel::<()>();
-        let (go_tx, go_rx) = mpsc::channel::<()>();
-        let (paused_tx, go_rx) = (Mutex::new(paused_tx), Mutex::new(go_rx));
-        *lock(&faults.pause) = Some(Arc::new(move || {
-            let _ = lock(&paused_tx).send(());
-            let _ = lock(&go_rx).recv_timeout(Duration::from_secs(2));
-        }));
-        let taker = {
-            let f = Arc::clone(&faults);
-            std::thread::spawn(move || f.take())
-        };
-        paused_rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("the taker reached the pause");
-        let recorder = {
-            let f = Arc::clone(&faults);
-            std::thread::spawn(move || f.record(1 << 5, 6))
-        };
-        // A correct `take` holds the state across the pause, so the recorder
-        // waits behind it; a torn one lets the record land mid-take.
-        std::thread::sleep(Duration::from_millis(100));
-        go_tx.send(()).unwrap();
-        let got = taker.join().unwrap();
-        recorder.join().unwrap();
-        *lock(&faults.pause) = None;
-        assert!(
-            got == (0, 0) || got == (1 << 5, 6),
-            "a torn read of the pair: {got:?}"
-        );
-        let rest = faults.take();
-        assert_eq!(
-            (got.0 | rest.0, got.1.max(rest.1)),
-            (1 << 5, 6),
-            "the record is reported once, whole: {got:?} then {rest:?}"
-        );
-    }
-
-    #[test]
-    fn a_second_taker_does_not_empty_the_report_of_the_thread_that_saw_the_fault() {
-        // Pre-fix, whichever thread took first emptied the one shared pair:
-        // the thread whose read copied faulted values got (0, 0) and
-        // returned Ok with them.
-        use std::sync::mpsc;
-        let faults = Arc::new(Faults::default());
-        let (seen_tx, seen_rx) = mpsc::channel::<()>();
-        let (taken_tx, taken_rx) = mpsc::channel::<()>();
-        let reader = {
-            let f = Arc::clone(&faults);
-            std::thread::spawn(move || {
-                f.record(1 << 9, 10); // what `read_once` does after a copy
-                seen_tx.send(()).unwrap();
-                taken_rx.recv().unwrap();
-                f.take() // what `faults()` does after the read returns
-            })
-        };
-        seen_rx.recv().unwrap();
-        let other = faults.take(); // another clone's sync
-        taken_tx.send(()).unwrap();
-        let own = reader.join().unwrap();
-        assert_eq!(other, (1 << 9, 10), "the other caller reports the fault");
-        assert_eq!(own, (1 << 9, 10), "the reader's own copy is not hidden");
-        assert_eq!(faults.take(), (0, 0), "a third caller sees it reported");
-    }
-
-    #[test]
     fn a_single_thread_reports_a_fault_once_and_edge_ids_survive() {
         let faults = Faults::default();
         assert_eq!(faults.take(), (0, 0));
@@ -2867,10 +2828,21 @@ mod tests {
         faults.record(0b101, 3);
         faults.record(0b010, 2);
         assert_eq!(faults.take(), (0b111, 3), "the first record names the op");
-        // A corrupted word: a first op with no bits is still reported.
-        faults.record(0, 5);
-        assert_eq!(faults.take(), (0, 5));
-        assert_eq!(faults.take(), (0, 0));
+    }
+
+    #[test]
+    fn a_torn_fault_pair_is_normalized_and_still_reported() {
+        // The device writes the mask words and the first-op word separately;
+        // a read can catch one without the other.
+        assert_eq!(normalize_fault_words(0, 0), (0, 0));
+        assert_eq!(normalize_fault_words(1 << 2, 3), (1 << 2, 3));
+        assert_eq!(normalize_fault_words(0, 5), (1 << 4, 5));
+        assert_eq!(normalize_fault_words(1 << 2, 5), ((1 << 2) | (1 << 4), 5));
+        assert_eq!(normalize_fault_words(0, 64), (1 << 63, 64));
+        assert_eq!(normalize_fault_words(0b1100, 0), (0b1100, 3));
+        // A first op past the mask is a corrupted word: kept for the caller.
+        assert_eq!(normalize_fault_words(0, 65), (0, 65));
+        assert_eq!(normalize_fault_words(1, 65), (1, 65));
     }
 
     #[test]
@@ -3041,6 +3013,44 @@ mod tests {
         assert_eq!(again.len(), text.len(), "stable across checks");
     }
 
+    #[test]
+    fn the_dropped_count_is_exact_under_concurrent_callbacks_and_text_is_kept_whole() {
+        // Ported from the adversary's A4 checks, which held.
+        let ctx = WgpuContext::open().expect("wgpu adapter");
+        let (threads, per) = (8usize, 50usize);
+        std::thread::scope(|s| {
+            for _ in 0..threads {
+                s.spawn(|| {
+                    for _ in 0..per {
+                        bad_buffer(&ctx);
+                    }
+                });
+            }
+        });
+        let (kept, dropped) = {
+            let q = lock(&ctx.inner.errors);
+            (q.msgs.len(), q.dropped)
+        };
+        assert_eq!(kept as u64 + dropped, (threads * per) as u64);
+        let other = WgpuContext::open().expect("wgpu adapter");
+        other.push_uncaptured("\u{e9}\u{4e16}\u{754c}\u{1f642}");
+        assert!(format!("{:?}", other.check_errors().unwrap_err()).contains("\u{4e16}\u{754c}"));
+    }
+
+    #[test]
+    fn nothing_clears_the_sticky_record() {
+        let ctx = WgpuContext::open().expect("wgpu adapter");
+        ctx.push_uncaptured("one");
+        let clone = ctx.clone();
+        for _ in 0..5 {
+            assert!(ctx.check_errors().is_err());
+            assert!(clone.sync().is_err());
+            let _ = ctx.failure("x".to_string());
+        }
+        ctx.trim_pool();
+        assert!(clone.check_errors().is_err());
+    }
+
     /// Characterization, not a fix: the loss record is permanent, and every
     /// later sync reports it again (it is cloned, never cleared).
     #[test]
@@ -3060,6 +3070,3 @@ mod tests {
 #[cfg(test)]
 #[path = "adversarial_oom.rs"]
 mod adversarial_oom;
-
-#[cfg(test)]
-mod adv757;

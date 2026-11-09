@@ -40,34 +40,42 @@
 //! the shared encoder exists to avoid. Instead:
 //!
 //! - the kernel raises its op's bit in a device fault word and keeps going;
-//! - the very next [`WgpuBackend::sync`], [`Backend::download`] (of any
-//!   tensor) or [`Backend::clip_grad_norm`] returns [`OjasError::NonFinite`]
-//!   naming the first op, in recording order on this backend, that faulted
-//!   since the previous report. A fault is never lost and is reported at
-//!   least once: one caller reports it once, but two threads whose syncs
-//!   overlap may both see it;
+//! - the next [`WgpuBackend::sync`], [`Backend::download`] (of any tensor)
+//!   or [`Backend::clip_grad_norm`] whose own read observes it returns
+//!   [`OjasError::NonFinite`] naming the first op, in recording order on
+//!   this backend, that faulted since the previous report. The caller that
+//!   made the read is the one told, whichever thread raised the fault, so a
+//!   read that copied faulted values is never answered `Ok` because another
+//!   thread reported first;
+//! - a read that cannot return a mask (`Tensor::to_host` through
+//!   `DeviceBuffer::read_bytes`, the public `WgpuContext::sync`, a read that
+//!   failed after it observed) defers the mask to one pair on the context.
+//!   The next `sync`, `download`, `clip_grad_norm` or `adamw_step` on any
+//!   thread takes it and reports it once. A mask is delivered by exactly
+//!   one of the two paths, never both, so a read that was not followed by a
+//!   report leaves nothing to be mistaken for a later fault. Two reads whose
+//!   copies overlap before either release lands may both report it;
 //! - `clip_grad_norm` reports a pending fault before it scales anything;
-//! - `adamw_step` also refuses, before it records anything, while an error or
-//!   fault is already pending (below);
+//! - `adamw_step` also refuses, before it records anything, while an error
+//!   or a deferred fault is already pending (below);
 //! - `adamw_step` and `muon_ns5_step` decide on the device: if any value of
 //!   *this* call is non-finite they write nothing, so a bad step is never
 //!   applied in part, and the fault is reported as above.
 //!
 //! A caller that must not run past a fault calls `sync` after the steps it
-//! cares about. The fault word belongs to the context, not to a caller: when
-//! threads share one backend, a fault raised by one thread's op is reported
-//! to every thread whose read copied it (the `sync` or `download` that made
-//! that read) and to the first thread that takes it otherwise; a thread that
-//! read after the fault never gets `Ok` because another thread took it
-//! first. Callers that need their faults kept apart open one backend each.
+//! cares about. The fault word belongs to the context, not to a caller. What
+//! this does not give: once a fault has been reported to one caller, a later
+//! read by another thread of data that op produced is answered `Ok`; telling
+//! it needs the fault attributed to the buffer, which is not built. Callers
+//! that need their faults kept apart open one backend each.
 //!
 //! Uncaptured wgpu errors (validation, out of memory) belong to the context
 //! too, and are sticky: after the first, every later `sync`, `download` and
 //! `clip_grad_norm` on every thread and on every backend sharing the context
 //! (`rebudget` backends do) returns [`OjasError::Backend`] naming them, until
 //! the context is reopened, as for a lost device ([`OjasError::DeviceLost`]).
-//! At most 16 messages are kept; later ones are counted and reported as
-//! "and N more uncaptured errors dropped".
+//! At most 16 messages of at most 4096 bytes each are kept; later errors are
+//! counted and reported as "and N more uncaptured errors dropped".
 //!
 //! The optimizers update in place through [`Tensor::device_buffer_mut`], so
 //! a parameter shared with another tensor is refused before anything is
@@ -585,8 +593,18 @@ impl WgpuBackend {
         &self.ctx
     }
 
-    fn faults(&self) -> Result<(), OjasError> {
-        let (bits, first) = self.ctx.take_faults();
+    /// The shared pair, taken (once) and merged with `own`, the mask of a read
+    /// the caller itself made ([`WgpuContext::read_observing`]): `Ok` when
+    /// both are empty, otherwise [`OjasError::NonFinite`] naming the first
+    /// op. The pair's first op, observed earlier, wins over `own`'s.
+    fn fault_error(&self, own: (u64, u32)) -> Result<(), OjasError> {
+        let (pending_bits, pending_first) = self.ctx.take_faults();
+        let bits = own.0 | pending_bits;
+        let first = if pending_first != 0 {
+            pending_first
+        } else {
+            own.1
+        };
         if bits == 0 && first == 0 {
             return Ok(());
         }
@@ -611,12 +629,20 @@ impl WgpuBackend {
 
     /// Refuse an op while the context already holds an uncaptured wgpu error
     /// or a lost device ([`WgpuContext::check_errors`], sticky) or a numeric
-    /// fault some read has already seen (reported once, as by `sync`). It
+    /// fault a boundary deferred to the shared pair (`Tensor::to_host`, the
+    /// public `WgpuContext::sync`). The refusal consumes the entry it refuses
+    /// on: it is reported once, to this caller, and the next call proceeds. It
     /// waits for nothing: a fault still on the device is found at the next
     /// sync point.
     fn refuse_if_pending(&self) -> Result<(), OjasError> {
         self.ctx.check_errors()?;
         self.faults()
+    }
+
+    /// [`Self::fault_error`] for a caller that made no read of its own: it
+    /// reports, and so consumes, whatever the shared pair holds.
+    fn faults(&self) -> Result<(), OjasError> {
+        self.fault_error((0, 0))
     }
 
     /// Placement and contiguity of an operand the op's `ojas_core::shapes`
@@ -1811,8 +1837,8 @@ impl BackendCore for WgpuBackend {
     /// as [`OjasError::Backend`]. The only `sync`: an inherent twin would
     /// leave `Arc<WgpuBackend>` and generic callers on the trait default.
     fn sync(&self) -> Result<(), OjasError> {
-        self.ctx.sync()?;
-        self.faults()
+        let seen = self.ctx.sync_observed()?;
+        self.fault_error(seen)
     }
 
     /// Host -> device copy. A tensor already on this context is a clone;
@@ -1864,11 +1890,76 @@ impl BackendCore for WgpuBackend {
     }
 
     /// The only readback. A fault deferred by any earlier op is reported here.
+    /// A contiguous tensor of this context is read directly, so the mask its
+    /// own read observed comes back to this caller and is reported by it,
+    /// whichever thread raised the fault. Anything else (a host tensor, a
+    /// view, a buffer of another context) goes through `Tensor::to_host`,
+    /// whose reads defer the mask to the shared pair that is taken right
+    /// after. The readback is counted in `Budget::device_readbacks` either way.
     fn download(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
-        let host = tensor.to_host(&self.budget)?;
-        if tensor.device().is_some() {
-            self.faults()?;
+        const OP: &str = "WgpuBackend::download";
+        let direct = tensor
+            .device_buffer()
+            .and_then(|d| d.as_any().downcast_ref::<WgpuBuffer>())
+            .filter(|b| self.ctx.same(b.context()))
+            .filter(|_| tensor.is_contiguous().unwrap_or(false));
+        let Some(buf) = direct else {
+            let host = tensor.to_host(&self.budget)?;
+            if tensor.device().is_some() {
+                self.faults()?;
+            }
+            return Ok(host);
+        };
+        let raw = buf.raw()?;
+        let len = tensor.num_elements()? * tensor.dtype().size();
+        let base = tensor.byte_offset();
+        let window_fits = base
+            .checked_add(len)
+            .is_some_and(|end| end <= ojas_core::DeviceBuffer::byte_len(buf));
+        if !window_fits {
+            return Err(OjasError::OutOfRange {
+                op: OP,
+                detail: format!(
+                    "window of {len} bytes at {base} exceeds device storage {}",
+                    ojas_core::DeviceBuffer::byte_len(buf)
+                ),
+            });
         }
+        let mut seen = (0u64, 0u32);
+        let read =
+            Tensor::from_le_reader(tensor.shape(), tensor.dtype(), &self.budget, |at, chunk| {
+                let (bytes, bits, first) =
+                    self.ctx
+                        .read_observing(raw, base as u64 + at, chunk.len() as u64)?;
+                if bytes.len() != chunk.len() {
+                    return Err(OjasError::Backend {
+                        id: BackendId::Wgpu,
+                        detail: format!(
+                            "read returned {} bytes, asked {} at offset {at}",
+                            bytes.len(),
+                            chunk.len()
+                        ),
+                    });
+                }
+                chunk.copy_from_slice(&bytes);
+                seen.0 |= bits;
+                if seen.1 == 0 {
+                    seen.1 = first;
+                }
+                Ok::<(), OjasError>(())
+            });
+        let host = match read {
+            Ok(host) => host,
+            Err(err) => {
+                // An `Err` carries no mask: what earlier pieces saw is deferred.
+                if seen != (0, 0) {
+                    self.ctx.defer_faults(seen.0, seen.1);
+                }
+                return Err(err);
+            }
+        };
+        self.budget.record_readback(len as u64);
+        self.fault_error(seen)?;
         Ok(host)
     }
 
@@ -2093,8 +2184,8 @@ impl BackendFloat for WgpuBackend {
             self.global_norm(op, &mut job, &parts, &status)?;
             job.commit()?;
         }
-        let words = self.ctx.read(&status, 0, 8)?;
-        self.faults()?;
+        let (words, bits, first) = self.ctx.read_observing(&status, 0, 8)?;
+        self.fault_error((bits, first))?;
         let word = |i: usize| -> Result<u32, OjasError> {
             let bytes = words
                 .get(i * 4..i * 4 + 4)
@@ -2711,7 +2802,7 @@ impl BackendModule for WgpuBackend {
     /// next sync point, naming `adamw_step` unless an op recorded earlier
     /// faulted first (see the module docs). A call made while the context
     /// already holds an uncaptured wgpu error, a lost device, or a fault a
-    /// read has seen and nobody has reported is refused with that error
+    /// boundary deferred to the shared pair is refused with that error
     /// before anything is recorded: the parameter and moments are unchanged.
     fn adamw_step(
         &self,
@@ -3396,10 +3487,38 @@ mod tests {
     }
 
     #[test]
-    fn a_second_clone_taking_the_fault_does_not_hide_it_from_the_read_that_saw_it() {
-        // Pre-fix, the clone that took first emptied the shared pair: the
-        // reader whose copy held the faulted values reported Ok.
-        use std::sync::mpsc;
+    fn a_read_that_saw_a_fault_reports_it_to_its_own_caller_whatever_another_clone_does() {
+        // Pre-fix, whichever clone took the one shared pair first emptied it
+        // and the reader whose copy held faulted values returned Ok.
+        let budget = Budget::new(1 << 20);
+        let a = WgpuBackend::open(budget.clone()).expect("wgpu adapter");
+        let b = WgpuBackend::with_context(a.ctx.clone(), budget.clone());
+        a.sync().unwrap();
+        let bad = a
+            .upload(&Tensor::from_f32(&[1.0, f32::NAN], &[2], &budget).unwrap())
+            .unwrap();
+        let id = CAST.fault_id();
+        raise_as(&a, id, &raw_of(&bad), 2);
+        // A's read observes the fault and hands it to A.
+        let seen = a.ctx.sync_observed().unwrap();
+        assert_eq!(seen, (1u64 << (id - 1), id));
+        // Another clone syncs before A reports: the observation is A's, not
+        // shared, so B is not told it and the pair holds nothing to take.
+        let other = std::thread::scope(|s| s.spawn(|| b.sync()).join().unwrap());
+        assert!(other.is_ok(), "{other:?}");
+        let own = a.fault_error(seen);
+        assert!(
+            matches!(own, Err(OjasError::NonFinite { op: "cast_bf16" })),
+            "the reader returned Ok with faulted values: {own:?}"
+        );
+        a.sync().expect("reported once");
+    }
+
+    #[test]
+    fn a_direct_read_without_a_report_leaves_nothing_stale() {
+        // Pre-fix, `Tensor::to_host` kept a per-thread copy that nothing took:
+        // after another thread reported the fault, this thread's unrelated
+        // sync returned a false NonFinite. (Adversary A1.)
         let budget = Budget::new(1 << 20);
         let a = WgpuBackend::open(budget.clone()).expect("wgpu adapter");
         let b = WgpuBackend::with_context(a.ctx.clone(), budget.clone());
@@ -3408,34 +3527,80 @@ mod tests {
             .upload(&Tensor::from_f32(&[1.0, f32::NAN], &[2], &budget).unwrap())
             .unwrap();
         raise_as(&a, CAST.fault_id(), &raw_of(&bad), 2);
-        let (seen_tx, seen_rx) = mpsc::channel::<()>();
-        let (taken_tx, taken_rx) = mpsc::channel::<()>();
-        let (own, other) = std::thread::scope(|s| {
-            let a = &a;
-            let reader = s.spawn(move || {
-                a.ctx.sync().unwrap(); // the read sees the mask
-                seen_tx.send(()).unwrap();
-                taken_rx.recv().unwrap();
-                a.faults() // after the other clone has taken
-            });
-            seen_rx.recv().unwrap();
-            let other = b.sync();
-            taken_tx.send(()).unwrap();
-            (reader.join().unwrap(), other)
-        });
+        let _host = bad.to_host(&budget).expect("a direct read");
+        let other = std::thread::scope(|s| s.spawn(|| b.sync()).join().unwrap());
         assert!(
-            matches!(other, Err(OjasError::NonFinite { op: "cast_bf16" })),
+            matches!(other, Err(OjasError::NonFinite { .. })),
             "{other:?}"
         );
-        assert!(
-            matches!(own, Err(OjasError::NonFinite { op: "cast_bf16" })),
-            "the reader returned Ok with faulted values: {own:?}"
-        );
-        gpu_clean(&a);
+        let mine = a.sync();
+        assert!(mine.is_ok(), "a stale copy gave a false Err: {mine:?}");
     }
 
-    fn gpu_clean(gpu: &WgpuBackend) {
-        gpu.sync().expect("reported, then clear");
+    #[test]
+    fn a_direct_read_without_a_report_does_not_refuse_an_adamw_step() {
+        // Adversary A1b: the same stale copy refused a step.
+        let budget = Budget::new(1 << 20);
+        let a = WgpuBackend::open(budget.clone()).expect("wgpu adapter");
+        let b = WgpuBackend::with_context(a.ctx.clone(), budget.clone());
+        a.sync().unwrap();
+        let up = |v: &[f32]| {
+            a.upload(&Tensor::from_f32(v, &[v.len()], &budget).unwrap())
+                .unwrap()
+        };
+        let (mut p, g) = (up(&[1.0; 8]), up(&[0.5; 8]));
+        let (mut m, mut v) = (up(&[0.0; 8]), up(&[0.0; 8]));
+        let bad = up(&[f32::NAN, 1.0]);
+        raise_as(&a, CAST.fault_id(), &raw_of(&bad), 2);
+        let _host = bad.to_host(&budget).expect("a direct read");
+        let other = std::thread::scope(|s| s.spawn(|| b.sync()).join().unwrap());
+        assert!(
+            matches!(other, Err(OjasError::NonFinite { .. })),
+            "{other:?}"
+        );
+        let cfg = AdamWConfig::nanolab(1e-2, 0.1);
+        let r = a.adamw_step(&mut p, &g, &mut m, &mut v, 1, cfg);
+        assert!(r.is_ok(), "the step was refused by a stale fault: {r:?}");
+    }
+
+    #[test]
+    fn a_refused_adamw_step_records_and_charges_nothing() {
+        // Adversary A6, which held: a refusal touches no counter.
+        let budget = Budget::new(1 << 20);
+        let gpu = WgpuBackend::open(budget.clone()).expect("wgpu adapter");
+        gpu.sync().unwrap();
+        let up = |v: &[f32]| {
+            gpu.upload(&Tensor::from_f32(v, &[v.len()], &budget).unwrap())
+                .unwrap()
+        };
+        let (mut p, g) = (up(&[1.0; 8]), up(&[0.5; 8]));
+        let (mut m, mut v) = (up(&[0.0; 8]), up(&[0.0; 8]));
+        gpu.ctx.push_uncaptured("pending");
+        let (s0, live0) = (gpu.ctx.stats(), budget.live_bytes().unwrap());
+        for _ in 0..3 {
+            let cfg = AdamWConfig::nanolab(1e-2, 0.1);
+            assert!(gpu.adamw_step(&mut p, &g, &mut m, &mut v, 1, cfg).is_err());
+        }
+        let (s1, live1) = (gpu.ctx.stats(), budget.live_bytes().unwrap());
+        assert_eq!(s0.dispatches, s1.dispatches);
+        assert_eq!(s0.submits, s1.submits);
+        assert_eq!(s0.reads, s1.reads);
+        assert_eq!(live0, live1);
+    }
+
+    #[test]
+    fn download_counts_one_readback_of_its_bytes() {
+        // The direct read must keep the accounting `Tensor::to_host` does.
+        let budget = Budget::new(1 << 20);
+        let gpu = WgpuBackend::open(budget.clone()).expect("wgpu adapter");
+        let x = gpu
+            .upload(&Tensor::from_f32(&[1.0, 2.0], &[2], &budget).unwrap())
+            .unwrap();
+        let (calls0, bytes0) = budget.device_readbacks();
+        let host = gpu.download(&x).unwrap();
+        let (calls1, bytes1) = budget.device_readbacks();
+        assert_eq!(host.to_f32_vec().unwrap(), [1.0, 2.0]);
+        assert_eq!((calls1 - calls0, bytes1 - bytes0), (1, 8));
     }
 
     #[test]
@@ -3457,8 +3622,9 @@ mod tests {
                     s.spawn(|| {
                         let mut seen = Vec::new();
                         while !done.load(Ordering::Acquire) {
-                            gpu.ctx.sync().unwrap();
-                            seen.push(gpu.ctx.take_faults());
+                            let own = gpu.ctx.sync_observed().unwrap();
+                            let (bits, first) = gpu.ctx.take_faults();
+                            seen.push((own.0 | bits, if first != 0 { first } else { own.1 }));
                         }
                         seen
                     })
@@ -3875,6 +4041,3 @@ mod tests {
         }
     }
 }
-
-#[cfg(test)]
-mod adv757;
