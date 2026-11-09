@@ -15,7 +15,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use cudarc::driver::LaunchConfig;
-use ojas_core::{Backend, BackendId, Budget, OjasError, Tensor};
+use ojas_core::{BackendCore, BackendId, Budget, OjasError, Tensor};
 use ojas_cuda::error::STICKY_DRIVER_CODES;
 use ojas_cuda::kernels::{KernelModule, STRICT_SM90};
 use ojas_cuda::runtime::driver_error;

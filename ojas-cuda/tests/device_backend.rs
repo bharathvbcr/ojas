@@ -5,7 +5,7 @@
 //! `LD_LIBRARY_PATH=<cublas>:<nvrtc> ./device_backend-<hash> --ignored --test-threads=1`.
 #![cfg(feature = "cuda")]
 
-use ojas_core::{Backend, Budget, DType, OjasError, Tensor};
+use ojas_core::{BackendCore, Budget, DType, OjasError, Tensor};
 use ojas_cuda::runtime::CUBLAS_WORKSPACE_BYTES;
 use ojas_cuda::{CudaBackend, CudaDeviceBuffer, CudaError};
 
