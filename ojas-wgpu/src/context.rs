@@ -564,6 +564,10 @@ pub(crate) struct Inner {
     /// completes, before the host sees the copied bytes.
     #[cfg(test)]
     fail_next_read: std::sync::atomic::AtomicBool,
+    /// Test seam: reads left before the one that fails (see
+    /// [`WgpuContext::fail_read_after`]); 0 when none is armed.
+    #[cfg(test)]
+    fail_countdown: AtomicU32,
     /// Test seam: this many next buffer creations fail as out of memory.
     #[cfg(test)]
     fail_allocs: AtomicU32,
@@ -693,6 +697,7 @@ const UNCAPTURED_CAP: usize = 16;
 const UNCAPTURED_MSG_BYTES: usize = 4096;
 
 /// Upper bound on the cut marker (`... [truncated, N bytes]`, N a `usize`).
+#[cfg(test)]
 const UNCAPTURED_MARKER_BYTES: usize = 64;
 
 /// The uncaptured-error record of a context. Sticky: an error is never
@@ -899,6 +904,8 @@ impl WgpuContext {
                 counters: Counters::default(),
                 #[cfg(test)]
                 fail_next_read: std::sync::atomic::AtomicBool::new(false),
+                #[cfg(test)]
+                fail_countdown: AtomicU32::new(0),
                 #[cfg(test)]
                 fail_allocs: AtomicU32::new(0),
             }),
@@ -1762,7 +1769,8 @@ impl WgpuContext {
             });
         self.wait(index)?;
         #[cfg(test)]
-        if self.inner.fail_next_read.swap(false, Ordering::Relaxed) {
+        if self.inner.fail_next_read.swap(false, Ordering::Relaxed) || self.fail_countdown_expired()
+        {
             return Err(self.failure("injected read failure".to_string()));
         }
         // Another thread's poll may be the one that runs this callback, and it
@@ -1863,6 +1871,24 @@ impl WgpuContext {
     #[cfg(test)]
     pub(crate) fn record_loss(&self, msg: &str) {
         *lock(&self.inner.lost) = Some(msg.to_string());
+    }
+
+    /// Let `n` reads (pieces of one [`WgpuContext::read`], or separate
+    /// reads) complete, then fail the next one once its submission is done:
+    /// deterministic, for a failure after earlier pieces observed a fault.
+    /// `fail_read_after(0)` is [`Self::fail_next_read`].
+    #[cfg(test)]
+    pub(crate) fn fail_read_after(&self, n: u32) {
+        self.inner.fail_countdown.store(n + 1, Ordering::SeqCst);
+    }
+
+    /// Counts a read down; true on the one that was armed to fail.
+    #[cfg(test)]
+    fn fail_countdown_expired(&self) -> bool {
+        self.inner
+            .fail_countdown
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok_and(|before| before == 1)
     }
 
     /// Make the next [`WgpuContext::read`] fail once its submission is done.

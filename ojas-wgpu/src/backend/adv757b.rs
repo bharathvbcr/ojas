@@ -250,73 +250,49 @@ fn adv2_a1_direct_download_vs_refuse_stealer() {
     assert_eq!(a_ok.load(Ordering::Relaxed), 0);
 }
 
-/// A later piece of a multi-piece direct download fails after an earlier one
+/// A later piece of a multi-piece download fails after an earlier one
 /// observed: the Err goes to the caller, the mask is deferred, delivered once.
+/// Deterministic: `fail_read_after(n)` fails the piece after `n` completed
+/// ones, for every n that leaves the first (observing) piece done.
 #[test]
 fn adv2_a1_multi_piece_download_failing_late_defers_once() {
+    const PIECES: u32 = 4;
     let budget = Budget::new(1 << 27);
     let a = WgpuBackend::open(budget.clone()).expect("wgpu adapter");
     a.sync().unwrap();
-    // Four pieces of `READBACK_CHUNK_BYTES`, the size `Tensor::to_host_via` reads in.
-    let n = 4 * ojas_core::READBACK_CHUNK_BYTES / 4;
+    // `PIECES` pieces of `READBACK_CHUNK_BYTES`, the size `Tensor::to_host_via` reads in.
+    let n = PIECES as usize * ojas_core::READBACK_CHUNK_BYTES / 4;
     let mut v = vec![1.0f32; n];
     v[1] = f32::NAN;
     let t = a
         .upload(&Tensor::from_f32(&v, &[n], &budget).unwrap())
         .unwrap();
     let buf = raw_of(&t);
-    let mut hit = 0;
-    for attempt in 0..40 {
+    for after in 1..PIECES {
         raise_as(&a, CAST.fault_id(), &buf, 2);
         let reads0 = a.ctx.stats().reads;
-        let stop = AtomicBool::new(false);
-        let r = std::thread::scope(|s| {
-            let h = s.spawn(|| {
-                while !stop.load(Ordering::Acquire) {
-                    if a.ctx.stats().reads > reads0 {
-                        a.ctx.fail_next_read();
-                        return;
-                    }
-                    std::hint::spin_loop();
-                }
-            });
-            let r = a.download(&t);
-            stop.store(true, Ordering::Release);
-            h.join().unwrap();
-            r
-        });
+        a.ctx.fail_read_after(after);
+        let r = a.download(&t);
         match r {
-            Err(OjasError::Backend { detail, .. }) if detail.contains("injected read failure") => {
-                hit += 1;
-                // The first piece observed the fault; the Err carried no mask.
-                let first = a.sync();
-                assert!(
-                    is_nonfinite(&first),
-                    "attempt {attempt}: mask lost after a late failure: {first:?}"
-                );
-                assert!(a.sync().is_ok(), "attempt {attempt}: delivered twice");
-            }
-            Err(OjasError::NonFinite { .. }) => {
-                // Flag landed after the last piece; the one-shot flag may be live.
-                let _ = a.sync();
-                let _ = a.sync();
-            }
-            other => {
-                // Ok would mean the fault was not delivered at all.
-                let _ = a.sync();
-                let _ = a.sync();
-                panic!("attempt {attempt}: {:?}", other.map(|_| ()));
-            }
+            Err(OjasError::Backend { detail, .. }) if detail.contains("injected read failure") => {}
+            other => panic!(
+                "after {after}: the injection did not fail the download: {:?}",
+                other.map(|_| ())
+            ),
         }
-        if hit >= 5 {
-            break;
-        }
+        assert_eq!(
+            a.ctx.stats().reads - reads0,
+            u64::from(after),
+            "after {after}: exactly {after} pieces completed before the failure"
+        );
+        // The first piece observed the fault; the Err carried no mask.
+        let first = a.sync();
+        assert!(
+            is_nonfinite(&first),
+            "after {after}: mask lost after a late failure: {first:?}"
+        );
+        assert!(a.sync().is_ok(), "after {after}: delivered twice");
     }
-    eprintln!("ADV2 A1 late-failure hits: {hit}");
-    assert!(
-        hit >= 1,
-        "the late failure was never injected (race lost every attempt)"
-    );
 }
 
 /// A failure BEFORE a read observes (injected after the wait) loses nothing:
