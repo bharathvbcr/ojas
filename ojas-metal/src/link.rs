@@ -17,7 +17,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{mpsc, Arc};
 
 use ojas_core::{
-    cached_attention_partial_elems, window_start, BackendId, CeGrads, OjasError, MAX_PERMUTE_RANK,
+    cached_attention_partial_elems, window_start, BackendId, CeChunk, CeGrads, OjasError,
+    MAX_PERMUTE_RANK,
 };
 
 pub(crate) type Res<T> = Result<T, OjasError>;
@@ -1617,25 +1618,52 @@ pub(crate) fn reduce_groups(n: usize) -> usize {
 }
 
 impl LceGeom {
-    /// `rows` and `cols` are the caller's chunk, clamped to the problem and
-    /// to the GEMMs' i32 element limit for one tile (a smaller tile only
-    /// lowers scratch). `w_half` is a `Bf16` weight, whose tiles are always
-    /// staged ([`Self::scratch`] then charges one `[ct, d]` f32 tile).
+    /// The `(rt, ct)` tile of the caller's `chunk`, clamped to the problem
+    /// and so that every matrix tessl's GEMMs see in one tile holds at most
+    /// `i32::MAX` elements (`require_i32_extent`, `../tessl/src/gemm.rs`): the
+    /// `[rt, ct]` logits, the `[rt, d]` input tile and input-gradient
+    /// destination, and the `[ct, d]` weight tile and weight-gradient
+    /// destination. A smaller tile only lowers scratch. A model dim whose
+    /// single row, `[1, d]`, is past the limit cannot be tiled at all and is
+    /// [`OjasError::Unsupported`], before any work.
+    pub(crate) fn tiles(
+        op: &'static str,
+        n: usize,
+        d: usize,
+        v: usize,
+        chunk: CeChunk,
+    ) -> Result<(usize, usize), OjasError> {
+        let limit = i32::MAX as usize;
+        if d > limit {
+            return Err(OjasError::Unsupported {
+                op,
+                detail: format!(
+                    "a model dim of {d} elements puts one [1, {d}] tile row past the i32 \
+                     indexing limit {limit}"
+                ),
+            });
+        }
+        let by_d = limit / d.max(1);
+        let rt = chunk.rows.min(n).min(by_d).max(1);
+        let ct = chunk.cols.min(v).min(by_d).min(limit / rt).max(1);
+        Ok((rt, ct))
+    }
+
+    /// The tiling of `(rt, ct)` from [`Self::tiles`]. `w_half` is a `Bf16`
+    /// weight, whose tiles are always staged ([`Self::scratch`] then charges
+    /// one `[ct, d]` f32 tile).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         n: usize,
         d: usize,
         v: usize,
-        rows: usize,
-        cols: usize,
+        rt: usize,
+        ct: usize,
         x_off: usize,
         w_off: usize,
         grads: CeGrads,
         w_half: bool,
     ) -> Self {
-        let limit = i32::MAX as usize;
-        let rt = rows.min(n).min(limit).max(1);
-        let ct = cols.min(v).min(limit / rt).max(1);
         Self {
             n,
             d,

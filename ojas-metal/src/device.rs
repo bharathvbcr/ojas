@@ -178,6 +178,10 @@ const WS_GROWTH: u64 = 64 << 20;
 /// The device bytes past which commands settle for the working set, from
 /// the reported `recommended_working_set`; `None` for `0`, which tessl
 /// reports when it has no figure.
+///
+/// A reported figure of 1 to 3 bytes gives `Some(0)`, a limit every
+/// allocation is over: a real device never reports one that small, and
+/// reading it as "unreported" would hide a figure the device did give.
 fn ws_limit_of(ws: u64) -> Option<u64> {
     (ws != 0).then(|| ws / WS_DEN * WS_NUM)
 }
@@ -658,8 +662,27 @@ struct Worker {
     _lease: crate::gauge::Lease,
 }
 
+/// The cap of the device-wide pool ledger from the reported
+/// `recommended_working_set`: the figure itself, or no cap for `0`, which
+/// tessl reports when it has no figure. A zero cap would refuse every pool
+/// allocation, so an unreported working set must not become one; the
+/// backend's own [`Budget`] still bounds what it holds.
+fn device_ledger_cap(ws: u64) -> u64 {
+    if ws == 0 {
+        u64::MAX
+    } else {
+        ws
+    }
+}
+
 impl Worker {
     fn open(waits: Arc<Waits>, budget: Budget) -> Res<Self> {
+        Self::open_reporting(waits, budget, |ws| ws)
+    }
+
+    /// [`Self::open`], reading the device's `recommended_working_set`
+    /// through `report`: a test hook for a device that reports none (`0`).
+    fn open_reporting(waits: Arc<Waits>, budget: Budget, report: impl Fn(u64) -> u64) -> Res<Self> {
         #[cfg(test)]
         let lease = crate::gauge::lease();
         let rt = GpuRuntime::new().map_err(metal_err)?;
@@ -667,8 +690,8 @@ impl Worker {
         let pool_cap_usize = usize::try_from(pool_cap).unwrap_or(usize::MAX);
         rt.set_pool_cache_cap_bytes(pool_cap_usize);
 
-        let ws = rt.memory_info().recommended_working_set;
-        let device_budget = Budget::new(ws);
+        let ws = report(rt.memory_info().recommended_working_set);
+        let device_budget = Budget::new(device_ledger_cap(ws));
         let ledger = BudgetLedger::new(&device_budget, pool_cap);
         rt.set_pool_ledger(Some(ledger.as_pool_ledger()))
             .map_err(metal_err)?;
@@ -696,7 +719,7 @@ impl Worker {
         let spare = rt
             .alloc_internal_buffer(NORM_SLOTS * 4)
             .map_err(metal_err)?;
-        let ws = rt.memory_info().recommended_working_set;
+        let ws = report(rt.memory_info().recommended_working_set);
         let book = Book {
             used: 0,
             pending: Vec::new(),
@@ -6853,6 +6876,23 @@ mod adversarial_oom;
 #[cfg(test)]
 mod adv_ws {
     use super::*;
+    /// A device that reports no working set must still allocate: its pool
+    /// ledger is uncapped, not capped at zero. A reported figure is the cap.
+    #[test]
+    fn an_unreported_working_set_leaves_the_pool_ledger_uncapped() {
+        assert_eq!(device_ledger_cap(0), u64::MAX);
+        assert_eq!(device_ledger_cap(48 << 30), 48 << 30);
+        assert_eq!(device_ledger_cap(1), 1);
+        let w = Worker::open_reporting(Arc::new(Waits::default()), Budget::new(1 << 30), |_| 0)
+            .expect("Metal device");
+        assert_eq!(w.book.borrow().ws_limit, None);
+        w.alloc(1 << 20)
+            .expect("an allocation on a device that reports no working set");
+    }
+
+    /// Characterization, not a rule to change: a reported working set of 1
+    /// to 3 bytes gives the limit `Some(0)`, not `None`. A real device never
+    /// reports a figure that small; `0` alone means unreported.
     #[test]
     fn ws_limit_of_edges() {
         for ws in [0u64, 1, 2, 3, 4, 5, 7, 8, u64::MAX, u64::MAX - 1, 48 << 30] {

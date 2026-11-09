@@ -19,8 +19,8 @@ use std::any::Any;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use ojas_core::{
-    BackendCore, BackendId, BackendModule, Budget, DType, DeviceBuffer, MuonNs5Config, OjasError,
-    Tensor,
+    BackendCore, BackendId, BackendModule, Budget, CeChunk, CeGrads, Conv2dParams,
+    ConvTranspose2dParams, DType, DeviceBuffer, MuonNs5Config, OjasError, Tensor,
 };
 use ojas_metal::MetalBackend;
 
@@ -224,4 +224,152 @@ fn linear_forward_output_under_i32_is_not_refused_as_unsupported() {
         Err(OjasError::CapacityExceeded { .. }) => {}
         other => panic!("expected CapacityExceeded, got {other:?}"),
     }
+}
+
+/// `[65537, 1] x [32768, 1]^T` plus a `[32768]` bias: the fused path's
+/// output is 2^31 + 2^15 elements.
+#[test]
+fn linear_bias_forward_output_past_i32_is_unsupported_before_any_work() {
+    refused_before_any_work("linear_bias_forward", |m| {
+        m.linear_bias_forward(
+            &phantom(&[65537, 1]),
+            &phantom(&[32768, 1]),
+            &phantom(&[32768]),
+        )
+        .err()
+    });
+}
+
+/// `linear_bias_backward` takes its gradients from `linear_backward`, whose
+/// bound it inherits; the bias gradient adds no matrix.
+#[test]
+fn linear_bias_backward_inherits_the_linear_backward_bound() {
+    refused_before_any_work("linear_backward", |m| {
+        m.linear_bias_backward(
+            &phantom(&[1, 32768]),
+            &phantom(&[65537, 32768]),
+            &phantom(&[65537]),
+            &phantom(&[1, 65537]),
+        )
+        .err()
+    });
+}
+
+/// 1 x 1 convolution: `W [32768, 1] @ X [1, 256 * 256]` is one image's
+/// 2^31-element output, whichever route the operand's alignment picks.
+#[test]
+fn conv2d_pointwise_image_past_i32_is_unsupported_before_any_work() {
+    refused_before_any_work("conv2d_forward", |m| {
+        m.conv2d_forward(
+            &phantom(&[1, 1, 256, 256]),
+            &phantom(&[32768, 1, 1, 1]),
+            None,
+            Conv2dParams::new(),
+        )
+        .err()
+    });
+}
+
+/// 3 x 3: `[65536, 9] @ [9, 32768]` is a 2^31-element product (the im2col
+/// route, or the TensorOps route's 2^31-element output).
+#[test]
+fn conv2d_3x3_product_past_i32_is_unsupported_before_any_work() {
+    refused_before_any_work("conv2d_forward", |m| {
+        m.conv2d_forward(
+            &phantom(&[1, 1, 258, 258]),
+            &phantom(&[32768, 1, 3, 3]),
+            None,
+            Conv2dParams::new(),
+        )
+        .err()
+    });
+}
+
+/// The reference arm, which never takes the pointwise route, on a 1 x 1.
+#[test]
+fn conv2d_via_im2col_product_past_i32_is_unsupported_before_any_work() {
+    refused_before_any_work("conv2d_forward", |m| {
+        m.conv2d_via_im2col(
+            &phantom(&[1, 1, 256, 256]),
+            &phantom(&[32768, 1, 1, 1]),
+            None,
+            Conv2dParams::new(),
+        )
+        .err()
+    });
+}
+
+fn stride2() -> ConvTranspose2dParams {
+    ConvTranspose2dParams {
+        stride: [2, 2],
+        ..ConvTranspose2dParams::new()
+    }
+}
+
+/// `[65536, 1] @ [1, 32768]` columns: 2^31 elements.
+#[test]
+fn conv_transpose2d_columns_past_i32_is_unsupported_before_any_work() {
+    refused_before_any_work("conv_transpose2d_forward", |m| {
+        m.conv_transpose2d_forward(
+            &phantom(&[1, 1, 256, 256]),
+            &phantom(&[1, 8192, 2, 2]),
+            None,
+            stride2(),
+        )
+        .err()
+    });
+}
+
+#[test]
+fn conv_transpose2d_backward_columns_past_i32_is_unsupported_before_any_work() {
+    refused_before_any_work("conv_transpose2d_backward", |m| {
+        m.conv_transpose2d_backward(
+            &phantom(&[1, 1, 256, 256]),
+            &phantom(&[1, 8192, 2, 2]),
+            None,
+            &phantom(&[1, 8192, 512, 512]),
+            stride2(),
+        )
+        .err()
+    });
+}
+
+#[test]
+fn conv2d_backward_product_past_i32_is_unsupported_before_any_work() {
+    refused_before_any_work("conv2d_backward", |m| {
+        m.conv2d_backward(
+            &phantom(&[1, 1, 258, 258]),
+            &phantom(&[32768, 1, 3, 3]),
+            None,
+            &phantom(&[1, 32768, 256, 256]),
+            Conv2dParams::new(),
+        )
+        .err()
+    });
+}
+
+/// One row of the model dim, `[1, 2^31]`, is past the limit: no tile fits.
+#[test]
+fn linear_cross_entropy_model_dim_past_i32_is_unsupported_before_any_work() {
+    refused_before_any_work("linear_cross_entropy_mean", |m| {
+        let targets = Tensor::from_device(
+            Arc::new(Phantom(4)),
+            &[1],
+            DType::U32,
+            &Budget::new(1 << 40),
+        )
+        .expect("phantom targets");
+        m.linear_cross_entropy_mean(
+            &phantom(&[1, 1 << 31]),
+            &phantom(&[1, 1 << 31]),
+            &targets,
+            None,
+            CeChunk { rows: 1, cols: 1 },
+            CeGrads {
+                input: true,
+                weight: true,
+            },
+        )
+        .err()
+    });
 }
