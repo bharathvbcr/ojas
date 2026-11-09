@@ -254,10 +254,11 @@ fn adv2_a1_direct_download_vs_refuse_stealer() {
 /// observed: the Err goes to the caller, the mask is deferred, delivered once.
 #[test]
 fn adv2_a1_multi_piece_download_failing_late_defers_once() {
-    let budget = Budget::new(1 << 24);
+    let budget = Budget::new(1 << 27);
     let a = WgpuBackend::open(budget.clone()).expect("wgpu adapter");
     a.sync().unwrap();
-    let n = 256 * 1024; // 1 MiB = 16 pieces of 64 KiB
+    // Four pieces of `READBACK_CHUNK_BYTES`, the size `Tensor::to_host_via` reads in.
+    let n = 4 * ojas_core::READBACK_CHUNK_BYTES / 4;
     let mut v = vec![1.0f32; n];
     v[1] = f32::NAN;
     let t = a

@@ -71,6 +71,10 @@ pub const LE_READ_CHUNK_BYTES: usize = 64 << 10;
 /// MiB keeps a checkpoint save of a 150 MB tensor to about 150 calls.
 pub const READBACK_CHUNK_BYTES: usize = 1 << 20;
 
+/// The device-read hook of [`Tensor::to_host_via`]: bytes at `(offset, len)` of the allocation.
+type DeviceReader<'a> =
+    dyn FnMut(&Arc<dyn DeviceBuffer>, usize, usize) -> Result<Vec<u8>, OjasError> + 'a;
+
 /// Owned elements plus view metadata.
 ///
 /// `byte_offset` is the start of element 0 inside the allocation, in bytes.
@@ -1312,7 +1316,7 @@ impl Tensor {
     fn to_host_with(
         &self,
         budget: &Budget,
-        read: &mut dyn FnMut(&Arc<dyn DeviceBuffer>, usize, usize) -> Result<Vec<u8>, OjasError>,
+        read: &mut DeviceReader<'_>,
     ) -> Result<Self, OjasError> {
         const OP: &str = "Tensor::to_host";
         enum Source<'a> {
