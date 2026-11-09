@@ -21,7 +21,7 @@ use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use super::adamw::{Moments, adamw_check, adamw_update};
+use super::adamw::{Moments, adamw_check};
 use super::step::{
     AdamWHyper, BankMode, HiddenGrad, ParamSpec, SequenceJob, StepError, StepProvider,
     StorageDtype, check_per_entry, refuse_lr_scale,
@@ -435,31 +435,30 @@ impl StepProvider for ToyProvider {
                 self.step
             )));
         }
-        // Atomic across entries: every entry is asked first, with `adamw_update`'s own refusal
-        // rule, so a refusal at entry i leaves entries 0..i unstepped and the counter where it
-        // was. Only then does any entry move.
-        for i in 0..self.values.len() {
-            adamw_check(
-                &self.values[i],
-                &self.grads[i],
-                &self.moments[i],
+        // Atomic across entries: every entry is checked first, with `adamw_update`'s own refusal
+        // rule, and only then does any entry move. The checked updates hold the borrows of the
+        // entries, so what is applied is what was checked, with no second scan. A refusal at
+        // entry i leaves entries 0..i unstepped and the counter where it was.
+        let mut checked = Vec::with_capacity(self.values.len());
+        for (i, ((value, grad), moments)) in self
+            .values
+            .iter_mut()
+            .zip(&self.grads)
+            .zip(self.moments.iter_mut())
+            .enumerate()
+        {
+            checked.push(adamw_check(
+                value,
+                grad,
+                moments,
                 hyper,
                 hyper.lr * lr_scale[i],
                 weight_decay[i],
                 step,
-            )?;
+            )?);
         }
-        for i in 0..self.values.len() {
-            let lr = hyper.lr * lr_scale[i];
-            adamw_update(
-                &mut self.values[i],
-                &self.grads[i],
-                &mut self.moments[i],
-                hyper,
-                lr,
-                weight_decay[i],
-                step,
-            )?;
+        for update in checked {
+            update.apply();
         }
         self.step = step;
         Ok(())

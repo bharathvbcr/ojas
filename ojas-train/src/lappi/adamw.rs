@@ -71,27 +71,6 @@ impl EntryState {
     }
 }
 
-/// The step count and hyper-parameters one entry's update runs with.
-fn entry_inputs(
-    state: &EntryState,
-    row: &EntryHyper,
-    lr: f64,
-    grad_scale: f64,
-) -> Result<(u64, AdamWHyper), StepError> {
-    let t = state
-        .steps
-        .checked_add(1)
-        .ok_or_else(|| StepError::Contract(format!("{}: the step count overflows", row.name)))?;
-    let hyper = AdamWHyper {
-        lr,
-        beta1: row.beta1,
-        beta2: row.beta2,
-        eps: row.eps,
-        grad_scale,
-    };
-    Ok((t, hyper))
-}
-
 /// One entry's AdamW step, as `torch.optim.AdamW` takes it over one parameter.
 ///
 /// - `grad` `None` is torch's `p.grad is None` (after `zero_grad(set_to_none=True)`, a parameter
@@ -103,9 +82,9 @@ fn entry_inputs(
 ///   weight_decay)` reads it. Eps and betas are the row's own. `grad_scale` is the clip
 ///   coefficient. Returns `true`.
 ///
-/// A refusal writes nothing and leaves the count where it was. A caller that steps several
-/// entries and must not leave some of them stepped asks [`adamw_entry_check`] of every entry
-/// first: it applies this function's own refusal rule.
+/// A refusal writes nothing and leaves the count where it was. This is
+/// [`adamw_entry_check`] followed by [`CheckedEntry::apply`], so a caller that steps several
+/// entries and must not leave some of them stepped checks every entry first and applies after.
 pub fn adamw_entry_step(
     param: &mut [f32],
     grad: Option<&[f32]>,
@@ -114,11 +93,60 @@ pub fn adamw_entry_step(
     lr: f64,
     grad_scale: f64,
 ) -> Result<bool, StepError> {
+    Ok(adamw_entry_check(param, grad, state, row, lr, grad_scale)?.apply())
+}
+
+/// One entry's step, checked and not yet applied. It holds the exclusive borrows of the entry's
+/// parameter and state and the shared borrow of its gradient, so nothing can change them between
+/// [`adamw_entry_check`] and [`CheckedEntry::apply`]: the check's verdict is the apply's. Dropping
+/// it applies nothing.
+#[must_use = "a checked entry steps nothing until it is applied"]
+pub struct CheckedEntry<'a> {
+    /// `None` for a skipped (no gradient) entry.
+    update: Option<(CheckedUpdate<'a>, &'a mut u64, u64)>,
+}
+
+impl CheckedEntry<'_> {
+    /// Steps the entry: writes the parameter and moments and advances the entry's count. Cannot
+    /// fail. Returns `false` for a skipped entry, `true` otherwise, as [`adamw_entry_step`].
+    pub fn apply(self) -> bool {
+        match self.update {
+            None => false,
+            Some((update, steps, t)) => {
+                update.apply();
+                *steps = t;
+                true
+            }
+        }
+    }
+}
+
+/// Whether [`adamw_entry_step`] with these arguments would succeed: it validates and scans, writes
+/// nothing, and returns the step as a [`CheckedEntry`] to apply. A `None` gradient is skipped, not
+/// refused. This is the one place the entry's refusal rule lives.
+pub fn adamw_entry_check<'a>(
+    param: &'a mut [f32],
+    grad: Option<&'a [f32]>,
+    state: &'a mut EntryState,
+    row: &EntryHyper,
+    lr: f64,
+    grad_scale: f64,
+) -> Result<CheckedEntry<'a>, StepError> {
     let Some(grad) = grad else {
-        return Ok(false);
+        return Ok(CheckedEntry { update: None });
     };
-    let (t, hyper) = entry_inputs(state, row, lr, grad_scale)?;
-    adamw_update(
+    let t = state
+        .steps
+        .checked_add(1)
+        .ok_or_else(|| StepError::Contract(format!("{}: the step count overflows", row.name)))?;
+    let hyper = AdamWHyper {
+        lr,
+        beta1: row.beta1,
+        beta2: row.beta2,
+        eps: row.eps,
+        grad_scale,
+    };
+    let update = adamw_check(
         param,
         grad,
         &mut state.moments,
@@ -127,34 +155,9 @@ pub fn adamw_entry_step(
         row.weight_decay,
         t,
     )?;
-    state.steps = t;
-    Ok(true)
-}
-
-/// Whether [`adamw_entry_step`] with these arguments would succeed, without writing anything.
-/// `Ok(())` is also the answer for a `None` gradient, which is skipped, not refused. The refusal
-/// is the one the step would return: this runs the same validation and the same scan.
-pub fn adamw_entry_check(
-    param: &[f32],
-    grad: Option<&[f32]>,
-    state: &EntryState,
-    row: &EntryHyper,
-    lr: f64,
-    grad_scale: f64,
-) -> Result<(), StepError> {
-    let Some(grad) = grad else {
-        return Ok(());
-    };
-    let (t, hyper) = entry_inputs(state, row, lr, grad_scale)?;
-    adamw_check(
-        param,
-        grad,
-        &state.moments,
-        &hyper,
-        lr * row.lr_scale,
-        row.weight_decay,
-        t,
-    )
+    Ok(CheckedEntry {
+        update: Some((update, &mut state.steps, t)),
+    })
 }
 
 /// The validated scalars of one update, and the lengths they were validated against.
@@ -215,9 +218,9 @@ fn prepare(
 /// element k must not leave elements 0..k updated. The scan runs the very pass that then stores,
 /// minus the stores, so what is checked is exactly what is stored: the first moment, the second
 /// moment and the parameter. A finite gradient whose scaled square overflows f32 in `w2 * g * g`
-/// (|g| above ~1.8e20 at beta2 = 0.999) stores a +inf second moment, and the next step divides by
-/// it. A gradient whose bare `g * g` is +inf is NOT refused when `(w2 * g) * g` is finite: that is
-/// the value the loop stores, and it stays unchanged.
+/// (|g| above ~5.8e20 at beta2 = 0.999, ~1.8e20 at 0.99) stores a +inf second moment, and the
+/// next step divides by it. A gradient whose bare `g * g` is +inf is NOT refused when
+/// `(w2 * g) * g` is finite: that is the value the loop stores, and it stays unchanged.
 fn scan_refusal(
     p: &Prepared,
     param: &[f32],
@@ -231,28 +234,68 @@ fn scan_refusal(
     Ok(())
 }
 
-/// Whether [`adamw_update`] with these arguments would succeed, without writing anything: the
-/// same validation, the same scan, the same refusal. It is the one place that rule lives, so a
-/// caller that steps several tensors (a provider's bank, a head) can ask every tensor first and
-/// then apply, instead of leaving the earlier tensors stepped when a later one refuses.
-pub fn adamw_check(
-    param: &[f32],
-    grad: &[f32],
-    moments: &Moments,
+/// One tensor's update, checked and not yet applied. It holds the exclusive borrows of the
+/// parameter and both moments and the shared borrow of the gradient, so the compiler guarantees
+/// they cannot change between [`adamw_check`] and [`CheckedUpdate::apply`]: the scan done at check
+/// time is the scan of what `apply` stores, and `apply` does not scan again. Dropping it applies
+/// nothing.
+#[must_use = "a checked update writes nothing until it is applied"]
+pub struct CheckedUpdate<'a> {
+    prepared: Prepared,
+    param: &'a mut [f32],
+    grad: &'a [f32],
+    m: &'a mut [f32],
+    v: &'a mut [f32],
+}
+
+impl CheckedUpdate<'_> {
+    /// Writes the update: parameter and both moments. Cannot fail.
+    pub fn apply(self) {
+        let Self {
+            prepared,
+            param,
+            grad,
+            m,
+            v,
+        } = self;
+        write_pass::<false>(&prepared.kernel, prepared.decaying, param, grad, m, v);
+    }
+}
+
+/// Whether [`adamw_update`] with these arguments would succeed: the validation and the scan,
+/// the same refusal, with nothing written. On success the update is returned as a
+/// [`CheckedUpdate`] to apply. It is the one place the refusal rule lives, so a caller that steps
+/// several tensors (a provider's bank, a head) checks every tensor first and then applies all,
+/// instead of leaving the earlier tensors stepped when a later one refuses.
+pub fn adamw_check<'a>(
+    param: &'a mut [f32],
+    grad: &'a [f32],
+    moments: &'a mut Moments,
     hyper: &AdamWHyper,
     lr: f64,
     weight_decay: f64,
     step: u64,
-) -> Result<(), StepError> {
-    let p = prepare(param, grad, moments, hyper, lr, weight_decay, step)?;
-    scan_refusal(&p, param, grad, &moments.m, &moments.v)
+) -> Result<CheckedUpdate<'a>, StepError> {
+    let prepared = prepare(param, grad, moments, hyper, lr, weight_decay, step)?;
+    let n = param.len();
+    // Re-slicing to `n` up front lets the compiler drop the per-element bounds checks.
+    let (param, grad) = (&mut param[..n], &grad[..n]);
+    let (m, v) = (&mut moments.m[..n], &mut moments.v[..n]);
+    scan_refusal(&prepared, param, grad, m, v)?;
+    Ok(CheckedUpdate {
+        prepared,
+        param,
+        grad,
+        m,
+        v,
+    })
 }
 
 /// One AdamW update of `param` in place. `lr` is this tensor's learning rate (the schedule's
 /// rate times its group's scale); `hyper.lr` is not read. `step` is the 1-based count.
 ///
-/// A refusal writes nothing: `param` and both moments are as they came in. See [`adamw_check`]
-/// for asking without applying.
+/// A refusal writes nothing: `param` and both moments are as they came in. This is
+/// [`adamw_check`] followed by [`CheckedUpdate::apply`].
 pub fn adamw_update(
     param: &mut [f32],
     grad: &[f32],
@@ -262,13 +305,7 @@ pub fn adamw_update(
     weight_decay: f64,
     step: u64,
 ) -> Result<(), StepError> {
-    let p = prepare(param, grad, moments, hyper, lr, weight_decay, step)?;
-    let n = param.len();
-    // Re-slicing to `n` up front lets the compiler drop the per-element bounds checks.
-    let (param, grad) = (&mut param[..n], &grad[..n]);
-    let (m, v) = (&mut moments.m[..n], &mut moments.v[..n]);
-    scan_refusal(&p, param, grad, m, v)?;
-    write_pass::<false>(&p.kernel, p.decaying, param, grad, m, v);
+    adamw_check(param, grad, moments, hyper, lr, weight_decay, step)?.apply();
     Ok(())
 }
 
@@ -539,6 +576,10 @@ mod tests {
         x.iter().map(|v| v.to_bits()).collect()
     }
 
+    fn mbits(m: &Moments) -> (Vec<u32>, Vec<u32>) {
+        (bits(&m.m), bits(&m.v))
+    }
+
     /// Runs one update and returns the (param, m, v) bit patterns, or the refusal.
     fn run(
         p: &[f32],
@@ -755,8 +796,18 @@ mod tests {
         // Accepted: the check says Ok and moves nothing; the update then succeeds.
         let (p0, mo0) = state();
         let g = [0.3f32, -4.0, 1e-3];
-        adamw_check(&p0, &g, &mo0, &h, 1e-3, 0.01, 3).unwrap();
-        assert!(run(&p0, &g, &mo0, &h).0.is_ok());
+        {
+            let (mut p, mut mo) = (p0.clone(), mo0.clone());
+            let checked = adamw_check(&mut p, &g, &mut mo, &h, 1e-3, 0.01, 3).unwrap();
+            // Checking wrote nothing; applying writes what `adamw_update` writes.
+            drop(checked);
+            assert_eq!((bits(&p), mbits(&mo)), (bits(&p0), mbits(&mo0)));
+            let checked = adamw_check(&mut p, &g, &mut mo, &h, 1e-3, 0.01, 3).unwrap();
+            checked.apply();
+            let (r, rp, rm, rv) = run(&p0, &g, &mo0, &h);
+            r.unwrap();
+            assert_eq!((bits(&p), bits(&mo.m), bits(&mo.v)), (rp, rm, rv));
+        }
         // Refused: the same refusal text as the update, for every kind of refusal.
         let (mut bad_m, mut bad_p) = (mo0.clone(), mo0.clone());
         bad_m.v[1] = f32::NAN;
@@ -773,7 +824,10 @@ mod tests {
         for (g, mo, lr, wd, step) in cases {
             let (mut p, mut mo_u) = (p0.clone(), mo.clone());
             let upd = adamw_update(&mut p, g, &mut mo_u, &h, lr, wd, step).unwrap_err();
-            let chk = adamw_check(&p0, g, mo, &h, lr, wd, step).unwrap_err();
+            let (mut pc, mut moc) = (p0.clone(), mo.clone());
+            let chk = adamw_check(&mut pc, g, &mut moc, &h, lr, wd, step)
+                .err()
+                .expect("the check refuses what the update refuses");
             assert_eq!(upd.to_string(), chk.to_string());
         }
     }
@@ -795,24 +849,42 @@ mod tests {
         // step-count-overflow entry are refused, and the check never moves the state.
         let ok_grad = [0.1f32, 0.2];
         let big = [1e21f32, 0.0];
-        let st = EntryState::zeros(2);
-        let p = [0.5f32, 0.5];
-        adamw_entry_check(&p, None, &st, &row(1.0), 1e-3, 1.0).unwrap();
-        adamw_entry_check(&p, Some(&ok_grad), &st, &row(1.0), 1e-3, 1.0).unwrap();
-        adamw_entry_check(&p, Some(&big), &st, &row(1.0), 1e-3, 1.0).unwrap_err();
-        adamw_entry_check(&p, Some(&ok_grad), &st, &row(0.0), 1e-3, 1.0).unwrap_err();
-        let mut max = EntryState::zeros(2);
-        max.steps = u64::MAX;
-        adamw_entry_check(&p, Some(&ok_grad), &max, &row(1.0), 1e-3, 1.0).unwrap_err();
-        assert_eq!(st, EntryState::zeros(2));
-        // Entry step refuses the same inputs, writing nothing and not counting.
-        for (grad, r) in [(&big, row(1.0)), (&ok_grad, row(0.0))] {
-            let (mut pp, mut s) = (p, EntryState::zeros(2));
-            adamw_entry_step(&mut pp, Some(grad), &mut s, &r, 1e-3, 1.0).unwrap_err();
-            assert_eq!((pp, s), (p, EntryState::zeros(2)));
+        let p0 = [0.5f32, 0.5];
+        let fresh = || (p0, EntryState::zeros(2));
+        let (mut p, mut st) = fresh();
+        assert!(
+            !adamw_entry_check(&mut p, None, &mut st, &row(1.0), 1e-3, 1.0)
+                .unwrap()
+                .apply()
+        );
+        let (mut p, mut st) = fresh();
+        let c = adamw_entry_check(&mut p, Some(&ok_grad), &mut st, &row(1.0), 1e-3, 1.0).unwrap();
+        c.apply();
+        assert_eq!(st.steps, 1);
+        for (grad, r, steps) in [
+            (&big, row(1.0), 0),
+            (&ok_grad, row(0.0), 0),
+            (&ok_grad, row(1.0), u64::MAX),
+        ] {
+            let (mut p, mut st) = fresh();
+            st.steps = steps;
+            assert!(
+                adamw_entry_check(&mut p, Some(grad), &mut st, &r, 1e-3, 1.0)
+                    .err()
+                    .is_some()
+            );
+            assert_eq!(p, p0, "a refused check wrote the parameter");
+            assert_eq!((st.steps, st.moments.clone()), (steps, Moments::zeros(2)));
+            // The entry step refuses the same inputs, writing nothing and not counting.
+            assert!(adamw_entry_step(&mut p, Some(grad), &mut st, &r, 1e-3, 1.0).is_err());
+            assert_eq!(p, p0);
+            assert_eq!((st.steps, st.moments.clone()), (steps, Moments::zeros(2)));
         }
         // An entry with no elements passes.
-        adamw_entry_check(&[], Some(&[]), &EntryState::zeros(0), &row(1.0), 1e-3, 1.0).unwrap();
+        let mut st = EntryState::zeros(0);
+        adamw_entry_check(&mut [], Some(&[]), &mut st, &row(1.0), 1e-3, 1.0)
+            .unwrap()
+            .apply();
     }
 
     /// Cost of the refusal pass, split: the aff9179 loop, the scan alone, the write pass alone,

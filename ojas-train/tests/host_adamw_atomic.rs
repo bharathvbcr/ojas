@@ -221,7 +221,9 @@ impl Objective for HostObjective {
 
     fn plan(&mut self, batch: &Batch) -> Result<MicroBatchPlan, TrainError> {
         self.batch = batch.0;
-        let tokens: Vec<u32> = (0..5).map(|k| ((batch.0 * 3 + k * 2) % VOCAB as u64) as u32).collect();
+        let tokens: Vec<u32> = (0..5)
+            .map(|k| ((batch.0 * 3 + k * 2) % VOCAB as u64) as u32)
+            .collect();
         Ok(MicroBatchPlan {
             sequences: vec![SequenceWork {
                 positions: (0..4).collect(),
