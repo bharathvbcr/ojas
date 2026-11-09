@@ -1885,10 +1885,9 @@ impl WgpuContext {
     /// Counts a read down; true on the one that was armed to fail.
     #[cfg(test)]
     fn fail_countdown_expired(&self) -> bool {
-        self.inner
-            .fail_countdown
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
-            .is_ok_and(|before| before == 1)
+        let countdown = &self.inner.fail_countdown;
+        // Armed and read from one thread, as the tests do; 0 means unarmed.
+        countdown.load(Ordering::SeqCst) != 0 && countdown.fetch_sub(1, Ordering::SeqCst) == 1
     }
 
     /// Make the next [`WgpuContext::read`] fail once its submission is done.
