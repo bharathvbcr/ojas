@@ -80,7 +80,14 @@ fn adamw_step_neither_reports_nor_clears_a_pending_fault() {
     let mut m2 = up(&m, &host(&[0.0; 8], &[8]));
     ok(
         "adamw_step runs past a pending fault",
-        m.adamw_step(&mut p, &g, &mut m1, &mut m2, 1, AdamWConfig::nanolab(1e-2, 0.1)),
+        m.adamw_step(
+            &mut p,
+            &g,
+            &mut m1,
+            &mut m2,
+            1,
+            AdamWConfig::nanolab(1e-2, 0.1),
+        ),
     );
     assert_ne!(
         bits(&down(&p)),
@@ -157,7 +164,9 @@ fn a_mapped_tensor_to_host_is_a_raw_read_and_leaves_the_fault_pending() {
     let shared = rx.recv().expect("shared buf");
     {
         let mut w = shared.write().expect("write lease");
-        w.as_f32_mut().expect("f32").copy_from_slice(&[1.0, 2.0, 3.0, 4.0]);
+        w.as_f32_mut()
+            .expect("f32")
+            .copy_from_slice(&[1.0, 2.0, 3.0, 4.0]);
     }
     let mapped = ok(
         "from_mapped",
