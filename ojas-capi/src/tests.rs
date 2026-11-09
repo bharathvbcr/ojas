@@ -1689,9 +1689,10 @@ fn a_user_path_never_selects_an_error_kind() {
 #[test]
 fn every_error_kind_has_a_distinct_prefix_that_go_decodes() {
     use crate::ErrorKind;
-    const ALL: [ErrorKind; 7] = [
+    const ALL: [ErrorKind; 8] = [
         ErrorKind::Capacity,
         ErrorKind::DeviceLost,
+        ErrorKind::Timeout,
         ErrorKind::NonFinite,
         ErrorKind::Busy,
         ErrorKind::Poisoned,
@@ -1702,11 +1703,12 @@ fn every_error_kind_has_a_distinct_prefix_that_go_decodes() {
         let at = match kind {
             ErrorKind::Capacity => 0,
             ErrorKind::DeviceLost => 1,
-            ErrorKind::NonFinite => 2,
-            ErrorKind::Busy => 3,
-            ErrorKind::Poisoned => 4,
-            ErrorKind::Pressure => 5,
-            ErrorKind::Target => 6,
+            ErrorKind::Timeout => 2,
+            ErrorKind::NonFinite => 3,
+            ErrorKind::Busy => 4,
+            ErrorKind::Poisoned => 5,
+            ErrorKind::Pressure => 6,
+            ErrorKind::Target => 7,
         };
         assert_eq!(at, i, "{kind:?} is out of place");
     }
@@ -1765,6 +1767,24 @@ fn error_kinds_follow_the_ojas_error_variant() {
                 detail: String::new(),
             },
             Some(ErrorKind::DeviceLost),
+        ),
+        // A device wait that ran out of budget is retryable: its own kind,
+        // never DeviceLost.
+        (
+            OjasError::WaitTimeout {
+                backend: BackendId::Metal,
+                waited_ms: 30_000,
+                detail: "wait budget exceeded".into(),
+            },
+            Some(ErrorKind::Timeout),
+        ),
+        (
+            OjasError::WaitTimeout {
+                backend: BackendId::Cuda,
+                waited_ms: 1,
+                detail: String::new(),
+            },
+            Some(ErrorKind::Timeout),
         ),
         // Pre-fix, these two were DeviceLost by substring. A Backend error
         // has no kind, whatever its text says.

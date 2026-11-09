@@ -54,6 +54,11 @@ pub use session::{
 pub(crate) enum ErrorKind {
     Capacity,
     DeviceLost,
+    /// A wait for the device to finish recorded work ran out of its budget
+    /// ([`ojas_core::OjasError::WaitTimeout`]). Retryable: the work is
+    /// queued, not faulted, and the backend is usable; the same call or the
+    /// next sync point waits again. Unlike `DeviceLost`, nothing is gone.
+    Timeout,
     NonFinite,
     /// Another call holds the session's model (its `try_lock` failed).
     Busy,
@@ -77,6 +82,7 @@ impl ErrorKind {
         match self {
             ErrorKind::Capacity => "ojas:E_CAPACITY: ",
             ErrorKind::DeviceLost => "ojas:E_DEVICE_LOST: ",
+            ErrorKind::Timeout => "ojas:E_TIMEOUT: ",
             ErrorKind::NonFinite => "ojas:E_NONFINITE: ",
             ErrorKind::Busy => "ojas:E_BUSY: ",
             ErrorKind::Poisoned => "ojas:E_POISONED: ",
@@ -92,15 +98,17 @@ pub(crate) fn kinded(kind: ErrorKind, msg: impl std::fmt::Display) -> String {
 }
 
 /// The kind an error carries, by variant alone: [`OjasError::CapacityExceeded`],
-/// [`OjasError::NonFinite`], [`OjasError::Poisoned`] and
+/// [`OjasError::NonFinite`], [`OjasError::Poisoned`],
 /// [`OjasError::DeviceLost`] (which the GPU backends set where they detect
-/// the loss) map directly. Every other variant has no kind, whatever its
+/// the loss) and [`OjasError::WaitTimeout`] (a device wait that ran out of
+/// budget, retryable) map directly. Every other variant has no kind, whatever its
 /// text says.
 ///
 /// [`OjasError::CapacityExceeded`]: ojas_core::OjasError::CapacityExceeded
 /// [`OjasError::NonFinite`]: ojas_core::OjasError::NonFinite
 /// [`OjasError::Poisoned`]: ojas_core::OjasError::Poisoned
 /// [`OjasError::DeviceLost`]: ojas_core::OjasError::DeviceLost
+/// [`OjasError::WaitTimeout`]: ojas_core::OjasError::WaitTimeout
 pub(crate) fn kind_of(err: &ojas_core::OjasError) -> Option<ErrorKind> {
     use ojas_core::OjasError;
     match err {
@@ -108,6 +116,7 @@ pub(crate) fn kind_of(err: &ojas_core::OjasError) -> Option<ErrorKind> {
         OjasError::NonFinite { .. } => Some(ErrorKind::NonFinite),
         OjasError::Poisoned => Some(ErrorKind::Poisoned),
         OjasError::DeviceLost { .. } => Some(ErrorKind::DeviceLost),
+        OjasError::WaitTimeout { .. } => Some(ErrorKind::Timeout),
         _ => None,
     }
 }

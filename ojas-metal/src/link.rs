@@ -56,6 +56,9 @@ const WAIT_KINDS: usize = 9;
 #[derive(Default)]
 pub(crate) struct Waits {
     by: [AtomicU64; WAIT_KINDS],
+    /// Waits that ran out of their budget, classified as
+    /// [`OjasError::WaitTimeout`]. Error-path only.
+    timeouts: AtomicU64,
     dispatches: AtomicU64,
     /// Dispatches encoded by pipeline name: what ran, as opposed to what a
     /// planner says would. Telemetry for tests and benches.
@@ -85,6 +88,17 @@ impl Waits {
             .get(name)
             .copied()
             .unwrap_or(0)
+    }
+
+    /// A wait ran out of its budget.
+    pub(crate) fn note_timeout(&self) {
+        self.timeouts.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Waits that ran out of their budget so far.
+    #[cfg(test)]
+    pub(crate) fn timeouts(&self) -> u64 {
+        self.timeouts.load(Ordering::Relaxed)
     }
 
     pub(crate) fn count(&self, why: Wait) {
@@ -677,10 +691,32 @@ pub(crate) enum Cmd {
     /// would.
     #[cfg(test)]
     FailNextRead,
-    /// Test hook: set tessl's runtime poison, as a command buffer that
-    /// failed or timed out on the GPU does.
+    /// Test hook: set tessl's runtime poison through its own test door
+    /// (`poison_as_shared_event_timeout_for_test`). It models a poisoned
+    /// runtime, which is tessl's third consecutive event-wait timeout
+    /// (`CONSECUTIVE_EVENT_WAIT_TIMEOUTS`) or a faulted command buffer. One
+    /// wait that runs out of budget does NOT poison; see `SetEventWaitMs`.
     #[cfg(test)]
     PoisonRuntime,
+    /// Test hook, served outside `command` (so it neither waits nor spends a
+    /// timeout of its own, and still runs on a poisoned runtime): set
+    /// tessl's event-wait budget with `set_event_wait_ms`.
+    #[cfg(test)]
+    SetEventWaitMs {
+        ms: u64,
+    },
+    /// Test hook, served outside `command`: the next command's trigger check
+    /// lowers the event-wait budget to `budget_ms` and waits, whatever the
+    /// triggers say. The budget is lowered only there, so the op's own
+    /// encoding never meets it.
+    #[cfg(test)]
+    ForceWaitNext {
+        budget_ms: u64,
+    },
+    /// Test hook, served outside `command`: whether tessl's runtime is
+    /// poisoned, as `Reply::Flag`.
+    #[cfg(test)]
+    RuntimePoisoned,
     /// Test hook: set tessl's pool cache cap, for an A/B of the cap a
     /// backend opens with against another.
     #[cfg(test)]
@@ -1350,6 +1386,8 @@ pub(crate) enum Reply {
     Memory(crate::MetalMemory),
     Done,
     Trimmed(u64),
+    #[cfg(test)]
+    Flag(bool),
 }
 
 pub(crate) struct Msg {
@@ -1499,6 +1537,12 @@ impl Link {
     /// Compute dispatches the device thread has encoded so far.
     pub(crate) fn dispatches(&self) -> u64 {
         self.waits.dispatches()
+    }
+
+    /// Waits that ran out of their budget so far.
+    #[cfg(test)]
+    pub(crate) fn timeouts(&self) -> u64 {
+        self.waits.timeouts()
     }
 
     /// Dispatches of the kernel named `name` the device thread has encoded.

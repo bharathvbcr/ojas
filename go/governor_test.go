@@ -27,7 +27,7 @@ func kindSentinels() []error {
 // prefix is a prefix of another, so the decoder's order cannot matter.
 func TestInBandKindsTable(t *testing.T) {
 	want := []string{
-		"ojas:E_CAPACITY:", "ojas:E_DEVICE_LOST:", "ojas:E_BUSY:",
+		"ojas:E_CAPACITY:", "ojas:E_DEVICE_LOST:", "ojas:E_TIMEOUT:", "ojas:E_BUSY:",
 		"ojas:E_NONFINITE:", "ojas:E_POISONED:", "ojas:E_PRESSURE:",
 		"ojas:E_TARGET:",
 	}
@@ -61,6 +61,7 @@ func TestInBandErrorPrefixes(t *testing.T) {
 		{errors.New("ojas:E_CAPACITY: session cap"), "ojas:E_CAPACITY: session cap", ErrCapacity},
 		// A gusset engine error: the kind leads its Msg, after gusset's head.
 		{&gusset.Error{Code: 1, Msg: "ojas:E_DEVICE_LOST: gpu reset"}, "gusset error [1]: ojas:E_DEVICE_LOST: gpu reset", ErrDeviceLost},
+		{&gusset.Error{Code: 1, Msg: "ojas:E_TIMEOUT: train_step: device wait timed out"}, "gusset error [1]: ojas:E_TIMEOUT: train_step: device wait timed out", ErrTimeout},
 		{errors.New("ojas:E_NONFINITE: logit"), "ojas:E_NONFINITE: logit", ErrNonFinite},
 		{errors.New("ojas:E_POISONED: train_step: poisoned"), "ojas:E_POISONED: train_step: poisoned", ErrPoisoned},
 		// Critical pressure is its own kind: transient, never ErrCapacity.

@@ -581,6 +581,10 @@ struct Book {
     fail_allocs: (u32, u32),
     #[cfg(test)]
     fail_next_read: bool,
+    /// The budget the next trigger check waits under, whatever the triggers
+    /// say (`Cmd::ForceWaitNext`).
+    #[cfg(test)]
+    force_wait: Option<u64>,
 }
 
 /// What one per-head gate command runs.
@@ -740,6 +744,8 @@ impl Worker {
             fail_allocs: (0, 0),
             #[cfg(test)]
             fail_next_read: false,
+            #[cfg(test)]
+            force_wait: None,
         };
         Ok(Self {
             rt,
@@ -786,6 +792,10 @@ impl Worker {
                 }
                 continue;
             }
+            #[cfg(test)]
+            if self.serve_wait_hook(&msg) {
+                continue;
+            }
             let out = if self.poisoned {
                 Err(OjasError::Poisoned)
             } else if self.rt.is_poisoned() {
@@ -808,6 +818,32 @@ impl Worker {
                 let _ = reply.send(out);
             }
         }
+    }
+
+    /// The test hooks that set up or read the event-wait state. They run
+    /// outside `command`, so a hook neither waits nor spends one of tessl's
+    /// consecutive timeouts, and they still answer on a poisoned runtime
+    /// (a test must raise the budget before the runtime drops, or tessl's
+    /// final wait gives up and leaks). `true` when `msg` was one of them.
+    #[cfg(test)]
+    fn serve_wait_hook(&self, msg: &Msg) -> bool {
+        let out = match &msg.cmd {
+            Cmd::SetEventWaitMs { ms } => self
+                .rt
+                .set_event_wait_ms(*ms)
+                .map(|()| Reply::Done)
+                .map_err(metal_err),
+            Cmd::ForceWaitNext { budget_ms } => {
+                self.book.borrow_mut().force_wait = Some(*budget_ms);
+                Ok(Reply::Done)
+            }
+            Cmd::RuntimePoisoned => Ok(Reply::Flag(self.rt.is_poisoned())),
+            _ => return false,
+        };
+        if let Some(reply) = &msg.reply {
+            let _ = reply.send(out);
+        }
+        true
     }
 
     /// Run a provider closure (`MetalBackend::with_runtime`) on this thread
@@ -951,6 +987,13 @@ impl Worker {
         };
         if !dirty {
             return Ok(());
+        }
+        #[cfg(test)]
+        let forced = self.book.borrow_mut().force_wait.take();
+        #[cfg(test)]
+        if let Some(budget_ms) = forced {
+            self.rt.set_event_wait_ms(budget_ms).map_err(metal_err)?;
+            return self.settle(Scan::All, Wait::MemCap);
         }
         if alloc > cap {
             return self.settle(Scan::All, Wait::MemCap);
@@ -1637,6 +1680,10 @@ impl Worker {
                 self.rt.poison_as_shared_event_timeout_for_test();
                 Ok(Reply::Done)
             }
+            #[cfg(test)]
+            Cmd::SetEventWaitMs { .. } | Cmd::ForceWaitNext { .. } | Cmd::RuntimePoisoned => Err(
+                metal_err("a wait test hook is served outside command, never run"),
+            ),
             #[cfg(test)]
             Cmd::Tune {
                 overlap,
