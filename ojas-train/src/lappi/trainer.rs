@@ -37,7 +37,7 @@ use std::path::{Path, PathBuf};
 use ojas_io::json::{JsonValue as Value, parse_json};
 use ojas_io::sha256::{Sha256, sha256};
 
-use super::adamw::{EntryState, Moments, adamw_entry_step};
+use super::adamw::{EntryState, Moments, adamw_entry_check};
 use super::pyjson::{CANONICAL, PyJsonError, dumps, float_fromhex, float_hex, obj};
 use super::recipe::{self, OptimizerRecipe};
 use super::run_control::{
@@ -858,32 +858,39 @@ where
             grad_scale: coef,
         };
         let t = optimizer_step + 1;
-        // Host shapes are checked before the provider moves, so the two halves move together.
-        if let Some(h) = objective.host_ref() {
-            if h.values().len() != host_rows.len() || host_state.len() != host_rows.len() {
+        // One snapshot of the host tensors serves the shape check, the refusal check and the
+        // step: `values_and_grads` is read once, so the three cannot disagree, and every host
+        // entry is checked BEFORE the provider moves, so the step is atomic across the provider
+        // and the host (a refusal after the provider stepped would leave it a step ahead of the
+        // host and of `optimizer_step`, as the non-finite-norm refusal above never does). The
+        // checked entries hold the borrows of the objective's tensors and of `host_state`, so
+        // what is applied after the provider's step is what was checked.
+        let snapshot = objective
+            .host()
+            .map(|h| h.values_and_grads())
+            .unwrap_or_default();
+        if snapshot.len() != host_rows.len() || host_state.len() != host_rows.len() {
+            return Err(TrainError::Refused(
+                "the host parameters no longer match the optimizer table".into(),
+            ));
+        }
+        let mut checked = Vec::with_capacity(snapshot.len());
+        // Each host entry steps on its own count, and not at all without a gradient.
+        for (((value, grad), s), row) in snapshot
+            .into_iter()
+            .zip(host_state.iter_mut())
+            .zip(&host_rows)
+        {
+            if grad.is_some_and(|g| g.len() != value.len()) || s.moments.m.len() != value.len() {
                 return Err(TrainError::Refused(
-                    "the host parameters no longer match the optimizer table".into(),
+                    "a host tensor's gradient or moments do not fit it".into(),
                 ));
             }
-            for ((g, v), s) in h.grads().into_iter().zip(h.values()).zip(&host_state) {
-                if g.is_some_and(|g| g.len() != v.len()) || s.moments.m.len() != v.len() {
-                    return Err(TrainError::Refused(
-                        "a host tensor's gradient or moments do not fit it".into(),
-                    ));
-                }
-            }
+            checked.push(adamw_entry_check(value, grad, s, row, lr, coef)?);
         }
         provider.adamw_step(&hyper, t, &lr_scale, &weight_decay)?;
-        if let Some(h) = objective.host() {
-            // Each host entry steps on its own count, and not at all without a gradient.
-            for (((value, grad), s), row) in h
-                .values_and_grads()
-                .into_iter()
-                .zip(host_state.iter_mut())
-                .zip(&host_rows)
-            {
-                adamw_entry_step(value, grad, s, row, lr, coef)?;
-            }
+        for entry in checked {
+            entry.apply();
         }
         log.append(LossPoint {
             optimizer_step,
