@@ -1374,7 +1374,10 @@ fn a_refused_adamw_step_leaves_the_bank_unscaled_and_complete_at_any_entry() {
                 let err = p
                     .adamw_step(&hyper(grad_scale), 1, &lr_scale, &wd)
                     .unwrap_err();
-                assert!(err.to_string().contains("no tensor was stepped"), "{what}: {err}");
+                assert!(
+                    err.to_string().contains("no tensor was stepped"),
+                    "{what}: {err}"
+                );
                 assert!(
                     p.bank().is_complete(),
                     "{what}: the refusal emptied the bank"
@@ -1452,8 +1455,12 @@ fn a_clean_step_after_a_norm_is_identical_to_one_without_it() {
     let run = |ask_norm: bool| {
         let mut p = open(16, true);
         let mut ext = outside;
-        p.accumulate(&job(10, 1, 1.0, true).view(), BankMode::Overwrite, Some(&mut ext))
-            .unwrap();
+        p.accumulate(
+            &job(10, 1, 1.0, true).view(),
+            BankMode::Overwrite,
+            Some(&mut ext),
+        )
+        .unwrap();
         p.accumulate(&job(9, 2, 0.5, false).view(), BankMode::Add, None)
             .unwrap();
         let norm = if ask_norm {
@@ -1463,7 +1470,11 @@ fn a_clean_step_after_a_norm_is_identical_to_one_without_it() {
         };
         let (lr_scale, wd) = per_entry(n_trainable(&p));
         p.adamw_step(&hyper(0.5), 1, &lr_scale, &wd).unwrap();
-        (norm, bits_all(&p.read_parameters().unwrap()), moments_bits(&mut p))
+        (
+            norm,
+            bits_all(&p.read_parameters().unwrap()),
+            moments_bits(&mut p),
+        )
     };
     let (norm, params_a, moments_a) = run(true);
     let (_, params_b, moments_b) = run(false);
@@ -1550,8 +1561,8 @@ fn metal_provider() -> TapeStepProvider<ojas_metal::MetalBackend> {
             m.with_budget(b)
         })),
     };
-    let mut p = TapeStepProvider::open_lora(metal(), hooks, open_config(16), lora_init(true))
-        .unwrap();
+    let mut p =
+        TapeStepProvider::open_lora(metal(), hooks, open_config(16), lora_init(true)).unwrap();
     p.preflight(&tiny_calibration(), 16, &[16], 1 << 30, 0)
         .unwrap();
     p
@@ -1608,15 +1619,17 @@ fn recording_hooks(seen: &Seen, honour: bool) -> DeviceHooks<DeviceLike> {
         freeze: Some(Box::new(
             |_: &DeviceLike, _: &Tensor| -> Result<(), ojas_core::OjasError> { Ok(()) },
         )),
-        rebind: Some(Box::new(move |_: &DeviceLike, budget: ojas_core::Budget| {
-            seen.borrow_mut().push(budget.clone());
-            let charged = if honour {
-                budget
-            } else {
-                ojas_core::Budget::new(4 << 30)
-            };
-            DeviceLike(CpuBackend::new(charged).with_numerics(Numerics::Exact))
-        })),
+        rebind: Some(Box::new(
+            move |_: &DeviceLike, budget: ojas_core::Budget| {
+                seen.borrow_mut().push(budget.clone());
+                let charged = if honour {
+                    budget
+                } else {
+                    ojas_core::Budget::new(4 << 30)
+                };
+                DeviceLike(CpuBackend::new(charged).with_numerics(Numerics::Exact))
+            },
+        )),
     }
 }
 

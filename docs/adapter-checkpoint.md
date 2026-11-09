@@ -68,6 +68,8 @@ All values are strings. Keys of `adapters.safetensors`:
 
 There is no dropout key: the recipe's LoRA dropout is 0 and a non-zero dropout refuses to checkpoint (`AdapterError::Dropout`), so a resume never depends on a dropout stream.
 
+**What the Tape provider writes as `ojas.adapter.rng_state`.** The layout treats the bytes as opaque; the Qwen3.5 Tape provider (`encode_rng` in `ojas-model/src/qwen35/step_provider.rs`) writes the loop's `CheckpointContext` as 16 bytes: `seed` as a u64 little-endian, then `epoch` as a u64 little-endian, hex-encoded lowercase like any other value of this key. Seed `0x0102030405060708` and epoch `0x1112131415161718` are `08070605040302011817161514131211`. On resume the provider recomputes those 16 bytes from the loop's seed and epoch and refuses the checkpoint unless they are equal byte for byte, so a swapped seed and epoch is refused too. Pinned by `the_rng_state_is_the_seed_then_the_epoch_little_endian_and_round_trips` (`ojas-model/tests/qwen35_step_provider.rs`). Another writer may put any 1 to 4096 bytes here; only this provider reads these 16 as seed and epoch.
+
 The RNG state is the data-order RNG only. The frozen base is named by the name and sha256 of the single base file the run loaded (for the quantised arm, the fake-quant bf16 file) plus the quantizer record; the block-quantised storage dtype is not part of layout 1.
 
 ## Refusals
