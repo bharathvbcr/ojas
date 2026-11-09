@@ -2,7 +2,7 @@
 //! tape, composed from three `Tape::rms_norm` records rather than from a
 //! fourth hand-written RMSNorm gradient.
 //!
-//! - The three outputs are `Backend::rms_qkv_norm_forward`'s outputs bit for
+//! - The three outputs are `ojas_core::BackendModule::rms_qkv_norm_forward`'s outputs bit for
 //!   bit, with learned Q/K weights and weightless, so the composition is the
 //!   same forward the backend op computes and not a near-copy of it.
 //! - The gradients are the backend's `rms_norm_backward` chained by hand, bit

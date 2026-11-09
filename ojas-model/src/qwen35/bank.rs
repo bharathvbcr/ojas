@@ -19,7 +19,7 @@
 //! A slot is a left fold in arrival order, in f32: after sequences
 //! `g1, g2, g3` it holds `(g1 + g2) + g3`, each `+` one f32 rounding per
 //! element and nothing else (no scaling, no compensated sum). Slots add
-//! through [`Backend::accumulate_grad`], which is that same elementwise f32
+//! through [`ojas_core::BackendFloat::accumulate_grad`], which is that same elementwise f32
 //! add. A caller that wants a different association builds it by changing the
 //! order it feeds the sequences.
 //!
@@ -35,7 +35,7 @@
 //!   its `Overwrite` would otherwise sum into the previous step's gradient
 //!   or start from nothing without saying so.
 //! - If the backend refuses an add, the slot is emptied, because a backend
-//!   that defers faults ([`Backend::accumulate_grad`]) leaves the sum
+//!   that defers faults ([`ojas_core::BackendFloat::accumulate_grad`]) leaves the sum
 //!   invalid. The step must restart with `Overwrite`.
 //! - Accumulating does not judge finiteness; [`AdapterBank::sq_norm`]
 //!   refuses a non-finite value, and [`super::optim::adamw_all_or_nothing`]

@@ -2,8 +2,8 @@
 //!
 //! A cache is one key and one value tensor per layer, `[1, slots, n_kv_head,
 //! head_dim]`, time-major. It is a ring: position `j` lives in slot
-//! `j % slots` (`Backend::kv_cache_write` and
-//! `Backend::cached_attention_forward` both index it so). Without a sliding
+//! `j % slots` (`ojas_core::BackendModule::kv_cache_write` and
+//! `ojas_core::BackendModule::cached_attention_forward` both index it so). Without a sliding
 //! window `slots` is the capacity, so no position ever wraps. With a window
 //! `W` smaller than the capacity, a query reads only the last `W`
 //! positions, and the ring keeps `2W - 1` slots (or the capacity, if that is
@@ -192,7 +192,7 @@ pub(crate) fn run_pieces<B: Backend>(
 
 /// Every block over `ids` at positions `len..len + Tn` (`rope` holds their
 /// rows). Each layer writes its post-RoPE keys and blended values into its
-/// ring with `Backend::kv_cache_write`, then attends over the visible
+/// ring with `ojas_core::BackendModule::kv_cache_write`, then attends over the visible
 /// positions with [`Graph::cached_attn`]. Returns the hidden state `[1, Tn,
 /// n_embd]`.
 fn blocks<B: Backend>(

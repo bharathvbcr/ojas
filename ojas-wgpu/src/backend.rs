@@ -12,15 +12,15 @@
 //! tensor passed to an op is [`OjasError::Placement`] with `found: None`; a
 //! tensor of another device or another wgpu context is `Placement` as well.
 //! Data moves
-//! only through [`Backend::upload`] (contiguous, non-empty) and
-//! [`Backend::download`]. A contiguous view with a non-zero `byte_offset` is
+//! only through [`ojas_core::BackendCore::upload`] (contiguous, non-empty) and
+//! [`ojas_core::BackendCore::download`]. A contiguous view with a non-zero `byte_offset` is
 //! bound in place at that offset when the device's storage-offset alignment
 //! allows it, and compacted on the device otherwise; a non-contiguous view
 //! is [`OjasError::Shape`]. A
 //! U32 upload keeps a host copy of its ids so token ids and targets are
 //! range-checked, and the cross-entropy valid count formed, with no readback.
 //!
-//! bf16 operands ([`Backend::bf16_operands`]): the matmul-class ops take a
+//! bf16 operands ([`ojas_core::BackendCore::bf16_operands`]): the matmul-class ops take a
 //! `Bf16` operand (two values a word, any element offset) and widen it
 //! exactly (`bits << 16`) into charged job scratch with `widen_bf16`, then
 //! run the f32 kernels, so a `Bf16` operand gives the bits its bf16-exact
@@ -40,8 +40,8 @@
 //! the shared encoder exists to avoid. Instead:
 //!
 //! - the kernel raises its op's bit in a device fault word and keeps going;
-//! - the very next [`WgpuBackend::sync`], [`Backend::download`] (of any
-//!   tensor) or [`Backend::clip_grad_norm`] returns [`OjasError::NonFinite`]
+//! - the very next [`WgpuBackend::sync`], [`ojas_core::BackendCore::download`] (of any
+//!   tensor) or [`ojas_core::BackendFloat::clip_grad_norm`] returns [`OjasError::NonFinite`]
 //!   naming the first op, in recording order on this backend, that faulted
 //!   since the previous report. A fault is never lost and is reported at
 //!   least once: one caller reports it once, but two threads whose syncs
@@ -716,7 +716,7 @@ impl WgpuBackend {
         self.ctx.job(&self.budget, op.fault_id())
     }
 
-    /// A matmul-class operand ([`Backend::bf16_operands`]) as f32 words: an
+    /// A matmul-class operand ([`ojas_core::BackendCore::bf16_operands`]) as f32 words: an
     /// `F32` operand's own ([`bind`]); a `Bf16` one's widened exactly by
     /// `widen_bf16` into job scratch charged to the budget, raising `op`'s
     /// fault bit on a NaN or an infinity.

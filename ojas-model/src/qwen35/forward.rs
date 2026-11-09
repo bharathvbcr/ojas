@@ -317,7 +317,7 @@ pub fn forward_loss_lora<G: Graph>(
 /// nothing the row reads. That holds for finite padding only: a non-finite
 /// value in a padding token's embedding is refused as `NonFinite`, naming
 /// the op. The CPU backend refuses it at the op; a GPU backend records the
-/// fault and reports it at `Backend::sync` or `Backend::download`, so read
+/// fault and reports it at `ojas_core::BackendCore::sync` or `ojas_core::BackendCore::download`, so read
 /// results of a GPU tape through those (raw `Tensor::to_host` is not a fault
 /// point on Metal and would hand the caller NaN with no error).
 /// [`RightPadded`] is the input form that makes only right padding

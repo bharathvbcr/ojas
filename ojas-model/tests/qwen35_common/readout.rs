@@ -31,7 +31,7 @@ use super::*;
 
 pub const ANSWERS: usize = 17;
 
-/// A tape value or gradient on the host, read through `Backend::download`: on
+/// A tape value or gradient on the host, read through `ojas_core::BackendCore::download`: on
 /// a GPU backend that is a sync point, so a non-finite value an op produced
 /// surfaces here as `NonFinite` naming the op. Raw `Tensor::to_host` is not
 /// a fault point on Metal. On CPU `download` is `to_host`.

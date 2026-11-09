@@ -1,6 +1,6 @@
 //! Randomized tape stress: many iterations of a seeded random op sequence,
 //! then `backward_seeded`, `take_grad` into trainer-owned accumulators
-//! (`Backend::accumulate_grad`), and `clear`, the way §3's training step
+//! (`ojas_core::BackendFloat::accumulate_grad`), and `clear`, the way §3's training step
 //! drives the tape.
 //!
 //! Checks, per run:

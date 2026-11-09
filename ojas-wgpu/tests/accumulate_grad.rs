@@ -1,4 +1,4 @@
-//! `Backend::accumulate_grad` on wgpu (T2, gate G2): `acc += grad` in the
+//! `ojas_core::BackendFloat::accumulate_grad` on wgpu (T2, gate G2): `acc += grad` in the
 //! accumulator's own buffer when it is the sole owner, bit-identical to the
 //! CPU reference (`Numerics::Exact`); a shared accumulator gets a new buffer
 //! and the other handle is untouched. Non-finite sums are deferred like every
@@ -299,7 +299,7 @@ fn adamw_step_copies_no_state() {
 }
 
 /// `optimizer_scratch_bytes` is an upper bound on what one step reserves
-/// (`ojas-core/src/backend.rs`, `Backend::optimizer_scratch_bytes`), so a
+/// (`ojas-core/src/backend.rs`, `ojas_core::BackendCore::optimizer_scratch_bytes`), so a
 /// budget with room for the operands and one step's figure must carry any
 /// number of back-to-back steps. wgpu holds a call's scratch until the next
 /// submit; a call that finds the budget short for want of an earlier call's

@@ -1,4 +1,4 @@
-//! `Backend::linear_cross_entropy_mean` on wgpu (T3, gate G3).
+//! `ojas_core::BackendModule::linear_cross_entropy_mean` on wgpu (T3, gate G3).
 //!
 //! (a) equals the unfused `linear_forward -> cross_entropy_mean_forward /
 //! backward -> linear_backward` composition on wgpu at 1e-6, measured as

@@ -60,7 +60,7 @@ pub enum OjasError {
     },
     /// The tensor lives on a different device than the call needs.
     /// `found` is `None` for host memory. Nothing is copied implicitly;
-    /// call [`crate::Tensor::to_host`] or [`crate::Backend::upload`].
+    /// call [`crate::Tensor::to_host`] or [`crate::BackendCore::upload`].
     Placement {
         op: &'static str,
         expected: Option<BackendId>,

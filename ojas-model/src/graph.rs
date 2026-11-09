@@ -50,7 +50,7 @@ pub trait Graph {
     /// Causal SDPA. Query is head-major `[B, H, T, D]`; key and value are
     /// `[B, Hkv, T, D]`, with `H` a positive multiple of `Hkv`. With a
     /// `window`, query `t` attends to keys `t - window < j <= t`
-    /// ([`Backend::causal_sdpa_forward`]).
+    /// ([`ojas_core::BackendModule::causal_sdpa_forward`]).
     fn sdpa(
         &mut self,
         q: &Self::V,
@@ -58,7 +58,7 @@ pub trait Graph {
         v: &Self::V,
         window: Option<usize>,
     ) -> Result<Self::V, OjasError>;
-    /// [`Backend::cached_attention_forward`]: `q` `[B, Tq, H, D]` against
+    /// [`ojas_core::BackendModule::cached_attention_forward`]: `q` `[B, Tq, H, D]` against
     /// the `kv_len` positions written to a `[B, Tcap, Hkv, D]` ring cache,
     /// under the same `window` as [`Graph::sdpa`]. Decode uses this path.
     /// Full-sequence training uses [`Graph::sdpa`].
@@ -82,7 +82,7 @@ pub trait Graph {
     fn vres(&mut self, v: &Self::V, v0: &Self::V, lambda: &Self::V) -> Result<Self::V, OjasError>;
     fn silu(&mut self, x: &Self::V) -> Result<Self::V, OjasError>;
     fn sigmoid(&mut self, x: &Self::V) -> Result<Self::V, OjasError>;
-    /// [`Backend::gdn_log_decay_forward`]: `a` `[..., H]`, `a_log` and
+    /// [`ojas_core::BackendModule::gdn_log_decay_forward`]: `a` `[..., H]`, `a_log` and
     /// `dt_bias` `[H]`.
     fn gdn_log_decay(
         &mut self,
@@ -90,10 +90,10 @@ pub trait Graph {
         a_log: &Self::V,
         dt_bias: &Self::V,
     ) -> Result<Self::V, OjasError>;
-    /// [`Backend::causal_conv1d_silu_forward`]: `x` `[B, T, C]`, `w` `[C, K]`.
+    /// [`ojas_core::BackendModule::causal_conv1d_silu_forward`]: `x` `[B, T, C]`, `w` `[C, K]`.
     fn conv1d_silu(&mut self, x: &Self::V, w: &Self::V) -> Result<Self::V, OjasError>;
     /// The gated delta rule from a zero state
-    /// ([`Backend::chunked_gdn_forward`]): `q`, `k` `[B, T, H, Dk]`, `v`
+    /// ([`ojas_core::BackendModule::chunked_gdn_forward`]): `q`, `k` `[B, T, H, Dk]`, `v`
     /// `[B, T, H, Dv]`, `g` and `beta` `[B, T, H]`. Returns `[B, T, H, Dv]`.
     fn gdn(
         &mut self,
@@ -103,7 +103,7 @@ pub trait Graph {
         g: &Self::V,
         beta: &Self::V,
     ) -> Result<Self::V, OjasError>;
-    /// [`Backend::gated_rms_norm_forward`].
+    /// [`ojas_core::BackendModule::gated_rms_norm_forward`].
     fn gated_rms_norm(
         &mut self,
         x: &Self::V,
@@ -111,7 +111,7 @@ pub trait Graph {
         w: &Self::V,
         eps: f32,
     ) -> Result<Self::V, OjasError>;
-    /// [`Backend::rope_partial_forward`]: `x` `[B, T, H, D]`, `cos` and `sin`
+    /// [`ojas_core::BackendModule::rope_partial_forward`]: `x` `[B, T, H, D]`, `cos` and `sin`
     /// `[T, R]`.
     fn rope_partial(
         &mut self,
@@ -124,7 +124,7 @@ pub trait Graph {
     /// The same contiguous values under another shape. No bytes move.
     fn reshape(&mut self, x: &Self::V, shape: &[usize]) -> Result<Self::V, OjasError>;
     /// Mean cross-entropy of `x @ w^T` through the backend's fused
-    /// [`Backend::linear_cross_entropy_mean`]. `x` is `[N, d]`, `w` is
+    /// [`ojas_core::BackendModule::linear_cross_entropy_mean`]. `x` is `[N, d]`, `w` is
     /// `[V, d]`, `targets` is `[N]` `U32`. Returns a rank-0 loss.
     fn lin_ce(
         &mut self,
@@ -301,7 +301,7 @@ impl<B: Backend> Eval<B> {
         }
     }
 
-    /// [`Backend::kv_cache_write`]: write `src` `[B, Tn, Hkv, D]` into the
+    /// [`ojas_core::BackendModule::kv_cache_write`]: write `src` `[B, Tn, Hkv, D]` into the
     /// uniquely owned `cache` at time positions `at..at + Tn`. On any error
     /// the cache is unchanged.
     pub fn kv_cache_write(

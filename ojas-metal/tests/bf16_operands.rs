@@ -1,4 +1,4 @@
-//! Bf16 operands of the matmul-class ops on Metal (`Backend::bf16_operands`):
+//! Bf16 operands of the matmul-class ops on Metal (`ojas_core::BackendCore::bf16_operands`):
 //! a `Bf16` operand gives the bits its widened `F32` copy gives, a resident
 //! `Bf16` weight costs 2 bytes per element, and the widened copy is charged
 //! only while the op runs. Device `to_bf16` / `to_f32` are bit-exact with

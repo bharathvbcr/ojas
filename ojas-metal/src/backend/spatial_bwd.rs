@@ -1,5 +1,5 @@
 //! The host half of the convolution backward passes
-//! ([`ojas_core::Backend::conv2d_backward`], [`ojas_core::Backend::conv_transpose2d_backward`]):
+//! ([`ojas_core::BackendModule::conv2d_backward`], [`ojas_core::BackendModule::conv_transpose2d_backward`]):
 //! validate, refuse what the kernels do not run, charge the outputs and the
 //! scratch to the budget, and send one command. The device half is
 //! `src/device/spatial_bwd.rs`.
@@ -42,7 +42,7 @@ fn convt_geom(op: &'static str, d: &ConvTranspose2dDims) -> Res<ConvGeom> {
 }
 
 impl MetalBackend {
-    /// [`ojas_core::Backend::conv2d_backward`]: im2col, two exact-f32 GEMMs and a
+    /// [`ojas_core::BackendModule::conv2d_backward`]: im2col, two exact-f32 GEMMs and a
     /// col2im gather for one group; three direct kernels for a depthwise
     /// convolution. Scratch (one group): the im2col matrix, the permuted
     /// `grad_output`, the column gradient, and a copy of the weight if it
@@ -106,7 +106,7 @@ impl MetalBackend {
         grads(OP, self.outputs(OP, &shapes, scratch, cmd)?)
     }
 
-    /// [`ojas_core::Backend::conv_transpose2d_backward`] for kernel == stride: gy read
+    /// [`ojas_core::BackendModule::conv_transpose2d_backward`] for kernel == stride: gy read
     /// as im2col columns on the input's grid, two exact-f32 GEMMs and a
     /// layout permute. Scratch: the NHWC input, the column gradient, the
     /// NHWC input gradient, and a copy of the weight if it does not start on

@@ -98,7 +98,7 @@ fn backward_ops_are_implemented() {
 
 /// `sync` through the trait, the way a generic training loop (or an
 /// `Arc<WgpuBackend>` / `&dyn Backend` caller) reaches it. Before wgpu
-/// overrode `Backend::sync`, every one of these returned the trait default
+/// overrode `ojas_core::BackendCore::sync`, every one of these returned the trait default
 /// `Ok(())` and the deferred fault was dropped.
 #[test]
 fn the_trait_sync_reports_the_deferred_fault() {

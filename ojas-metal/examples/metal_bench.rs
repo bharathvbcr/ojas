@@ -8,7 +8,7 @@
 //!
 //! `floor` (never part of the default run; macOS only) splits the per-op
 //! fixed cost into phases, `25 × iters` runs per scenario:
-//! - `MetalBackend`: the op call, `Backend::sync`, tessl's event wait inside
+//! - `MetalBackend`: the op call, `ojas_core::BackendCore::sync`, tessl's event wait inside
 //!   it, and the commits, residency flushes and cold allocations each run
 //!   made, from `tessl::infer_trace`. Scenarios: sync alone, one op and a
 //!   sync, the same after an idle gap of 1, 5 or 20 ms, and 8 ops then one
@@ -42,7 +42,7 @@
 //! decode requests (H 12, D 64, 1024 cached positions) cost as 16
 //! `cached_attention_forward` calls against one batched call, `25 × iters`
 //! runs per scenario:
-//! - `MetalBackend`: host time of the calls, `Backend::sync`, tessl's event
+//! - `MetalBackend`: host time of the calls, `ojas_core::BackendCore::sync`, tessl's event
 //!   wait, and the commits, residency flushes, cold allocations, dispatches
 //!   and barriers per run.
 //! - tessl directly with this crate's `ojas_cached_attn`: the GPU span of one
@@ -66,7 +66,7 @@
 //!
 //! Ops are recorded and return before the device runs them
 //! (`docs/metal-deferred-faults.md`), so every timed run ends with
-//! `Backend::sync` and is device-complete time. Each row reports:
+//! `ojas_core::BackendCore::sync` and is device-complete time. Each row reports:
 //! - resident: inputs already on the device, outputs left there;
 //! - with transfer: host inputs uploaded, then the op, then every output
 //!   downloaded. For the full step the parameters and optimizer state stay

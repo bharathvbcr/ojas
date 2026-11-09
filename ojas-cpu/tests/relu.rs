@@ -1,4 +1,4 @@
-//! `Backend::relu_forward` on the CPU: values, refusals, thread and
+//! `ojas_core::BackendFloat::relu_forward` on the CPU: values, refusals, thread and
 //! numerics independence, and its place in the bf16 autocast policy (a
 //! pointwise op, like SiLU: rounded and tagged only when its input is
 //! bf16-tagged; the norms and softmax stay f32).

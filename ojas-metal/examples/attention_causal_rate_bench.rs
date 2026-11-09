@@ -1,5 +1,5 @@
 //! Day-0 kill check of the TensorOps cross-attention work: the effective rate of
-//! the existing flash forward `ojas_attn_fwd_d32` (`Backend::causal_sdpa_forward`,
+//! the existing flash forward `ojas_attn_fwd_d32` (`ojas_core::BackendModule::causal_sdpa_forward`,
 //! windowless) at large T, with tessl's bidirectional `encoder_attn`
 //! (`attention_forward` at Tq = Tk) as the engine reference and the fc1 linear as
 //! the control. The rules are `bench/results/2026-10-27-attention-mpp/rules.md`.

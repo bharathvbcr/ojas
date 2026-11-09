@@ -325,7 +325,7 @@ pub(crate) fn relu_backward(
 }
 
 /// `y[r, :] += bias` over `[rows, out]` rows in place: the one `f32` add
-/// [`ojas_core::Backend::linear_bias_forward`] makes after the product.
+/// [`ojas_core::BackendModule::linear_bias_forward`] makes after the product.
 pub(crate) fn add_row_bias(op: &'static str, y: &mut [f32], bias: &[f32]) -> Result<(), OjasError> {
     if bias.is_empty() || !y.len().is_multiple_of(bias.len()) {
         return Err(shape(op, "bias length does not divide the output"));

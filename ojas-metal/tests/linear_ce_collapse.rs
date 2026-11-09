@@ -1,4 +1,4 @@
-//! Softmax Collapse through `Backend::linear_cross_entropy_mean` on Metal
+//! Softmax Collapse through `ojas_core::BackendModule::linear_cross_entropy_mean` on Metal
 //! (`ojas_lce_stats`, `ojas_lce_loss`, `ojas_lce_grad`; ft-f40eeed8).
 //!
 //! A row keeps the standard form bit for bit unless its target logit is the

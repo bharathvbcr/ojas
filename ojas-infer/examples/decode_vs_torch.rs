@@ -7,7 +7,7 @@
 //! - `wgpu`: `DeviceDecoder<WgpuBackend>` (runtime `ojas-wgpu`).
 //!
 //! Run through `bench/run_paired.sh`; see `bench/README.md`. Every timed
-//! iteration ends with `Backend::sync`, as in the other lanes.
+//! iteration ends with `ojas_core::BackendCore::sync`, as in the other lanes.
 
 #[path = "../../bench/ojas_rows.rs"]
 #[allow(dead_code)]

@@ -1,4 +1,4 @@
-//! `Backend::chunked_gdn_forward` / `_backward` on the CPU, against
+//! `ojas_core::BackendModule::chunked_gdn_forward` / `_backward` on the CPU, against
 //! transformers' float64 goldens, central differences of the f64 forward
 //! (`ojas_oracle::gdn::forward_f64`), and that forward's states at each
 //! checkpoint.

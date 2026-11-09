@@ -1,5 +1,5 @@
 //! Adversarial and stress checks of the CPU gated delta rule
-//! (`Backend::chunked_gdn_forward` / `_backward`), beyond the goldens in
+//! (`ojas_core::BackendModule::chunked_gdn_forward` / `_backward`), beyond the goldens in
 //! `gdn.rs`:
 //!
 //! - a sweep of shapes, including every extent of 1 and the lengths either

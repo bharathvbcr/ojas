@@ -1,4 +1,4 @@
-//! `Backend::optimizer_scratch_bytes` is an upper bound on what one step
+//! `ojas_core::BackendCore::optimizer_scratch_bytes` is an upper bound on what one step
 //! reserves, so a budget with room for the operands and one step's figure
 //! carries any number of back-to-back `muon_ns5_step` calls: none is refused
 //! after another has updated its parameter in place. Metal reserves scratch

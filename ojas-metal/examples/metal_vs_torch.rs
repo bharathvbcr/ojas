@@ -5,7 +5,7 @@
 //!
 //! `MetalBackend` ops are recorded and return before the device runs them
 //! (`docs/metal-deferred-faults.md`). The harness ends every timed iteration
-//! with `Backend::sync`, which waits for the recorded work, so wall time
+//! with `ojas_core::BackendCore::sync`, which waits for the recorded work, so wall time
 //! around a call is device-complete time.
 
 #[path = "../../bench/ojas_rows.rs"]

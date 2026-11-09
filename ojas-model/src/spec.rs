@@ -63,7 +63,7 @@ pub struct ModelSpec {
     pub tie_embeddings: bool,
     /// Sliding-window attention on every layer: the query at position `t`
     /// attends to keys `t - W < j <= t` (nanolab's `swa` mixer with
-    /// `swa_sinks = 0`, `Backend::causal_sdpa_forward`'s `window`). `None`
+    /// `swa_sinks = 0`, `ojas_core::BackendModule::causal_sdpa_forward`'s `window`). `None`
     /// is full causal attention, and so is a window of at least the
     /// sequence length. Decoders keep a ring of keys and values for it
     /// rather than every position.

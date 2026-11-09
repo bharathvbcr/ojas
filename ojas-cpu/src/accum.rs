@@ -6,7 +6,7 @@ use ojas_core::{accumulate_grad_dims, Budget, OjasError, Tensor};
 use crate::pool::{scoped, Exec};
 use crate::validate::{f32_layouts, fill_outs_chunked_trusted, nonfinite};
 
-/// [`ojas_core::Backend::accumulate_grad`] on the CPU.
+/// [`ojas_core::BackendFloat::accumulate_grad`] on the CPU.
 ///
 /// Both operands are read in place. Every sum is checked finite before
 /// anything is written or charged: a NaN or infinity in either operand, or
@@ -117,7 +117,7 @@ fn sums_finite(a: &[f32], g: &[f32]) -> bool {
 /// Sums [`sums_finite`] tests per branch.
 const FINITE_BLOCK: usize = 64;
 
-/// [`ojas_core::Backend::scale_grad`] on the CPU: `grad *= scale`.
+/// [`ojas_core::BackendFloat::scale_grad`] on the CPU: `grad *= scale`.
 ///
 /// One pass in the [`scoped::pieces`] cut, each product one rounding of
 /// `value * scale` (the bits of the host loop the tape ran before

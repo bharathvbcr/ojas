@@ -1,5 +1,5 @@
 //! Adversarial tests for `Tape::frozen_leaf` and
-//! `Backend::linear_backward_input` (card ft-6fb212ce). A test that exposes a
+//! `ojas_core::BackendModule::linear_backward_input` (card ft-6fb212ce). A test that exposes a
 //! real break is `#[ignore = "BREAK: ..."]`; the rest are regression tests.
 
 mod common;

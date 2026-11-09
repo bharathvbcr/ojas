@@ -1,5 +1,5 @@
 //! `Tape::chunked_gdn`: the record keeps the forward's checkpoints and its
-//! backward hands every input the gradient `Backend::chunked_gdn_backward`
+//! backward hands every input the gradient `ojas_core::BackendModule::chunked_gdn_backward`
 //! gives for an all-ones output seed. The op's own numerics are checked in
 //! `ojas-oracle/tests/gdn.rs` (published goldens and central differences).
 

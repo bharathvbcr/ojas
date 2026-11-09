@@ -8,7 +8,7 @@
 //! 4. `rms_qkv_norm` with learned Q/K weights and weightless V
 //! 5. `swa` non-causal symmetric sliding window attention (|i - j| <= W)
 //!
-//! [`check`] runs a backend through [`Backend::upload`] on every case and measures
+//! [`check`] runs a backend through [`ojas_core::BackendCore::upload`] on every case and measures
 //! against PyTorch references within pre-specified tolerance bounds.
 
 use std::collections::HashMap;

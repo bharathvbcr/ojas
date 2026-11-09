@@ -1,4 +1,4 @@
-//! `Backend::attention_forward`, `attention_forward_saving` and
+//! `ojas_core::BackendModule::attention_forward`, `attention_forward_saving` and
 //! `attention_backward`: bidirectional attention, a query length that
 //! differs from the key length, grouped-query heads, key lengths, an
 //! additive bias (with its gradient) and the causal / window masks, against

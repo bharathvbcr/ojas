@@ -7,7 +7,7 @@
 
 #![cfg(all(target_os = "macos", feature = "metal"))]
 
-use ojas_core::{Backend, BackendId, Budget, DType, OjasError, Tensor};
+use ojas_core::{BackendCore, BackendId, Budget, DType, OjasError, Tensor};
 use std::sync::Arc;
 use tessl::shared_buf::{SharedAlloc, SharedBuf};
 

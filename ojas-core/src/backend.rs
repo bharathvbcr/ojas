@@ -184,9 +184,9 @@ pub fn attention_scale(head_dim: u32, scale: Option<f32>) -> Result<f32, OjasErr
 /// The order logits are ranked in for decoding: column `a` of `row` against
 /// column `b`, value descending, then column ascending. `+0.0` and `-0.0`
 /// are one value, so a tie between them goes to the lower column, as
-/// `torch.argmax` and [`Backend::argmax_rows`] take ties; `-inf` ranks after
+/// `torch.argmax` and [`crate::BackendInt::argmax_rows`] take ties; `-inf` ranks after
 /// every finite value. Distinct columns never compare equal. NaN is not
-/// ranked: callers refuse it first. [`Backend::topk_rows`] and
+/// ranked: callers refuse it first. [`crate::BackendInt::topk_rows`] and
 /// `ojas_infer`'s sampler (`top_k`, and temperature 0) rank by it, so every
 /// greedy pick in ojas is the lowest column of the largest value.
 pub fn rank_logits(row: &[f32], a: usize, b: usize) -> std::cmp::Ordering {
@@ -462,14 +462,14 @@ impl AdamWConfig {
     }
 }
 
-/// Which optimizer call [`Backend::optimizer_scratch_bytes`] sizes.
+/// Which optimizer call [`crate::BackendCore::optimizer_scratch_bytes`] sizes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OptimizerKind {
     AdamW,
     MuonNs5,
 }
 
-/// Precision of the Newton-Schulz iterate in [`Backend::muon_ns5_step`].
+/// Precision of the Newton-Schulz iterate in [`crate::BackendModule::muon_ns5_step`].
 ///
 /// The momentum buffer, the parameter and its update stay f32 under both.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -489,7 +489,7 @@ pub enum Ns5Precision {
     Bf16,
 }
 
-/// Muon NS5 as [`Backend::muon_ns5_step`] runs it.
+/// Muon NS5 as [`crate::BackendModule::muon_ns5_step`] runs it.
 ///
 /// Nesterov momentum (`buf = mom * buf + g`, update = `g + mom * buf` when
 /// Nesterov is on). Orthogonalize with five Newton-Schulz steps at `ns5`
@@ -529,7 +529,7 @@ pub struct PerHeadGateGrad {
     pub attn_out: Tensor,
 }
 
-/// How [`Backend::attention_forward`] masks and biases the scores
+/// How [`crate::BackendModule::attention_forward`] masks and biases the scores
 /// `scale * q . k`, with `scale` from [`attention_scale`]
 /// ([`sdpa_scale`]`(D)` unless [`AttentionOpts::scale`] says otherwise). The default is
 /// bidirectional attention over every key, no bias, `scale` and `radius`
@@ -537,7 +537,7 @@ pub struct PerHeadGateGrad {
 ///
 /// A key is visible to query `i` of batch `b` when it passes every mask
 /// that is set, and a row that sees no key outputs zeros (its
-/// log-sum-exp is stored as 0; see [`Backend::attention_forward_saving`]):
+/// log-sum-exp is stored as 0; see [`crate::BackendModule::attention_forward_saving`]):
 ///
 /// - `causal`: query `i` sits at position `p = i + Tk - Tq` and sees keys
 ///   `j <= p`. With `Tq == Tk` that is the usual lower triangle; with
@@ -560,9 +560,9 @@ pub struct PerHeadGateGrad {
 /// `scale` replaces the `1 / sqrt(D)` score scale, applied to `q . k` as
 /// the default scale is (EmbeddingGemma 2 passes `Some(1.0)`, after its
 /// QK norm). It must be finite. `None` is [`sdpa_scale`]`(D)`. The causal
-/// pair [`Backend::causal_sdpa_forward`] and
-/// [`Backend::causal_sdpa_backward`] has no scale parameter, so
-/// [`Backend::attention_forward`] with `causal` equals the causal pair bit
+/// pair [`crate::BackendModule::causal_sdpa_forward`] and
+/// [`crate::BackendModule::causal_sdpa_backward`] has no scale parameter, so
+/// [`crate::BackendModule::attention_forward`] with `causal` equals the causal pair bit
 /// for bit only with `scale: None` and `radius: None`.
 ///
 /// `bias` is added to the scores before the softmax: `F32` (or `Bf16`)
@@ -585,7 +585,7 @@ pub struct AttentionOpts<'a> {
     pub radius: Option<usize>,
 }
 
-/// Gradients of [`Backend::attention_backward`].
+/// Gradients of [`crate::BackendModule::attention_backward`].
 #[derive(Clone, Debug)]
 pub struct AttentionGrad {
     pub q: Tensor,
@@ -604,7 +604,7 @@ pub struct ValueResidualGrad {
     pub lambda: Tensor,
 }
 
-/// Tokens between the states [`Backend::chunked_gdn_forward`] saves. The
+/// Tokens between the states [`crate::BackendModule::chunked_gdn_forward`] saves. The
 /// backward recomputes each chunk's states from its checkpoint, as tessl's
 /// `gdn_train` kernels do (`GDN_TRAIN_CKPT`).
 pub const GDN_CHECKPOINT_TOKENS: usize = 64;
@@ -640,7 +640,7 @@ pub struct GdnInputs<'a> {
     pub initial_state: Option<&'a Tensor>,
 }
 
-/// What [`Backend::chunked_gdn_forward`] produces.
+/// What [`crate::BackendModule::chunked_gdn_forward`] produces.
 #[derive(Clone, Debug)]
 pub struct GdnForward {
     /// `[B, T, H, Dv]`.
@@ -665,7 +665,7 @@ pub struct GdnGrad {
     pub initial_state: Option<Tensor>,
 }
 
-/// Gradients of [`Backend::gated_rms_norm_forward`], each shaped like its
+/// Gradients of [`crate::BackendModule::gated_rms_norm_forward`], each shaped like its
 /// input.
 #[derive(Clone, Debug)]
 pub struct GatedRmsGrad {
@@ -675,8 +675,8 @@ pub struct GatedRmsGrad {
 }
 
 /// Gradients of an op with an input, a weight and a bias
-/// ([`Backend::layer_norm_backward`], [`Backend::channel_layer_norm_backward`]
-/// and [`Backend::linear_bias_backward`]), each shaped like its operand.
+/// ([`crate::BackendModule::layer_norm_backward`], [`crate::BackendModule::channel_layer_norm_backward`]
+/// and [`crate::BackendModule::linear_bias_backward`]), each shaped like its operand.
 #[derive(Clone, Debug)]
 pub struct AffineGrad {
     pub input: Tensor,
@@ -684,7 +684,7 @@ pub struct AffineGrad {
     pub bias: Tensor,
 }
 
-/// Gradients of [`Backend::gdn_log_decay_forward`], each shaped like its
+/// Gradients of [`crate::BackendModule::gdn_log_decay_forward`], each shaped like its
 /// input.
 #[derive(Clone, Debug)]
 pub struct GdnDecayGrad {
@@ -794,7 +794,7 @@ fn refuse_device_cast(op: &'static str, tensor: &Tensor) -> Result<(), OjasError
     }
 }
 
-/// Refuse a `Bf16` operand on a backend whose [`Backend::bf16_operands`] is
+/// Refuse a `Bf16` operand on a backend whose [`crate::BackendCore::bf16_operands`] is
 /// `false`, with [`OjasError::Unsupported`] naming `op` and `backend`.
 ///
 /// Such a backend calls this right after the op's shape validator, which
@@ -819,7 +819,7 @@ pub fn refuse_bf16_operands(
 }
 
 /// Refuse a `Bf16` tied table on a backend that has no bf16 table lane
-/// ([`Backend::bf16_operands`]): [`OjasError::Dtype`] naming `op`, expecting
+/// ([`crate::BackendCore::bf16_operands`]): [`OjasError::Dtype`] naming `op`, expecting
 /// `F32`, as the validators refused it before the lane existed.
 ///
 /// Such a backend calls this right after the op's shape validator, which
@@ -891,7 +891,7 @@ pub trait BackendCore {
         tensor.to_host(self.budget())
     }
 
-    /// The most bytes one [`Backend::adamw_step`] or [`Backend::muon_ns5_step`]
+    /// The most bytes one [`crate::BackendModule::adamw_step`] or [`crate::BackendModule::muon_ns5_step`]
     /// on a `[rows, cols]` parameter charges to this backend's budget beyond
     /// its operands (a vector is `[1, len]`). `None`: this backend does not
     /// say.
@@ -953,9 +953,9 @@ pub trait BackendCore {
 
     /// Whether the matmul-class ops take `Bf16` storage as operands.
     ///
-    /// The matmul-class ops are [`Self::linear_forward`],
-    /// [`Self::linear_backward`], [`Self::causal_sdpa_forward`] and
-    /// [`Self::causal_sdpa_backward`] (except its `lse`, which stays `F32`).
+    /// The matmul-class ops are [`BackendModule::linear_forward`],
+    /// [`BackendModule::linear_backward`], [`BackendModule::causal_sdpa_forward`] and
+    /// [`BackendModule::causal_sdpa_backward`] (except its `lse`, which stays `F32`).
     /// Their validators accept each operand as `F32` or `Bf16`, mixed freely.
     /// A bf16 operand is widened exactly to `f32` (`bits << 16`), every
     /// product and sum accumulates in `f32`, and every output is `F32`. So an
@@ -963,8 +963,8 @@ pub trait BackendCore {
     /// it arrives as `F32` or as `Bf16`, under the same [`Self::numerics`].
     ///
     /// The tied table takes the same rule (decided 2026-10-14): the `table`
-    /// of [`Self::embedding_forward`] and [`Self::embedding_backward`] and
-    /// the `weight` of [`Self::linear_cross_entropy_mean`]. Their other
+    /// of [`BackendModule::embedding_forward`] and [`BackendModule::embedding_backward`] and
+    /// the `weight` of [`BackendModule::linear_cross_entropy_mean`]. Their other
     /// operands stay `F32` (`U32` for ids and targets). The table lane reads
     /// bf16 rows in place, a gathered row or one vocabulary chunk at a time,
     /// so a frozen bf16 table never costs an `f32` copy of itself. The CPU
@@ -1424,13 +1424,13 @@ pub trait BackendFloat: BackendModule {
     /// `acc += grad`, elementwise, same shape and dtype.
     ///
     /// On success `acc` holds the sum and is uniquely owned. A non-finite
-    /// sum is [`OjasError::NonFinite`], reported as [`Backend::sync`]
+    /// sum is [`OjasError::NonFinite`], reported as [`crate::BackendCore::sync`]
     /// describes: a backend that reports synchronously leaves `acc`
     /// unchanged; on a deferring backend, `acc` must be treated as invalid
     /// once `sync` reports the fault. Shapes are checked by
     /// [`crate::accumulate_grad_dims`] first, so a refusal names
     /// `accumulate_grad` on every backend. The default then composes
-    /// [`Backend::residual_add_forward`]; a backend may add in place.
+    /// [`crate::BackendFloat::residual_add_forward`]; a backend may add in place.
     fn accumulate_grad(&self, acc: &mut Tensor, grad: &Tensor) -> Result<(), OjasError> {
         crate::accumulate_grad_dims(acc, grad)?;
         *acc = self.residual_add_forward(acc, grad)?;
@@ -1443,11 +1443,11 @@ pub trait BackendFloat: BackendModule {
     ///
     /// Each value is one rounding of `value * scale`. A non-finite `scale`,
     /// input or product is [`OjasError::NonFinite`], reported as
-    /// [`Backend::sync`] describes, and `grad`'s values are then
+    /// [`crate::BackendCore::sync`] describes, and `grad`'s values are then
     /// unspecified: the caller discards it. A backend that overrides this
     /// writes a uniquely owned `grad` in place and replaces a shared one
     /// with a new tensor (the other handles keep the old values). The
-    /// default replaces `grad` with [`Backend::mul_forward`] of `grad` and
+    /// default replaces `grad` with [`crate::BackendFloat::mul_forward`] of `grad` and
     /// `scale` repeated over its shape ([`broadcast_scalar`]), built on the
     /// backend from one uploaded value, so nothing is read back.
     fn scale_grad(&self, grad: &mut Tensor, scale: f32) -> Result<(), OjasError> {
@@ -1465,13 +1465,13 @@ pub trait BackendInt: BackendCore {
     /// The column of each row's largest value: `x` `F32` `[rows, cols]` to
     /// `U32` `[rows]`, ties to the lowest column (greedy decoding's pick).
     /// Any NaN or infinity is [`OjasError::NonFinite`]; a device backend may
-    /// report it at the next [`Backend::sync`]. Every id is below `cols`, so
+    /// report it at the next [`crate::BackendCore::sync`]. Every id is below `cols`, so
     /// a backend may let the result index an `embedding_forward` table of at
     /// least `cols` rows without reading the ids back. Validate with
     /// [`crate::argmax_rows_dims`].
     ///
     /// The default reads `x` to the host (for a device tensor, a readback
-    /// and a [`Backend::sync`]), scans it there, and returns a host tensor
+    /// and a [`crate::BackendCore::sync`]), scans it there, and returns a host tensor
     /// charged to this backend's budget.
     fn argmax_rows(&self, x: &Tensor) -> Result<Tensor, OjasError> {
         const OP: &str = "argmax_rows";
@@ -1512,7 +1512,7 @@ pub trait BackendInt: BackendCore {
     /// `-inf` is a value (a masked logit). Validate with `topk_rows_dims`. The default
     /// downloads `x` and selects on the host.
     ///
-    /// As with [`Backend::argmax_rows`], a backend may let the ids index an
+    /// As with [`crate::BackendInt::argmax_rows`], a backend may let the ids index an
     /// `embedding_forward` table of at least `cols` rows without reading them
     /// back. A device kernel may refuse a large `k` as
     /// [`OjasError::Unsupported`] (Metal and wgpu take `k <= 1024`). The
@@ -1560,7 +1560,7 @@ pub trait BackendInt: BackendCore {
 pub trait BackendModule: BackendCore {
     /// The rows of `table` (`[vocab, dim]`) that `token_ids` pick, as an
     /// `F32` tensor shaped `ids.shape ++ [dim]`. A `Bf16` table is a
-    /// bf16-operand slot ([`Self::bf16_operands`]): each picked row is
+    /// bf16-operand slot ([`BackendCore::bf16_operands`]): each picked row is
     /// widened exactly as it is read, never through an `f32` copy of the
     /// table. Validate with [`crate::embedding_forward_dims`].
     fn embedding_forward(&self, table: &Tensor, token_ids: &Tensor) -> Result<Tensor, OjasError>;
@@ -1586,7 +1586,7 @@ pub trait BackendModule: BackendCore {
         grad_output: &Tensor,
     ) -> Result<(Tensor, Tensor), OjasError>;
 
-    /// `grad_input` of [`Backend::linear_backward`] alone, for a frozen
+    /// `grad_input` of [`crate::BackendModule::linear_backward`] alone, for a frozen
     /// weight: the same operands and the same bits, with no weight
     /// gradient. `input` is not read by the product, but it is checked
     /// (shape, dtype, finiteness) exactly as the full path checks it, so
@@ -2448,14 +2448,14 @@ pub trait BackendModule: BackendCore {
     /// tied head takes no `[V, d]` gradient).
     ///
     /// `input` is `[N, d]` `F32`, `weight` is `[V, d]` `F32` or `Bf16` (the
-    /// tied embedding, a bf16-operand slot of [`Self::bf16_operands`]),
+    /// tied embedding, a bf16-operand slot of [`BackendCore::bf16_operands`]),
     /// `targets` is `[N]` `U32`. A `Bf16` weight is widened exactly one
     /// vocabulary chunk at a time (`chunk.cols * d` values, charged as
     /// scratch), never as a whole-table `f32` copy, and every gradient is
     /// `F32`. Values equal
-    /// [`Backend::linear_forward`] → [`Backend::cross_entropy_mean_forward`],
-    /// and the gradients equal [`Backend::cross_entropy_mean_backward`] →
-    /// [`Backend::linear_backward`] at seed 1, within the backend's
+    /// [`crate::BackendModule::linear_forward`] → [`crate::BackendModule::cross_entropy_mean_forward`],
+    /// and the gradients equal [`crate::BackendModule::cross_entropy_mean_backward`] →
+    /// [`crate::BackendModule::linear_backward`] at seed 1, within the backend's
     /// [`Numerics`]. The valid-row count is global, not per chunk; an
     /// all-ignored batch is [`OjasError::NonFinite`]. Logit scratch must stay
     /// within `chunk.rows * chunk.cols` elements: an implementation that
@@ -2480,14 +2480,14 @@ pub trait BackendModule: BackendCore {
     ///
     /// `q` is `[B, Tq, H, D]`; `k_cache` and `v_cache` are `[B, Tcap, Hkv, D]`,
     /// time-major like `ojas-infer`'s host cache, and a ring: position `j`
-    /// is slot `j % Tcap` (as [`Backend::kv_cache_write`] puts it), so a
+    /// is slot `j % Tcap` (as [`crate::BackendModule::kv_cache_write`] puts it), so a
     /// cache never written past `Tcap` is a plain prefix. Query `i` sits at
     /// position `p = kv_len - Tq + i` and attends to positions `0..=p`, or
     /// with a `window` to `p + 1 - window..=p` (as
-    /// [`Backend::causal_sdpa_forward`]'s window), visited oldest first.
+    /// [`crate::BackendModule::causal_sdpa_forward`]'s window), visited oldest first.
     /// Head `h` reads KV head `h / (H / Hkv)` (grouped-query attention).
     /// Scale is [`sdpa_scale`]`(D)`. Returns `[B, Tq, H, D]`. With `kv_len
-    /// == Tq` and `H == Hkv` this equals [`Backend::causal_sdpa_forward`]
+    /// == Tq` and `H == Hkv` this equals [`crate::BackendModule::causal_sdpa_forward`]
     /// with the same window after the layout permute. Validate with
     /// [`cached_attention_dims`](crate::cached_attention_dims), which refuses a
     /// read the ring no longer holds; [`KvDims::visible`](crate::KvDims::visible)
@@ -2549,7 +2549,7 @@ pub trait BackendModule: BackendCore {
 /// (elementwise ops and reductions), [`BackendInt`] (row reductions
 /// to ids), and [`BackendModule`] (layers and optimizers). This trait
 /// is their aggregate, so a bound on [`Backend`] still names every op
-/// and [`with_backend_methods!`] still lists every one. MPS, MLX, and
+/// and [`crate::with_backend_methods!`] still lists every one. MPS, MLX, and
 /// Accelerate are non-exact GEMM choices ([`GemmProvider`]);
 /// [`GemmProvider::select`] never returns them for [`Numerics::Exact`].
 pub trait Backend: BackendFloat + BackendInt + BackendModule {}
@@ -2990,7 +2990,7 @@ impl<B: Backend + ?Sized> BackendModule for std::sync::Arc<B> {
     );
 }
 
-/// Tiling of [`Backend::linear_cross_entropy_mean`]: at most `rows` rows and
+/// Tiling of [`crate::BackendModule::linear_cross_entropy_mean`]: at most `rows` rows and
 /// `cols` vocabulary columns of logits exist at once.
 ///
 /// Both dimensions matter. At Qwen's vocabulary of 248,320, a row-only chunk
@@ -3002,7 +3002,7 @@ pub struct CeChunk {
     pub cols: usize,
 }
 
-/// Which gradients [`Backend::linear_cross_entropy_mean`] returns, one flag
+/// Which gradients [`crate::BackendModule::linear_cross_entropy_mean`] returns, one flag
 /// per operand: [`LinearCe::grad_input`] for `input`, [`LinearCe::grad_weight`]
 /// for `weight`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3042,9 +3042,9 @@ impl CeGrads {
     }
 }
 
-/// Loss and, when requested, gradients from [`Backend::linear_cross_entropy_mean`].
+/// Loss and, when requested, gradients from [`crate::BackendModule::linear_cross_entropy_mean`].
 ///
-/// `loss` has the shape [`Backend::cross_entropy_mean_forward`] returns.
+/// `loss` has the shape [`crate::BackendModule::cross_entropy_mean_forward`] returns.
 /// `grad_input` is `[N, d]` and `grad_weight` is `[V, d]`; each is `Some`
 /// exactly when its [`CeGrads`] flag was set.
 #[derive(Debug)]

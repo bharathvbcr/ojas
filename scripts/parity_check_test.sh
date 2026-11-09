@@ -94,12 +94,17 @@ run STUB_UNAME=Linux STUB_CARGO=failed_then_ok -- --backend cpu
 
 # 8. SIGTERM / SIGINT during a suite end the script with 128+signal and no banner,
 # rather than letting it resume with its log deleted.
-# Job control (set -m) so the background script does not inherit an ignored SIGINT.
+# A shell started with SIGINT ignored (any caller that backgrounds this test with `&`,
+# a CI step, the b3 launcher) hands that disposition to its children, and a script that
+# inherits an ignored SIGINT cannot trap it: the INT check below would then measure the
+# caller, not parity_check.sh. perl resets INT to its default before exec'ing the script,
+# so the script under test always starts with the dispositions an interactive run has.
 set -m
 for sig in TERM INT; do
   want=$((128 + $(kill -l "$sig")))
   outf="$tmp/sig.out"
   env PATH="$tmp/bin:$PATH" STUB_UNAME=Linux STUB_CARGO=slow_zero \
+    perl -e '$SIG{INT} = "DEFAULT"; exec @ARGV or die "exec: $!"' \
     "$HERE/parity_check.sh" --fixtures "$tmp/fixture.safetensors" --backend cpu >"$outf" 2>&1 &
   pid=$!
   sleep 0.4

@@ -1,4 +1,4 @@
-//! `Backend::attention_backward` on the device thread: the general tiled
+//! `ojas_core::BackendModule::attention_backward` on the device thread: the general tiled
 //! backward of `attn_gen_bwd.metal` over `attn_bwd_tiled.h`.
 //!
 //! Bidirectional or causal attention, `Tq != Tk`, an additive score bias with

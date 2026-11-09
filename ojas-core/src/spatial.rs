@@ -2,7 +2,7 @@
 //! of 2D convolution, transposed convolution, max pooling, bilinear
 //! resampling and interleaved RoPE; the axial 2D RoPE tables; and the layout
 //! ops (window split and merge, pixel shuffle) that are views and
-//! [`Backend::permute`] rather than kernels.
+//! [`crate::BackendFloat::permute`] rather than kernels.
 //!
 //! Image tensors are `NCHW` and convolution weights are PyTorch's
 //! (`[out, in / groups, kh, kw]`; transposed `[in, out, kh, kw]`), so a
@@ -33,7 +33,7 @@ const WINDOW_MERGE: &str = "window_merge";
 const PIXEL_SHUFFLE: &str = "pixel_shuffle";
 const PIXEL_UNSHUFFLE: &str = "pixel_unshuffle";
 
-/// Hyper-parameters of [`Backend::conv2d_forward`], each pair `[h, w]`.
+/// Hyper-parameters of [`crate::BackendModule::conv2d_forward`], each pair `[h, w]`.
 /// `groups == in_channels` is a depthwise convolution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Conv2dParams {
@@ -62,7 +62,7 @@ impl Default for Conv2dParams {
     }
 }
 
-/// Validated dimensions of [`Backend::conv2d_forward`].
+/// Validated dimensions of [`crate::BackendModule::conv2d_forward`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Conv2dDims {
     pub batch: usize,
@@ -98,7 +98,7 @@ impl Conv2dDims {
     }
 }
 
-/// Hyper-parameters of [`Backend::conv_transpose2d_forward`], each pair
+/// Hyper-parameters of [`crate::BackendModule::conv_transpose2d_forward`], each pair
 /// `[h, w]`. One group, dilation 1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ConvTranspose2dParams {
@@ -127,7 +127,7 @@ impl Default for ConvTranspose2dParams {
     }
 }
 
-/// Validated dimensions of [`Backend::conv_transpose2d_forward`].
+/// Validated dimensions of [`crate::BackendModule::conv_transpose2d_forward`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ConvTranspose2dDims {
     pub batch: usize,
@@ -153,7 +153,7 @@ impl ConvTranspose2dDims {
     }
 }
 
-/// Validated dimensions of [`Backend::max_pool2d_forward`].
+/// Validated dimensions of [`crate::BackendModule::max_pool2d_forward`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MaxPool2dDims {
     pub batch: usize,
@@ -173,8 +173,8 @@ impl MaxPool2dDims {
     }
 }
 
-/// Gradients of [`Backend::conv2d_forward`] or
-/// [`Backend::conv_transpose2d_forward`], each shaped like its operand.
+/// Gradients of [`crate::BackendModule::conv2d_forward`] or
+/// [`crate::BackendModule::conv_transpose2d_forward`], each shaped like its operand.
 /// `bias` is `Some` exactly when the forward had a bias.
 #[derive(Clone, Debug)]
 pub struct ConvGrad {
@@ -183,7 +183,7 @@ pub struct ConvGrad {
     pub bias: Option<Tensor>,
 }
 
-/// Validated dimensions of [`Backend::interpolate_bilinear_forward`].
+/// Validated dimensions of [`crate::BackendModule::interpolate_bilinear_forward`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BilinearDims {
     pub batch: usize,
@@ -255,7 +255,7 @@ fn bias_vector(op: &'static str, bias: Option<&Tensor>, len: usize) -> Result<()
     Ok(())
 }
 
-/// [`Backend::conv2d_forward`]: `input` `[N, C, H, W]`, `weight`
+/// [`crate::BackendModule::conv2d_forward`]: `input` `[N, C, H, W]`, `weight`
 /// `[O, C / groups, kh, kw]` and an optional `bias` `[O]`, all `F32`.
 /// `stride`, `dilation` and `groups` are at least 1, `groups` divides both
 /// `C` and `O`, and the dilated kernel fits the padded input. The output is
@@ -269,7 +269,7 @@ pub fn conv2d_forward_dims(
     conv2d_dims(CONV2D, input, weight, bias, params)
 }
 
-/// [`Backend::conv2d_backward`]: the operands of
+/// [`crate::BackendModule::conv2d_backward`]: the operands of
 /// [`conv2d_forward_dims`], refused under this op's name, and a
 /// `grad_output` `F32` shaped like the forward's output.
 pub fn conv2d_backward_dims(
@@ -344,7 +344,7 @@ fn conv2d_dims(
     Ok(dims)
 }
 
-/// [`Backend::conv_transpose2d_forward`]: `input` `[N, C, H, W]`, `weight`
+/// [`crate::BackendModule::conv_transpose2d_forward`]: `input` `[N, C, H, W]`, `weight`
 /// `[C, O, kh, kw]` and an optional `bias` `[O]`, all `F32`. `stride` is at
 /// least 1, `output_padding` is below `stride`, and `padding` leaves a
 /// non-empty output. The output is `[N, O, Ho, Wo]` with `Ho = (H - 1)
@@ -358,7 +358,7 @@ pub fn conv_transpose2d_forward_dims(
     conv_transpose2d_dims(CONV_TRANSPOSE2D, input, weight, bias, params)
 }
 
-/// [`Backend::conv_transpose2d_backward`]: the operands of
+/// [`crate::BackendModule::conv_transpose2d_backward`]: the operands of
 /// [`conv_transpose2d_forward_dims`], refused under this op's name, and a
 /// `grad_output` `F32` shaped like the forward's output.
 pub fn conv_transpose2d_backward_dims(
@@ -443,7 +443,7 @@ fn conv_transpose2d_dims(
     Ok(dims)
 }
 
-/// [`Backend::max_pool2d_forward`]: `input` `[N, C, H, W]` `F32`, `kernel`
+/// [`crate::BackendModule::max_pool2d_forward`]: `input` `[N, C, H, W]` `F32`, `kernel`
 /// and `stride` at least 1, the kernel no larger than the input. The output
 /// is `[N, C, (H - kh) / sh + 1, (W - kw) / sw + 1]`; there is no padding
 /// and a window never leaves the input.
@@ -455,7 +455,7 @@ pub fn max_pool2d_forward_dims(
     max_pool2d_dims(MAX_POOL2D, input, kernel, stride)
 }
 
-/// [`Backend::max_pool2d_backward`]: the operands of
+/// [`crate::BackendModule::max_pool2d_backward`]: the operands of
 /// [`max_pool2d_forward_dims`], refused under this op's name, and a
 /// `grad_output` `F32` shaped like the forward's output.
 pub fn max_pool2d_backward_dims(
@@ -495,7 +495,7 @@ fn max_pool2d_dims(
     Ok(dims)
 }
 
-/// [`Backend::interpolate_bilinear_forward`]: `input` `[N, C, H, W]` `F32`
+/// [`crate::BackendModule::interpolate_bilinear_forward`]: `input` `[N, C, H, W]` `F32`
 /// and a target size of at least 1 on each axis. The output is
 /// `[N, C, out_h, out_w]`.
 pub fn interpolate_bilinear_forward_dims(
@@ -507,7 +507,7 @@ pub fn interpolate_bilinear_forward_dims(
     bilinear_dims(OP, input, out_size)
 }
 
-/// [`Backend::interpolate_bilinear_backward`]: `input` `[N, C, H, W]` and
+/// [`crate::BackendModule::interpolate_bilinear_backward`]: `input` `[N, C, H, W]` and
 /// `grad_output` `[N, C, out_h, out_w]`, both `F32`, checked in that order
 /// (dtype, then no zero extent, then size), then the rank of each, then that
 /// `grad_output` has the input's batch and channels. The returned dims are
@@ -578,7 +578,7 @@ fn rope_interleaved_layout(
     })
 }
 
-/// [`Backend::rope_interleaved_forward`]: `x` `[batch, time, heads, dim]`
+/// [`crate::BackendModule::rope_interleaved_forward`]: `x` `[batch, time, heads, dim]`
 /// with `dim` even and `cos`, `sin` `[time, dim / 2]`, all `F32`.
 pub fn rope_interleaved_forward_dims(
     x: &Tensor,
@@ -588,7 +588,7 @@ pub fn rope_interleaved_forward_dims(
     rope_interleaved_layout(ROPE_INTERLEAVED_FORWARD, x, cos, sin)
 }
 
-/// [`Backend::rope_interleaved_backward`]: `grad_output` shaped like `x`.
+/// [`crate::BackendModule::rope_interleaved_backward`]: `grad_output` shaped like `x`.
 pub fn rope_interleaved_backward_dims(
     grad_output: &Tensor,
     cos: &Tensor,
@@ -598,7 +598,7 @@ pub fn rope_interleaved_backward_dims(
 }
 
 /// `cos` and `sin`, each `[grid_h * grid_w, head_dim / 2]`, of SAM2 and SAM3's
-/// 2D axial RoPE (`compute_axial_cis`), for [`Backend::rope_interleaved_forward`].
+/// 2D axial RoPE (`compute_axial_cis`), for [`crate::BackendModule::rope_interleaved_forward`].
 ///
 /// Token `t` of the row-major grid sits at column `t % grid_w` and row `t /
 /// grid_w`. The first `head_dim / 4` pairs rotate by `column * scale_pos *
@@ -763,8 +763,8 @@ fn windowed<T>(op: &'static str, step: &str, result: Result<T, OjasError>) -> Re
 /// An `H` or `W` that `window` does not divide is zero-padded at the bottom
 /// and the right to the next multiple, as SAM's `window_partition` does with
 /// `F.pad(x, (0, 0, 0, pad_w, 0, pad_h))`. When both divide, nothing is
-/// padded: a reshape (a view), one [`Backend::permute`] and a reshape, with no
-/// [`Backend::fill`], [`Backend::concat`] or [`Backend::slice`] call, so a
+/// padded: a reshape (a view), one [`crate::BackendFloat::permute`] and a reshape, with no
+/// [`crate::BackendFloat::fill`], [`crate::BackendFloat::concat`] or [`crate::BackendFloat::slice`] call, so a
 /// backend without those ops runs it. Padding adds one `fill` and one
 /// `concat` per padded axis (up to two copies besides the permute's); a
 /// backend that lacks either refuses with [`OjasError::Unsupported`] naming
@@ -825,8 +825,8 @@ pub fn window_partition<B: Backend + ?Sized>(
 /// `height x width`, as SAM's `window_unpartition` does with
 /// `x[:, :H, :W, :].contiguous()`. Several sizes in `(padded - window,
 /// padded]` share one grid, so the caller supplies the true one. When both
-/// divide there is no crop: a reshape (a view), one [`Backend::permute`] and a
-/// reshape, with no [`Backend::slice`] call. A crop adds one `slice` per
+/// divide there is no crop: a reshape (a view), one [`crate::BackendFloat::permute`] and a
+/// reshape, with no [`crate::BackendFloat::slice`] call. A crop adds one `slice` per
 /// cropped axis after the permute; a backend without `slice` refuses with
 /// [`OjasError::Unsupported`] naming `window_merge`. A zero `height` or
 /// `width` is refused, as every op refuses an empty tensor. Inverse of
@@ -882,7 +882,7 @@ pub fn window_merge<B: Backend + ?Sized>(
 
 /// `torch.nn.functional.pixel_shuffle`: `x` `[N, C * r * r, H, W]` to
 /// `[N, C, H * r, W * r]`, channel `c * r * r + i * r + j` landing at row
-/// `h * r + i`, column `w * r + j`. A view and one [`Backend::permute`].
+/// `h * r + i`, column `w * r + j`. A view and one [`crate::BackendFloat::permute`].
 pub fn pixel_shuffle<B: Backend + ?Sized>(
     backend: &B,
     x: &Tensor,

@@ -4,7 +4,7 @@
 //! `bench/ojas_rows.rs`, shared with `ojas-metal/examples/metal_vs_torch.rs`.
 //!
 //! `WgpuBackend` ops record into one shared encoder and do not wait, so each
-//! timed iteration is the op followed by `Backend::sync` (submit, wait,
+//! timed iteration is the op followed by `ojas_core::BackendCore::sync` (submit, wait,
 //! and report a deferred non-finite fault).
 
 #[path = "../../bench/ojas_rows.rs"]

@@ -238,7 +238,7 @@ pub struct AttentionBias {
     pub queries: usize,
 }
 
-/// Dimensions of [`crate::Backend::attention_forward`]. Query is `[B, H,
+/// Dimensions of [`crate::BackendModule::attention_forward`]. Query is `[B, H,
 /// Tq, D]`; K and V are `[B, Hkv, Tk, D]`, `H` a positive multiple of `Hkv`.
 /// Every extent is non-zero and the product of each tensor, in `f32` bytes,
 /// fits `usize`: [`attention_forward_dims`], [`attention_forward_saving_dims`]
@@ -426,7 +426,7 @@ pub(crate) fn f32_operand(op: &'static str, tensor: &Tensor) -> Result<usize, Oj
     operand(op, tensor, DType::F32)
 }
 
-/// A bf16-operand slot ([`crate::Backend::bf16_operands`]: a matmul-class
+/// A bf16-operand slot ([`crate::BackendCore::bf16_operands`]: a matmul-class
 /// operand or the tied table): `F32`, or `Bf16` storage that the kernel
 /// widens exactly into its `f32` accumulation. Any other dtype is refused
 /// naming `F32`, the default.
@@ -498,7 +498,7 @@ fn table_dims(op: &'static str, table: &Tensor) -> Result<(usize, usize), OjasEr
     }
 }
 
-/// [`crate::Backend::argmax_rows`]: `x` `F32` `[rows, cols]`. Returns
+/// [`crate::BackendInt::argmax_rows`]: `x` `F32` `[rows, cols]`. Returns
 /// `(rows, cols)`. Both must fit `u32`, so every result id does too.
 pub fn argmax_rows_dims(x: &Tensor) -> Result<(usize, usize), OjasError> {
     const OP: &str = "argmax_rows";
@@ -518,7 +518,7 @@ pub fn argmax_rows_dims(x: &Tensor) -> Result<(usize, usize), OjasError> {
     Ok((rows, cols))
 }
 
-/// [`crate::Backend::topk_rows`]: `x` `F32` `[rows, cols]` and
+/// [`crate::BackendInt::topk_rows`]: `x` `F32` `[rows, cols]` and
 /// `1 <= k <= cols`. Returns `(rows, cols)`. Both must fit `u32` (so `k`
 /// and every result id do too); a zero extent is refused as for any operand.
 /// `k` out of `1..=cols` is [`OjasError::OutOfRange`].
@@ -543,7 +543,7 @@ pub fn topk_rows_dims(x: &Tensor, k: usize) -> Result<(usize, usize), OjasError>
     Ok((rows, cols))
 }
 
-/// [`crate::Backend::embedding_forward`]: `table` `[vocab, dim]` `F32` or
+/// [`crate::BackendModule::embedding_forward`]: `table` `[vocab, dim]` `F32` or
 /// `Bf16`, `token_ids` `U32` of any rank (rank 0 included). The output is
 /// `ids.shape ++ [dim]`, `F32`. Id range is the backend's to check.
 pub fn embedding_forward_dims(
@@ -565,7 +565,7 @@ pub fn embedding_forward_dims(
     })
 }
 
-/// [`crate::Backend::embedding_backward`]: as the forward, plus `grad_output`
+/// [`crate::BackendModule::embedding_backward`]: as the forward, plus `grad_output`
 /// `F32` shaped `ids.shape ++ [dim]`. The result is `F32` shaped like
 /// `table`, whichever of `F32` and `Bf16` the table is.
 pub fn embedding_backward_dims(
@@ -626,7 +626,7 @@ fn linear_dims(op: &'static str, input: &Tensor, weight: &Tensor) -> Result<Line
     })
 }
 
-/// [`crate::Backend::linear_forward`]: `input` `[..., in]` (rank 1 or more)
+/// [`crate::BackendModule::linear_forward`]: `input` `[..., in]` (rank 1 or more)
 /// and `weight` `[out, in]`, each `F32` or `Bf16`. The output is `F32`.
 pub fn linear_forward_dims(input: &Tensor, weight: &Tensor) -> Result<LinearDims, OjasError> {
     const OP: &str = LINEAR_FORWARD;
@@ -634,7 +634,7 @@ pub fn linear_forward_dims(input: &Tensor, weight: &Tensor) -> Result<LinearDims
     linear_dims(OP, input, weight)
 }
 
-/// [`crate::Backend::linear_backward`]: as the forward, plus `grad_output`
+/// [`crate::BackendModule::linear_backward`]: as the forward, plus `grad_output`
 /// (`F32` or `Bf16`) shaped like the forward output. Both gradients are
 /// `F32`.
 pub fn linear_backward_dims(
@@ -678,7 +678,7 @@ fn rms_layout(
     })
 }
 
-/// [`crate::Backend::rms_norm_forward`]: `input` `[..., dim]` (rank 1 or
+/// [`crate::BackendModule::rms_norm_forward`]: `input` `[..., dim]` (rank 1 or
 /// more) and `weight` `[dim]`, both `F32`. A non-finite `eps` is
 /// [`OjasError::NonFinite`], checked after the operands and before the
 /// shapes, where every backend checks it today.
@@ -692,7 +692,7 @@ pub fn rms_norm_forward_dims(
     rms_layout(OP, input, weight, eps)
 }
 
-/// [`crate::Backend::rms_norm_backward`]: `grad_output` shaped like `input`
+/// [`crate::BackendModule::rms_norm_backward`]: `grad_output` shaped like `input`
 /// (checked before `eps` and the weight), then as the forward.
 pub fn rms_norm_backward_dims(
     input: &Tensor,
@@ -706,7 +706,7 @@ pub fn rms_norm_backward_dims(
     rms_layout(OP, input, weight, eps)
 }
 
-/// [`crate::Backend::rms_qk_norm_forward`]: [`rms_norm_forward_dims`] of
+/// [`crate::BackendModule::rms_qk_norm_forward`]: [`rms_norm_forward_dims`] of
 /// `(q, q_weight)` and then of `(k, k_weight)`, both before either norm runs.
 /// Refusals name `rms_norm_forward`, as every backend's composition does.
 pub fn rms_qk_norm_forward_dims(
@@ -721,7 +721,7 @@ pub fn rms_qk_norm_forward_dims(
     Ok((qd, kd))
 }
 
-/// [`crate::Backend::rms_qkv_norm_forward`]: validates `q`, `k`, `v` (all F32, rank >= 1),
+/// [`crate::BackendModule::rms_qkv_norm_forward`]: validates `q`, `k`, `v` (all F32, rank >= 1),
 /// optional `q_weight` (`[dim_q]`), optional `k_weight` (`[dim_k]`), and finite `eps`.
 pub fn rms_qkv_norm_forward_dims(
     q: &Tensor,
@@ -756,7 +756,7 @@ fn rms_weightless_dims(op: &'static str, x: &Tensor, eps: f32) -> Result<RmsDims
     })
 }
 
-/// [`crate::Backend::rms_qk_norm_backward`]: [`rms_norm_backward_dims`] of
+/// [`crate::BackendModule::rms_qk_norm_backward`]: [`rms_norm_backward_dims`] of
 /// `(q, q_weight, grad_q)` and then of `(k, k_weight, grad_k)`. Refusals name
 /// `rms_norm_backward`.
 #[allow(clippy::too_many_arguments)]
@@ -805,7 +805,7 @@ fn rope_dims(
     Ok(RopeDims { rows, dim, layout })
 }
 
-/// [`crate::Backend::rope_half_split_forward`]: `F32` `x` `[..., dim]` (rank 1
+/// [`crate::BackendModule::rope_half_split_forward`]: `F32` `x` `[..., dim]` (rank 1
 /// or more, `dim` even), `cos` and `sin` of equal shape, either `x`'s shape
 /// or `[T, dim]` against an `x` of `[B, T, H, dim]`.
 pub fn rope_half_split_forward_dims(
@@ -816,7 +816,7 @@ pub fn rope_half_split_forward_dims(
     rope_dims(ROPE_FORWARD, x, cos, sin)
 }
 
-/// [`crate::Backend::rope_half_split_backward`]: the forward's rules with
+/// [`crate::BackendModule::rope_half_split_backward`]: the forward's rules with
 /// `grad_output` in place of `x`.
 pub fn rope_half_split_backward_dims(
     grad_output: &Tensor,
@@ -875,7 +875,7 @@ fn sdpa_window(op: &'static str, window: Option<usize>) -> Result<(), OjasError>
     Ok(())
 }
 
-/// [`crate::Backend::causal_sdpa_forward`]: `q`, `k` and `v` each `F32` or
+/// [`crate::BackendModule::causal_sdpa_forward`]: `q`, `k` and `v` each `F32` or
 /// `Bf16`; the output and log-sum-exp are `F32`. Query is
 /// rank 4 `[B, H, T, D]`; K and V are `[B, Hkv, T, D]` with the same batch,
 /// sequence and head dimension, and `H` a positive multiple of `Hkv`. A
@@ -895,7 +895,7 @@ pub fn causal_sdpa_forward_dims(
 
 /// `grad_output` is shaped like `q`: the first rule of
 /// [`causal_sdpa_backward_dims`], also checked by
-/// [`crate::Backend::causal_sdpa_backward_recompute`] before its forward.
+/// [`crate::BackendModule::causal_sdpa_backward_recompute`] before its forward.
 pub(crate) fn causal_sdpa_grad_shape(q: &Tensor, grad_output: &Tensor) -> Result<(), OjasError> {
     if grad_output.shape() != q.shape() {
         return Err(refuse(
@@ -910,7 +910,7 @@ pub(crate) fn causal_sdpa_grad_shape(q: &Tensor, grad_output: &Tensor) -> Result
     Ok(())
 }
 
-/// [`crate::Backend::causal_sdpa_backward`]: `lse` `F32`, every other
+/// [`crate::BackendModule::causal_sdpa_backward`]: `lse` `F32`, every other
 /// operand `F32` or `Bf16`, checked in argument order; the gradients are
 /// `F32`. `grad_output` shaped like `q` (checked first), then `output` shaped like
 /// `q` and `lse` `[B, H, T]` (`q`'s shape without its last axis), then as the
@@ -993,7 +993,7 @@ fn gate_layout(
     })
 }
 
-/// [`crate::Backend::per_head_sigmoid_gate_forward`]: all `F32`; `weight`
+/// [`crate::BackendModule::per_head_sigmoid_gate_forward`]: all `F32`; `weight`
 /// `[heads, d_model]`, `input` `[..., d_model]` (rank 1 or more), `bias`
 /// `[heads]`, `attn_out` `[..., heads, head_dim]` with `input`'s leading
 /// axes. The output is shaped like `attn_out`.
@@ -1008,7 +1008,7 @@ pub fn per_head_sigmoid_gate_forward_dims(
     gate_layout(OP, input, weight, bias, attn_out)
 }
 
-/// [`crate::Backend::per_head_sigmoid_gate_backward`]: `grad_output` shaped
+/// [`crate::BackendModule::per_head_sigmoid_gate_backward`]: `grad_output` shaped
 /// like `attn_out` (checked first), then as the forward.
 pub fn per_head_sigmoid_gate_backward_dims(
     input: &Tensor,
@@ -1088,7 +1088,7 @@ fn gdn_operands<'a>(x: &GdnInputs<'a>) -> Vec<&'a Tensor> {
     ts
 }
 
-/// [`crate::Backend::chunked_gdn_forward`]: every operand `F32`, in the order
+/// [`crate::BackendModule::chunked_gdn_forward`]: every operand `F32`, in the order
 /// `q, k, v, g, beta, initial_state`. Then `q` rank 4 `[B, T, H, Dk]`, `k`
 /// shaped like `q`, `v` `[B, T, H, Dv]`, `g` and `beta` `[B, T, H]`, and
 /// `initial_state` `[B, H, Dk, Dv]`. The checkpoint tensor's size fits.
@@ -1099,7 +1099,7 @@ pub fn chunked_gdn_forward_dims(inputs: GdnInputs<'_>) -> Result<GdnDims, OjasEr
     gdn_layout(OP, &inputs)
 }
 
-/// [`crate::Backend::chunked_gdn_backward`]: the forward's operands, then
+/// [`crate::BackendModule::chunked_gdn_backward`]: the forward's operands, then
 /// `checkpoints`, `grad_output` and `grad_final_state`, all `F32`. Then the
 /// forward's layout, `checkpoints` `[B, H, ceil(T / 64), Dk, Dv]`,
 /// `grad_output` shaped like `v`, and `grad_final_state` `[B, H, Dk, Dv]`.
@@ -1184,7 +1184,7 @@ fn conv1d_layout(
     })
 }
 
-/// [`crate::Backend::causal_conv1d_silu_forward`]: `input` `[batch, time,
+/// [`crate::BackendModule::causal_conv1d_silu_forward`]: `input` `[batch, time,
 /// channels]` and `weight` `[channels, width]`, both `F32`. The output is
 /// shaped like `input`. Which widths a kernel is compiled for is the
 /// device's to check.
@@ -1197,7 +1197,7 @@ pub fn causal_conv1d_silu_forward_dims(
     conv1d_layout(OP, input, weight)
 }
 
-/// [`crate::Backend::causal_conv1d_silu_backward`]: the forward's operands,
+/// [`crate::BackendModule::causal_conv1d_silu_backward`]: the forward's operands,
 /// then `grad_output` shaped like `input`.
 pub fn causal_conv1d_silu_backward_dims(
     input: &Tensor,
@@ -1210,7 +1210,7 @@ pub fn causal_conv1d_silu_backward_dims(
     conv1d_layout(OP, input, weight)
 }
 
-/// [`crate::Backend::gated_rms_norm_forward`]: `input` and `gate` of one
+/// [`crate::BackendModule::gated_rms_norm_forward`]: `input` and `gate` of one
 /// shape, rank 1 or more, `weight` `[dim]` for the last axis `dim`, all
 /// `F32`; `eps` finite. Rows are every leading axis (a head is a row).
 pub fn gated_rms_norm_forward_dims(
@@ -1225,7 +1225,7 @@ pub fn gated_rms_norm_forward_dims(
     rms_layout(OP, input, weight, eps)
 }
 
-/// [`crate::Backend::gated_rms_norm_backward`]: the forward's operands,
+/// [`crate::BackendModule::gated_rms_norm_backward`]: the forward's operands,
 /// then `grad_output` shaped like `input`.
 pub fn gated_rms_norm_backward_dims(
     input: &Tensor,
@@ -1288,7 +1288,7 @@ fn rope_partial_layout(
     })
 }
 
-/// [`crate::Backend::rope_partial_forward`]: `x` `[batch, time, heads,
+/// [`crate::BackendModule::rope_partial_forward`]: `x` `[batch, time, heads,
 /// head_dim]`, `cos` and `sin` `[time, rotary_dim]` with `rotary_dim` even
 /// and at most `head_dim`, all `F32`.
 pub fn rope_partial_forward_dims(
@@ -1299,7 +1299,7 @@ pub fn rope_partial_forward_dims(
     rope_partial_layout(ROPE_PARTIAL_FORWARD, x, cos, sin)
 }
 
-/// [`crate::Backend::rope_partial_backward`]: `grad_output` in place of `x`.
+/// [`crate::BackendModule::rope_partial_backward`]: `grad_output` in place of `x`.
 pub fn rope_partial_backward_dims(
     grad_output: &Tensor,
     cos: &Tensor,
@@ -1308,7 +1308,7 @@ pub fn rope_partial_backward_dims(
     rope_partial_layout(ROPE_PARTIAL_BACKWARD, grad_output, cos, sin)
 }
 
-/// [`crate::Backend::value_residual_blend_forward`]: all `F32`, `lambda` one
+/// [`crate::BackendModule::value_residual_blend_forward`]: all `F32`, `lambda` one
 /// element of any rank, `value0` shaped like `value`. Returns the element
 /// count of `value`.
 pub fn value_residual_blend_forward_dims(
@@ -1325,7 +1325,7 @@ pub fn value_residual_blend_forward_dims(
     f32_product(OP, value.shape())
 }
 
-/// [`crate::Backend::value_residual_blend_backward`]: as the forward, plus
+/// [`crate::BackendModule::value_residual_blend_backward`]: as the forward, plus
 /// `grad_output` shaped like `value`.
 pub fn value_residual_blend_backward_dims(
     value: &Tensor,
@@ -1343,24 +1343,24 @@ pub fn value_residual_blend_backward_dims(
     f32_product(OP, value.shape())
 }
 
-/// [`crate::Backend::silu_forward`]: one `F32` tensor of any rank. Returns
+/// [`crate::BackendFloat::silu_forward`]: one `F32` tensor of any rank. Returns
 /// its element count.
 pub fn silu_forward_dims(input: &Tensor) -> Result<usize, OjasError> {
     same_shape(SILU_FORWARD, &[input])
 }
 
-/// [`crate::Backend::silu_backward`]: `grad_output` shaped like `input`.
+/// [`crate::BackendFloat::silu_backward`]: `grad_output` shaped like `input`.
 pub fn silu_backward_dims(input: &Tensor, grad_output: &Tensor) -> Result<usize, OjasError> {
     same_shape(SILU_BACKWARD, &[input, grad_output])
 }
 
-/// [`crate::Backend::sigmoid_forward`]: one `F32` tensor of any rank.
+/// [`crate::BackendFloat::sigmoid_forward`]: one `F32` tensor of any rank.
 /// Returns its element count.
 pub fn sigmoid_forward_dims(input: &Tensor) -> Result<usize, OjasError> {
     same_shape(SIGMOID_FORWARD, &[input])
 }
 
-/// [`crate::Backend::sigmoid_backward`]: `grad_output` shaped like `input`.
+/// [`crate::BackendFloat::sigmoid_backward`]: `grad_output` shaped like `input`.
 pub fn sigmoid_backward_dims(input: &Tensor, grad_output: &Tensor) -> Result<usize, OjasError> {
     same_shape(SIGMOID_BACKWARD, &[input, grad_output])
 }
@@ -1387,7 +1387,7 @@ fn gdn_decay_layout(
     })
 }
 
-/// [`crate::Backend::gdn_log_decay_forward`]: `a` `[..., heads]` of rank 1
+/// [`crate::BackendModule::gdn_log_decay_forward`]: `a` `[..., heads]` of rank 1
 /// or more, `a_log` and `dt_bias` `[heads]`, all `F32`.
 pub fn gdn_log_decay_forward_dims(
     a: &Tensor,
@@ -1397,7 +1397,7 @@ pub fn gdn_log_decay_forward_dims(
     gdn_decay_layout(GDN_DECAY_FORWARD, a, a_log, dt_bias)
 }
 
-/// [`crate::Backend::gdn_log_decay_backward`]: the forward's operands, then
+/// [`crate::BackendModule::gdn_log_decay_backward`]: the forward's operands, then
 /// `grad_output` shaped like `a`.
 pub fn gdn_log_decay_backward_dims(
     a: &Tensor,
@@ -1412,22 +1412,22 @@ pub fn gdn_log_decay_backward_dims(
     Ok(dims)
 }
 
-/// [`crate::Backend::mul_forward`]: `a` and `b` of one shape, no broadcast.
+/// [`crate::BackendFloat::mul_forward`]: `a` and `b` of one shape, no broadcast.
 pub fn mul_forward_dims(a: &Tensor, b: &Tensor) -> Result<usize, OjasError> {
     same_shape(MUL_FORWARD, &[a, b])
 }
 
-/// [`crate::Backend::mul_backward`]: `b`, then `grad_output`, shaped like `a`.
+/// [`crate::BackendFloat::mul_backward`]: `b`, then `grad_output`, shaped like `a`.
 pub fn mul_backward_dims(a: &Tensor, b: &Tensor, grad_output: &Tensor) -> Result<usize, OjasError> {
     same_shape(MUL_BACKWARD, &[a, b, grad_output])
 }
 
-/// [`crate::Backend::residual_add_forward`]: `x` and `y` of one shape.
+/// [`crate::BackendFloat::residual_add_forward`]: `x` and `y` of one shape.
 pub fn residual_add_forward_dims(x: &Tensor, y: &Tensor) -> Result<usize, OjasError> {
     same_shape(ADD_FORWARD, &[x, y])
 }
 
-/// [`crate::Backend::residual_add_backward`]: `y`, then `grad_output`,
+/// [`crate::BackendFloat::residual_add_backward`]: `y`, then `grad_output`,
 /// shaped like `x`.
 pub fn residual_add_backward_dims(
     x: &Tensor,
@@ -1437,20 +1437,20 @@ pub fn residual_add_backward_dims(
     same_shape(ADD_BACKWARD, &[x, y, grad_output])
 }
 
-/// [`crate::Backend::accumulate_grad`]: `grad` shaped like `acc`, both `F32`
+/// [`crate::BackendFloat::accumulate_grad`]: `grad` shaped like `acc`, both `F32`
 /// (the rules of [`residual_add_forward_dims`], reported as
 /// `accumulate_grad`). Returns the element count.
 pub fn accumulate_grad_dims(acc: &Tensor, grad: &Tensor) -> Result<usize, OjasError> {
     same_shape(ACCUMULATE_GRAD, &[acc, grad])
 }
 
-/// [`crate::Backend::scale_grad`]: an `F32` `grad` of any rank. Returns the
+/// [`crate::BackendFloat::scale_grad`]: an `F32` `grad` of any rank. Returns the
 /// element count.
 pub fn scale_grad_dims(grad: &Tensor) -> Result<usize, OjasError> {
     f32_operand(SCALE_GRAD, grad)
 }
 
-/// [`crate::Backend::layer_norm_forward`]: `input` `[..., dim]` of rank 1 or
+/// [`crate::BackendModule::layer_norm_forward`]: `input` `[..., dim]` of rank 1 or
 /// more, `weight` and `bias` `[dim]`, all `F32`. Returns the row count and
 /// `dim`; a non-finite `eps` is [`OjasError::NonFinite`], as for RMSNorm.
 pub fn layer_norm_forward_dims(
@@ -1491,7 +1491,7 @@ fn layer_norm_layout(
     })
 }
 
-/// [`crate::Backend::layer_norm_backward`]: `grad_output` shaped like
+/// [`crate::BackendModule::layer_norm_backward`]: `grad_output` shaped like
 /// `input` (checked before `eps` and the weight and bias, as
 /// [`rms_norm_backward_dims`] does), then as the forward.
 pub fn layer_norm_backward_dims(
@@ -1507,7 +1507,7 @@ pub fn layer_norm_backward_dims(
     layer_norm_layout(OP, input, weight, bias, eps)
 }
 
-/// For [`crate::Backend::channel_layer_norm_forward`]: `input`
+/// For [`crate::BackendModule::channel_layer_norm_forward`]: `input`
 /// `[batch, channels, *spatial]` of rank 2 or more (`[N, C]`, `[N, C, L]`,
 /// `[N, C, H, W]`), `weight` and `bias` `[channels]`, all `F32`.
 pub fn channel_layer_norm_forward_dims(
@@ -1557,7 +1557,7 @@ fn channel_norm_layout(
     })
 }
 
-/// [`crate::Backend::channel_layer_norm_backward`]: `grad_output` shaped
+/// [`crate::BackendModule::channel_layer_norm_backward`]: `grad_output` shaped
 /// like `input`, then as the forward.
 pub fn channel_layer_norm_backward_dims(
     input: &Tensor,
@@ -1572,7 +1572,7 @@ pub fn channel_layer_norm_backward_dims(
     channel_norm_layout(OP, input, weight, bias, eps)
 }
 
-/// [`crate::Backend::group_norm_forward`]: `input` `[N, C, H, W]`, `weight`
+/// [`crate::BackendModule::group_norm_forward`]: `input` `[N, C, H, W]`, `weight`
 /// and `bias` `[C]`, all `F32`. Refused in this order, after the per-operand
 /// rules: a rank other than 4, `groups` of 0 ([`OjasError::OutOfRange`]), a
 /// `C` that `groups` does not divide, a `weight` or `bias` that is not `[C]`,
@@ -1591,7 +1591,7 @@ pub fn group_norm_forward_dims(
     group_norm_layout(OP, input, weight, bias, groups, eps)
 }
 
-/// [`crate::Backend::group_norm_backward`]: `grad_output` shaped like
+/// [`crate::BackendModule::group_norm_backward`]: `grad_output` shaped like
 /// `input` (checked after the operands' own rules and before the rest, as
 /// [`layer_norm_backward_dims`] does), then as the forward.
 pub fn group_norm_backward_dims(
@@ -1657,31 +1657,31 @@ fn group_norm_layout(
     })
 }
 
-/// [`crate::Backend::gelu_erf_forward`]: one `F32` tensor of any rank.
+/// [`crate::BackendFloat::gelu_erf_forward`]: one `F32` tensor of any rank.
 /// Returns its element count.
 pub fn gelu_erf_forward_dims(input: &Tensor) -> Result<usize, OjasError> {
     same_shape(GELU_ERF_FORWARD, &[input])
 }
 
-/// [`crate::Backend::gelu_erf_backward`]: `grad_output` shaped like `input`,
+/// [`crate::BackendFloat::gelu_erf_backward`]: `grad_output` shaped like `input`,
 /// both `F32`. Returns the element count.
 pub fn gelu_erf_backward_dims(input: &Tensor, grad_output: &Tensor) -> Result<usize, OjasError> {
     same_shape(GELU_ERF_BACKWARD, &[input, grad_output])
 }
 
-/// [`crate::Backend::gelu_tanh_forward`]: the contract of
+/// [`crate::BackendFloat::gelu_tanh_forward`]: the contract of
 /// [`gelu_erf_forward_dims`] under this op's name.
 pub fn gelu_tanh_forward_dims(input: &Tensor) -> Result<usize, OjasError> {
     same_shape(GELU_TANH_FORWARD, &[input])
 }
 
-/// [`crate::Backend::gelu_tanh_backward`]: the contract of
+/// [`crate::BackendFloat::gelu_tanh_backward`]: the contract of
 /// [`gelu_erf_backward_dims`] under this op's name.
 pub fn gelu_tanh_backward_dims(input: &Tensor, grad_output: &Tensor) -> Result<usize, OjasError> {
     same_shape(GELU_TANH_BACKWARD, &[input, grad_output])
 }
 
-/// Dimensions of [`crate::Backend::seq_mean_forward`]: `x` is `[batch, seq,
+/// Dimensions of [`crate::BackendFloat::seq_mean_forward`]: `x` is `[batch, seq,
 /// dim]` and the output `[batch, dim]`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SeqMeanDims {
@@ -1717,7 +1717,7 @@ fn seq_mean_dims(
     Ok(SeqMeanDims { batch, seq, dim })
 }
 
-/// [`crate::Backend::seq_mean_forward`]: [`seq_mean_dims`] and then the
+/// [`crate::BackendFloat::seq_mean_forward`]: `seq_mean_dims` and then the
 /// `[B, D]` output's size.
 pub fn seq_mean_forward_dims(x: &Tensor, key_lens: &Tensor) -> Result<SeqMeanDims, OjasError> {
     const OP: &str = SEQ_MEAN_FORWARD;
@@ -1726,7 +1726,7 @@ pub fn seq_mean_forward_dims(x: &Tensor, key_lens: &Tensor) -> Result<SeqMeanDim
     Ok(dims)
 }
 
-/// [`crate::Backend::seq_mean_backward`]: [`seq_mean_dims`] on the forward's
+/// [`crate::BackendFloat::seq_mean_backward`]: `seq_mean_dims` on the forward's
 /// `x` and `key_lens`, then `grad_output` `F32` `[B, D]` (the forward's
 /// output shape), then the `[B, T, D]` gradient's size. `x` is taken for its
 /// shape and its `key_lens` pairing; the backward reads none of its values.
@@ -1775,12 +1775,12 @@ fn l2_normalize_dims(op: &'static str, x: &Tensor, eps: f32) -> Result<RmsDims, 
     Ok(RmsDims { rows, dim })
 }
 
-/// [`crate::Backend::l2_normalize_forward`]: [`l2_normalize_dims`].
+/// [`crate::BackendFloat::l2_normalize_forward`]: [`l2_normalize_dims`].
 pub fn l2_normalize_forward_dims(x: &Tensor, eps: f32) -> Result<RmsDims, OjasError> {
     l2_normalize_dims(L2_NORMALIZE_FORWARD, x, eps)
 }
 
-/// [`crate::Backend::l2_normalize_backward`]: [`l2_normalize_dims`] on the
+/// [`crate::BackendFloat::l2_normalize_backward`]: `l2_normalize_dims` on the
 /// forward's `x` and `eps`, then `grad_output`, which is `F32` of `x`'s
 /// shape. The gradient is formed from `x` (the norm is recomputed), so the
 /// forward's output is not an operand.
@@ -1796,18 +1796,18 @@ pub fn l2_normalize_backward_dims(
     Ok(dims)
 }
 
-/// [`crate::Backend::relu_forward`]: one `F32` tensor of any rank. Returns
+/// [`crate::BackendFloat::relu_forward`]: one `F32` tensor of any rank. Returns
 /// its element count.
 pub fn relu_forward_dims(input: &Tensor) -> Result<usize, OjasError> {
     same_shape(RELU_FORWARD, &[input])
 }
 
-/// [`crate::Backend::relu_backward`]: `grad_output` shaped like `input`.
+/// [`crate::BackendFloat::relu_backward`]: `grad_output` shaped like `input`.
 pub fn relu_backward_dims(input: &Tensor, grad_output: &Tensor) -> Result<usize, OjasError> {
     same_shape(RELU_BACKWARD, &[input, grad_output])
 }
 
-/// [`crate::Backend::concat`]: at least one `F32` tensor, all of one rank
+/// [`crate::BackendFloat::concat`]: at least one `F32` tensor, all of one rank
 /// and all equal on every axis but `axis`, which must be below that rank.
 /// Refused in this order: no inputs, each operand's own rules in turn (dtype,
 /// an empty extent, an element or byte count that overflows), the axis, a
@@ -1873,7 +1873,7 @@ pub fn concat_dims(inputs: &[&Tensor], axis: usize) -> Result<ConcatDims, OjasEr
     })
 }
 
-/// [`crate::Backend::fill`]: refused in this order. A `shape` with a zero
+/// [`crate::BackendFloat::fill`]: refused in this order. A `shape` with a zero
 /// extent is [`OjasError::Shape`] (rank 0 is one element); then a `dtype` of
 /// `F16` is a [`OjasError::Dtype`] naming `F32` (`F32`, `Bf16` and `U32` are
 /// accepted); then element and byte counts that overflow `usize` are
@@ -1917,7 +1917,7 @@ pub fn fill_dims(shape: &[usize], dtype: DType, value: f32) -> Result<usize, Oja
     Ok(n)
 }
 
-/// [`crate::Backend::slice`]: an `F32` `input` and `axis` below its rank;
+/// [`crate::BackendFloat::slice`]: an `F32` `input` and `axis` below its rank;
 /// the rows `start..start + len` of that axis, `len` at least 1. Refused in
 /// this order: the operand's rules, the axis ([`OjasError::Shape`]), `len`
 /// of 0 (an empty output, [`OjasError::Shape`]), a `start + len` that
@@ -1962,7 +1962,7 @@ pub fn slice_dims(
     })
 }
 
-/// [`crate::Backend::slice_backward`]: places `grad_output` at rows `start..start + len` of `axis`
+/// [`crate::BackendFloat::slice_backward`]: places `grad_output` at rows `start..start + len` of `axis`
 /// within a zeroed tensor of shape `in_shape`.
 pub fn slice_backward_dims(
     grad_output: &Tensor,
@@ -2025,7 +2025,7 @@ pub fn slice_backward_dims(
     })
 }
 
-/// [`crate::Backend::linear_bias_forward`]: the rules of
+/// [`crate::BackendModule::linear_bias_forward`]: the rules of
 /// [`linear_forward_dims`] (`input` `[..., in]` and `weight` `[out, in]`,
 /// each `F32` or `Bf16`) and an `F32` `bias` `[out]`.
 pub fn linear_bias_forward_dims(
@@ -2061,7 +2061,7 @@ fn linear_bias_layout(
     Ok(dims)
 }
 
-/// [`crate::Backend::linear_bias_backward`]: the forward's operands plus
+/// [`crate::BackendModule::linear_bias_backward`]: the forward's operands plus
 /// `grad_output` (`F32` or `Bf16`) shaped like the forward output. The
 /// gradients are `F32`.
 pub fn linear_bias_backward_dims(
@@ -2154,13 +2154,13 @@ fn broadcast_dims(op: &'static str, a: &Tensor, b: &Tensor) -> Result<BroadcastD
     Ok(dims)
 }
 
-/// [`crate::Backend::broadcast_add_forward`]: `a` and `b` `F32`, shapes
+/// [`crate::BackendFloat::broadcast_add_forward`]: `a` and `b` `F32`, shapes
 /// broadcastable ([`broadcast_shapes`]).
 pub fn broadcast_add_forward_dims(a: &Tensor, b: &Tensor) -> Result<BroadcastDims, OjasError> {
     broadcast_dims(BROADCAST_ADD_FORWARD, a, b)
 }
 
-/// [`crate::Backend::broadcast_mul_forward`]: as [`broadcast_add_forward_dims`].
+/// [`crate::BackendFloat::broadcast_mul_forward`]: as [`broadcast_add_forward_dims`].
 pub fn broadcast_mul_forward_dims(a: &Tensor, b: &Tensor) -> Result<BroadcastDims, OjasError> {
     broadcast_dims(BROADCAST_MUL_FORWARD, a, b)
 }
@@ -2179,7 +2179,7 @@ fn broadcast_backward_dims(
     Ok(dims)
 }
 
-/// [`crate::Backend::broadcast_add_backward`]: the rules of
+/// [`crate::BackendFloat::broadcast_add_backward`]: the rules of
 /// [`broadcast_add_forward_dims`], plus `grad_output` shaped like the sum.
 pub fn broadcast_add_backward_dims(
     a: &Tensor,
@@ -2189,7 +2189,7 @@ pub fn broadcast_add_backward_dims(
     broadcast_backward_dims(BROADCAST_ADD_BACKWARD, a, b, grad_output)
 }
 
-/// [`crate::Backend::broadcast_mul_backward`]: the rules of
+/// [`crate::BackendFloat::broadcast_mul_backward`]: the rules of
 /// [`broadcast_mul_forward_dims`], plus `grad_output` shaped like the
 /// product.
 pub fn broadcast_mul_backward_dims(
@@ -2200,7 +2200,7 @@ pub fn broadcast_mul_backward_dims(
     broadcast_backward_dims(BROADCAST_MUL_BACKWARD, a, b, grad_output)
 }
 
-/// [`crate::Backend::scale_forward`]: an `F32` `input` of any rank and a
+/// [`crate::BackendFloat::scale_forward`]: an `F32` `input` of any rank and a
 /// finite `scale` ([`OjasError::NonFinite`] otherwise). Returns the element
 /// count.
 pub fn scale_forward_dims(input: &Tensor, scale: f32) -> Result<usize, OjasError> {
@@ -2211,7 +2211,7 @@ pub fn scale_forward_dims(input: &Tensor, scale: f32) -> Result<usize, OjasError
     Ok(n)
 }
 
-/// [`crate::Backend::softmax_forward`]: an `F32` `input` `[..., dim]` of
+/// [`crate::BackendFloat::softmax_forward`]: an `F32` `input` `[..., dim]` of
 /// rank 1 or more. Returns the row count and `dim`.
 pub fn softmax_forward_dims(input: &Tensor) -> Result<RmsDims, OjasError> {
     const OP: &str = SOFTMAX_FORWARD;
@@ -2223,7 +2223,7 @@ pub fn softmax_forward_dims(input: &Tensor) -> Result<RmsDims, OjasError> {
     })
 }
 
-/// [`crate::Backend::softmax_backward`]: the forward's `output` `[..., dim]`
+/// [`crate::BackendFloat::softmax_backward`]: the forward's `output` `[..., dim]`
 /// of rank 1 or more and `grad_output` shaped like it, both `F32`. Returns
 /// the row count and `dim`.
 pub fn softmax_backward_dims(output: &Tensor, grad_output: &Tensor) -> Result<RmsDims, OjasError> {
@@ -2237,10 +2237,10 @@ pub fn softmax_backward_dims(output: &Tensor, grad_output: &Tensor) -> Result<Rm
     })
 }
 
-/// Largest rank [`crate::Backend::permute`] accepts.
+/// Largest rank [`crate::BackendFloat::permute`] accepts.
 pub const MAX_PERMUTE_RANK: usize = 8;
 
-/// [`crate::Backend::permute`]: an `F32` `input` with no zero axis, and
+/// [`crate::BackendFloat::permute`]: an `F32` `input` with no zero axis, and
 /// `dims` naming each of its axes exactly once ([`permute_output_shape`]).
 /// Returns the output shape. Rank 0 with `dims` `[]` is accepted: it is one
 /// element. A zero axis is `"empty tensor"`, as for every other op (D17 in
@@ -2323,7 +2323,7 @@ fn ce_dims(op: &'static str, logits: &Tensor, targets: &Tensor) -> Result<CeDims
     })
 }
 
-/// [`crate::Backend::cross_entropy_mean_forward`]: `logits` `F32` `[..., vocab]`
+/// [`crate::BackendModule::cross_entropy_mean_forward`]: `logits` `F32` `[..., vocab]`
 /// (rank 1 or more) and `targets` `U32` shaped like the logits' leading
 /// axes (rank 0 for rank-1 logits). Target range and the all-ignored case
 /// are the backend's.
@@ -2334,7 +2334,7 @@ pub fn cross_entropy_mean_forward_dims(
     ce_dims(CE_FORWARD, logits, targets)
 }
 
-/// [`crate::Backend::cross_entropy_mean_backward`]: the forward's rules. The
+/// [`crate::BackendModule::cross_entropy_mean_backward`]: the forward's rules. The
 /// gradient is shaped like `logits`.
 pub fn cross_entropy_mean_backward_dims(
     logits: &Tensor,
@@ -2343,7 +2343,7 @@ pub fn cross_entropy_mean_backward_dims(
     ce_dims(CE_BACKWARD, logits, targets)
 }
 
-/// [`crate::Backend::clip_grad_norm`]: at least one gradient, each `F32` of
+/// [`crate::BackendFloat::clip_grad_norm`]: at least one gradient, each `F32` of
 /// any rank and any shape. Returns the total element count, whose `f32`
 /// bytes fit `usize`. `max_norm` is checked by [`crate::clip_scale`].
 pub fn clip_grad_norm_dims(grads: &[Tensor]) -> Result<usize, OjasError> {
@@ -2364,7 +2364,7 @@ pub fn clip_grad_norm_dims(grads: &[Tensor]) -> Result<usize, OjasError> {
     Ok(total)
 }
 
-/// [`crate::Backend::adamw_step`]: `param`, `grad`, `moment1` and `moment2`
+/// [`crate::BackendModule::adamw_step`]: `param`, `grad`, `moment1` and `moment2`
 /// `F32`, each later one shaped like `param`. Returns the element count.
 /// The config and step are checked by [`crate::check_adamw`].
 pub fn adamw_step_dims(
@@ -2376,7 +2376,7 @@ pub fn adamw_step_dims(
     same_shape(ADAMW, &[param, grad, moment1, moment2])
 }
 
-/// [`crate::Backend::muon_ns5_step`]: `param` a rank-2 `F32` matrix, `grad`
+/// [`crate::BackendModule::muon_ns5_step`]: `param` a rank-2 `F32` matrix, `grad`
 /// and then `momentum` shaped like it. The config is the backend's.
 pub fn muon_ns5_step_dims(
     param: &Tensor,
@@ -2393,7 +2393,7 @@ pub fn muon_ns5_step_dims(
     Ok(MuonDims { rows, cols })
 }
 
-/// Validated dimensions of a [`crate::Backend::linear_cross_entropy_mean`] call.
+/// Validated dimensions of a [`crate::BackendModule::linear_cross_entropy_mean`] call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LinearCeDims {
     pub rows: usize,
@@ -2401,7 +2401,7 @@ pub struct LinearCeDims {
     pub vocab: usize,
 }
 
-/// Check the operands of [`crate::Backend::linear_cross_entropy_mean`]: `input`
+/// Check the operands of [`crate::BackendModule::linear_cross_entropy_mean`]: `input`
 /// `[N, d]` in `F32`, `weight` `[V, d]` in `F32` or `Bf16`, `targets` `[N]` in
 /// `U32`, `N`,
 /// `d` and `V` non-zero, and both chunk dimensions non-zero. Target values
@@ -2630,7 +2630,7 @@ fn attention_opts_operands(op: &'static str, opts: &AttentionOpts<'_>) -> Result
     Ok(())
 }
 
-/// [`crate::Backend::attention_forward`]: `q`, `k`, `v` and the bias each
+/// [`crate::BackendModule::attention_forward`]: `q`, `k`, `v` and the bias each
 /// `F32` or `Bf16`, `key_lens` `U32`, checked in that order; the output is
 /// `F32` shaped like `q`, and the log-sum-exp of the saving form `[B, H,
 /// Tq]`. Query is rank 4 `[B, H, Tq, D]`; K and V are `[B, Hkv, Tk, D]`
@@ -2668,7 +2668,7 @@ fn attention_dims(
     attention_layout(op, q, k, v, opts)
 }
 
-/// [`crate::Backend::attention_backward`]: `lse` `F32`, every other
+/// [`crate::BackendModule::attention_backward`]: `lse` `F32`, every other
 /// operand as the forward's, checked in argument order; the gradients are
 /// `F32`. `grad_output` and `output` are shaped like `q` and `lse` is `[B,
 /// H, Tq]`; then the forward's rules. `bias_grad` needs a bias.
@@ -2748,7 +2748,7 @@ pub(crate) fn rank4(
     }
 }
 
-/// Check the operands of [`crate::Backend::cached_attention_forward`]: `F32`
+/// Check the operands of [`crate::BackendModule::cached_attention_forward`]: `F32`
 /// `q [B, Tq, H, D]`, `k_cache` and `v_cache [B, Tcap, Hkv, D]` of equal
 /// shape, every dimension non-zero, `H % Hkv == 0`, `kv_len >= Tq`, a
 /// `window` of at least 1, and every position some query reads still in
@@ -2826,7 +2826,7 @@ pub fn cached_attention_dims(
     })
 }
 
-/// Check the operands of [`crate::Backend::kv_cache_write`]: `F32` `cache
+/// Check the operands of [`crate::BackendModule::kv_cache_write`]: `F32` `cache
 /// [B, Tcap, Hkv, D]` and `src [B, Tn, Hkv, D]`, every dimension non-zero,
 /// `Tn <= Tcap`, and `at + Tn` without overflow. Position `at + t` goes to
 /// slot `(at + t) % Tcap`: a cache is a ring, and one that is never written

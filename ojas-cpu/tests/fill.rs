@@ -1,4 +1,4 @@
-//! `Backend::fill` on the CPU: torch's `full`, made on the backend with no
+//! `ojas_core::BackendFloat::fill` on the CPU: torch's `full`, made on the backend with no
 //! host upload.
 //!
 //! - An `F32` fill stores the value's exact bits (both zeros, subnormals and

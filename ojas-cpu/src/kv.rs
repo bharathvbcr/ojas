@@ -100,7 +100,7 @@ fn check_read_slots(
     Ok(())
 }
 
-/// [`ojas_core::Backend::cached_attention_forward`] on the CPU: the
+/// [`ojas_core::BackendModule::cached_attention_forward`] on the CPU: the
 /// `[B, Tq, H, D]` output as a new tensor. Each head's rows are computed on
 /// the pool, reading the cache in place (nothing is repacked), then copied
 /// once into the output tensor ([`fill_out`]).
@@ -255,7 +255,7 @@ fn attend(
     Ok(())
 }
 
-/// [`ojas_core::Backend::kv_cache_write`] on the CPU: all-or-nothing.
+/// [`ojas_core::BackendModule::kv_cache_write`] on the CPU: all-or-nothing.
 ///
 /// Every check (shapes, a finite `src`, a uniquely owned host cache) runs
 /// before the cache changes; the copy of `src` into its slots, which cannot

@@ -1,4 +1,4 @@
-//! Frozen leaves (`Tape::frozen_leaf`) and `Backend::linear_backward_input`.
+//! Frozen leaves (`Tape::frozen_leaf`) and `ojas_core::BackendModule::linear_backward_input`.
 //!
 //! A frozen leaf has no gradient (absent, not zero) and costs no weight
 //! gradient: a linear with a frozen weight runs the dX-only backward, whose

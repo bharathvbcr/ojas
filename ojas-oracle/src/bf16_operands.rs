@@ -1,4 +1,4 @@
-//! The bf16 operand contract of [`Backend::bf16_operands`], checked on any
+//! The bf16 operand contract of [`ojas_core::BackendCore::bf16_operands`], checked on any
 //! backend that reports it.
 //!
 //! The matmul-class ops (`linear_forward`, `linear_backward`,
@@ -21,15 +21,15 @@
 //!   `Bf16` operand with [`OjasError::Dtype`];
 //! - a `Bf16` NaN or infinity in a matmul-class operand is
 //!   [`OjasError::NonFinite`], from the op or, on a backend that defers
-//!   faults, from the readback or [`Backend::sync`] after it;
-//! - [`Backend::to_bf16`] and [`Backend::to_f32`] on this backend's own
+//!   faults, from the readback or [`ojas_core::BackendCore::sync`] after it;
+//! - [`ojas_core::BackendCore::to_bf16`] and [`ojas_core::BackendCore::to_f32`] on this backend's own
 //!   tensors give the host conversions' bits ([`f32_to_bf16`],
 //!   [`bf16_to_f32`]), NaN payloads included: the NaN rule is ojas's one rule
 //!   (sign, the top payload bits and the quiet bit `0x0040`), not torch's
 //!   canonical `0x7fc0`.
 //!
-//! Operands go up with [`Backend::upload`] and results come back with
-//! [`Backend::download`], so a device backend runs the same runner as the CPU.
+//! Operands go up with [`ojas_core::BackendCore::upload`] and results come back with
+//! [`ojas_core::BackendCore::download`], so a device backend runs the same runner as the CPU.
 
 use ojas_core::{bf16_to_f32, f32_to_bf16, round_f32_to_bf16, Backend, DType, OjasError, Tensor};
 
@@ -649,7 +649,7 @@ fn other_ops_refuse<B: Backend + ?Sized>(
     Ok(())
 }
 
-/// [`Backend::to_bf16`] and [`Backend::to_f32`] on this backend's tensors
+/// [`ojas_core::BackendCore::to_bf16`] and [`ojas_core::BackendCore::to_f32`] on this backend's tensors
 /// against the host conversions, bit for bit: round to nearest even, ties
 /// to even, overflow to infinity, and the NaN rule (sign, top payload bits,
 /// quiet bit).
@@ -725,7 +725,7 @@ fn conversions_match_the_host<B: Backend + ?Sized>(b: &B) -> Result<(), ParityFa
 }
 
 /// Run the whole contract on `b`. A backend that does not report
-/// [`Backend::bf16_operands`] fails at once: it has no contract to check.
+/// [`ojas_core::BackendCore::bf16_operands`] fails at once: it has no contract to check.
 pub fn bf16_operand_contract<B: Backend + ?Sized>(b: &B) -> Result<Bf16Report, ParityFailure> {
     if !b.bf16_operands() {
         return Err(fail(

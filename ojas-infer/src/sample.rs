@@ -15,7 +15,7 @@
 //! One greedy rule: the rank is [`ojas_core::rank_logits`], in which `+0.0`
 //! and `-0.0` are one value, so temperature 0 (and `top_k == 1`) takes the
 //! lowest index of the largest logit, as [`crate::argmax_token`],
-//! `Backend::argmax_rows` and `torch.argmax` do; `Backend::topk_rows` ranks
+//! `ojas_core::BackendInt::argmax_rows` and `torch.argmax` do; `ojas_core::BackendInt::topk_rows` ranks
 //! the same way on every backend. Decided 2026-10-10: until then the sampler
 //! ranked by `f32::total_cmp`, which put `+0.0` ahead of a `-0.0` at a lower
 //! index, so the sampler and the argmax disagreed on that one tie.
@@ -156,7 +156,7 @@ pub(crate) fn ranked_candidates(
         .collect()
 }
 
-/// [`ranked_candidates`] from one row of `Backend::topk_rows`: `values` and
+/// [`ranked_candidates`] from one row of `ojas_core::BackendInt::topk_rows`: `values` and
 /// `ids` are its `k` leaders, ranked as [`rank_logits`] ranks them, with `-inf` (a
 /// masked logit) after every finite value. The candidates are the finite
 /// prefix, so a row with fewer than `k` finite logits gives all of them and

@@ -1,6 +1,6 @@
 //! AdamW over a list of trainable tensors, all or nothing.
 //!
-//! [`Backend::adamw_step`] is one parameter: it checks its own step and
+//! [`ojas_core::BackendModule::adamw_step`] is one parameter: it checks its own step and
 //! writes only if that step is finite. Called once per tensor, a
 //! non-finite step in tensor `k` leaves tensors `0..k` stepped and the rest
 //! not, and the moments of those first `k` have moved with them. That
@@ -14,13 +14,13 @@
 //! a host tensor also contiguous and finite), and that every gradient value
 //! is safe.
 //!
-//! **Pass 2** calls [`Backend::adamw_step`] on each entry in order, then
-//! [`Backend::sync`] so a deferring backend's fault surfaces here.
+//! **Pass 2** calls [`ojas_core::BackendModule::adamw_step`] on each entry in order, then
+//! [`ojas_core::BackendCore::sync`] so a deferring backend's fault surfaces here.
 //!
 //! # What "safe" means, and what it costs
 //!
 //! `Backend` has no finite-check op, so pass 1 reads every gradient to the
-//! host ([`Tensor::to_host`], after one [`Backend::sync`]) and scans it: a
+//! host ([`Tensor::to_host`], after one [`ojas_core::BackendCore::sync`]) and scans it: a
 //! value is safe when `g * g` is a finite f32, i.e. `g` is finite and
 //! `|g| <= `[`GRAD_ABS_LIMIT`] (`2^64 - 2^40`). That is exactly the
 //! condition for the second moment `v' = b2 v + (1 - b2) g^2` and the first
@@ -141,7 +141,7 @@ impl fmt::Display for OptimError {
 impl std::error::Error for OptimError {}
 
 /// Step every entry once at `step` (the count before this update, as
-/// [`Backend::adamw_step`] takes it), or none. See the module docs for the
+/// [`ojas_core::BackendModule::adamw_step`] takes it), or none. See the module docs for the
 /// two passes, the finiteness condition and its cost. `budget` is charged
 /// for one downloaded gradient at a time.
 pub fn adamw_all_or_nothing<B: Backend + ?Sized>(

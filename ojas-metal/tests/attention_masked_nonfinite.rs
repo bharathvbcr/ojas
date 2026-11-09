@@ -173,17 +173,17 @@ fn the_kernel_comment_says_p_is_zeroed_and_v_is_not() {
 ///
 /// What is true on Metal, established by running:
 /// - `embedding_forward` does check its output: it is the first faulting op
-///   in recording order, and a `sync` or `Backend::download` reports
+///   in recording order, and a `sync` or `ojas_core::BackendCore::download` reports
 ///   `NonFinite { op: "embedding_forward" }`;
 /// - the real positions' attention output is non-finite as well (the `0 * NaN`
 ///   of a visited tile, above), and a raw read (`Tensor::to_host`) returns
 ///   those values with no error, because a raw read is not a fault point
 ///   (`docs/metal-deferred-faults.md`, "Tensor::to_host ... the fault stays
 ///   pending"). A caller that reads only through `to_host` and never calls
-///   `sync` or `Backend::download` is handed NaN without an error. That is the
+///   `sync` or `ojas_core::BackendCore::download` is handed NaN without an error. That is the
 ///   documented contract, and it is what the readout adversary's helpers do
 ///   (`qwen35_common`'s `to_host`);
-/// - the fault is not lost: the next `Backend::download` reports it, once.
+/// - the fault is not lost: the next `ojas_core::BackendCore::download` reports it, once.
 #[test]
 fn a_non_finite_padding_embedding_row_reaches_the_real_positions_and_faults_at_the_next_sync_point()
 {
