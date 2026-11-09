@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 
 use ojas_io::sha256::open_sha256_hex;
 use ojas_io::{
-    read_checkpoint, read_regular_text, replace_dir_with, replace_dir_with_if,
-    write_safetensors, CheckpointView, IoError, SafeTensors,
+    read_checkpoint, read_regular_text, replace_dir_with, replace_dir_with_if, write_safetensors,
+    CheckpointView, IoError, SafeTensors,
 };
 
 struct Dir(PathBuf);
@@ -104,12 +104,18 @@ fn missing_path_reports_not_found_through_every_reader() {
     let m = d.0.join("missing");
     let cases: Vec<(&str, IoError)> = vec![
         ("read_checkpoint", read_checkpoint(&m).unwrap_err()),
-        ("SafeTensors::open", SafeTensors::open(&m).map(drop).unwrap_err()),
+        (
+            "SafeTensors::open",
+            SafeTensors::open(&m).map(drop).unwrap_err(),
+        ),
         (
             "CheckpointView::open",
             CheckpointView::open(&m).map(drop).unwrap_err(),
         ),
-        ("open_sha256_hex", open_sha256_hex(&m).map(drop).unwrap_err()),
+        (
+            "open_sha256_hex",
+            open_sha256_hex(&m).map(drop).unwrap_err(),
+        ),
     ];
     for (who, e) in &cases {
         assert_kind(who, e, ErrorKind::NotFound);
@@ -158,12 +164,18 @@ fn unreadable_file_reports_permission_denied_through_every_reader() {
     chmod(&f, 0o000);
     let cases: Vec<(&str, IoError)> = vec![
         ("read_checkpoint", read_checkpoint(&f).unwrap_err()),
-        ("SafeTensors::open", SafeTensors::open(&f).map(drop).unwrap_err()),
+        (
+            "SafeTensors::open",
+            SafeTensors::open(&f).map(drop).unwrap_err(),
+        ),
         (
             "CheckpointView::open",
             CheckpointView::open(&f).map(drop).unwrap_err(),
         ),
-        ("open_sha256_hex", open_sha256_hex(&f).map(drop).unwrap_err()),
+        (
+            "open_sha256_hex",
+            open_sha256_hex(&f).map(drop).unwrap_err(),
+        ),
     ];
     for (who, e) in &cases {
         assert_kind(who, e, ErrorKind::PermissionDenied);
@@ -189,7 +201,11 @@ fn index_naming_a_missing_shard_reports_not_found() {
     )
     .unwrap();
     let e = CheckpointView::open(&d.0).map(drop).unwrap_err();
-    assert_kind("CheckpointView::open(index, missing shard)", &e, ErrorKind::NotFound);
+    assert_kind(
+        "CheckpointView::open(index, missing shard)",
+        &e,
+        ErrorKind::NotFound,
+    );
 }
 
 /// `symlink_metadata(dir/index)` fails with PermissionDenied when the directory cannot be
@@ -207,7 +223,11 @@ fn unsearchable_checkpoint_dir_reports_permission_denied() {
     chmod(&sub, 0o000);
     let r = CheckpointView::open(&sub).map(drop);
     chmod(&sub, 0o700);
-    assert_kind("CheckpointView::open(0o000 dir)", &r.unwrap_err(), ErrorKind::PermissionDenied);
+    assert_kind(
+        "CheckpointView::open(0o000 dir)",
+        &r.unwrap_err(),
+        ErrorKind::PermissionDenied,
+    );
 }
 
 #[test]
@@ -222,7 +242,11 @@ fn writers_report_the_kind_of_the_parent_failure() {
     let under_file = f.join("out.safetensors");
     let e = write_safetensors(&under_file, &[], &[]).unwrap_err();
     #[cfg(unix)]
-    assert_kind("write_safetensors(parent is a file)", &e, ErrorKind::NotADirectory);
+    assert_kind(
+        "write_safetensors(parent is a file)",
+        &e,
+        ErrorKind::NotADirectory,
+    );
     #[cfg(not(unix))]
     let _ = e;
 }
@@ -239,13 +263,19 @@ fn rename_failure_in_replace_keeps_the_rename_error() {
     let e = write_safetensors(&target, &[], &[]).unwrap_err();
     let want = std::fs::rename(d.0.join("nonexistent-src"), &target).is_err();
     assert!(want);
-    assert!(e.io_kind().is_some(), "rename failure lost its io::Error: {e}");
+    assert!(
+        e.io_kind().is_some(),
+        "rename failure lost its io::Error: {e}"
+    );
     let src = e.source().unwrap().to_string();
     assert!(
         e.detail().contains(&src),
         "message `{e}` should contain its source `{src}`"
     );
-    assert!(e.detail().starts_with(&format!("{}: ", target.display())), "{e}");
+    assert!(
+        e.detail().starts_with(&format!("{}: ", target.display())),
+        "{e}"
+    );
 }
 
 /// `fill` returns an io-backed IoError; `replace_dir_with` re-wraps it (replace.rs:306-316).
@@ -259,7 +289,10 @@ fn fill_error_kind_survives_replace_dir_with() {
     })
     .unwrap_err();
     assert_kind("replace_dir_with(fill)", &e, ErrorKind::TimedOut);
-    assert_eq!(e.to_string(), format!("{}: fill: slow disk", target.display()));
+    assert_eq!(
+        e.to_string(),
+        format!("{}: fill: slow disk", target.display())
+    );
 }
 
 /// Same through `allow` (replace.rs:287), with an existing target.
@@ -317,8 +350,14 @@ fn directory_is_a_synthetic_refusal_with_no_kind() {
     let d = Dir::new("dir");
     let cases: Vec<(&str, IoError)> = vec![
         ("read_checkpoint", read_checkpoint(&d.0).unwrap_err()),
-        ("SafeTensors::open", SafeTensors::open(&d.0).map(drop).unwrap_err()),
-        ("open_sha256_hex", open_sha256_hex(&d.0).map(drop).unwrap_err()),
+        (
+            "SafeTensors::open",
+            SafeTensors::open(&d.0).map(drop).unwrap_err(),
+        ),
+        (
+            "open_sha256_hex",
+            open_sha256_hex(&d.0).map(drop).unwrap_err(),
+        ),
     ];
     for (who, e) in &cases {
         assert_eq!(e.io_kind(), None, "{who}: {e}");
@@ -368,7 +407,10 @@ fn display_text_matches_the_pre_change_format_strings() {
     let raw_dir = std::fs::read_dir(&dir).map(drop).unwrap_err();
     assert_eq!(
         write_safetensors(&out, &[], &[]).unwrap_err().to_string(),
-        format!("{}: cannot scan temp files before replace: {raw_dir}", dir.display())
+        format!(
+            "{}: cannot scan temp files before replace: {raw_dir}",
+            dir.display()
+        )
     );
     // replace.rs Site::lock: `{what}: parent {parent}: {e}`
     let tgt = d.0.join("nope").join("t");
@@ -381,8 +423,15 @@ fn display_text_matches_the_pre_change_format_strings() {
     std::fs::write(d.0.join("model.safetensors.index.json"), b"{}").unwrap();
     let e = CheckpointView::open(&d.0).map(drop).unwrap_err();
     let idx = d.0.join("model.safetensors.index.json");
-    assert!(e.to_string().starts_with(&format!("{}: ", idx.display())), "{e}");
-    assert_eq!(e.io_kind(), None, "a parse refusal of the index has no io source: {e}");
+    assert!(
+        e.to_string().starts_with(&format!("{}: ", idx.display())),
+        "{e}"
+    );
+    assert_eq!(
+        e.io_kind(),
+        None,
+        "a parse refusal of the index has no io source: {e}"
+    );
 }
 
 // ---------------------------------------------------------------------------------------
@@ -396,7 +445,10 @@ fn index_utf8_refusal_keeps_its_flag_and_has_no_source() {
     let d = Dir::new("utf8");
     std::fs::write(d.0.join("model.safetensors.index.json"), [0xff, 0xfe, 0x00]).unwrap();
     let e = CheckpointView::open(&d.0).map(drop).unwrap_err();
-    assert!(e.is_refusal(), "refusal flag lost through CheckpointView::open: {e}");
+    assert!(
+        e.is_refusal(),
+        "refusal flag lost through CheckpointView::open: {e}"
+    );
     assert_eq!(e.io_kind(), None);
     assert!(e.source().is_none());
 }
