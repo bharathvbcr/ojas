@@ -3384,7 +3384,8 @@ mod tests {
         let (seen_tx, seen_rx) = mpsc::channel::<()>();
         let (taken_tx, taken_rx) = mpsc::channel::<()>();
         let (own, other) = std::thread::scope(|s| {
-            let reader = s.spawn(|| {
+            let a = &a;
+            let reader = s.spawn(move || {
                 a.ctx.sync().unwrap(); // the read sees the mask
                 seen_tx.send(()).unwrap();
                 taken_rx.recv().unwrap();
