@@ -453,13 +453,65 @@ impl Group {
     }
 }
 
+/// Which per-entry optimizer table a run's every learning-rate scale and weight decay come from.
+#[derive(Debug, Clone, Copy)]
+pub enum TableRule<'a> {
+    /// [`recipe::optimizer_table`]: the full fine-tune recipe (every entry at 1.0, or the
+    /// lower-layer split). [`train`] and [`train_epochs`] run this rule.
+    Full,
+    /// [`recipe::lora_optimizer_table`]: the adapters at 1.0, D17 and the span head at
+    /// [`recipe::HEAD_LR_SCALE`], told apart by the caller's host names.
+    Lora(recipe::LoraHostNames<'a>),
+}
+
+/// A trainable provider entry named as a LoRA adapter leaf (`<module>.lora_A.weight` or
+/// `<module>.lora_B.weight`).
+fn is_lora_adapter_leaf(name: &str) -> bool {
+    name.ends_with(".lora_A.weight") || name.ends_with(".lora_B.weight")
+}
+
 /// Run the loop. `batches` yields this epoch's batches in order; a resume skips (and hashes)
-/// those before the checkpoint's position.
+/// those before the checkpoint's position. The optimizer table is [`TableRule::Full`]; a LoRA
+/// run with host entries is refused here and runs through [`train_with_table`].
 pub fn train<P, O, I>(
     provider: &mut P,
     objective: &mut O,
     batches: I,
     cfg: &TrainConfig,
+    clock: &dyn Clock,
+    resume: Option<ResumeState>,
+    hooks: &mut Hooks<'_>,
+) -> Result<TrainResult, TrainError>
+where
+    P: StepProvider,
+    O: Objective,
+    I: IntoIterator<Item = Result<O::Batch, TrainError>>,
+{
+    train_with_table(
+        provider,
+        objective,
+        batches,
+        cfg,
+        TableRule::Full,
+        clock,
+        resume,
+        hooks,
+    )
+}
+
+/// [`train`] under the optimizer table `rule` names.
+///
+/// Under [`TableRule::Full`], a provider whose trainable entries are LoRA adapter leaves next to
+/// host entries (D17, the span head) is refused: the full table would train the heads at the
+/// adapters' rate, where Lappi's LoRA recipe (`lora.lora_param_groups`) trains them at
+/// [`recipe::HEAD_LR_SCALE`], so the run would be a different recipe from the one its row names.
+#[allow(clippy::too_many_arguments)]
+pub fn train_with_table<P, O, I>(
+    provider: &mut P,
+    objective: &mut O,
+    batches: I,
+    cfg: &TrainConfig,
+    rule: TableRule<'_>,
     clock: &dyn Clock,
     resume: Option<ResumeState>,
     hooks: &mut Hooks<'_>,
@@ -512,7 +564,26 @@ where
         .map(|h| h.entries())
         .unwrap_or_default();
     // Every per-entry number the optimizer uses comes out of this one table (Amendment 2 (ii)).
-    let table = recipe::optimizer_table(&entries, &host_entries, &cfg.optimizer)?;
+    let table = match rule {
+        TableRule::Full => {
+            if !host_entries.is_empty()
+                && let Some(leaf) = entries.iter().find(|e| is_lora_adapter_leaf(&e.name))
+            {
+                return Err(TrainError::Refused(format!(
+                    "{} is a LoRA adapter leaf and the objective holds {} host entries: the full \
+                     optimizer table would train the heads at the adapters' rate, not the LoRA \
+                     recipe's {}x; run it through train_with_table(TableRule::Lora)",
+                    leaf.name,
+                    host_entries.len(),
+                    recipe::HEAD_LR_SCALE
+                )));
+            }
+            recipe::optimizer_table(&entries, &host_entries, &cfg.optimizer)?
+        }
+        TableRule::Lora(names) => {
+            recipe::lora_optimizer_table(&entries, &host_entries, &cfg.optimizer, &names)?
+        }
+    };
     let (provider_rows, host_rows) = table.split_at(entries.len());
     let lr_scale: Vec<f64> = provider_rows.iter().map(|e| e.lr_scale).collect();
     let weight_decay: Vec<f64> = provider_rows.iter().map(|e| e.weight_decay).collect();
@@ -1041,8 +1112,39 @@ pub struct EpochSource<I> {
 pub fn train_epochs<P, O, I, F>(
     provider: &mut P,
     objective: &mut O,
+    source: F,
+    cfg: &TrainConfig,
+    clock: &dyn Clock,
+    resume: Option<ResumeState>,
+    hooks: &mut Hooks<'_>,
+) -> Result<TrainResult, TrainError>
+where
+    P: StepProvider,
+    O: Objective,
+    I: IntoIterator<Item = Result<O::Batch, TrainError>>,
+    F: FnMut(u64) -> Result<EpochSource<I>, TrainError>,
+{
+    train_epochs_with_table(
+        provider,
+        objective,
+        source,
+        cfg,
+        TableRule::Full,
+        clock,
+        resume,
+        hooks,
+    )
+}
+
+/// [`train_epochs`] under the optimizer table `rule` names (see [`train_with_table`]); every
+/// epoch's [`train_with_table`] call runs the same rule.
+#[allow(clippy::too_many_arguments)]
+pub fn train_epochs_with_table<P, O, I, F>(
+    provider: &mut P,
+    objective: &mut O,
     mut source: F,
     cfg: &TrainConfig,
+    rule: TableRule<'_>,
     clock: &dyn Clock,
     resume: Option<ResumeState>,
     hooks: &mut Hooks<'_>,
@@ -1116,11 +1218,12 @@ where
         if elapsed > 0.0 {
             epoch_cfg.cap = WallClockCap::new(cfg.cap.cap_s() - elapsed)?;
         }
-        let mut result = train(
+        let mut result = train_with_table(
             provider,
             objective,
             batches,
             &epoch_cfg,
+            rule,
             clock,
             state.take(),
             hooks,
