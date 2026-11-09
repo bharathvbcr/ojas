@@ -3070,3 +3070,6 @@ mod tests {
 #[cfg(test)]
 #[path = "adversarial_oom.rs"]
 mod adversarial_oom;
+
+#[cfg(test)]
+mod adv757b;

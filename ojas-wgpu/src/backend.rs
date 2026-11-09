@@ -4041,3 +4041,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod adv757b;
