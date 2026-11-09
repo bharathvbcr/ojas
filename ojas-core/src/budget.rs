@@ -205,11 +205,8 @@ impl Budget {
         )
     }
 
-    /// Count one readback of `bytes` here and in every ancestor. `Tensor::to_host`
-    /// does this for its own reads; a backend that reads device memory
-    /// without it (to take the fault mask of its own read) calls this once per
-    /// readback so [`Self::device_readbacks`] stays honest.
-    pub fn record_readback(&self, bytes: u64) {
+    /// Count one readback of `bytes` here and in every ancestor.
+    pub(crate) fn record_readback(&self, bytes: u64) {
         let mut node = Some(self);
         while let Some(budget) = node {
             budget.inner.readbacks.fetch_add(1, Ordering::AcqRel);

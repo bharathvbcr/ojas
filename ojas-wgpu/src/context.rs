@@ -18,17 +18,19 @@
 //! timeout, a failed map) therefore leaves the fault held for the next read
 //! instead of losing it.
 //!
-//! A read hands the mask it observed to its own caller ([`WgpuContext::read_observing`],
-//! [`WgpuContext::sync_observed`]), which reports it itself. The two
-//! boundaries that cannot return a mask ([`WgpuContext::read`], which backs
-//! `DeviceBuffer::read_bytes`, and the public [`WgpuContext::sync`]) defer it
-//! to one shared pair that [`WgpuContext::take_faults`] takes once, for
-//! whichever caller asks next. A mask is delivered by exactly one of the two
-//! channels, never both. Two reads on different threads can both copy the
-//! same held bits before either release lands, so a fault may then be
-//! reported to both. A caller whose data came from a faulting op after the
-//! fault was released and reported elsewhere is not told again: that needs
-//! per-buffer attribution, which is a follow-up.
+//! A read hands the mask it observed to its own caller
+//! ([`WgpuContext::read_observing`], [`WgpuContext::sync_observed`]), which
+//! reports it itself. The two boundaries that cannot return a mask
+//! ([`WgpuContext::read`], which backs `DeviceBuffer::read_bytes`, and the
+//! public [`WgpuContext::sync`]) defer it to one shared pair that
+//! [`WgpuContext::take_faults`] takes, for whichever caller asks next. A mask
+//! is delivered by one of the two channels, never both. Two reads that
+//! overlap a held fault before either release lands both observe it and
+//! both report it: every reader that may have copied faulted bytes errs
+//! (fail closed), and "reported once" is not promised (ft-84e2b74e). A
+//! caller whose data came from a faulting op after the fault was released
+//! and reported elsewhere is not told again: that needs per-buffer
+//! attribution, which is a follow-up.
 //!
 //! A lost device is recorded apart from the capped uncaptured-error queue,
 //! every later error check reports it, every error from a device call
@@ -685,16 +687,21 @@ fn admits_adapter(kind: wgpu::DeviceType, opt_in: Option<&str>) -> bool {
 /// Uncaptured wgpu errors whose text is kept.
 const UNCAPTURED_CAP: usize = 16;
 
-/// Bytes kept of one uncaptured-error message; a longer one is cut and
-/// marked, so the record is bounded in bytes as well as in count.
+/// Bytes kept of one uncaptured-error message before the cut marker; a longer
+/// one is cut there and marked, so the record is bounded in bytes as well as
+/// in count: a kept message is at most this plus [`UNCAPTURED_MARKER_BYTES`].
 const UNCAPTURED_MSG_BYTES: usize = 4096;
+
+/// Upper bound on the cut marker (`... [truncated, N bytes]`, N a `usize`).
+const UNCAPTURED_MARKER_BYTES: usize = 64;
 
 /// The uncaptured-error record of a context. Sticky: an error is never
 /// removed, so every later check on every thread and clone reports it until
 /// the context is reopened, as for the device-lost record. The cap bounds
-/// the record: at most [`UNCAPTURED_CAP`] messages of at most
-/// [`UNCAPTURED_MSG_BYTES`] bytes are kept, and an error past the count cap
-/// is counted and reported as a number, its text discarded.
+/// the record: at most [`UNCAPTURED_CAP`] messages are kept, each at most
+/// [`UNCAPTURED_MSG_BYTES`] bytes plus a cut marker of at most
+/// [`UNCAPTURED_MARKER_BYTES`], and an error past the count cap is counted
+/// and reported as a number, its text discarded.
 #[derive(Default)]
 struct ErrorQueue {
     msgs: Vec<String>,
@@ -2332,6 +2339,14 @@ impl WgpuBuffer {
 
     pub(crate) fn context(&self) -> &Arc<Inner> {
         &self.ctx
+    }
+
+    /// The context this buffer was created on, which any read of it must go
+    /// through, whichever backend asked.
+    pub(crate) fn owner(&self) -> WgpuContext {
+        WgpuContext {
+            inner: Arc::clone(&self.ctx),
+        }
     }
 
     pub(crate) fn shadow(&self) -> Option<&Arc<[u32]>> {

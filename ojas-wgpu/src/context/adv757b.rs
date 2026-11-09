@@ -20,7 +20,20 @@ impl WgpuContext {
 #[test]
 fn adv2_a5_normalize_never_panics_and_fails_closed() {
     let edge_bits = [0u64, 1, 1 << 2, 1 << 63, u64::MAX, 0xdead_beef_0000_0001];
-    let edge_first = [0u32, 1, 2, 38, 39, 63, 64, 65, 66, 1 << 31, u32::MAX - 1, u32::MAX];
+    let edge_first = [
+        0u32,
+        1,
+        2,
+        38,
+        39,
+        63,
+        64,
+        65,
+        66,
+        1 << 31,
+        u32::MAX - 1,
+        u32::MAX,
+    ];
     for &b in &edge_bits {
         for &f in &edge_first {
             let (nb, nf) = normalize_fault_words(b, f);
@@ -64,7 +77,11 @@ fn adv2_a5_torn_words_on_the_device_are_observed_normalized_and_released() {
         let got = ctx.sync_observed().unwrap();
         assert_eq!(got, want, "raw {raw:?}");
         let again = ctx.sync_observed().unwrap();
-        assert_eq!(again, (0, 0), "raw {raw:?}: held not clean after the release");
+        assert_eq!(
+            again,
+            (0, 0),
+            "raw {raw:?}: held not clean after the release"
+        );
         assert_eq!(ctx.take_faults(), (0, 0), "raw {raw:?}: also recorded");
     }
 }
@@ -99,7 +116,10 @@ fn adv2_a6_truncation_lands_on_a_char_boundary_for_every_straddle() {
             assert!(marker <= UNCAPTURED_MSG_BYTES, "{marker} > cap");
             assert!(msg.starts_with(&kept[..marker]), "prefix preserved");
             // The cut is as late as a boundary allows.
-            assert!(UNCAPTURED_MSG_BYTES - marker < w, "pad {pad} w {w}: cut at {marker}");
+            assert!(
+                UNCAPTURED_MSG_BYTES - marker < w,
+                "pad {pad} w {w}: cut at {marker}"
+            );
         }
     }
 }
@@ -125,7 +145,12 @@ fn adv2_a6_doc_claim_at_most_4096_bytes_each() {
     q.push("x".repeat(100_000));
     let n = q.msgs[0].len();
     eprintln!("ADV2 A6 a truncated message is {n} bytes (cap {UNCAPTURED_MSG_BYTES})");
-    assert!(n <= UNCAPTURED_MSG_BYTES, "kept message is {n} bytes");
+    // A cut message is the cap plus the marker, and that is the stated bound.
+    assert!(
+        n <= UNCAPTURED_MSG_BYTES + UNCAPTURED_MARKER_BYTES,
+        "kept message is {n} bytes"
+    );
+    assert!(q.msgs[0].contains("[truncated, 100000 bytes]"));
 }
 
 #[test]
@@ -150,7 +175,11 @@ fn adv2_a6_dropped_count_is_exact_under_many_threads() {
     });
     let (kept, dropped, bytes) = {
         let q = lock(&ctx.inner.errors);
-        (q.msgs.len(), q.dropped, q.msgs.iter().map(String::len).max().unwrap())
+        (
+            q.msgs.len(),
+            q.dropped,
+            q.msgs.iter().map(String::len).max().unwrap(),
+        )
     };
     assert_eq!(kept, UNCAPTURED_CAP);
     assert_eq!(kept as u64 + dropped, (threads * per) as u64);
@@ -199,5 +228,21 @@ fn adv2_a3_overlapping_reads_of_one_held_fault() {
         "ADV2 A3 overlap: rounds={rounds} threads={threads} max_deliveries_of_one_fault={max_dup} extra_deliveries={total_dup} lost={zero}"
     );
     assert_eq!(zero, 0, "a held fault was lost");
-    assert_eq!(total_dup, 0, "one held fault was delivered to several readers");
+    // Ruled: readers that overlapped a held fault may each be told it
+    // (fail closed). Pinned: that is the only way a fault is delivered twice;
+    // reads that do not overlap deliver it exactly once.
+    assert!(max_dup <= threads, "more deliveries than readers");
+    for _ in 0..rounds {
+        ctx.adv_set_held(1 << 3, 4);
+        assert_eq!(
+            ctx.sync_observed().unwrap(),
+            (1 << 3, 4),
+            "the first read is told"
+        );
+        assert_eq!(
+            ctx.sync_observed().unwrap(),
+            (0, 0),
+            "a later read is not told again"
+        );
+    }
 }

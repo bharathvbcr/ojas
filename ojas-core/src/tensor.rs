@@ -1288,6 +1288,32 @@ impl Tensor {
     /// window is decoded straight from the lease, so only the result is
     /// charged. A short read is [`OjasError::Backend`] and nothing is kept.
     pub fn to_host(&self, budget: &Budget) -> Result<Self, OjasError> {
+        self.to_host_with(budget, &mut |buf, offset, len| buf.read_bytes(offset, len))
+    }
+
+    /// [`Self::to_host`] with the device reads supplied by the caller:
+    /// `read(offset, len)` returns `len` bytes at `offset` of the device
+    /// allocation, in the same pieces `to_host` asks for, in place of
+    /// [`DeviceBuffer::read_bytes`]. A backend whose own read yields more than
+    /// bytes (a deferred-fault mask, say) takes it from the closure's
+    /// captures instead of a side channel. Windowing, budget charges, the
+    /// short-read check and the [`crate::Budget::device_readbacks`] count are
+    /// exactly `to_host`'s, and this is the one place the count is made. A
+    /// host tensor is cloned without calling `read`; a mapped one is read
+    /// from its lease, also without it.
+    pub fn to_host_via(
+        &self,
+        budget: &Budget,
+        mut read: impl FnMut(usize, usize) -> Result<Vec<u8>, OjasError>,
+    ) -> Result<Self, OjasError> {
+        self.to_host_with(budget, &mut |_, offset, len| read(offset, len))
+    }
+
+    fn to_host_with(
+        &self,
+        budget: &Budget,
+        read: &mut dyn FnMut(&Arc<dyn DeviceBuffer>, usize, usize) -> Result<Vec<u8>, OjasError>,
+    ) -> Result<Self, OjasError> {
         const OP: &str = "Tensor::to_host";
         enum Source<'a> {
             Device(&'a Arc<dyn DeviceBuffer>),
@@ -1369,7 +1395,7 @@ impl Tensor {
             let n = (len - done).min(chunk_len);
             match &src {
                 Source::Device(buf) => {
-                    let bytes = buf.read_bytes(offset + done, n)?;
+                    let bytes = read(buf, offset + done, n)?;
                     if bytes.len() != n {
                         return Err(OjasError::Backend {
                             id: backend,

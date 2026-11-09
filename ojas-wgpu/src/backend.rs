@@ -40,21 +40,24 @@
 //! the shared encoder exists to avoid. Instead:
 //!
 //! - the kernel raises its op's bit in a device fault word and keeps going;
-//! - the next [`WgpuBackend::sync`], [`Backend::download`] (of any tensor)
-//!   or [`Backend::clip_grad_norm`] whose own read observes it returns
-//!   [`OjasError::NonFinite`] naming the first op, in recording order on
-//!   this backend, that faulted since the previous report. The caller that
-//!   made the read is the one told, whichever thread raised the fault, so a
-//!   read that copied faulted values is never answered `Ok` because another
-//!   thread reported first;
+//! - the next [`WgpuBackend::sync`], [`Backend::download`] (of any tensor,
+//!   any layout, any context) or [`Backend::clip_grad_norm`] whose own read
+//!   observes it returns [`OjasError::NonFinite`] naming the first op, in
+//!   recording order, that faulted. The caller that made the read is the one
+//!   told, whichever thread raised the fault, so a read through these that
+//!   observed a fault is never answered `Ok` because another thread took a
+//!   report first;
 //! - a read that cannot return a mask (`Tensor::to_host` through
 //!   `DeviceBuffer::read_bytes`, the public `WgpuContext::sync`, a read that
 //!   failed after it observed) defers the mask to one pair on the context.
 //!   The next `sync`, `download`, `clip_grad_norm` or `adamw_step` on any
 //!   thread takes it and reports it once. A mask is delivered by exactly
 //!   one of the two paths, never both, so a read that was not followed by a
-//!   report leaves nothing to be mistaken for a later fault. Two reads whose
-//!   copies overlap before either release lands may both report it;
+//!   report leaves nothing to be mistaken for a later fault. Two reads that
+//!   overlap a held fault before either release lands both observe it and
+//!   both report it: every reader that may have copied faulted bytes errs
+//!   (fail closed), and a "reported once" guarantee is not given
+//!   (ft-84e2b74e);
 //! - `clip_grad_norm` reports a pending fault before it scales anything;
 //! - `adamw_step` also refuses, before it records anything, while an error
 //!   or a deferred fault is already pending (below);
@@ -74,8 +77,9 @@
 //! `clip_grad_norm` on every thread and on every backend sharing the context
 //! (`rebudget` backends do) returns [`OjasError::Backend`] naming them, until
 //! the context is reopened, as for a lost device ([`OjasError::DeviceLost`]).
-//! At most 16 messages of at most 4096 bytes each are kept; later errors are
-//! counted and reported as "and N more uncaptured errors dropped".
+//! At most 16 messages are kept, each at most 4096 bytes plus a cut marker of
+//! under 64; later errors are counted and reported as "and N more uncaptured
+//! errors dropped".
 //!
 //! The optimizers update in place through [`Tensor::device_buffer_mut`], so
 //! a parameter shared with another tensor is refused before anything is
@@ -1890,77 +1894,49 @@ impl BackendCore for WgpuBackend {
     }
 
     /// The only readback. A fault deferred by any earlier op is reported here.
-    /// A contiguous tensor of this context is read directly, so the mask its
-    /// own read observed comes back to this caller and is reported by it,
-    /// whichever thread raised the fault. Anything else (a host tensor, a
-    /// view, a buffer of another context) goes through `Tensor::to_host`,
-    /// whose reads defer the mask to the shared pair that is taken right
-    /// after. The readback is counted in `Budget::device_readbacks` either way.
+    /// A tensor of any wgpu context, in any layout (a view included), is read
+    /// through [`Tensor::to_host_via`] on the context that owns its buffer,
+    /// so the fault mask that read observed comes back to this caller and is
+    /// reported by it, whichever thread raised the fault and whichever
+    /// backend asked. The pair deferred on this backend's context is taken
+    /// with it. A host tensor, or a buffer of another backend, goes through
+    /// `Tensor::to_host` and its owner's boundary. The readback is counted in
+    /// `Budget::device_readbacks` by `ojas-core`, once.
     fn download(&self, tensor: &Tensor) -> Result<Tensor, OjasError> {
-        const OP: &str = "WgpuBackend::download";
-        let direct = tensor
+        let Some(buf) = tensor
             .device_buffer()
             .and_then(|d| d.as_any().downcast_ref::<WgpuBuffer>())
-            .filter(|b| self.ctx.same(b.context()))
-            .filter(|_| tensor.is_contiguous().unwrap_or(false));
-        let Some(buf) = direct else {
+        else {
             let host = tensor.to_host(&self.budget)?;
             if tensor.device().is_some() {
                 self.faults()?;
             }
             return Ok(host);
         };
+        let owner = buf.owner();
         let raw = buf.raw()?;
-        let len = tensor.num_elements()? * tensor.dtype().size();
-        let base = tensor.byte_offset();
-        let window_fits = base
-            .checked_add(len)
-            .is_some_and(|end| end <= ojas_core::DeviceBuffer::byte_len(buf));
-        if !window_fits {
-            return Err(OjasError::OutOfRange {
-                op: OP,
-                detail: format!(
-                    "window of {len} bytes at {base} exceeds device storage {}",
-                    ojas_core::DeviceBuffer::byte_len(buf)
-                ),
-            });
-        }
         let mut seen = (0u64, 0u32);
-        let read =
-            Tensor::from_le_reader(tensor.shape(), tensor.dtype(), &self.budget, |at, chunk| {
-                let (bytes, bits, first) =
-                    self.ctx
-                        .read_observing(raw, base as u64 + at, chunk.len() as u64)?;
-                if bytes.len() != chunk.len() {
-                    return Err(OjasError::Backend {
-                        id: BackendId::Wgpu,
-                        detail: format!(
-                            "read returned {} bytes, asked {} at offset {at}",
-                            bytes.len(),
-                            chunk.len()
-                        ),
-                    });
-                }
-                chunk.copy_from_slice(&bytes);
-                seen.0 |= bits;
-                if seen.1 == 0 {
-                    seen.1 = first;
-                }
-                Ok::<(), OjasError>(())
-            });
-        let host = match read {
-            Ok(host) => host,
+        let read = tensor.to_host_via(&self.budget, |offset, len| {
+            let (bytes, bits, first) = owner.read_observing(raw, offset as u64, len as u64)?;
+            seen.0 |= bits;
+            if seen.1 == 0 {
+                seen.1 = first;
+            }
+            Ok(bytes)
+        });
+        match read {
+            Ok(host) => {
+                self.fault_error(seen)?;
+                Ok(host)
+            }
             Err(err) => {
                 // An `Err` carries no mask: what earlier pieces saw is deferred.
                 if seen != (0, 0) {
-                    self.ctx.defer_faults(seen.0, seen.1);
+                    owner.defer_faults(seen.0, seen.1);
                 }
-                return Err(err);
+                Err(err)
             }
-        };
-        self.budget.record_readback(len as u64);
-        self.fault_error(seen)?;
-        Ok(host)
+        }
     }
 
     /// Device round under its own fault bit (`CAST`, in the high mask
