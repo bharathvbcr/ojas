@@ -1893,7 +1893,8 @@ impl BackendCore for WgpuBackend {
         Tensor::from_device_reserved(Arc::new(wb), tensor.shape(), tensor.dtype(), charge)
     }
 
-    /// The only readback. A fault deferred by any earlier op is reported here.
+    /// The checked readback (`Tensor::to_host` is the raw one). A fault
+    /// deferred by any earlier op is reported here.
     /// A tensor of any wgpu context, in any layout (a view included), is read
     /// through [`Tensor::to_host_via`] on the context that owns its buffer,
     /// so the fault mask that read observed comes back to this caller and is

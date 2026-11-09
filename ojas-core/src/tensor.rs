@@ -31,13 +31,23 @@ pub trait DeviceBuffer: Any + Send + Sync + fmt::Debug {
     /// This is a raw read. It returns the bytes exactly as the device wrote
     /// them, a NaN or infinity included, and it does not refuse a buffer
     /// that an op faulted: a non-finite fault is not an error of the read.
-    /// Metal reports the fault at its next
-    /// [`BackendCore::sync`](crate::BackendCore::sync), [`BackendCore::download`](crate::BackendCore::download) or
-    /// [`BackendFloat::clip_grad_norm`](crate::BackendFloat::clip_grad_norm). wgpu defers the fault the read
-    /// observed to one pair shared by every thread of the context, which the
-    /// next `sync`, `download`, `clip_grad_norm` or
-    /// [`BackendModule::adamw_step`](crate::BackendModule::adamw_step) takes, once. A caller that needs checked
-    /// bytes calls `sync` or `download` first (or reads with `download`).
+    /// The fault stays pending for the backend to report:
+    /// - Metal reports it at the next
+    ///   [`BackendCore::sync`](crate::BackendCore::sync),
+    ///   [`BackendCore::download`](crate::BackendCore::download),
+    ///   [`BackendFloat::clip_grad_norm`](crate::BackendFloat::clip_grad_norm)
+    ///   or `MetalBackend::with_runtime`.
+    ///   [`BackendModule::adamw_step`](crate::BackendModule::adamw_step)
+    ///   neither reports nor clears it.
+    /// - wgpu defers the fault the read observed to one pair shared by every
+    ///   thread of the context, which the next `sync`, `download`,
+    ///   `clip_grad_norm` or `adamw_step` takes and reports. A read that
+    ///   overlaps another read of the same held fault may make both report
+    ///   it; ojas-wgpu's module docs give no "reported once" guarantee under
+    ///   overlap.
+    ///
+    /// A caller that needs checked bytes calls `sync` or `download` first,
+    /// or reads with `download`.
     fn read_bytes(&self, offset: usize, len: usize) -> Result<Vec<u8>, OjasError>;
 
     /// Downcast hook so a backend can recover its concrete buffer type.
@@ -1306,12 +1316,11 @@ impl Tensor {
     /// On a device tensor this is a raw read, like
     /// [`DeviceBuffer::read_bytes`]: the bytes come back as written, a
     /// non-finite value included, and a fault an op raised on the output is
-    /// not checked here. It stays pending for the backend's next
-    /// [`BackendCore::sync`](crate::BackendCore::sync), [`BackendCore::download`](crate::BackendCore::download) or
-    /// [`BackendFloat::clip_grad_norm`](crate::BackendFloat::clip_grad_norm) (wgpu defers it to a pair shared by
-    /// all threads of the context, which any of those, or
-    /// [`BackendModule::adamw_step`](crate::BackendModule::adamw_step), takes once). A caller that needs checked
-    /// bytes uses [`BackendCore::download`](crate::BackendCore::download), or syncs before reading.
+    /// not checked here. It stays pending for the backend to report, at the
+    /// points listed on [`DeviceBuffer::read_bytes`]. A caller that needs
+    /// checked bytes uses
+    /// [`BackendCore::download`](crate::BackendCore::download), or syncs
+    /// before reading.
     pub fn to_host(&self, budget: &Budget) -> Result<Self, OjasError> {
         self.to_host_with(budget, &mut |buf, offset, len| buf.read_bytes(offset, len))
     }
