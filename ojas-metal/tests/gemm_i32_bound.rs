@@ -15,7 +15,7 @@
 
 #![cfg(target_os = "macos")]
 
-use ojas_core::{BackendCore, BackendFloat, BackendModule, Budget, OjasError, Tensor};
+use ojas_core::{BackendCore, BackendModule, Budget, OjasError, Tensor};
 use ojas_metal::MetalBackend;
 
 fn up(m: &MetalBackend, shape: &[usize]) -> Tensor {
@@ -42,7 +42,11 @@ fn linear_forward_output_past_i32_is_unsupported_before_any_work() {
         other => panic!("expected Unsupported naming the i32 limit, got {other:?}"),
     }
     assert_eq!(m.dispatches(), dispatches, "nothing dispatched");
-    assert_eq!(m.budget().live_bytes().expect("live"), live, "nothing charged");
+    assert_eq!(
+        m.budget().live_bytes().expect("live"),
+        live,
+        "nothing charged"
+    );
     assert_eq!(
         m.memory().expect("memory").allocated,
         allocated,

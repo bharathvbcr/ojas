@@ -1716,6 +1716,37 @@ fn row_major_strides(shape: &[usize]) -> Vec<usize> {
     strides
 }
 
+/// tessl refuses a GEMM operand or output of more than `i32::MAX` elements
+/// (`require_i32_extent`, `../tessl/src/gemm.rs`), but only on the device
+/// thread, after the output was reserved and allocated. This is the same
+/// bound on the host: `what` holding `elems` elements past it is
+/// [`OjasError::Unsupported`], raised before any reservation, allocation or
+/// dispatch. `elems` is wide so a product of two `usize` dims cannot wrap.
+pub(crate) fn require_i32_elems(op: &'static str, what: &str, elems: u128) -> Res<()> {
+    if elems > i32::MAX as u128 {
+        return Err(OjasError::Unsupported {
+            op,
+            detail: format!(
+                "{what} holds {elems} elements, past the i32 indexing limit {}",
+                i32::MAX
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// [`require_i32_elems`] for the three matrices of an `[rows, k] x [n, k]^T`
+/// GEMM family (linear forward and backward, the per-head gate): the
+/// `[rows, k]` input, the `[n, k]` weight and the `[rows, n]` output or
+/// output gradient. Each is bounded on its own element count, as tessl
+/// does, so a leading dimension wider than `k` is not counted twice.
+fn gemm_operands_fit(op: &'static str, rows: usize, k: usize, n: usize) -> Res<()> {
+    let elems = |a: usize, b: usize| a as u128 * b as u128;
+    require_i32_elems(op, "the input", elems(rows, k))?;
+    require_i32_elems(op, "the weight", elems(n, k))?;
+    require_i32_elems(op, "the output", elems(rows, n))
+}
+
 fn u32_dim(op: &'static str, n: usize) -> Res<u32> {
     u32::try_from(n).map_err(|_| OjasError::Unsupported {
         op,
@@ -2160,6 +2191,7 @@ impl MetalBackend {
     ) -> Res<(Tensor, Option<Tensor>)> {
         const OP: &str = "per_head_sigmoid_gate_forward";
         let dims = per_head_sigmoid_gate_forward_dims(input, weight, bias, attn_out)?;
+        gemm_operands_fit(OP, dims.rows, dims.d_model, dims.heads)?;
         let (x, w, b, a) = (
             self.f32(OP, input)?,
             self.f32(OP, weight)?,
@@ -2201,6 +2233,7 @@ impl MetalBackend {
     ) -> Res<PerHeadGateGrad> {
         const OP: &str = "per_head_sigmoid_gate_backward";
         let dims = per_head_sigmoid_gate_backward_dims(input, weight, bias, attn_out, grad_output)?;
+        gemm_operands_fit(OP, dims.rows, dims.d_model, dims.heads)?;
         if let Some(s) = scales {
             if s.shape() != [dims.rows, dims.heads] {
                 return Err(shape(
@@ -3056,6 +3089,7 @@ impl BackendModule for MetalBackend {
     fn linear_forward(&self, input: &Tensor, weight: &Tensor) -> Result<Tensor, OjasError> {
         const OP: &str = "linear_forward";
         let dims = linear_forward_dims(input, weight)?;
+        gemm_operands_fit(OP, dims.rows, dims.in_features, dims.out_features)?;
         let lane = self.lane_of(input, weight);
         let (input, weight) = (self.widened(input)?, self.widened(weight)?);
         let x = self.f32(OP, &input)?;
@@ -3089,6 +3123,7 @@ impl BackendModule for MetalBackend {
     ) -> Result<(Tensor, Tensor), OjasError> {
         const OP: &str = "linear_backward";
         let dims = linear_backward_dims(input, weight, grad_output)?;
+        gemm_operands_fit(OP, dims.rows, dims.in_features, dims.out_features)?;
         let gx_lane = self.lane_of(grad_output, weight);
         let gw_lane = self.lane_of(grad_output, input);
         let input = self.widened(input)?;
@@ -3135,6 +3170,7 @@ impl BackendModule for MetalBackend {
     ) -> Result<Tensor, OjasError> {
         const OP: &str = "linear_backward_input";
         let dims = linear_backward_dims(input, weight, grad_output)?;
+        gemm_operands_fit(OP, dims.rows, dims.in_features, dims.out_features)?;
         let lane = self.lane_of(grad_output, weight);
         let input = self.widened(input)?;
         let weight = self.widened(weight)?;
@@ -4351,6 +4387,7 @@ impl BackendModule for MetalBackend {
     ) -> Result<(), OjasError> {
         const OP: &str = "muon_ns5_step";
         let dims = muon_ns5_step_dims(param, grad, momentum)?;
+        require_i32_elems(OP, "the parameter", dims.rows as u128 * dims.cols as u128)?;
         let (p, g, m) = (
             self.f32(OP, param)?,
             self.f32(OP, grad)?,
@@ -5236,6 +5273,42 @@ mod tests {
         );
         assert_eq!(pending(&m), None);
         drop(kept);
+    }
+
+    #[test]
+    fn gemm_bound_is_tessls_i32_element_count_per_matrix() {
+        const OP: &str = "linear_forward";
+        let max = i32::MAX as usize;
+        // Exactly i32::MAX elements in any one matrix is accepted.
+        assert!(gemm_operands_fit(OP, 1, max, 1).is_ok());
+        assert!(gemm_operands_fit(OP, max, 1, 1).is_ok());
+        assert!(gemm_operands_fit(OP, 1, 1, max).is_ok());
+        // One past it, in each of the input, weight and output, is refused.
+        for (rows, k, n, which) in [
+            (1usize, max + 1, 1usize, "input"),
+            (max + 1, 1, 1, "input"),
+            (1, 1, max + 1, "weight"),
+            (2, 1, max / 2 + 1, "output"),
+            (65537, 1, 32768, "output"),
+        ] {
+            match gemm_operands_fit(OP, rows, k, n) {
+                Err(OjasError::Unsupported { op: OP, detail }) => {
+                    assert!(detail.contains("i32"), "{detail}");
+                    assert!(detail.contains(which), "{which}: {detail}");
+                }
+                other => panic!("{rows} {k} {n}: {other:?}"),
+            }
+        }
+        // Products that wrap u32 and usize are refused, not wrapped.
+        assert!(gemm_operands_fit(OP, 1 << 17, 1 << 17, 1).is_err());
+        assert!(gemm_operands_fit(OP, usize::MAX, usize::MAX, usize::MAX).is_err());
+        // Zero-sized dims stay in bound (the empty-shape refusal is elsewhere).
+        assert!(gemm_operands_fit(OP, 0, usize::MAX, 0).is_ok());
+        require_i32_elems("muon_ns5_step", "the parameter", i32::MAX as u128).expect("max");
+        assert!(matches!(
+            require_i32_elems("muon_ns5_step", "the parameter", i32::MAX as u128 + 1),
+            Err(OjasError::Unsupported { .. })
+        ));
     }
 
     /// A backend whose device reports no working set (tessl's `0`) has no

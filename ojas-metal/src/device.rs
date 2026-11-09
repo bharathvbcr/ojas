@@ -174,6 +174,14 @@ fn gate_dbias_threads(n_head: usize) -> Res<usize> {
 const WS_NUM: u64 = 3;
 const WS_DEN: u64 = 4;
 const WS_GROWTH: u64 = 64 << 20;
+
+/// The device bytes past which commands settle for the working set, from
+/// the reported `recommended_working_set`; `None` for `0`, which tessl
+/// reports when it has no figure.
+fn ws_limit_of(ws: u64) -> Option<u64> {
+    (ws != 0).then(|| ws / WS_DEN * WS_NUM)
+}
+
 /// Tiled attention geometry, as `ATT_THREADS` (four simdgroups) and
 /// `ATT_BQ` / `ATT_BK` (rows per threadgroup) in the Metal source.
 /// The forward kernel's key tile is wider (`ATT_FWD_BK`); its grid is
@@ -457,13 +465,11 @@ fn bind(b: &mut Binder<'_>, v: &V, index: usize) {
 /// The attention kernels' matrix-unit tensors index one `[T, D]` plane with
 /// i32 extents.
 fn attn_plane_fits(op: &'static str, t: u32, d: u32) -> Res<()> {
-    if u64::from(t) * u64::from(d) > i32::MAX as u64 {
-        return Err(OjasError::Unsupported {
-            op,
-            detail: format!("a [T, D] = [{t}, {d}] plane exceeds i32 indexing"),
-        });
-    }
-    Ok(())
+    crate::backend::require_i32_elems(
+        op,
+        &format!("a [T, D] = [{t}, {d}] plane"),
+        u128::from(t) * u128::from(d),
+    )
 }
 
 /// RMSNorm geometry, as `RMS_ROWS_PER_TG` (one simdgroup per row) and
@@ -561,7 +567,10 @@ struct Book {
     clean: HashMap<u64, Clean>,
     overlap: usize,
     mem_cap: u64,
-    ws_limit: u64,
+    /// Device bytes past which a command settles for the working set; `None`
+    /// when the device reports no working set (tessl's `0`), where there is
+    /// no threshold to be over.
+    ws_limit: Option<u64>,
     bf16_accum: bool,
     #[cfg(test)]
     /// Allocations to let through, then allocations to fail.
@@ -702,7 +711,7 @@ impl Worker {
             clean: HashMap::new(),
             overlap: OVERLAP_DISPATCHES,
             mem_cap: MEM_CAP_CEILING.min(budget.cap_bytes() / 4),
-            ws_limit: ws / WS_DEN * WS_NUM,
+            ws_limit: ws_limit_of(ws),
             bf16_accum: false,
             #[cfg(test)]
             fail_allocs: (0, 0),
@@ -923,7 +932,7 @@ impl Worker {
         if alloc > cap {
             return self.settle(Scan::All, Wait::MemCap);
         }
-        if alloc > WS_GROWTH && self.rt.current_allocated_bytes() > limit {
+        if alloc > WS_GROWTH && limit.is_some_and(|l| self.rt.current_allocated_bytes() > l) {
             return self.settle(Scan::All, Wait::WorkingSet);
         }
         if since >= overlap {
@@ -1613,7 +1622,8 @@ impl Worker {
             } => {
                 let mut book = self.book.borrow_mut();
                 book.overlap = overlap.unwrap_or(book.overlap);
-                book.ws_limit = ws_limit.unwrap_or(book.ws_limit);
+                // `Some(0)` is tessl's "no figure": the unreported state.
+                book.ws_limit = ws_limit.map_or(book.ws_limit, ws_limit_of);
                 book.fail_allocs = fail_allocs;
                 Ok(Reply::Done)
             }
