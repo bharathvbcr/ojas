@@ -416,6 +416,7 @@ fn lora_product<B: Backend>(
         }
     };
     let delta = backend.linear_forward(&place(b)?, &place(&at)?)?;
+    // Raw read (Tensor::to_host checks no device fault); merge and merged_weight_bf16 refuse a non-finite product on the host.
     Ok(delta.to_host(&budget)?)
 }
 
