@@ -373,3 +373,21 @@ fn linear_cross_entropy_model_dim_past_i32_is_unsupported_before_any_work() {
         .err()
     });
 }
+
+/// The route is decided before anything is widened: a 1 x 1 convolution over
+/// a batch of 4 images of 255 x 255 pixels is not 16-byte aligned from the
+/// second image, so it cannot take the pointwise route. Each image's GEMM
+/// would fit, but the im2col product (or TensorOps output) of 4 * 8448 *
+/// 255 * 255 = 2.197e9 elements does not, and is refused up front.
+#[test]
+fn conv2d_pointwise_shape_on_the_fallback_route_is_bounded_before_any_work() {
+    refused_before_any_work("conv2d_forward", |m| {
+        m.conv2d_forward(
+            &phantom(&[4, 1, 255, 255]),
+            &phantom(&[8448, 1, 1, 1]),
+            None,
+            Conv2dParams::new(),
+        )
+        .err()
+    });
+}

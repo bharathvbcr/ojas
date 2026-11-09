@@ -131,10 +131,10 @@ use ojas_core::{
 use crate::layout::{CONV1D_BWD_ROWS, CONV1D_WIDTHS, GATED_RMS_BWD_MAX_DIM, GATED_RMS_BWD_ROWS};
 use crate::link::Conv2dTensorOps;
 use crate::link::{
-    cached_attn_origin, cached_attn_part, check_mem_cap, check_overlap_dispatches, metal_err,
-    norm_chunks, rms_w_chunks, Arg, AttnExtra, AttnGeom, BilinearGeom, Cmd, Conv1dGeom, ConvGeom,
-    EmbedRows, EncAttnGeom, GdnArgs, GroupNormGeom, Lane, LceGeom, Link, ReadAs, Reply, Res,
-    RmsSide, RopeMode, SdpaGeom, WaitCounts, Waits, SQ_OUT_WORDS,
+    cached_attn_origin, cached_attn_part, check_mem_cap, check_overlap_dispatches, copied_at,
+    metal_err, norm_chunks, rms_w_chunks, Arg, AttnExtra, AttnGeom, BilinearGeom, Cmd, Conv1dGeom,
+    ConvGeom, EmbedRows, EncAttnGeom, GdnArgs, GroupNormGeom, Lane, LceGeom, Link, ReadAs, Reply,
+    Res, RmsSide, RopeMode, SdpaGeom, WaitCounts, Waits, SQ_OUT_WORDS,
 };
 use crate::permute;
 
@@ -590,15 +590,22 @@ impl MetalBackend {
         } else {
             crate::device::conv2d_tops_scratch_elems(mode, &geom)?
         };
-        // The GEMM's i32 extents, before anything is widened, reserved or
-        // dispatched. A 1 x 1 convolution that may take the pointwise route
-        // is bounded per image; whether it does depends on the operand's
-        // alignment, known below.
-        let pointwise_shape = allow_pointwise && pointwise_shape(&dims);
+        // The route is fixed by the shapes and by where the input window
+        // starts: a `Bf16` input is widened into a new buffer at offset 0, any
+        // other keeps its own offset. So the GEMM's i32 extents are bounded
+        // for the route the call will take, before anything is widened,
+        // reserved or dispatched; the check after widening only confirms it.
+        let x_off = if input.dtype() == DType::Bf16 {
+            0
+        } else {
+            input.byte_offset()
+        };
+        let pointwise = allow_pointwise && pointwise_conv(&dims, x_off);
+        let tops_scratch = if pointwise { None } else { tops_elems };
         if dims.params.groups == 1 {
-            let route = if pointwise_shape {
+            let route = if pointwise {
                 ConvGemm::Pointwise
-            } else if tops_elems.is_some() {
+            } else if tops_scratch.is_some() {
                 ConvGemm::Tops
             } else {
                 ConvGemm::Im2col
@@ -622,19 +629,10 @@ impl MetalBackend {
             };
             return self.one(OP, &dims.out_shape(), 0, cmd);
         }
-        let pointwise = allow_pointwise && pointwise_conv(&dims, x);
-        let tops_scratch = if pointwise { None } else { tops_elems };
-        if pointwise_shape && !pointwise {
-            // A pointwise shape whose operand cannot be read in place takes
-            // the other route, bounded as that route is. This is the one
-            // bound that runs after the operands are widened, and still
-            // before the output is reserved or anything is dispatched.
-            let route = if tops_scratch.is_some() {
-                ConvGemm::Tops
-            } else {
-                ConvGemm::Im2col
-            };
-            conv2d_fits(OP, &dims, route)?;
+        if (allow_pointwise && pointwise_conv(&dims, x.off)) != pointwise {
+            return Err(metal_err(format!(
+                "{OP}: the operand's window moved after the route was bounded"
+            )));
         }
         let scratch = if let Some(elems) = tops_scratch {
             // tessl's padded NHWC input copy and HWIO weights, in f16 or f32:
@@ -1788,8 +1786,9 @@ pub(crate) enum ConvGemm {
     /// tessl's `conv2d_nchw`, which refuses (`int_scratch`,
     /// `../tessl/src/conv.rs`) a convolution whose input, output or weights
     /// hold more than `i32::MAX` elements. Its padded NHWC copy is also
-    /// bounded there, but its size is private to tessl and no smaller than
-    /// the input, so it is not bounded here.
+    /// bounded there, but that size is private to tessl, so it is the one
+    /// size the host cannot see; it is no smaller than the input, which is
+    /// bounded.
     Tops,
     /// `im2col [rows, c kh kw] @ W^T [c kh kw, o]`.
     Im2col,
@@ -1909,11 +1908,11 @@ fn refuse_unsupported_conv2d(op: &'static str, d: &Conv2dDims) -> Res<()> {
 /// not here) and, past one image, so must every image after the first (`c`
 /// times the pixels, and `o` times them for the output, a multiple of 4).
 /// Anything else takes im2col, which reads any window.
-fn pointwise_conv(d: &Conv2dDims, x: Arg) -> bool {
+fn pointwise_conv(d: &Conv2dDims, x_off: usize) -> bool {
     if !pointwise_shape(d) {
         return false;
     }
-    if x.copied(ReadAs::Matrix) {
+    if copied_at(x_off, ReadAs::Matrix) {
         return false;
     }
     let pixels = d.out_height.checked_mul(d.out_width);
