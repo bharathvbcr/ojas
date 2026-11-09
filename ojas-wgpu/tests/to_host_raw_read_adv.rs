@@ -18,9 +18,7 @@ use std::sync::{Arc, Barrier};
 use std::thread;
 
 use common::*;
-use ojas_core::{
-    AdamWConfig, BackendCore, BackendFloat, BackendModule, DType, OjasError, Tensor,
-};
+use ojas_core::{AdamWConfig, BackendCore, BackendFloat, BackendModule, DType, OjasError, Tensor};
 use ojas_wgpu::WgpuBackend;
 
 fn nonfinite_op(r: Result<impl std::fmt::Debug, OjasError>) -> &'static str {
@@ -127,7 +125,11 @@ fn a_second_sync_on_any_thread_is_clean_after_one_takes_it() {
     assert_eq!(b, "silu_forward");
     g.sync().expect("thread A (the reader) after B took it");
     thread::scope(|s| s.spawn(|| g.sync().expect("thread C")).join().unwrap());
-    thread::scope(|s| s.spawn(|| g.sync().expect("thread B again")).join().unwrap());
+    thread::scope(|s| {
+        s.spawn(|| g.sync().expect("thread B again"))
+            .join()
+            .unwrap()
+    });
 }
 
 /// Attack 2e: eight threads race to take one deferred fault: exactly one
@@ -255,5 +257,9 @@ fn a_raw_read_racing_a_sync_reports_the_fault_exactly_once() {
         }
     }
     eprintln!("RAWADV-STRESS doubles={doubles} lost={lost} of 400");
-    assert_eq!((doubles, lost), (0, 0), "once is not guaranteed under overlap");
+    assert_eq!(
+        (doubles, lost),
+        (0, 0),
+        "once is not guaranteed under overlap"
+    );
 }
