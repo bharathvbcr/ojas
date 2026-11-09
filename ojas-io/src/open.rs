@@ -160,7 +160,7 @@ const O_NONBLOCK: Option<i32> = None;
 /// files this is meant to open.
 pub fn open_regular_file(path: &Path) -> Result<(File, u64), IoError> {
     let what = path.display();
-    let before = std::fs::metadata(path).map_err(|e| IoError::new(format!("{what}: {e}")))?;
+    let before = std::fs::metadata(path).map_err(|e| IoError::io(format!("{what}: {e}"), e))?;
     if !before.is_file() {
         return Err(IoError::new(format!("{what}: not a regular file")));
     }
@@ -168,10 +168,10 @@ pub fn open_regular_file(path: &Path) -> Result<(File, u64), IoError> {
         Some(flag) => open_flagged(path, flag),
         None => File::open(path),
     }
-    .map_err(|e| IoError::new(format!("{what}: {e}")))?;
+    .map_err(|e| IoError::io(format!("{what}: {e}"), e))?;
     let after = file
         .metadata()
-        .map_err(|e| IoError::new(format!("{what}: {e}")))?;
+        .map_err(|e| IoError::io(format!("{what}: {e}"), e))?;
     if !after.is_file() {
         return Err(IoError::new(format!("{what}: not a regular file")));
     }
@@ -213,7 +213,7 @@ pub fn read_regular_text(path: &Path, max_bytes: u64, cap_name: &str) -> Result<
             if e.kind() == std::io::ErrorKind::InvalidData {
                 IoError::refusal(detail)
             } else {
-                IoError::new(detail)
+                IoError::io(detail, e)
             }
         })?;
     if text.len() as u64 > max_bytes {
@@ -242,17 +242,17 @@ pub fn open_nofollow(path: &Path) -> Result<File, IoError> {
         )));
     };
     let before =
-        std::fs::symlink_metadata(path).map_err(|e| IoError::new(format!("{what}: {e}")))?;
+        std::fs::symlink_metadata(path).map_err(|e| IoError::io(format!("{what}: {e}"), e))?;
     if before.file_type().is_symlink() {
         return Err(IoError::new(format!("{what}: is a symbolic link")));
     }
     if !before.is_file() {
         return Err(IoError::new(format!("{what}: not a regular file")));
     }
-    let file = open_flagged(path, flag).map_err(|e| IoError::new(format!("{what}: {e}")))?;
+    let file = open_flagged(path, flag).map_err(|e| IoError::io(format!("{what}: {e}"), e))?;
     let after = file
         .metadata()
-        .map_err(|e| IoError::new(format!("{what}: {e}")))?;
+        .map_err(|e| IoError::io(format!("{what}: {e}"), e))?;
     if !after.is_file() || identity(&before) != identity(&after) {
         return Err(IoError::new(format!("{what}: changed while it was opened")));
     }

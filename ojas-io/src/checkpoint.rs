@@ -20,7 +20,7 @@ pub fn write_checkpoint(path: &Path, ckpt: &CheckpointV1) -> Result<(), IoError>
         write_to(file, ckpt)?;
         let pos = file
             .stream_position()
-            .map_err(|e| IoError::new(format!("checkpoint write: {e}")))?;
+            .map_err(|e| IoError::io(format!("checkpoint write: {e}"), e))?;
         if pos != n {
             return Err(IoError::new(format!(
                 "checkpoint length mismatch: wrote {pos}, expected {n}"
@@ -50,8 +50,8 @@ fn exceeds_checkpoint_cap(n: u64, cap: u64) -> bool {
 
 pub fn read_checkpoint(path: &Path) -> Result<CheckpointV1, IoError> {
     let what = path.display();
-    let file = File::open(path).map_err(|e| IoError::new(format!("{what}: {e}")))?;
-    read_checkpoint_from(file).map_err(|e| IoError::new(format!("{what}: {}", e.detail())))
+    let file = File::open(path).map_err(|e| IoError::io(format!("{what}: {e}"), e))?;
+    read_checkpoint_from(file).map_err(|e| IoError::wrap(format!("{what}: {}", e.detail()), e))
 }
 
 /// Decode a checkpoint from a file the caller already opened, for example
@@ -60,7 +60,7 @@ pub fn read_checkpoint(path: &Path) -> Result<CheckpointV1, IoError> {
 /// read. Reads are positioned from byte 0: the file's cursor is neither used
 /// nor moved.
 pub fn read_checkpoint_from(file: File) -> Result<CheckpointV1, IoError> {
-    let meta = file.metadata().map_err(|e| IoError::new(e.to_string()))?;
+    let meta = file.metadata().map_err(|e| IoError::io(e.to_string(), e))?;
     if !meta.is_file() {
         return Err(IoError::new("not a regular file"));
     }
@@ -270,7 +270,7 @@ fn window_ok(b: &NamedBlob) -> Result<(), IoError> {
 
 fn put(out: &mut impl Write, bytes: &[u8]) -> Result<(), IoError> {
     out.write_all(bytes)
-        .map_err(|e| IoError::new(format!("checkpoint write: {e}")))
+        .map_err(|e| IoError::io(format!("checkpoint write: {e}"), e))
 }
 
 fn write_lp(out: &mut impl Write, bytes: &[u8]) -> Result<(), IoError> {
@@ -331,7 +331,7 @@ impl<R: Read> In<'_, R> {
         buf.resize(n_us, 0);
         self.r
             .read_exact(&mut buf)
-            .map_err(|e| IoError::new(format!("truncated checkpoint: {e}")))?;
+            .map_err(|e| IoError::io(format!("truncated checkpoint: {e}"), e))?;
         self.left -= n;
         Ok(buf)
     }

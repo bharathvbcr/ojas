@@ -27,7 +27,8 @@ impl Drop for Dir {
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
-                    let _ = std::fs::set_permissions(e.path(), std::fs::Permissions::from_mode(0o600));
+                    let _ =
+                        std::fs::set_permissions(e.path(), std::fs::Permissions::from_mode(0o600));
                 }
             }
         }
@@ -38,14 +39,19 @@ impl Drop for Dir {
 fn assert_kind(err: &IoError, kind: ErrorKind) {
     assert_eq!(err.io_kind(), Some(kind), "io_kind of {err}");
     let src = err.source().expect("source() is the io::Error");
-    let io = src.downcast_ref::<std::io::Error>().expect("source downcasts to io::Error");
+    let io = src
+        .downcast_ref::<std::io::Error>()
+        .expect("source downcasts to io::Error");
     assert_eq!(io.kind(), kind);
 }
 
 fn both_openers(path: &Path) -> Vec<(&'static str, IoError)> {
     vec![
         ("open_regular_file", open_regular_file(path).unwrap_err()),
-        ("read_regular_text", read_regular_text(path, 1024, "test cap").unwrap_err()),
+        (
+            "read_regular_text",
+            read_regular_text(path, 1024, "test cap").unwrap_err(),
+        ),
     ]
 }
 
@@ -88,7 +94,11 @@ fn not_a_directory_keeps_its_kind() {
     let through = f.join("child");
     // Ask std which kind it reports, so the test does not assume one.
     let want = std::fs::metadata(&through).unwrap_err().kind();
-    assert_eq!(want, ErrorKind::NotADirectory, "std's kind for file/child on this host");
+    assert_eq!(
+        want,
+        ErrorKind::NotADirectory,
+        "std's kind for file/child on this host"
+    );
     for (who, e) in both_openers(&through) {
         eprintln!("{who}: {e}");
         assert_kind(&e, want);
@@ -120,7 +130,12 @@ fn display_text_is_unchanged() {
     let raw = std::fs::metadata(&missing).unwrap_err();
     let want = format!("{}: {raw}", missing.display());
     assert_eq!(open_regular_file(&missing).unwrap_err().to_string(), want);
-    assert_eq!(read_regular_text(&missing, 8, "cap").unwrap_err().to_string(), want);
+    assert_eq!(
+        read_regular_text(&missing, 8, "cap")
+            .unwrap_err()
+            .to_string(),
+        want
+    );
     assert_eq!(open_regular_file(&missing).unwrap_err().detail(), want);
 }
 

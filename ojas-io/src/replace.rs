@@ -36,25 +36,29 @@ where
             .write(true)
             .create_new(true)
             .open(&tmp)
-            .map_err(|e| IoError::new(e.to_string()))?;
+            .map_err(|e| IoError::io(e.to_string(), e))?;
         write(&mut file)?;
-        file.sync_all().map_err(|e| IoError::new(e.to_string()))?;
-        fs::rename(&tmp, path).map_err(|e| IoError::new(e.to_string()))?;
+        file.sync_all().map_err(|e| IoError::io(e.to_string(), e))?;
+        fs::rename(&tmp, path).map_err(|e| IoError::io(e.to_string(), e))?;
         Ok(())
     })();
     if let Err(e) = staged {
         return Err(match fs::remove_file(&tmp) {
-            Err(c) if c.kind() != std::io::ErrorKind::NotFound => IoError::new(format!(
-                "{what}: {e}; removing temp file {} also failed: {c}",
-                tmp.display()
-            )),
-            _ => IoError::new(format!("{what}: {e}")),
+            Err(c) if c.kind() != std::io::ErrorKind::NotFound => IoError::wrap(
+                format!(
+                    "{what}: {e}; removing temp file {} also failed: {c}",
+                    tmp.display()
+                ),
+                e,
+            ),
+            _ => IoError::wrap(format!("{what}: {e}"), e),
         });
     }
     sync_dir(dir).map_err(|e| {
-        IoError::new(format!(
-            "{what}: written, but syncing its directory failed: {e}"
-        ))
+        IoError::io(
+            format!("{what}: written, but syncing its directory failed: {e}"),
+            e,
+        )
     })
 }
 
@@ -86,11 +90,14 @@ fn sweep_orphan_temps(dir: &Path, name: &OsStr) -> Result<(), IoError> {
             continue;
         }
         fs::remove_file(&path).map_err(|e| {
-            IoError::new(format!(
-                "{}: cannot remove orphan temp {}: {e}",
-                dir.display(),
-                path.display()
-            ))
+            IoError::io(
+                format!(
+                    "{}: cannot remove orphan temp {}: {e}",
+                    dir.display(),
+                    path.display()
+                ),
+                e,
+            )
         })?;
     }
     Ok(())
@@ -104,28 +111,37 @@ fn temps_of(
     suffix: &str,
 ) -> Result<Vec<(PathBuf, fs::FileType)>, IoError> {
     let entries = fs::read_dir(dir).map_err(|e| {
-        IoError::new(format!(
-            "{}: cannot scan temp files before replace: {e}",
-            dir.display()
-        ))
+        IoError::io(
+            format!(
+                "{}: cannot scan temp files before replace: {e}",
+                dir.display()
+            ),
+            e,
+        )
     })?;
     let mut out = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|e| {
-            IoError::new(format!(
-                "{}: cannot read a directory entry before replace: {e}",
-                dir.display()
-            ))
+            IoError::io(
+                format!(
+                    "{}: cannot read a directory entry before replace: {e}",
+                    dir.display()
+                ),
+                e,
+            )
         })?;
         if !is_temp_name(name, &entry.file_name(), suffix) {
             continue;
         }
         let kind = entry.file_type().map_err(|e| {
-            IoError::new(format!(
-                "{}: cannot stat {} before replace: {e}",
-                dir.display(),
-                entry.path().display()
-            ))
+            IoError::io(
+                format!(
+                    "{}: cannot stat {} before replace: {e}",
+                    dir.display(),
+                    entry.path().display()
+                ),
+                e,
+            )
         })?;
         out.push((entry.path(), kind));
     }
@@ -268,7 +284,7 @@ where
     let mut site = Site::lock(target)?;
     site.recover()?;
     if site.exists {
-        allow(target).map_err(|e| IoError::new(format!("{what}: {}", e.detail())))?;
+        allow(target).map_err(|e| IoError::wrap(format!("{what}: {}", e.detail()), e))?;
     }
     site.sweep_stages()?;
     let mut stage = Stage {
@@ -280,7 +296,7 @@ where
             return Ok(());
         }
         let kind = fs::symlink_metadata(target)
-            .map_err(|e| IoError::new(format!("{what}: re-checked before the swap: {e}")))?;
+            .map_err(|e| IoError::io(format!("{what}: re-checked before the swap: {e}"), e))?;
         if !kind.is_dir() {
             return Err(IoError::new(format!(
                 "{what}: is no longer a plain directory; left as it is"
@@ -290,12 +306,15 @@ where
     });
     if let Err(e) = staged {
         return Err(match stage.remove() {
-            Ok(()) => IoError::new(format!("{what}: {}", e.detail())),
-            Err(c) => IoError::new(format!(
-                "{what}: {}; removing stage {} also failed: {c}",
-                e.detail(),
-                stage.path.display()
-            )),
+            Ok(()) => IoError::wrap(format!("{what}: {}", e.detail()), e),
+            Err(c) => IoError::wrap(
+                format!(
+                    "{what}: {}; removing stage {} also failed: {c}",
+                    e.detail(),
+                    stage.path.display()
+                ),
+                e,
+            ),
         });
     }
     site.swap(stage)
@@ -354,7 +373,7 @@ impl<'a> Site<'a> {
         let what = target.display();
         let (parent, name) = split(target)?;
         let parent_kind = fs::symlink_metadata(parent)
-            .map_err(|e| IoError::new(format!("{what}: parent {}: {e}", parent.display())))?;
+            .map_err(|e| IoError::io(format!("{what}: parent {}: {e}", parent.display()), e))?;
         if parent_kind.file_type().is_symlink() {
             return Err(IoError::new(format!(
                 "{what}: parent {} is a symbolic link",
@@ -368,7 +387,7 @@ impl<'a> Site<'a> {
             )));
         }
         let key = fs::canonicalize(parent)
-            .map_err(|e| IoError::new(format!("{what}: parent {}: {e}", parent.display())))?;
+            .map_err(|e| IoError::io(format!("{what}: parent {}: {e}", parent.display()), e))?;
         let me = std::thread::current().id();
         let mut lock = {
             let mut held = HELD.lock().unwrap_or_else(PoisonError::into_inner);
@@ -383,12 +402,12 @@ impl<'a> Site<'a> {
             ParentLock { key, _file: None }
         };
         let file = File::open(parent)
-            .map_err(|e| IoError::new(format!("{what}: parent {}: {e}", parent.display())))?;
+            .map_err(|e| IoError::io(format!("{what}: parent {}: {e}", parent.display()), e))?;
         file.lock().map_err(|e| {
-            IoError::new(format!(
-                "{what}: cannot lock parent {}: {e}",
-                parent.display()
-            ))
+            IoError::io(
+                format!("{what}: cannot lock parent {}: {e}", parent.display()),
+                e,
+            )
         })?;
         lock._file = Some(file);
         let exists = match fs::symlink_metadata(target) {
@@ -402,7 +421,7 @@ impl<'a> Site<'a> {
             }
             Ok(_) => true,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-            Err(e) => return Err(IoError::new(format!("{what}: {e}"))),
+            Err(e) => return Err(IoError::io(format!("{what}: {e}"), e)),
         };
         Ok(Site {
             target,
@@ -428,10 +447,10 @@ impl<'a> Site<'a> {
         if self.exists {
             for b in &backups {
                 fs::remove_dir_all(b).map_err(|e| {
-                    IoError::new(format!(
-                        "{what}: cannot remove old backup {}: {e}",
-                        b.display()
-                    ))
+                    IoError::io(
+                        format!("{what}: cannot remove old backup {}: {e}", b.display()),
+                        e,
+                    )
                 })?;
             }
             self.sync_parent("removed old backups")?;
@@ -444,10 +463,13 @@ impl<'a> Site<'a> {
             )));
         };
         fs::rename(backup, self.target).map_err(|e| {
-            IoError::new(format!(
-                "{what}: missing; restoring backup {} failed: {e}",
-                backup.display()
-            ))
+            IoError::io(
+                format!(
+                    "{what}: missing; restoring backup {} failed: {e}",
+                    backup.display()
+                ),
+                e,
+            )
         })?;
         self.exists = true;
         self.sync_parent("restored the backup")?;
@@ -462,11 +484,14 @@ impl<'a> Site<'a> {
                 continue;
             }
             fs::remove_dir_all(&path).map_err(|e| {
-                IoError::new(format!(
-                    "{}: cannot remove stale stage {}: {e}",
-                    self.target.display(),
-                    path.display()
-                ))
+                IoError::io(
+                    format!(
+                        "{}: cannot remove stale stage {}: {e}",
+                        self.target.display(),
+                        path.display()
+                    ),
+                    e,
+                )
             })?;
         }
         Ok(())
@@ -474,11 +499,14 @@ impl<'a> Site<'a> {
 
     fn sync_parent(&self, done: &str) -> Result<(), IoError> {
         sync_dir(self.parent).map_err(|e| {
-            IoError::new(format!(
-                "{}: {done}, but syncing {} failed: {e}",
-                self.target.display(),
-                self.parent.display()
-            ))
+            IoError::io(
+                format!(
+                    "{}: {done}, but syncing {} failed: {e}",
+                    self.target.display(),
+                    self.parent.display()
+                ),
+                e,
+            )
         })
     }
 
@@ -486,16 +514,21 @@ impl<'a> Site<'a> {
     /// stage was made, so `exists` still describes the target.
     fn swap(self, mut stage: Stage) -> Result<(), IoError> {
         let what = self.target.display();
-        let fail = |stage: &mut Stage, msg: String| match stage.remove() {
-            Ok(()) => IoError::new(msg),
-            Err(c) => IoError::new(format!(
-                "{msg}; removing stage {} also failed: {c}",
-                stage.path.display()
-            )),
+        // `src` is the rename error that made the swap fail; it stays the
+        // source whether or not removing the stage also failed.
+        let fail = |stage: &mut Stage, msg: String, src: std::io::Error| match stage.remove() {
+            Ok(()) => IoError::io(msg, src),
+            Err(c) => IoError::io(
+                format!(
+                    "{msg}; removing stage {} also failed: {c}",
+                    stage.path.display()
+                ),
+                src,
+            ),
         };
         if !self.exists {
             if let Err(e) = fs::rename(&stage.path, self.target) {
-                return Err(fail(&mut stage, format!("{what}: {e}")));
+                return Err(fail(&mut stage, format!("{what}: {e}"), e));
             }
             stage.disarm();
             return self.sync_parent("replaced");
@@ -509,12 +542,12 @@ impl<'a> Site<'a> {
         // persist (neither, the first, both) is one `recover` handles, and
         // the window in which a live reader finds no target stays short.
         if let Err(e) = fs::rename(self.target, &backup) {
-            return Err(fail(&mut stage, format!("{what}: moving it aside: {e}")));
+            return Err(fail(&mut stage, format!("{what}: moving it aside: {e}"), e));
         }
         if let Err(e) = fs::rename(&stage.path, self.target) {
             let msg = format!("{what}: {e}");
             return Err(match fs::rename(&backup, self.target) {
-                Ok(()) => fail(&mut stage, msg),
+                Ok(()) => fail(&mut stage, msg, e),
                 Err(r) => fail(
                     &mut stage,
                     format!(
@@ -522,17 +555,21 @@ impl<'a> Site<'a> {
                          recover_replaced_dir restores it",
                         backup.display()
                     ),
+                    e,
                 ),
             });
         }
         stage.disarm();
         self.sync_parent("replaced")?;
         fs::remove_dir_all(&backup).map_err(|e| {
-            IoError::new(format!(
-                "{what}: replaced, but removing the old directory {} failed: {e}; \
+            IoError::io(
+                format!(
+                    "{what}: replaced, but removing the old directory {} failed: {e}; \
                  the next replace removes it",
-                backup.display()
-            ))
+                    backup.display()
+                ),
+                e,
+            )
         })?;
         self.sync_parent("replaced and removed the old directory")
     }
@@ -586,10 +623,10 @@ fn create_stage(parent: &Path, name: &OsStr, counter: &AtomicU64) -> Result<Path
             Ok(()) => return Ok(path),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(e) => {
-                return Err(IoError::new(format!(
-                    "cannot create stage {}: {e}",
-                    path.display()
-                )))
+                return Err(IoError::io(
+                    format!("cannot create stage {}: {e}", path.display()),
+                    e,
+                ))
             }
         }
     }
@@ -607,13 +644,14 @@ fn sync_tree(dir: &Path, depth: usize) -> Result<(), IoError> {
             dir.display()
         )));
     }
-    let entries = fs::read_dir(dir).map_err(|e| IoError::new(format!("{}: {e}", dir.display())))?;
+    let entries =
+        fs::read_dir(dir).map_err(|e| IoError::io(format!("{}: {e}", dir.display()), e))?;
     for entry in entries {
-        let entry = entry.map_err(|e| IoError::new(format!("{}: {e}", dir.display())))?;
+        let entry = entry.map_err(|e| IoError::io(format!("{}: {e}", dir.display()), e))?;
         let path = entry.path();
         let kind = entry
             .file_type()
-            .map_err(|e| IoError::new(format!("{}: {e}", path.display())))?;
+            .map_err(|e| IoError::io(format!("{}: {e}", path.display()), e))?;
         if kind.is_symlink() {
             return Err(IoError::new(format!(
                 "staged {} is a symbolic link",
@@ -624,7 +662,7 @@ fn sync_tree(dir: &Path, depth: usize) -> Result<(), IoError> {
         } else if kind.is_file() {
             File::open(&path)
                 .and_then(|f| f.sync_all())
-                .map_err(|e| IoError::new(format!("syncing {}: {e}", path.display())))?;
+                .map_err(|e| IoError::io(format!("syncing {}: {e}", path.display()), e))?;
         } else {
             return Err(IoError::new(format!(
                 "staged {} is not a regular file or directory",
@@ -632,7 +670,7 @@ fn sync_tree(dir: &Path, depth: usize) -> Result<(), IoError> {
             )));
         }
     }
-    sync_dir(dir).map_err(|e| IoError::new(format!("syncing {}: {e}", dir.display())))
+    sync_dir(dir).map_err(|e| IoError::io(format!("syncing {}: {e}", dir.display()), e))
 }
 
 #[cfg(test)]

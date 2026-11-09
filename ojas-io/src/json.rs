@@ -573,7 +573,7 @@ impl JsonValue {
         key: &str,
         read: impl FnOnce(&'a JsonValue) -> Result<T, IoError>,
     ) -> Result<T, IoError> {
-        read(self.field(key)?).map_err(|e| IoError::new(format!("{key:?}: {}", e.detail())))
+        read(self.field(key)?).map_err(|e| IoError::wrap(format!("{key:?}: {}", e.detail()), e))
     }
 
     pub fn get_bool(&self, key: &str) -> Result<bool, IoError> {

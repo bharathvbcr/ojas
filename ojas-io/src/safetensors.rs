@@ -291,7 +291,7 @@ impl FileStamp {
 
     /// Err if `f` no longer matches `self`.
     fn recheck(&self, f: &File) -> Result<(), IoError> {
-        let now = Self::of(f).map_err(|e| IoError::new(e.to_string()))?;
+        let now = Self::of(f).map_err(|e| IoError::io(e.to_string(), e))?;
         if now != *self {
             return Err(IoError::new(format!(
                 "file changed since it was opened (was {self:?}, now {now:?}); \
@@ -389,7 +389,7 @@ impl<'a> SafeTensors<'a> {
 
     /// Parse `bytes`, naming the caller's label in errors or logging if applicable.
     pub fn from_bytes_named(what: &str, bytes: Vec<u8>) -> Result<SafeTensors<'static>, IoError> {
-        Self::from_bytes(bytes).map_err(|e| IoError::new(format!("{what}: {}", e.detail())))
+        Self::from_bytes(bytes).map_err(|e| IoError::wrap(format!("{what}: {}", e.detail()), e))
     }
 
     /// Open `path` and validate its header. Tensor bytes stay on disk.
@@ -413,9 +413,9 @@ impl<'a> SafeTensors<'a> {
         // refusal. Symlinks are still followed, which a Hugging Face snapshot
         // needs.
         let (file, _) = crate::open::open_regular_file(path)
-            .map_err(|e| IoError::new(e.detail().to_string()))?;
+            .map_err(|e| IoError::wrap(e.detail().to_string(), e))?;
         Self::from_file_with_limit(file, limit)
-            .map_err(|e| IoError::new(format!("{what}: {}", e.detail())))
+            .map_err(|e| IoError::wrap(format!("{what}: {}", e.detail()), e))
     }
 
     /// Validate the header of a file the caller already opened, for example
@@ -435,14 +435,14 @@ impl<'a> SafeTensors<'a> {
         file: File,
         limit: Option<u64>,
     ) -> Result<SafeTensors<'static>, IoError> {
-        let meta = file.metadata().map_err(|e| IoError::new(e.to_string()))?;
+        let meta = file.metadata().map_err(|e| IoError::io(e.to_string(), e))?;
         if !meta.is_file() {
             return Err(IoError::new("not a regular file"));
         }
         // One `fstat` is the source of both the length the header is validated
         // against and the identity every read re-checks, so a rewrite between
         // two of them cannot leave the two disagreeing.
-        let stamp = FileStamp::of(&file).map_err(|e| IoError::new(e.to_string()))?;
+        let stamp = FileStamp::of(&file).map_err(|e| IoError::io(e.to_string(), e))?;
         let file_len = stamp.len;
         if file_len < 8 {
             return Err(IoError::new(format!(
@@ -451,7 +451,7 @@ impl<'a> SafeTensors<'a> {
         }
         let mut prefix = [0u8; 8];
         read_exact_at(&file, &mut prefix, 0)
-            .map_err(|e| IoError::new(format!("header length: {e}")))?;
+            .map_err(|e| IoError::io(format!("header length: {e}"), e))?;
         let n = u64::from_le_bytes(prefix);
         check_header_len(n, file_len)?;
         let n_us = usize::try_from(n).map_err(|_| IoError::new("header length exceeds usize"))?;
@@ -460,7 +460,7 @@ impl<'a> SafeTensors<'a> {
             .try_reserve_exact(n_us)
             .map_err(|_| IoError::new(format!("header allocation of {n_us} bytes refused")))?;
         header.resize(n_us, 0);
-        read_exact_at(&file, &mut header, 8).map_err(|e| IoError::new(format!("header: {e}")))?;
+        read_exact_at(&file, &mut header, 8).map_err(|e| IoError::io(format!("header: {e}"), e))?;
         let data_start = 8 + n;
         let data_len = file_len - data_start;
         let (tensors, metadata) = parse_header(&header, data_len)?;
@@ -575,12 +575,12 @@ impl<'a> SafeTensors<'a> {
                 // than coming back as short data.
                 stamp
                     .recheck(file)
-                    .map_err(|e| IoError::new(format!("{name}: {}", e.detail())))?;
+                    .map_err(|e| IoError::wrap(format!("{name}: {}", e.detail()), e))?;
                 read_exact_at(file, dst, abs)
-                    .map_err(|e| IoError::new(format!("{name}: data: {e}")))?;
+                    .map_err(|e| IoError::io(format!("{name}: data: {e}"), e))?;
                 stamp
                     .recheck(file)
-                    .map_err(|e| IoError::new(format!("{name}: {}", e.detail())))
+                    .map_err(|e| IoError::wrap(format!("{name}: {}", e.detail()), e))
             }
         }
     }
@@ -955,7 +955,7 @@ impl CheckpointView {
 
     pub fn open_with_limit(path: &Path, limit: Option<u64>) -> Result<Self, IoError> {
         let what = path.display().to_string();
-        let md = std::fs::metadata(path).map_err(|e| IoError::new(format!("{what}: {e}")))?;
+        let md = std::fs::metadata(path).map_err(|e| IoError::io(format!("{what}: {e}"), e))?;
         if md.is_dir() {
             let index = path.join(INDEX_FILE_NAME);
             return match std::fs::symlink_metadata(&index) {
@@ -963,7 +963,7 @@ impl CheckpointView {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     Self::open_single(&path.join("model.safetensors"), limit)
                 }
-                Err(e) => Err(IoError::new(format!("{}: {e}", index.display()))),
+                Err(e) => Err(IoError::io(format!("{}: {e}", index.display()), e)),
             };
         }
         if path.extension().is_some_and(|e| e == "json") {
@@ -1011,14 +1011,14 @@ impl CheckpointView {
         // config, an index and several shards, does not say which file was
         // wrong.
         let by_file =
-            parse_index(&text).map_err(|e| IoError::new(format!("{what}: {}", e.detail())))?;
+            parse_index(&text).map_err(|e| IoError::wrap(format!("{what}: {}", e.detail()), e))?;
 
         let mut paths: Vec<(&String, std::path::PathBuf)> = Vec::with_capacity(by_file.len());
         for (file, names) in &by_file {
             paths.push((
                 file,
                 shard_path(dir, file, &names[0])
-                    .map_err(|e| IoError::new(format!("{what}: {}", e.detail())))?,
+                    .map_err(|e| IoError::wrap(format!("{what}: {}", e.detail()), e))?,
             ));
         }
 
@@ -1367,10 +1367,10 @@ fn layout(specs: &[TensorSpec<'_>], metadata: &[(&str, &str)]) -> Result<Layout,
         )));
     }
     parse_header(&header_bytes, cursor).map_err(|e| {
-        IoError::new(format!(
-            "the reader would refuse this header: {}",
-            e.detail()
-        ))
+        IoError::wrap(
+            format!("the reader would refuse this header: {}", e.detail()),
+            e,
+        )
     })?;
     let file_len = (8 + n)
         .checked_add(cursor)
@@ -1434,7 +1434,7 @@ impl<W: Write> SafeTensorsWriter<W> {
             .map_err(|_| IoError::new("header length exceeds u64"))?;
         out.write_all(&n.to_le_bytes())
             .and_then(|()| out.write_all(&layout.header))
-            .map_err(|e| IoError::new(format!("safetensors header write: {e}")))?;
+            .map_err(|e| IoError::io(format!("safetensors header write: {e}"), e))?;
         let data_len = layout.file_len - 8 - n;
         Ok(Self {
             out,
@@ -1491,7 +1491,7 @@ impl<W: Write> SafeTensorsWriter<W> {
         }
         self.out
             .write_all(bytes)
-            .map_err(|e| IoError::new(format!("{name:?}: write: {e}")))?;
+            .map_err(|e| IoError::io(format!("{name:?}: write: {e}"), e))?;
         self.at = at;
         self.filled = filled + n;
         self.left -= n;
@@ -1552,7 +1552,7 @@ impl<W: Write> SafeTensorsWriter<W> {
         }
         self.out
             .flush()
-            .map_err(|e| IoError::new(format!("safetensors flush: {e}")))?;
+            .map_err(|e| IoError::io(format!("safetensors flush: {e}"), e))?;
         Ok(self.out)
     }
 }
