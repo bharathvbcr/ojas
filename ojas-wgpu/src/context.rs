@@ -3024,6 +3024,23 @@ mod tests {
         WgpuContext::open().expect("wgpu adapter").sync().unwrap();
     }
 
+    #[test]
+    fn uncaptured_message_text_is_bounded_per_message() {
+        // Pre-fix only the count was capped: 16 messages of 256 KiB were
+        // kept and every error that reported them was megabytes long.
+        let ctx = WgpuContext::open().expect("wgpu adapter");
+        for _ in 0..20 {
+            ctx.push_uncaptured(&"L".repeat(256 * 1024));
+        }
+        let err = ctx.check_errors().expect_err("sticky");
+        let text = format!("{err:?}");
+        assert!(text.len() <= 128 * 1024, "{} bytes", text.len());
+        assert!(text.contains("truncated"), "the cut is marked");
+        assert!(text.contains("and 4 more uncaptured errors dropped"));
+        let again = format!("{:?}", ctx.check_errors().expect_err("sticky"));
+        assert_eq!(again.len(), text.len(), "stable across checks");
+    }
+
     /// Characterization, not a fix: the loss record is permanent, and every
     /// later sync reports it again (it is cloned, never cleared).
     #[test]
