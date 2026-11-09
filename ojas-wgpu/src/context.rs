@@ -42,6 +42,7 @@
 //! no wgpu object and pops no error scope. [`CacheStats`] counts what is
 //! still created and every blocking error-scope pop.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering};
@@ -670,56 +671,141 @@ fn admits_adapter(kind: wgpu::DeviceType, opt_in: Option<&str>) -> bool {
     kind != wgpu::DeviceType::Cpu || opt_in == Some("1")
 }
 
-/// Uncaptured wgpu errors kept between checks.
+/// Uncaptured wgpu errors whose text is kept.
 const UNCAPTURED_CAP: usize = 16;
 
-/// The uncaptured-error queue: at most [`UNCAPTURED_CAP`] messages.
+/// Entries of this thread's own fault record that are kept ([`Faults`]).
+const OWN_FAULTS_CAP: usize = 64;
+
+/// The uncaptured-error record of a context. Sticky: an error is never
+/// removed, so every later check on every thread and clone reports it until
+/// the context is reopened, as for the device-lost record. The cap bounds
+/// the stored text only: an error past it is counted, and the count is
+/// reported with the rest.
 #[derive(Default)]
 struct ErrorQueue {
     msgs: Vec<String>,
+    dropped: u64,
 }
 
 impl ErrorQueue {
     fn push(&mut self, msg: String) {
         if self.msgs.len() < UNCAPTURED_CAP {
             self.msgs.push(msg);
+        } else {
+            self.dropped = self.dropped.saturating_add(1);
         }
     }
 
-    fn take(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.msgs)
+    /// Every message kept, then a line naming how many were dropped; empty
+    /// when no error was ever recorded. Does not clear anything.
+    fn report(&self) -> Vec<String> {
+        let mut out = self.msgs.clone();
+        if self.dropped > 0 {
+            out.push(format!(
+                "and {} more uncaptured errors dropped",
+                self.dropped
+            ));
+        }
+        out
     }
+}
+
+static NEXT_FAULTS_ID: AtomicU64 = AtomicU64::new(1);
+
+thread_local! {
+    /// What reads on this thread saw, per [`Faults`] id: `(id, bits, first)`.
+    static OWN_FAULTS: RefCell<Vec<(u64, u64, u32)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// What reads have seen of the device fault words and the host has not yet
 /// taken: the op mask and the first op (+ 1) among its bits, 0 when none.
-#[derive(Default)]
+///
+/// The pair lives under one mutex, so a taker sees a mask with the first op
+/// that belongs to it, never half of one record. A read also keeps its own
+/// copy on the thread that made it: the caller of a read that copied
+/// faulted values takes that copy with [`Faults::take`] even when another
+/// clone's caller has already taken the shared pair. A fault is therefore
+/// reported to every thread whose read saw it and to the first taker among
+/// the others, and a thread's own copy is dropped when that thread takes.
 struct Faults {
-    observed: AtomicU64,
-    first: AtomicU32,
-    /// Test seam: runs between the two reads of [`Faults::take`].
+    id: u64,
+    shared: Mutex<(u64, u32)>,
+    /// Test seam: runs inside [`Faults::take`], between reading the mask and
+    /// reading the first op.
     #[cfg(test)]
     pause: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
+impl Default for Faults {
+    fn default() -> Self {
+        Self {
+            id: NEXT_FAULTS_ID.fetch_add(1, Ordering::Relaxed),
+            shared: Mutex::new((0, 0)),
+            #[cfg(test)]
+            pause: Mutex::new(None),
+        }
+    }
+}
+
 impl Faults {
     fn record(&self, bits: u64, first: u32) {
-        self.observed.fetch_or(bits, Ordering::Relaxed);
-        if first != 0 {
-            let _ = self
-                .first
-                .compare_exchange(0, first, Ordering::Relaxed, Ordering::Relaxed);
+        {
+            let mut shared = lock(&self.shared);
+            shared.0 |= bits;
+            if shared.1 == 0 {
+                shared.1 = first;
+            }
         }
+        // A thread being torn down has no record to keep; the shared pair
+        // above already holds the fault.
+        let _ = OWN_FAULTS.try_with(|own| {
+            let mut own = own.borrow_mut();
+            if let Some(entry) = own.iter_mut().find(|e| e.0 == self.id) {
+                entry.1 |= bits;
+                if entry.2 == 0 {
+                    entry.2 = first;
+                }
+            } else {
+                if own.len() >= OWN_FAULTS_CAP {
+                    // Evicted bits stay in the shared pair of their context.
+                    own.remove(0);
+                }
+                own.push((self.id, bits, first));
+            }
+        });
     }
 
     fn take(&self) -> (u64, u32) {
-        let bits = self.observed.swap(0, Ordering::Relaxed);
-        #[cfg(test)]
-        if let Some(pause) = lock(&self.pause).clone() {
-            pause();
-        }
-        let first = self.first.swap(0, Ordering::Relaxed);
-        (bits, first)
+        let (shared_bits, shared_first) = {
+            let mut shared = lock(&self.shared);
+            let bits = shared.0;
+            #[cfg(test)]
+            if let Some(pause) = lock(&self.pause).clone() {
+                pause();
+            }
+            let first = shared.1;
+            *shared = (0, 0);
+            (bits, first)
+        };
+        let (own_bits, own_first) = OWN_FAULTS
+            .try_with(|own| {
+                let mut own = own.borrow_mut();
+                match own.iter().position(|e| e.0 == self.id) {
+                    Some(i) => {
+                        let entry = own.swap_remove(i);
+                        (entry.1, entry.2)
+                    }
+                    None => (0, 0),
+                }
+            })
+            .unwrap_or((0, 0));
+        let first = if shared_first != 0 {
+            shared_first
+        } else {
+            own_first
+        };
+        (shared_bits | own_bits, first)
     }
 }
 
@@ -1661,7 +1747,7 @@ impl WgpuContext {
         self.wait(index)?;
         #[cfg(test)]
         if self.inner.fail_next_read.swap(false, Ordering::Relaxed) {
-            return Err(backend_err("injected read failure"));
+            return Err(self.failure("injected read failure".to_string()));
         }
         // Another thread's poll may be the one that runs this callback, and it
         // can land just after our poll returns.
@@ -1774,18 +1860,28 @@ impl WgpuContext {
                 timeout: Some(std::time::Duration::from_secs(5)),
             });
         }
+        // A device call that fails reports the sticky uncaptured errors
+        // with it, so the caller sees what wgpu said about the same device.
+        let pending = lock(&self.inner.errors).report();
+        let detail = if pending.is_empty() {
+            detail
+        } else {
+            format!("{detail}; wgpu reported: {}", pending.join("; "))
+        };
         match lock(&self.inner.lost).as_deref() {
             Some(lost) => device_lost(format!("{detail}; {lost}")),
             None => backend_err(detail),
         }
     }
 
-    /// Uncaptured wgpu errors since the last call, and a lost device on every
-    /// call after the loss: [`OjasError::DeviceLost`] once the device is
-    /// lost, [`OjasError::Backend`] for errors alone.
+    /// Every uncaptured wgpu error the context has recorded (with a count of
+    /// those past the cap) and a lost device, on every call from the first
+    /// error on, from every thread and clone: nothing is cleared, so the
+    /// context fails until it is reopened. [`OjasError::DeviceLost`] once the
+    /// device is lost, [`OjasError::Backend`] for errors alone.
     pub(crate) fn check_errors(&self) -> Result<(), OjasError> {
         let lost = lock(&self.inner.lost).clone();
-        let mut errors = lock(&self.inner.errors).take();
+        let mut errors = lock(&self.inner.errors).report();
         if errors.is_empty() && lost.is_none() {
             return Ok(());
         }

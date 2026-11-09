@@ -47,6 +47,8 @@
 //!   least once: one caller reports it once, but two threads whose syncs
 //!   overlap may both see it;
 //! - `clip_grad_norm` reports a pending fault before it scales anything;
+//! - `adamw_step` also refuses, before it records anything, while an error or
+//!   fault is already pending (below);
 //! - `adamw_step` and `muon_ns5_step` decide on the device: if any value of
 //!   *this* call is non-finite they write nothing, so a bad step is never
 //!   applied in part, and the fault is reported as above.
@@ -54,8 +56,18 @@
 //! A caller that must not run past a fault calls `sync` after the steps it
 //! cares about. The fault word belongs to the context, not to a caller: when
 //! threads share one backend, a fault raised by one thread's op is reported
-//! once, to whichever thread synchronizes next. Callers that need their
-//! faults kept apart open one backend each.
+//! to every thread whose read copied it (the `sync` or `download` that made
+//! that read) and to the first thread that takes it otherwise; a thread that
+//! read after the fault never gets `Ok` because another thread took it
+//! first. Callers that need their faults kept apart open one backend each.
+//!
+//! Uncaptured wgpu errors (validation, out of memory) belong to the context
+//! too, and are sticky: after the first, every later `sync`, `download` and
+//! `clip_grad_norm` on every thread and on every backend sharing the context
+//! (`rebudget` backends do) returns [`OjasError::Backend`] naming them, until
+//! the context is reopened, as for a lost device ([`OjasError::DeviceLost`]).
+//! At most 16 messages are kept; later ones are counted and reported as
+//! "and N more uncaptured errors dropped".
 //!
 //! The optimizers update in place through [`Tensor::device_buffer_mut`], so
 //! a parameter shared with another tensor is refused before anything is
@@ -595,6 +607,16 @@ impl WgpuBackend {
         Err(OjasError::NonFinite {
             op: Op(index).name(),
         })
+    }
+
+    /// Refuse an op while the context already holds an uncaptured wgpu error
+    /// or a lost device ([`WgpuContext::check_errors`], sticky) or a numeric
+    /// fault some read has already seen (reported once, as by `sync`). It
+    /// waits for nothing: a fault still on the device is found at the next
+    /// sync point.
+    fn refuse_if_pending(&self) -> Result<(), OjasError> {
+        self.ctx.check_errors()?;
+        self.faults()
     }
 
     /// Placement and contiguity of an operand the op's `ojas_core::shapes`
@@ -2684,10 +2706,13 @@ impl BackendModule for WgpuBackend {
     /// sole owner of their device buffer. `adam_check` computes every
     /// element's step into a per-call status word and `adam_apply` writes
     /// only if that word is clear, so a step with any non-finite value
-    /// changes nothing and copies nothing. The call still returns `Ok(())`
-    /// and the fault surfaces as [`OjasError::NonFinite`] at the next sync
-    /// point, naming `adamw_step` unless an op recorded earlier faulted
-    /// first (see the module docs).
+    /// changes nothing and copies nothing. A non-finite value of this call
+    /// still returns `Ok(())` and surfaces as [`OjasError::NonFinite`] at the
+    /// next sync point, naming `adamw_step` unless an op recorded earlier
+    /// faulted first (see the module docs). A call made while the context
+    /// already holds an uncaptured wgpu error, a lost device, or a fault a
+    /// read has seen and nobody has reported is refused with that error
+    /// before anything is recorded: the parameter and moments are unchanged.
     fn adamw_step(
         &self,
         param: &mut Tensor,
@@ -2722,6 +2747,8 @@ impl BackendModule for WgpuBackend {
         let pb = exclusive(op, param)?;
         let mb = exclusive(op, moment1)?;
         let vb = exclusive(op, moment2)?;
+        // Nothing is recorded while an error or a fault is already pending.
+        self.refuse_if_pending()?;
         let mut job = self.job(op);
         let gb = bind(op, &mut job, &gv)?;
         let status = job.scratch(16)?;
