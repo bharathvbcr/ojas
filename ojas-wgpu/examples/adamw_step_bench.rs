@@ -9,7 +9,7 @@
 
 use std::time::Instant;
 
-use ojas_core::{AdamWConfig, BackendCore, BackendFloat, BackendModule, Budget, Tensor};
+use ojas_core::{AdamWConfig, BackendCore, BackendModule, Budget, Tensor};
 use ojas_wgpu::WgpuBackend;
 
 const N: usize = 1 << 20;
