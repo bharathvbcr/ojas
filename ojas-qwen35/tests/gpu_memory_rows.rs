@@ -63,7 +63,16 @@
 //!   upload) and the pre-flight's `preflight_ms` and `preflight_peak_bytes`. The
 //!   pre-flight's calibration is nominal (resident bytes plus 1 GiB per half
 //!   width), so its gate is the real dry run under the 28 GiB cap, not the
-//!   estimate (`preflight_estimate_nominal_bytes`).
+//!   estimate (`preflight_estimate_nominal_bytes`). Each step's two phases
+//!   are synced before their clocks stop.
+//!
+//! - `tape-provider-clip`: `tape-provider`'s open, pre-flight and warmup, then
+//!   10 rounds of one step at `grad_scale` 0.5 and one at 1, alternating which
+//!   goes first (task ft-a306b417). `adamw_step` runs a separate `scale_grad`
+//!   pass over every adapter gradient when `grad_scale` is not 1, so the AdamW
+//!   walls of the two arms differ by that pass. The row carries every step's
+//!   accumulate and AdamW walls and loss per arm, and `trainable_values`, the
+//!   adapter gradient count the pass reads and writes.
 //!
 //! Every position is scored (the causal loss as letter rows), micro-batch 1.
 //! The snapshot is `QWEN35_MEM_SNAPSHOT`, or the one snapshot of
@@ -164,7 +173,8 @@ fn gpu_memory_row() {
                 ..StepVariant::default()
             },
         ),
-        "tape-provider" => tape_provider(&snap, &ids, row),
+        "tape-provider" => tape_provider(&snap, &ids, row, false),
+        "tape-provider-clip" => tape_provider(&snap, &ids, row, true),
         other => panic!("unknown QWEN35_MEM_ARM {other}"),
     };
     row.num("wall_ms", started.elapsed().as_millis() as u64);
@@ -809,15 +819,33 @@ fn provider_base_identity(path: &std::path::Path) -> BaseIdentity {
     }
 }
 
+/// One provider step's mean cross-entropy and its two phases' device-complete
+/// walls in milliseconds.
+struct ProviderStep {
+    loss: f64,
+    accumulate_ms: f64,
+    adamw_ms: f64,
+}
+
+impl ProviderStep {
+    fn ms(&self) -> f64 {
+        self.accumulate_ms + self.adamw_ms
+    }
+}
+
 /// One `tape-provider` step: `accumulate` of one sequence of `n` tokens with
-/// every position a row at scale `1/n`, then `adamw_step`. The mean
-/// cross-entropy and the wall in milliseconds, or the phase that refused.
+/// every position a row at scale `1/n`, then `adamw_step` at `grad_scale`.
+/// Each phase is synced before its clock stops, so the AdamW wall holds the
+/// `scale_grad` pass a `grad_scale` other than 1 adds. The refusing phase on
+/// an error.
 fn provider_step(
+    m: &MetalBackend,
     p: &mut TapeStepProvider<MetalBackend>,
     ids: &[u32],
     n: usize,
     entries: usize,
-) -> Result<(f64, f64), (&'static str, String)> {
+    grad_scale: f64,
+) -> Result<ProviderStep, (&'static str, String)> {
     let started = Instant::now();
     let positions: Vec<u32> = (0..n as u32).collect();
     let job = lstep::SequenceJob {
@@ -832,21 +860,40 @@ fn provider_step(
     let sum = p
         .accumulate(&job, lstep::BankMode::Overwrite, None)
         .map_err(|e| ("accumulate", format!("{e:?}")))?;
+    m.sync()
+        .map_err(|e| ("sync accumulate", format!("{e:?}")))?;
+    let accumulate_ms = ms(started.elapsed());
     let hyper = lstep::AdamWHyper {
         lr: LORA_LR,
         beta1: 0.9,
         beta2: 0.999,
         eps: 1e-8,
-        grad_scale: 1.0,
+        grad_scale,
     };
     let next = p.step_count() + 1;
+    let optimizer = Instant::now();
     p.adamw_step(&hyper, next, &vec![1.0; entries], &vec![0.0; entries])
         .map_err(|e| ("adamw_step", format!("{e:?}")))?;
-    Ok((sum / n as f64, ms(started.elapsed())))
+    m.sync()
+        .map_err(|e| ("sync adamw_step", format!("{e:?}")))?;
+    Ok(ProviderStep {
+        loss: sum / n as f64,
+        accumulate_ms,
+        adamw_ms: ms(optimizer.elapsed()),
+    })
 }
 
-/// The `tape-provider` arm: see the file's header.
-fn tape_provider(snap: &Snapshot, ids: &[u32], mut r: Row) -> Row {
+/// Rounds of `tape-provider-clip`: each runs one step at [`CLIP_SCALE`] and
+/// one at 1, in an order that alternates by round.
+const CLIP_ROUNDS: usize = 10;
+
+/// The clipped arm's `grad_scale`: below 1, so `adamw_step` runs its
+/// `scale_grad` pass over every adapter gradient.
+const CLIP_SCALE: f64 = 0.5;
+
+/// The `tape-provider` arm, and `tape-provider-clip` when `clip`: see the
+/// file's header.
+fn tape_provider(snap: &Snapshot, ids: &[u32], mut r: Row, clip: bool) -> Row {
     let cfg = snap.config.clone();
     let spec = cfg.tape_spec();
     let n = ids.len() - 1;
@@ -967,30 +1014,36 @@ fn tape_provider(snap: &Snapshot, ids: &[u32], mut r: Row) -> Row {
     );
     r.phase("preflight");
 
-    let entries = p.parameters().iter().filter(|s| s.trainable).count();
+    let trainable = p.parameters().iter().filter(|s| s.trainable);
+    let entries = trainable.clone().count();
+    let trainable_values: usize = trainable.map(|s| s.shape.iter().product::<usize>()).sum();
     r.num("trainable_entries", entries as u64);
+    r.num("trainable_values", trainable_values as u64);
     // The first step is the warmup: its wall includes shader compilation and
     // first-use allocation, which is what a run's first step costs.
-    let (first_loss, first_ms) = match provider_step(&mut p, ids, n, entries) {
+    let first = match provider_step(&m, &mut p, ids, n, entries, 1.0) {
         Ok(v) => v,
         Err((phase, e)) => refused(r, phase, e),
     };
-    let first = m.memory().unwrap();
-    r.real("first_step_ms", first_ms);
-    r.num("first_step_peak_bytes", first.peak_allocated);
+    let first_loss = first.loss;
+    r.real("first_step_ms", first.ms());
+    r.num("first_step_peak_bytes", m.memory().unwrap().peak_allocated);
     r.text("first_step_loss", &format!("{first_loss:.6}"));
     let fp = footprint_or_refuse(&r);
     r.num("first_step_footprint_max_bytes", fp.lifetime_max);
     r.phase("first step");
+    if clip {
+        return provider_clip_rounds(&m, p, ids, n, entries, r);
+    }
     let mut walls = Vec::with_capacity(TIMED_STEPS);
     let mut last_loss = first_loss;
     for _ in 0..TIMED_STEPS {
-        let (loss, wall) = match provider_step(&mut p, ids, n, entries) {
+        let s = match provider_step(&m, &mut p, ids, n, entries, 1.0) {
             Ok(v) => v,
             Err((phase, e)) => refused(r, phase, e),
         };
-        walls.push(wall);
-        last_loss = loss;
+        walls.push(s.ms());
+        last_loss = s.loss;
     }
     let end = m.memory().unwrap();
     let mean_ms = walls.iter().sum::<f64>() / walls.len() as f64;
@@ -1009,6 +1062,49 @@ fn tape_provider(snap: &Snapshot, ids: &[u32], mut r: Row) -> Row {
     let fp = footprint_or_refuse(&r);
     r.num("end_footprint_bytes", fp.now);
     r.num("footprint_max_bytes", fp.lifetime_max);
+    drop(p);
+    r
+}
+
+/// `tape-provider-clip`'s timed loop: [`CLIP_ROUNDS`] rounds, each one step
+/// at `grad_scale` [`CLIP_SCALE`] and one at 1 (which skips `scale_grad`),
+/// alternating which goes first. Every step's accumulate and AdamW walls per
+/// arm, and the losses, go in the row; the caller pairs them by round.
+fn provider_clip_rounds(
+    m: &MetalBackend,
+    mut p: TapeStepProvider<MetalBackend>,
+    ids: &[u32],
+    n: usize,
+    entries: usize,
+    mut r: Row,
+) -> Row {
+    let mut acc = [Vec::new(), Vec::new()];
+    let mut adamw = [Vec::new(), Vec::new()];
+    let mut losses = [Vec::new(), Vec::new()];
+    for round in 0..CLIP_ROUNDS {
+        let order = if round % 2 == 0 { [0, 1] } else { [1, 0] };
+        for arm in order {
+            let scale = if arm == 0 { CLIP_SCALE } else { 1.0 };
+            let s = match provider_step(m, &mut p, ids, n, entries, scale) {
+                Ok(v) => v,
+                Err((phase, e)) => refused(r, phase, e),
+            };
+            acc[arm].push(s.accumulate_ms);
+            adamw[arm].push(s.adamw_ms);
+            losses[arm].push(s.loss);
+        }
+    }
+    r.real("clip_grad_scale", CLIP_SCALE);
+    r.num("clip_rounds", CLIP_ROUNDS as u64);
+    r.reals("scaled_accumulate_ms", &acc[0]);
+    r.reals("scaled_adamw_ms", &adamw[0]);
+    r.reals("scaled_losses", &losses[0]);
+    r.reals("unscaled_accumulate_ms", &acc[1]);
+    r.reals("unscaled_adamw_ms", &adamw[1]);
+    r.reals("unscaled_losses", &losses[1]);
+    let end = m.memory().unwrap();
+    r.num("step_peak_bytes", end.peak_allocated);
+    r.num("end_allocated_bytes", end.allocated);
     drop(p);
     r
 }

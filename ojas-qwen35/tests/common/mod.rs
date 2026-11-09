@@ -111,6 +111,12 @@ impl Row {
         self.fields.push((k, format!("{v:.6}")));
     }
 
+    /// A list of real numbers, each printed with six decimals.
+    pub fn reals(&mut self, k: &'static str, v: &[f64]) {
+        let items: Vec<String> = v.iter().map(|x| format!("{x:.6}")).collect();
+        self.fields.push((k, format!("[{}]", items.join(","))));
+    }
+
     pub fn text(&mut self, k: &'static str, v: &str) {
         let escaped: String = v
             .chars()

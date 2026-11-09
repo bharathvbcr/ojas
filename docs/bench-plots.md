@@ -724,6 +724,14 @@ No chart: the folder holds only scripts, logs or text that is not a measurement 
 
 No chart: the folder holds only scripts, logs or text that is not a measurement table.
 
+## 2026-11-02-sam-xattn-q2
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
+## 2026-11-02-splitk-regression
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
 ## 2026-11-03-flash-fwd-specialize
 
 No chart: the folder holds only scripts, logs or text that is not a measurement table.
@@ -733,5 +741,13 @@ No chart: the folder holds only scripts, logs or text that is not a measurement 
 No chart: the folder holds only scripts, logs or text that is not a measurement table.
 
 ## 2026-11-03-tracker-ops-baseline
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
+## 2026-11-04-conv2d-tensorops
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
+## 2026-11-08-clip-scale-share
 
 No chart: the folder holds only scripts, logs or text that is not a measurement table.
