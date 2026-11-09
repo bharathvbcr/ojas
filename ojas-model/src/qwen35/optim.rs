@@ -291,6 +291,7 @@ fn check_entry(
             return Ok(());
         }
     }
+    // Raw read (no device fault check): the scan below is the non-finite check.
     let host = e.grad.to_host(budget).map_err(refused)?;
     let values = host.f32_slice().map_err(refused)?;
     let unsafe_at = |g: &f32| {

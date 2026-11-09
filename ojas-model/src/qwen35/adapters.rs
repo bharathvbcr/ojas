@@ -332,6 +332,7 @@ impl AdapterEntry {
                     ),
                 });
             }
+            // Raw read: a non-finite value is caught by the finite check when the entry is written.
             Ok(t.to_host(budget)?.to_f32_vec()?)
         };
         Ok(Self {
