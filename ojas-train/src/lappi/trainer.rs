@@ -37,7 +37,7 @@ use std::path::{Path, PathBuf};
 use ojas_io::json::{JsonValue as Value, parse_json};
 use ojas_io::sha256::{Sha256, sha256};
 
-use super::adamw::{EntryState, Moments, adamw_entry_step};
+use super::adamw::{EntryState, Moments, adamw_entry_check, adamw_entry_step};
 use super::pyjson::{CANONICAL, PyJsonError, dumps, float_fromhex, float_hex, obj};
 use super::recipe::{self, OptimizerRecipe};
 use super::run_control::{
@@ -871,6 +871,20 @@ where
                         "a host tensor's gradient or moments do not fit it".into(),
                     ));
                 }
+            }
+            // A host entry's refusal (a non-finite update, a bad scalar) is found here, before
+            // the provider steps: the step is atomic across the provider and the host entries,
+            // the same order as the shape check above and the non-finite-norm refusal, which also
+            // return with nothing moved. A refusal after the provider had stepped would leave it
+            // a step ahead of the host and of `optimizer_step`.
+            for (((g, v), s), row) in h
+                .grads()
+                .into_iter()
+                .zip(h.values())
+                .zip(&host_state)
+                .zip(&host_rows)
+            {
+                adamw_entry_check(v, g, s, row, lr, coef)?;
             }
         }
         provider.adamw_step(&hyper, t, &lr_scale, &weight_decay)?;

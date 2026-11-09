@@ -21,7 +21,7 @@ use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use super::adamw::{Moments, adamw_update};
+use super::adamw::{Moments, adamw_check, adamw_update};
 use super::step::{
     AdamWHyper, BankMode, HiddenGrad, ParamSpec, SequenceJob, StepError, StepProvider,
     StorageDtype, check_per_entry, refuse_lr_scale,
@@ -434,6 +434,20 @@ impl StepProvider for ToyProvider {
                 "asked for step {step}, but this provider has taken {}",
                 self.step
             )));
+        }
+        // Atomic across entries: every entry is asked first, with `adamw_update`'s own refusal
+        // rule, so a refusal at entry i leaves entries 0..i unstepped and the counter where it
+        // was. Only then does any entry move.
+        for i in 0..self.values.len() {
+            adamw_check(
+                &self.values[i],
+                &self.grads[i],
+                &self.moments[i],
+                hyper,
+                hyper.lr * lr_scale[i],
+                weight_decay[i],
+                step,
+            )?;
         }
         for i in 0..self.values.len() {
             let lr = hyper.lr * lr_scale[i];

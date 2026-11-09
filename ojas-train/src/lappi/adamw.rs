@@ -71,27 +71,13 @@ impl EntryState {
     }
 }
 
-/// One entry's AdamW step, as `torch.optim.AdamW` takes it over one parameter.
-///
-/// - `grad` `None` is torch's `p.grad is None` (after `zero_grad(set_to_none=True)`, a parameter
-///   no loss reached this step). The entry is skipped: no decay, no moment update, and no step
-///   count. Returns `false`.
-/// - Otherwise the entry's own count advances and is the bias-correction step. The entry's rate
-///   is `lr * row.lr_scale`, and its decoupled decay is `1 - (lr * row.lr_scale) *
-///   row.weight_decay`: torch's group `lr` is already scaled, and `param.mul_(1 - lr *
-///   weight_decay)` reads it. Eps and betas are the row's own. `grad_scale` is the clip
-///   coefficient. Returns `true`.
-pub fn adamw_entry_step(
-    param: &mut [f32],
-    grad: Option<&[f32]>,
-    state: &mut EntryState,
+/// The step count and hyper-parameters one entry's update runs with.
+fn entry_inputs(
+    state: &EntryState,
     row: &EntryHyper,
     lr: f64,
     grad_scale: f64,
-) -> Result<bool, StepError> {
-    let Some(grad) = grad else {
-        return Ok(false);
-    };
+) -> Result<(u64, AdamWHyper), StepError> {
     let t = state
         .steps
         .checked_add(1)
@@ -103,6 +89,35 @@ pub fn adamw_entry_step(
         eps: row.eps,
         grad_scale,
     };
+    Ok((t, hyper))
+}
+
+/// One entry's AdamW step, as `torch.optim.AdamW` takes it over one parameter.
+///
+/// - `grad` `None` is torch's `p.grad is None` (after `zero_grad(set_to_none=True)`, a parameter
+///   no loss reached this step). The entry is skipped: no decay, no moment update, and no step
+///   count. Returns `false`.
+/// - Otherwise the entry's own count advances and is the bias-correction step. The entry's rate
+///   is `lr * row.lr_scale`, and its decoupled decay is `1 - (lr * row.lr_scale) *
+///   row.weight_decay`: torch's group `lr` is already scaled, and `param.mul_(1 - lr *
+///   weight_decay)` reads it. Eps and betas are the row's own. `grad_scale` is the clip
+///   coefficient. Returns `true`.
+///
+/// A refusal writes nothing and leaves the count where it was. A caller that steps several
+/// entries and must not leave some of them stepped asks [`adamw_entry_check`] of every entry
+/// first: it applies this function's own refusal rule.
+pub fn adamw_entry_step(
+    param: &mut [f32],
+    grad: Option<&[f32]>,
+    state: &mut EntryState,
+    row: &EntryHyper,
+    lr: f64,
+    grad_scale: f64,
+) -> Result<bool, StepError> {
+    let Some(grad) = grad else {
+        return Ok(false);
+    };
+    let (t, hyper) = entry_inputs(state, row, lr, grad_scale)?;
     adamw_update(
         param,
         grad,
@@ -116,17 +131,48 @@ pub fn adamw_entry_step(
     Ok(true)
 }
 
-/// One AdamW update of `param` in place. `lr` is this tensor's learning rate (the schedule's
-/// rate times its group's scale); `hyper.lr` is not read. `step` is the 1-based count.
-pub fn adamw_update(
-    param: &mut [f32],
+/// Whether [`adamw_entry_step`] with these arguments would succeed, without writing anything.
+/// `Ok(())` is also the answer for a `None` gradient, which is skipped, not refused. The refusal
+/// is the one the step would return: this runs the same validation and the same scan.
+pub fn adamw_entry_check(
+    param: &[f32],
+    grad: Option<&[f32]>,
+    state: &EntryState,
+    row: &EntryHyper,
+    lr: f64,
+    grad_scale: f64,
+) -> Result<(), StepError> {
+    let Some(grad) = grad else {
+        return Ok(());
+    };
+    let (t, hyper) = entry_inputs(state, row, lr, grad_scale)?;
+    adamw_check(
+        param,
+        grad,
+        &state.moments,
+        &hyper,
+        lr * row.lr_scale,
+        row.weight_decay,
+        t,
+    )
+}
+
+/// The validated scalars of one update, and the lengths they were validated against.
+struct Prepared {
+    kernel: Kernel,
+    decaying: bool,
+}
+
+/// Every refusal that does not depend on the element values: the scalars, the step, the lengths.
+fn prepare(
+    param: &[f32],
     grad: &[f32],
-    moments: &mut Moments,
+    moments: &Moments,
     hyper: &AdamWHyper,
     lr: f64,
     weight_decay: f64,
     step: u64,
-) -> Result<(), StepError> {
+) -> Result<Prepared, StepError> {
     hyper.validate()?;
     if !(lr.is_finite() && lr > 0.0) {
         return Err(StepError::Contract(format!(
@@ -159,22 +205,70 @@ pub fn adamw_update(
             "step {step} is not exact in f64"
         )));
     }
-    let k = kernel(hyper, lr, weight_decay, step);
-    let decaying = weight_decay != 0.0;
+    Ok(Prepared {
+        kernel: kernel(hyper, lr, weight_decay, step),
+        decaying: weight_decay != 0.0,
+    })
+}
+
+/// Refuses, before any write, an update that would store a non-finite value: an error found at
+/// element k must not leave elements 0..k updated. The scan runs the very pass that then stores,
+/// minus the stores, so what is checked is exactly what is stored: the first moment, the second
+/// moment and the parameter. A finite gradient whose scaled square overflows f32 in `w2 * g * g`
+/// (|g| above ~1.8e20 at beta2 = 0.999) stores a +inf second moment, and the next step divides by
+/// it. A gradient whose bare `g * g` is +inf is NOT refused when `(w2 * g) * g` is finite: that is
+/// the value the loop stores, and it stays unchanged.
+fn scan_refusal(
+    p: &Prepared,
+    param: &[f32],
+    grad: &[f32],
+    m: &[f32],
+    v: &[f32],
+) -> Result<(), StepError> {
+    if scan_pass(&p.kernel, p.decaying, param, grad, m, v) != 0 {
+        return Err(first_refusal(&p.kernel, p.decaying, param, grad, m, v));
+    }
+    Ok(())
+}
+
+/// Whether [`adamw_update`] with these arguments would succeed, without writing anything: the
+/// same validation, the same scan, the same refusal. It is the one place that rule lives, so a
+/// caller that steps several tensors (a provider's bank, a head) can ask every tensor first and
+/// then apply, instead of leaving the earlier tensors stepped when a later one refuses.
+pub fn adamw_check(
+    param: &[f32],
+    grad: &[f32],
+    moments: &Moments,
+    hyper: &AdamWHyper,
+    lr: f64,
+    weight_decay: f64,
+    step: u64,
+) -> Result<(), StepError> {
+    let p = prepare(param, grad, moments, hyper, lr, weight_decay, step)?;
+    scan_refusal(&p, param, grad, &moments.m, &moments.v)
+}
+
+/// One AdamW update of `param` in place. `lr` is this tensor's learning rate (the schedule's
+/// rate times its group's scale); `hyper.lr` is not read. `step` is the 1-based count.
+///
+/// A refusal writes nothing: `param` and both moments are as they came in. See [`adamw_check`]
+/// for asking without applying.
+pub fn adamw_update(
+    param: &mut [f32],
+    grad: &[f32],
+    moments: &mut Moments,
+    hyper: &AdamWHyper,
+    lr: f64,
+    weight_decay: f64,
+    step: u64,
+) -> Result<(), StepError> {
+    let p = prepare(param, grad, moments, hyper, lr, weight_decay, step)?;
+    let n = param.len();
     // Re-slicing to `n` up front lets the compiler drop the per-element bounds checks.
     let (param, grad) = (&mut param[..n], &grad[..n]);
     let (m, v) = (&mut moments.m[..n], &mut moments.v[..n]);
-    // Refuse before any write: an error found at element k must not leave elements 0..k
-    // updated. The scan runs the very pass that then stores, minus the stores, so what is
-    // checked is exactly what is stored: the first moment, the second moment and the
-    // parameter. A finite gradient whose scaled square overflows f32 in `w2 * g * g` (|g| above
-    // ~1.8e20 at beta2 = 0.999) stores a +inf second moment, and the next step divides by it. A
-    // gradient whose bare `g * g` is +inf is NOT refused when `(w2 * g) * g` is finite: that is
-    // the value the loop stores, and it stays unchanged.
-    if update_pass::<false>(&k, decaying, param, grad, m, v) != 0 {
-        return Err(first_refusal(&k, decaying, param, grad, m, v));
-    }
-    update_pass::<true>(&k, decaying, param, grad, m, v);
+    scan_refusal(&p, param, grad, m, v)?;
+    write_pass::<false>(&p.kernel, p.decaying, param, grad, m, v);
     Ok(())
 }
 
@@ -229,22 +323,87 @@ fn kernel(hyper: &AdamWHyper, lr: f64, weight_decay: f64, step: u64) -> Kernel {
     }
 }
 
-/// Bits of the mask [`update_pass`] returns in scan mode.
+/// Bits of the mask [`scan_pass`] returns.
 const BAD_FIRST_MOMENT: u8 = 1;
 const BAD_SECOND_MOMENT: u8 = 2;
 const BAD_PARAM: u8 = 4;
 
-/// One pass of the update over equal-length slices, in one of two modes that share every
-/// instruction of the arithmetic.
-///
-/// - `WRITE = true` stores each element's new `param`, `m` and `v`; returns 0.
-/// - `WRITE = false` stores nothing and returns the OR over all elements of which stored
-///   quantities would be non-finite. It has no early exit, so it vectorises like the write pass.
-///
-/// The lerp branch (torch's weight below 0.5 or not) and the decay are loop-invariant, so each
-/// of the four combinations is its own loop body, chosen once.
+/// One element's update: the new `(param, first moment, second moment)`. Every pass shares this
+/// one body, so what the scan checks is what the write pass stores. The lerp branch (torch's
+/// weight below 0.5 or not) and the decay are loop-invariant, so each of the four combinations
+/// is its own instantiation, chosen once per pass.
 #[inline(always)]
-fn update_pass<const WRITE: bool>(
+fn element<const DECAY: bool, const LOW_LERP: bool>(
+    k: &Kernel,
+    p: f32,
+    g: f32,
+    m0: f32,
+    v0: f32,
+) -> (f32, f32, f32) {
+    let g = g * k.scale;
+    let mut p = p;
+    if DECAY {
+        p *= k.decay;
+    }
+    // torch's lerp for a weight below 0.5: start + weight * (end - start), fused.
+    let mi = if LOW_LERP {
+        k.w1.mul_add(g - m0, m0)
+    } else {
+        (k.w1 - 1.0).mul_add(g - m0, g)
+    };
+    let vi = v0 * k.b2 + k.w2 * g * g;
+    let denom = vi.sqrt() / k.bc2_sqrt + k.eps;
+    p += k.neg_step * mi / denom;
+    (p, mi, vi)
+}
+
+/// Which stored quantities of one element's update are non-finite, as a mask of the `BAD_*` bits.
+#[inline(always)]
+fn bad_bits(p: f32, mi: f32, vi: f32) -> [bool; 3] {
+    [!mi.is_finite(), !vi.is_finite(), !p.is_finite()]
+}
+
+fn mask(bad: [bool; 3]) -> u8 {
+    u8::from(bad[0]) * BAD_FIRST_MOMENT
+        + u8::from(bad[1]) * BAD_SECOND_MOMENT
+        + u8::from(bad[2]) * BAD_PARAM
+}
+
+/// Stores nothing and returns the OR over all elements of which stored quantities would be
+/// non-finite. It has no early exit, so it vectorises like the write pass.
+#[inline(always)]
+fn scan_pass(k: &Kernel, decaying: bool, param: &[f32], grad: &[f32], m: &[f32], v: &[f32]) -> u8 {
+    #[inline(always)]
+    fn run<const DECAY: bool, const LOW_LERP: bool>(
+        k: &Kernel,
+        param: &[f32],
+        grad: &[f32],
+        m: &[f32],
+        v: &[f32],
+    ) -> u8 {
+        let n = param.len();
+        let (grad, m, v) = (&grad[..n], &m[..n], &v[..n]);
+        let mut bad = [false; 3];
+        for i in 0..n {
+            let (p, mi, vi) = element::<DECAY, LOW_LERP>(k, param[i], grad[i], m[i], v[i]);
+            let b = bad_bits(p, mi, vi);
+            bad = [bad[0] | b[0], bad[1] | b[1], bad[2] | b[2]];
+        }
+        mask(bad)
+    }
+    match (decaying, k.w1.abs() < 0.5) {
+        (true, true) => run::<true, true>(k, param, grad, m, v),
+        (true, false) => run::<true, false>(k, param, grad, m, v),
+        (false, true) => run::<false, true>(k, param, grad, m, v),
+        (false, false) => run::<false, false>(k, param, grad, m, v),
+    }
+}
+
+/// Stores each element's new `param`, `m` and `v`. With `CHECK` it also returns what
+/// [`scan_pass`] would have (after the stores: the fused single-pass shape, which cannot refuse
+/// before writing and is used only to measure what that would save); otherwise 0.
+#[inline(always)]
+fn write_pass<const CHECK: bool>(
     k: &Kernel,
     decaying: bool,
     param: &mut [f32],
@@ -252,54 +411,35 @@ fn update_pass<const WRITE: bool>(
     m: &mut [f32],
     v: &mut [f32],
 ) -> u8 {
-    match (decaying, k.w1.abs() < 0.5) {
-        (true, true) => body::<WRITE, true, true>(k, param, grad, m, v),
-        (true, false) => body::<WRITE, true, false>(k, param, grad, m, v),
-        (false, true) => body::<WRITE, false, true>(k, param, grad, m, v),
-        (false, false) => body::<WRITE, false, false>(k, param, grad, m, v),
-    }
-}
-
-#[inline(always)]
-fn body<const WRITE: bool, const DECAY: bool, const LOW_LERP: bool>(
-    k: &Kernel,
-    param: &mut [f32],
-    grad: &[f32],
-    m: &mut [f32],
-    v: &mut [f32],
-) -> u8 {
-    let n = param.len();
-    let (grad, m, v) = (&grad[..n], &mut m[..n], &mut v[..n]);
-    let (mut bad_m, mut bad_v, mut bad_p) = (false, false, false);
-    for i in 0..n {
-        let g = grad[i] * k.scale;
-        let mut p = param[i];
-        if DECAY {
-            p *= k.decay;
-        }
-        let m0 = m[i];
-        // torch's lerp for a weight below 0.5: start + weight * (end - start), fused.
-        let mi = if LOW_LERP {
-            k.w1.mul_add(g - m0, m0)
-        } else {
-            (k.w1 - 1.0).mul_add(g - m0, g)
-        };
-        let vi = v[i] * k.b2 + k.w2 * g * g;
-        let denom = vi.sqrt() / k.bc2_sqrt + k.eps;
-        p += k.neg_step * mi / denom;
-        if WRITE {
+    #[inline(always)]
+    fn run<const CHECK: bool, const DECAY: bool, const LOW_LERP: bool>(
+        k: &Kernel,
+        param: &mut [f32],
+        grad: &[f32],
+        m: &mut [f32],
+        v: &mut [f32],
+    ) -> u8 {
+        let n = param.len();
+        let (grad, m, v) = (&grad[..n], &mut m[..n], &mut v[..n]);
+        let mut bad = [false; 3];
+        for i in 0..n {
+            let (p, mi, vi) = element::<DECAY, LOW_LERP>(k, param[i], grad[i], m[i], v[i]);
+            if CHECK {
+                let b = bad_bits(p, mi, vi);
+                bad = [bad[0] | b[0], bad[1] | b[1], bad[2] | b[2]];
+            }
             m[i] = mi;
             v[i] = vi;
             param[i] = p;
-        } else {
-            bad_m |= !mi.is_finite();
-            bad_v |= !vi.is_finite();
-            bad_p |= !p.is_finite();
         }
+        mask(bad)
     }
-    u8::from(bad_m) * BAD_FIRST_MOMENT
-        + u8::from(bad_v) * BAD_SECOND_MOMENT
-        + u8::from(bad_p) * BAD_PARAM
+    match (decaying, k.w1.abs() < 0.5) {
+        (true, true) => run::<CHECK, true, true>(k, param, grad, m, v),
+        (true, false) => run::<CHECK, true, false>(k, param, grad, m, v),
+        (false, true) => run::<CHECK, false, true>(k, param, grad, m, v),
+        (false, false) => run::<CHECK, false, false>(k, param, grad, m, v),
+    }
 }
 
 /// The refusal for the first element whose update stores a non-finite value. Cold: it runs
@@ -307,19 +447,19 @@ fn body<const WRITE: bool, const DECAY: bool, const LOW_LERP: bool>(
 fn first_refusal(
     k: &Kernel,
     decaying: bool,
-    param: &mut [f32],
+    param: &[f32],
     grad: &[f32],
-    m: &mut [f32],
-    v: &mut [f32],
+    m: &[f32],
+    v: &[f32],
 ) -> StepError {
     for i in 0..param.len() {
-        let mask = update_pass::<false>(
+        let mask = scan_pass(
             k,
             decaying,
-            &mut param[i..=i],
+            &param[i..=i],
             &grad[i..=i],
-            &mut m[i..=i],
-            &mut v[i..=i],
+            &m[i..=i],
+            &v[i..=i],
         );
         if mask != 0 {
             let names: Vec<&str> = [
@@ -609,63 +749,135 @@ mod tests {
         1015330162, 966598960,
     ];
 
-    /// Cost of the refusal pass, split: the aff9179 loop, the scan alone, the write pass alone
-    /// and the full `adamw_update`, on 4M elements, interleaved, min of 15 each. Run with
+    #[test]
+    fn adamw_check_agrees_with_adamw_update_and_writes_nothing() {
+        let h = hyper();
+        // Accepted: the check says Ok and moves nothing; the update then succeeds.
+        let (p0, mo0) = state();
+        let g = [0.3f32, -4.0, 1e-3];
+        adamw_check(&p0, &g, &mo0, &h, 1e-3, 0.01, 3).unwrap();
+        assert!(run(&p0, &g, &mo0, &h).0.is_ok());
+        // Refused: the same refusal text as the update, for every kind of refusal.
+        let (mut bad_m, mut bad_p) = (mo0.clone(), mo0.clone());
+        bad_m.v[1] = f32::NAN;
+        bad_p.m[2] = 3e38;
+        bad_p.v[2] = 0.0;
+        let cases: [(&[f32], &Moments, f64, f64, u64); 6] = [
+            (&[1e21, 0.1, 0.1], &mo0, 1e-3, 0.01, 3),
+            (&[0.1, 0.1, 0.1], &bad_m, 1e-3, 0.01, 3),
+            (&[0.1, 0.1, 0.0], &bad_p, 1e-3, 0.01, 3),
+            (&[0.1; 3], &mo0, 0.0, 0.01, 3),
+            (&[0.1; 3], &mo0, 1e-3, -1.0, 3),
+            (&[0.1; 3], &mo0, 1e-3, 0.01, 0),
+        ];
+        for (g, mo, lr, wd, step) in cases {
+            let (mut p, mut mo_u) = (p0.clone(), mo.clone());
+            let upd = adamw_update(&mut p, g, &mut mo_u, &h, lr, wd, step).unwrap_err();
+            let chk = adamw_check(&p0, g, mo, &h, lr, wd, step).unwrap_err();
+            assert_eq!(upd.to_string(), chk.to_string());
+        }
+    }
+
+    fn row(lr_scale: f64) -> EntryHyper {
+        EntryHyper {
+            name: "head".into(),
+            lr_scale,
+            weight_decay: 0.01,
+            eps: 1e-8,
+            beta1: 0.9,
+            beta2: 0.999,
+        }
+    }
+
+    #[test]
+    fn an_entry_check_is_the_entry_steps_verdict_without_its_effects() {
+        // A skipped (None) gradient and a finite one pass; an overflowing, a zero-scale and a
+        // step-count-overflow entry are refused, and the check never moves the state.
+        let ok_grad = [0.1f32, 0.2];
+        let big = [1e21f32, 0.0];
+        let st = EntryState::zeros(2);
+        let p = [0.5f32, 0.5];
+        adamw_entry_check(&p, None, &st, &row(1.0), 1e-3, 1.0).unwrap();
+        adamw_entry_check(&p, Some(&ok_grad), &st, &row(1.0), 1e-3, 1.0).unwrap();
+        adamw_entry_check(&p, Some(&big), &st, &row(1.0), 1e-3, 1.0).unwrap_err();
+        adamw_entry_check(&p, Some(&ok_grad), &st, &row(0.0), 1e-3, 1.0).unwrap_err();
+        let mut max = EntryState::zeros(2);
+        max.steps = u64::MAX;
+        adamw_entry_check(&p, Some(&ok_grad), &max, &row(1.0), 1e-3, 1.0).unwrap_err();
+        assert_eq!(st, EntryState::zeros(2));
+        // Entry step refuses the same inputs, writing nothing and not counting.
+        for (grad, r) in [(&big, row(1.0)), (&ok_grad, row(0.0))] {
+            let (mut pp, mut s) = (p, EntryState::zeros(2));
+            adamw_entry_step(&mut pp, Some(grad), &mut s, &r, 1e-3, 1.0).unwrap_err();
+            assert_eq!((pp, s), (p, EntryState::zeros(2)));
+        }
+        // An entry with no elements passes.
+        adamw_entry_check(&[], Some(&[]), &EntryState::zeros(0), &row(1.0), 1e-3, 1.0).unwrap();
+    }
+
+    /// Cost of the refusal pass, split: the aff9179 loop, the scan alone, the write pass alone,
+    /// the full two-pass `adamw_update` and the fused single-pass shape (write and check in one
+    /// loop, which cannot refuse before writing). Interleaved, min of 5, at 2^16, 2^20 and 2^24
+    /// elements; the same config is measured twice (`full` and `full'`) as the noise floor. Run with
     /// `cargo test --release -p ojas-train --lib adamw_refusal_pass_cost -- --ignored --nocapture --test-threads=1`.
     #[test]
     #[ignore = "timing; run by hand with --test-threads=1"]
     fn adamw_refusal_pass_cost() {
         use std::time::Instant;
-        const N: usize = 4 << 20;
         let h = hyper();
         let k = kernel(&h, 1e-3, 0.01, 3);
-        let g: Vec<f32> = (0..N).map(|i| ((i % 977) as f32 - 488.0) * 1e-3).collect();
-        let p0: Vec<f32> = (0..N).map(|i| (i % 13) as f32 * 0.1).collect();
-        let (mut p_full, mut p_ref, mut p_write) = (p0.clone(), p0.clone(), p0.clone());
-        let mut p_scan = p0;
-        let (mut m_full, mut m_ref, mut m_write, mut m_scan) = (
-            Moments::zeros(N),
-            Moments::zeros(N),
-            Moments::zeros(N),
-            Moments::zeros(N),
-        );
-        let (mut t_full, mut t_ref, mut t_scan, mut t_write) =
-            (f64::MAX, f64::MAX, f64::MAX, f64::MAX);
-        for _ in 0..15 {
-            let t = Instant::now();
-            adamw_update(&mut p_full, &g, &mut m_full, &h, 1e-3, 0.01, 3).unwrap();
-            t_full = t_full.min(t.elapsed().as_secs_f64());
-            let t = Instant::now();
-            reference_aff9179(&mut p_ref, &g, &mut m_ref, &h, 3);
-            t_ref = t_ref.min(t.elapsed().as_secs_f64());
-            let t = Instant::now();
-            let bad = update_pass::<false>(&k, true, &mut p_scan, &g, &mut m_scan.m, &mut m_scan.v);
-            t_scan = t_scan.min(t.elapsed().as_secs_f64());
-            assert_eq!(bad, 0);
-            let t = Instant::now();
-            update_pass::<true>(&k, true, &mut p_write, &g, &mut m_write.m, &mut m_write.v);
-            t_write = t_write.min(t.elapsed().as_secs_f64());
+        for n in [1usize << 16, 1 << 20, 1 << 24] {
+            let g: Vec<f32> = (0..n).map(|i| ((i % 977) as f32 - 488.0) * 1e-3).collect();
+            let p0: Vec<f32> = (0..n).map(|i| (i % 13) as f32 * 0.1).collect();
+            let mut st: Vec<(Vec<f32>, Moments)> =
+                (0..6).map(|_| (p0.clone(), Moments::zeros(n))).collect();
+            // 0 two-pass, 1 two-pass again (noise), 2 aff9179 loop, 3 scan alone (param/moments
+            // unchanged), 4 write alone, 5 fused single pass.
+            let mut t = [f64::MAX; 6];
+            for _ in 0..5 {
+                let s = Instant::now();
+                let (p, m) = &mut st[0];
+                adamw_update(p, &g, m, &h, 1e-3, 0.01, 3).unwrap();
+                t[0] = t[0].min(s.elapsed().as_secs_f64());
+                let s = Instant::now();
+                let (p, m) = &mut st[1];
+                adamw_update(p, &g, m, &h, 1e-3, 0.01, 3).unwrap();
+                t[1] = t[1].min(s.elapsed().as_secs_f64());
+                let s = Instant::now();
+                let (p, m) = &mut st[2];
+                reference_aff9179(p, &g, m, &h, 3);
+                t[2] = t[2].min(s.elapsed().as_secs_f64());
+                let s = Instant::now();
+                let (p, m) = &mut st[3];
+                assert_eq!(scan_pass(&k, true, p, &g, &m.m, &m.v), 0);
+                t[3] = t[3].min(s.elapsed().as_secs_f64());
+                let s = Instant::now();
+                let (p, m) = &mut st[4];
+                write_pass::<false>(&k, true, p, &g, &mut m.m, &mut m.v);
+                t[4] = t[4].min(s.elapsed().as_secs_f64());
+                let s = Instant::now();
+                let (p, m) = &mut st[5];
+                assert_eq!(write_pass::<true>(&k, true, p, &g, &mut m.m, &mut m.v), 0);
+                t[5] = t[5].min(s.elapsed().as_secs_f64());
+            }
+            assert_eq!(bits(&st[0].0), bits(&st[2].0), "update == aff9179 loop");
+            assert_eq!(bits(&st[4].0), bits(&st[2].0), "write pass == aff9179 loop");
+            assert_eq!(bits(&st[5].0), bits(&st[2].0), "fused == aff9179 loop");
+            let ms = t.map(|x| x * 1e3);
+            println!(
+                "adamw n=2^{} min-of-5 ms: two-pass {:.3}, two-pass again {:.3} (noise {:+.1}%), \
+                 aff9179 loop {:.3}, scan alone {:.3}, write alone {:.3}, fused single-pass {:.3} \
+                 (fused/two-pass {:.3})",
+                n.trailing_zeros(),
+                ms[0],
+                ms[1],
+                (ms[1] / ms[0] - 1.0) * 100.0,
+                ms[2],
+                ms[3],
+                ms[4],
+                ms[5],
+                ms[5] / ms[0].min(ms[1])
+            );
         }
-        assert_eq!(
-            bits(&p_full),
-            bits(&p_ref),
-            "update and the aff9179 loop must agree"
-        );
-        assert_eq!(
-            bits(&p_write),
-            bits(&p_ref),
-            "the write pass and the aff9179 loop must agree"
-        );
-        println!(
-            "adamw n={N} min-of-15 ms: aff9179 loop {:.3}, scan alone {:.3}, write alone {:.3}, \
-             full update {:.3}; full/ref {:.3}, scan/ref {:.3}, write/ref {:.3}",
-            t_ref * 1e3,
-            t_scan * 1e3,
-            t_write * 1e3,
-            t_full * 1e3,
-            t_full / t_ref,
-            t_scan / t_ref,
-            t_write / t_ref
-        );
     }
 }
