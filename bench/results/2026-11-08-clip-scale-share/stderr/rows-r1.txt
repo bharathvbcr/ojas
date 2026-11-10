@@ -1,0 +1,25 @@
+{"runtime":"ojas-metal","row":"_device","status":"info","device":{"backend":"MetalBackend","adapter":"Apple M5 Pro"}}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"clip_grad_norm_full","when":"before","load":"7.88 7.47 7.24","gpu_util_pct":81}
+{"runtime":"ojas-metal","row":"clip_grad_norm_full","status":"ok","min_ms":6.317666,"median_ms":7.752937,"iters":20,"warmup":5,"parity_max_abs":3.0517578125e-5,"parity_rel":3.04173095174925e-7,"tol":1e-3}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"clip_grad_norm_full","when":"after","load":"7.88 7.47 7.24","gpu_util_pct":91}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"clip_norm_only","when":"before","load":"7.88 7.47 7.24","gpu_util_pct":90}
+{"runtime":"ojas-metal","row":"clip_norm_only","status":"no_ref","detail":"no reference bench/out/run5c/ref/clip_norm_only.spec: No such file or directory (os error 2)"}
+{"runtime":"ojas-metal","row":"_load","status":"info","for":"clip_norm_only","when":"after","load":"7.88 7.47 7.24","gpu_util_pct":0}
+        1.05 real         0.23 user         0.19 sys
+           919076864  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+               58021  page reclaims
+                  12  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                  44  voluntary context switches
+                1771  involuntary context switches
+          5726260819  instructions retired
+          1451245140  cycles elapsed
+           983811440  peak memory footprint

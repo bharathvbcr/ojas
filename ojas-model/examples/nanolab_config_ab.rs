@@ -8,6 +8,8 @@
 //!     step <batch> <f32|bf16> <ce_cols> <off|blocks> [steps 10] [seq 1024] [tag]
 //! cargo run -p ojas-model --release --example nanolab_config_ab -- \
 //!     phase <batch> [reps 8] [seq 1024]
+//! cargo run -p ojas-model --release --example nanolab_config_ab -- \
+//!     clip <batch> [rounds 30] [seq 1024] [forced_clip 1e-3]
 //! ```
 //!
 //! `step` runs nanolab-124M training steps on Metal with Muon's
@@ -26,7 +28,21 @@
 //! both gradients over `batch * seq` rows, the default tile against one
 //! vocabulary tile. Arms alternate within the process; each call is synced.
 //!
-//! Both modes read `sysctl -n vm.loadavg` before and after the timed loop.
+//! `clip` is the clip scale pass's share of a step (task ft-a306b417,
+//! `bench/results/2026-11-08-clip-scale-share/`). Three trainers of the same
+//! init and data run in one process on one device: `scale` with `grad_clip`
+//! at `forced_clip`, so `clip_grad_norm` runs its scale pass every step, and
+//! `noscale` and `noscale_aa` with `grad_clip` at 1e30, so the norm runs and
+//! the scale is skipped (`MetalBackend::clip_grad_norm` scales only below a
+//! coefficient of 1). `noscale` is the step a folded clip would leave: the
+//! norm stays, the separate scale pass goes. `noscale_aa` is its identical
+//! twin, the noise floor. Each round steps every trainer once, in an order
+//! rotated by the round; each step is synced before its clock stops. The row
+//! carries every step's time, loss and pre-clip grad norm per arm, so the
+//! caller can check that `scale` clipped on every step (`grad_norm >
+//! forced_clip`) and that the A/A twins' losses are bit-identical.
+//!
+//! Every mode reads `sysctl -n vm.loadavg` before and after the timed loop.
 
 // Off macOS only the refusal in `run` is reachable.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code, unused_imports))]
@@ -47,7 +63,8 @@ use ojas_model::{
 type R<T> = Result<T, OjasError>;
 
 const USAGE: &str = "usage: nanolab_config_ab step <batch> <f32|bf16> <ce_cols> <off|blocks> \
-                     [steps] [seq] [tag] | phase <batch> [reps] [seq]";
+                     [steps] [seq] [tag] | phase <batch> [reps] [seq] | \
+                     clip <batch> [rounds] [seq] [forced_clip]";
 
 fn fail(detail: impl Into<String>) -> OjasError {
     OjasError::Unsupported {
@@ -81,9 +98,17 @@ struct PhaseArgs {
     seq: usize,
 }
 
+struct ClipArgs {
+    batch: usize,
+    rounds: usize,
+    seq: usize,
+    forced_clip: f32,
+}
+
 enum Mode {
     Step(StepArgs),
     Phase(PhaseArgs),
+    Clip(ClipArgs),
 }
 
 fn args() -> R<Mode> {
@@ -115,6 +140,20 @@ fn args() -> R<Mode> {
             reps: count(&a, 2, 8)?,
             seq: count(&a, 3, 1024)?,
         })),
+        Some("clip") if (2..=5).contains(&a.len()) => {
+            let forced_clip = match a.get(4) {
+                None => 1e-3,
+                Some(s) => s
+                    .parse()
+                    .map_err(|_| fail(format!("forced_clip {s:?} is not a number; {USAGE}")))?,
+            };
+            Ok(Mode::Clip(ClipArgs {
+                batch: count(&a, 1, 0)?,
+                rounds: count(&a, 2, 30)?,
+                seq: count(&a, 3, 1024)?,
+                forced_clip,
+            }))
+        }
         _ => Err(fail(USAGE)),
     }
 }
@@ -229,6 +268,97 @@ fn step_row<B: Backend>(backend: B, a: &StepArgs) -> R<String> {
         list(&peaks),
         secs(&times),
         losses.join(","),
+    ))
+}
+
+/// `grad_clip` of the `noscale` arms: finite and positive, as `TrainConfig`
+/// requires, and far above any gradient norm, so the coefficient is 1.
+const NO_SCALE_CLIP: f32 = 1e30;
+
+/// One arm of `clip` mode: its trainer and every step's time, loss and
+/// pre-clip gradient norm.
+struct ClipArm<B: Backend> {
+    name: &'static str,
+    grad_clip: f32,
+    trainer: Trainer<Autocast<B>>,
+    seconds: Vec<f64>,
+    losses: Vec<String>,
+    norms: Vec<String>,
+}
+
+fn clip_row<B: Backend + Clone>(backend: B, a: &ClipArgs) -> R<String> {
+    let spec = ModelSpec::nanolab_124m();
+    let host = init_params(&spec, 1337, &Budget::new(4 << 30))?;
+    let tokens = (a.batch * (a.seq + 1) * (a.rounds + 2)).max(1 << 20);
+    let (guard, first) = token_bin(tokens, spec.vocab as u32)?;
+    // Each trainer owns its bin; the twins open the same file, so every arm
+    // reads the same windows in the same order.
+    let mut bins = vec![first];
+    for _ in 1..3 {
+        let path = guard.0.join("tokens.bin");
+        bins.push(TokenBin::open_headerless(&path).map_err(|e| fail(format!("token bin: {e}")))?);
+    }
+    let budget = backend.budget().clone();
+    let mut arms = Vec::with_capacity(3);
+    for ((name, grad_clip), bin) in [
+        ("scale", a.forced_clip),
+        ("noscale", NO_SCALE_CLIP),
+        ("noscale_aa", NO_SCALE_CLIP),
+    ]
+    .into_iter()
+    .zip(bins)
+    {
+        let schedule = LrSchedule::Cosine(CosineSchedule::new(1, 1000)?);
+        let mut cfg = TrainConfig::nanolab(a.batch, a.seq, 1, 1337, schedule);
+        cfg.autocast = AutocastMode::Off;
+        cfg.grad_clip = grad_clip;
+        let trainer = Trainer::new(Autocast::new(backend.clone()), spec, &host, bin, cfg)?;
+        arms.push(ClipArm {
+            name,
+            grad_clip,
+            trainer,
+            seconds: Vec::with_capacity(a.rounds),
+            losses: Vec::with_capacity(a.rounds),
+            norms: Vec::with_capacity(a.rounds),
+        });
+    }
+    drop(host);
+    backend.sync()?;
+    let resident = budget.live_bytes()?;
+    let load_before = loadavg();
+    let n = arms.len();
+    for round in 0..a.rounds {
+        for i in 0..n {
+            let arm = &mut arms[(i + round) % n];
+            let start = Instant::now();
+            let r = arm.trainer.step()?;
+            arm.trainer.backend().sync()?;
+            arm.seconds.push(start.elapsed().as_secs_f64());
+            arm.losses.push(format!("{:?}", r.loss));
+            arm.norms.push(format!("{:?}", r.grad_norm));
+        }
+    }
+    let load_after = loadavg();
+    let arms_json = arms
+        .iter()
+        .map(|arm| {
+            format!(
+                "{{\"arm\":\"{}\",\"grad_clip\":{:?},\"step_seconds\":[{}],\"losses\":[{}],\
+                 \"grad_norms\":[{}]}}",
+                arm.name,
+                arm.grad_clip,
+                secs(&arm.seconds),
+                arm.losses.join(","),
+                arm.norms.join(","),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    Ok(format!(
+        "{{\"mode\":\"clip\",\"backend\":\"metal\",\"batch\":{},\"seq\":{},\"rounds\":{},\
+         \"forced_clip\":{:?},\"resident_bytes_before_steps\":{resident},\"arms\":[{arms_json}],\
+         \"load_before\":\"{load_before}\",\"load_after\":\"{load_after}\"}}",
+        a.batch, a.seq, a.rounds, a.forced_clip,
     ))
 }
 
@@ -385,6 +515,18 @@ fn run(mode: &Mode) -> R<String> {
                 return Err(fail("batch and reps must be at least 1"));
             }
             phase_row(ojas_metal::MetalBackend::new(budget)?, a)
+        }
+        Mode::Clip(a) => {
+            if a.batch == 0 || a.rounds == 0 {
+                return Err(fail("batch and rounds must be at least 1"));
+            }
+            if !(a.forced_clip.is_finite() && a.forced_clip > 0.0) {
+                return Err(fail(format!(
+                    "forced_clip {} is not finite and positive",
+                    a.forced_clip
+                )));
+            }
+            clip_row(ojas_metal::MetalBackend::new(budget)?, a)
         }
     }
 }

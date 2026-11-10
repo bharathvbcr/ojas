@@ -98,8 +98,23 @@ Up to PyTorch 2.14, MPS ran `clip_grad_norm_` (`linalg.vector_norm`) on a single
   counts on 170 gradients.
 - **What the row now costs:** the norm reads the 123.7M gradients once and
   the scale reads and writes them once more, about 1.5 GB per call at about
-  230 GB/s. Going faster means folding the clip coefficient into the
-  optimizer step, a `Backend` trait change that needs the owner's sign-off.
+  230 GB/s.
+- **Folding the coefficient into the optimizer: measured, no-go**
+  (`bench/results/2026-11-08-clip-scale-share/`, 2026-11-09).
+  - The scale pass costs 4.14 ms min / 5.23 ms median. That is
+    `clip_grad_norm_full` minus `clip_norm_only` (norm alone 2.05-2.39 ms
+    min), median of 5 processes, about 239 GB/s.
+  - Against the nanolab-124M `Trainer::step` (639 ms min at B=1, 2523 ms at
+    B=8, T=1024), that is **0.65%** at B=1 and **0.16%** at B=8. Dropping the
+    whole clip would save at most 6.63 ms (1.04% and 0.26%).
+  - An interleaved in-process trainer A/B could not resolve the pass. The
+    forced-clip arm sat inside its A/A twin's spread: median -15.5 ms vs A/A
+    -9.8 ms at B=1, n=84, A/A |delta| p90 148 ms.
+  - On the LoRA-2B `TapeStepProvider` path, `grad_scale` 0.5 vs 1.0 adds
+    +10.6 ms median to AdamW (9/10 slower), **0.16%** of a 6.55 s step.
+  - A fold saves under 1% of any step measured, so the `Backend` trait change
+    is not worth making for speed. The owner decides, and a trait change needs
+    their explicit sign-off either way.
 - **Historical, superseded:** round 5 (`bench/results/2026-10-02-r5/summary.md`)
   measured 18.96 ms on Metal and 19.12 ms on wgpu, about 0.45× the nightly.
   That timed Metal's path from before 0e3254f, about five dispatches per
