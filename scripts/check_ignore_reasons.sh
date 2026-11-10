@@ -3,7 +3,10 @@
 # `#[ignore = "why, and how to run it"]`. A bare `#[ignore]` leaves a reader of
 # `cargo test` output with "ignored" and nothing else (no way to tell a slow
 # sweep from a test that needs a device or a fixture). Doc and line comments
-# that merely mention `#[ignore]` are not attributes and are not flagged.
+# that merely mention `#[ignore]` are not attributes and are not flagged. A
+# conditional ignore needs one too: `#[cfg_attr(miri, ignore = "why")]`, not
+# `#[cfg_attr(miri, ignore)]`. Spaces inside the brackets (`#[ ignore ]`)
+# compile and are caught. Not caught: an attribute split across lines.
 # Invoke: ./scripts/check_ignore_reasons.sh
 set -euo pipefail
 
@@ -15,7 +18,7 @@ cd "$ROOT"
 # from git grep means "no match", which is success
 # here; any other non-zero status is a real failure and must not read as clean.
 status=0
-hits=$(git grep -n -E '^([^/]|/[^/])*#\[ignore[[:space:]]*\]' -- '*.rs') || status=$?
+hits=$(git grep -n -E '^([^/]|/[^/])*#\[[[:space:]]*(ignore[[:space:]]*\]|cfg_attr[[:space:]]*\(.*[[:space:],]ignore[[:space:]]*[,)])' -- '*.rs') || status=$?
 if [ "$status" -gt 1 ]; then
   echo "check_ignore_reasons: git grep failed with status $status" >&2
   exit 1

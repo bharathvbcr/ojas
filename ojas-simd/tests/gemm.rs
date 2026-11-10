@@ -65,7 +65,7 @@ fn one_by_one() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
+#[cfg_attr(miri, ignore = "all layout pairs at 127x67x131: too slow under Miri")]
 fn primes_all_layouts() {
     let mut rng = Rng::new(2);
     for &(m, n, k) in &[(73, 11, 13), (127, 67, 131)] {
@@ -78,7 +78,7 @@ fn primes_all_layouts() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
+#[cfg_attr(miri, ignore = "k to 1025, m to 257, n to 1921: too slow under Miri")]
 fn tile_boundaries() {
     let mut rng = Rng::new(3);
     // Register tiles: MR in {6, 8}, NR in {8, 12, 16}.
@@ -308,7 +308,7 @@ fn tiled(
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
+#[cfg_attr(miri, ignore = "4 shapes, 3 layouts, backends: too slow under Miri")]
 fn tile_partition_invariance() {
     let mut rng = Rng::new(7);
     for &(m, n, k) in &[(37, 41, 300), (127, 67, 131), (64, 96, 513), (9, 200, 17)] {
@@ -346,7 +346,7 @@ fn tile_partition_invariance() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
+#[cfg_attr(miri, ignore = "150x130x700 across threads is too slow under Miri")]
 fn tile_partition_invariance_across_threads() {
     let mut rng = Rng::new(8);
     let (m, n, k) = (150, 130, 700);
@@ -395,7 +395,7 @@ fn tile_partition_invariance_across_threads() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
+#[cfg_attr(miri, ignore = "200x190x600 on every backend: too slow under Miri")]
 fn run_to_run_determinism() {
     let mut rng = Rng::new(9);
     let (m, n, k) = (200, 190, 600);
