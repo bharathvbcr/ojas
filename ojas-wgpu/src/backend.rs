@@ -4021,3 +4021,6 @@ mod tests {
 
 #[cfg(test)]
 mod adv757b;
+
+#[cfg(test)]
+mod wgf;

@@ -362,10 +362,6 @@ pub const KERNEL_GRIDS: &[(&str, GridKind)] = &[
     ),
     // fault.wgsl.
     ("fault_hold", GridKind::Single("one workgroup, (1, 1, 1)")),
-    (
-        "fault_release",
-        GridKind::Single("one workgroup, (1, 1, 1)"),
-    ),
 ];
 
 /// Edge of the square output tile one GEMM workgroup owns.

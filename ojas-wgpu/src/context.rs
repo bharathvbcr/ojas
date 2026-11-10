@@ -10,13 +10,15 @@
 //!
 //! Kernels that produce a non-finite value OR their op's bit into a 64-bit
 //! op mask held in two device words ([`FAULT_OPS`] ops) and keep going; the
-//! first op to fault also records itself in a third word. Every read runs
-//! `fault_hold`, which moves those words into a second, held set, and
-//! copies the held set out in the same submission. Only
-//! after the host has seen the copy does it record `fault_release`, which
-//! clears exactly what it saw. A read that fails between the two (a poll
-//! timeout, a failed map) therefore leaves the fault held for the next read
-//! instead of losing it.
+//! first op to fault also records itself in a third word. Every read owns
+//! one of [`HOLD_SLOTS`] hold slots of the device's `held` words ([`HoldSlots`]).
+//! It runs `fault_hold`, which moves the live words into its slot in one
+//! dispatch, and copies that slot out in the same submission. Nothing else
+//! touches the slot, so the pair the host sees is consistent and goes to
+//! exactly one read, and no release is needed. A read that fails before the
+//! host has seen the copy (a poll timeout, a failed map) leaves its slot
+//! holding the fault; the next hold folds such orphan slots into its own,
+//! oldest first, instead of losing the fault (ft-84e2b74e).
 //!
 //! A read hands the mask it observed to its own caller
 //! ([`WgpuContext::read_observing`], [`WgpuContext::sync_observed`]), which
@@ -24,13 +26,10 @@
 //! ([`WgpuContext::read`], which backs `DeviceBuffer::read_bytes`, and the
 //! public [`WgpuContext::sync`]) defer it to one shared pair that
 //! [`WgpuContext::take_faults`] takes, for whichever caller asks next. A mask
-//! is delivered by one of the two channels, never both. Two reads that
-//! overlap a held fault before either release lands both observe it and
-//! both report it: every reader that may have copied faulted bytes errs
-//! (fail closed), and "reported once" is not promised (ft-84e2b74e). A
-//! caller whose data came from a faulting op after the fault was released
-//! and reported elsewhere is not told again: that needs per-buffer
-//! attribution, which is a follow-up.
+//! is delivered by one of the two channels, never both, and a raised fault
+//! reaches one reader once: a reader that did not see it is not told, even if
+//! its data came from the faulting op after another reader's report. That
+//! needs per-buffer attribution, which is a follow-up (ft-31b498ab).
 //!
 //! A lost device is recorded apart from the capped uncaptured-error queue,
 //! every later error check reports it, every error from a device call
@@ -54,12 +53,12 @@
 //! no wgpu object and pops no error scope. [`CacheStats`] counts what is
 //! still created and every blocking error-scope pop.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::num::NonZeroU64;
 #[cfg(test)]
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use ojas_core::{BackendId, Budget, DeviceBuffer, OjasError, Reservation};
 use ojas_device::{Device, DeviceError};
@@ -245,11 +244,19 @@ const FAULT_HOLD: Kernel = Kernel {
     slots: &[Slot::W(2)],
 };
 
-const FAULT_RELEASE: Kernel = Kernel {
-    module: WgslModule::Fault,
-    entry: "fault_release",
-    slots: &[Slot::W(2)],
-};
+/// Hold slots of the device's `held` words: reads in flight at once, plus
+/// the orphans a failed read left. A reader that finds none free waits.
+pub(crate) const HOLD_SLOTS: u32 = 64;
+
+/// How long a read waits for a hold slot when all [`HOLD_SLOTS`] are leased.
+const HOLD_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Bytes of one hold slot: the mask words, the first-op word and one spare.
+const HOLD_SLOT_BYTES: u64 = 16;
+
+/// Orphan slots one `fault_hold` folds in: the parameter words 2..=14
+/// (`HOLD_ORPHANS` in `fault.wgsl`).
+const HOLD_ORPHANS: usize = 13;
 
 /// One storage binding of a kernel, numbered from 2. `R` is read-only.
 #[derive(Clone, Copy, Debug)]
@@ -552,8 +559,10 @@ pub(crate) struct Inner {
     /// Live fault words, written by kernels: 0 and 1 the op mask (ops 0..31,
     /// then 32..63), 2 the first op + 1.
     fault: wgpu::Buffer,
-    /// Faults moved out of `fault` by a read and not yet observed by the host.
+    /// [`HOLD_SLOTS`] hold slots of [`HOLD_SLOT_BYTES`]: the faults a read
+    /// moved out of `fault` and the host has not yet observed.
     held: wgpu::Buffer,
+    slots: HoldSlots,
     hold: Mutex<Option<(Arc<Pipe>, wgpu::BindGroup)>>,
     faults: Faults,
     errors: Arc<Mutex<ErrorQueue>>,
@@ -571,6 +580,11 @@ pub(crate) struct Inner {
     /// Test seam: this many next buffer creations fail as out of memory.
     #[cfg(test)]
     fail_allocs: AtomicU32,
+    /// Test seam: raw `(bits, first)` pairs a read copied out of the device
+    /// whose mask and first op disagree (ft-84e2b74e), counted before
+    /// [`normalize_fault_words`] repairs them.
+    #[cfg(test)]
+    torn_pairs: AtomicU64,
 }
 
 impl Inner {
@@ -787,6 +801,162 @@ impl Faults {
     }
 }
 
+/// A raw device pair whose halves disagree: a first op with no bit in the
+/// mask, a mask with no first op, or a first op past the mask.
+#[cfg(test)]
+fn raw_pair_is_torn(bits: u64, first: u32) -> bool {
+    match first {
+        0 => bits != 0,
+        1..=64 => bits & (1u64 << (first - 1)) == 0,
+        _ => true,
+    }
+}
+
+/// Which of the device's hold slots a read may use, and which hold a pair no
+/// host has seen. A read leases one slot ([`HoldSlots::lease`]); the lease
+/// frees it once the host has seen the copy, and keeps it as an orphan when
+/// the read ends any earlier after its hold was recorded, including by a
+/// panic, so a fault is never dropped by an unwinding reader.
+pub(crate) struct HoldSlots {
+    state: Mutex<SlotState>,
+    freed: Condvar,
+}
+
+struct SlotState {
+    /// Slots whose pair the host has seen: nothing in them to report.
+    free: Vec<u32>,
+    /// Slots that hold a pair no host has seen, oldest first.
+    orphans: VecDeque<u32>,
+}
+
+impl HoldSlots {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(SlotState {
+                free: (0..HOLD_SLOTS).rev().collect(),
+                orphans: VecDeque::new(),
+            }),
+            freed: Condvar::new(),
+        }
+    }
+
+    /// A slot for one read: a free one, else the oldest orphan (its pair is
+    /// folded into the hold that fills it), else wait for a read to finish.
+    /// Never shares a slot and never overwrites an unseen pair: the 65th
+    /// concurrent read waits. It fails closed with a backend error after
+    /// [`HOLD_WAIT`], which only a wedged device reaches: every lease is
+    /// held for one submission and one wait.
+    fn lease(&self) -> Result<HoldLease<'_>, OjasError> {
+        self.lease_within(HOLD_WAIT)
+    }
+
+    fn lease_within(&self, wait: std::time::Duration) -> Result<HoldLease<'_>, OjasError> {
+        let deadline = std::time::Instant::now() + wait;
+        let mut state = lock(&self.state);
+        loop {
+            if let Some(slot) = state.free.pop() {
+                return Ok(HoldLease::new(self, slot, false));
+            }
+            if let Some(slot) = state.orphans.pop_front() {
+                return Ok(HoldLease::new(self, slot, true));
+            }
+            let left = deadline
+                .checked_duration_since(std::time::Instant::now())
+                .ok_or_else(|| {
+                    backend_err(format!(
+                        "no fault hold slot of {HOLD_SLOTS} came free within {wait:?}"
+                    ))
+                })?;
+            state = self
+                .freed
+                .wait_timeout(state, left)
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
+        }
+    }
+}
+
+/// How far a read got with its slot.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HoldPhase {
+    /// No hold recorded for it: the slot holds only what `carries` says.
+    Idle,
+    /// The hold is recorded; the pair is in the slot, unseen.
+    Recorded,
+    /// The host has the pair.
+    Seen,
+}
+
+pub(crate) struct HoldLease<'a> {
+    slots: &'a HoldSlots,
+    pub(crate) slot: u32,
+    /// The slot still holds an orphan's unseen pair (a lease taken when
+    /// none was free): the hold folds it in, and a lease dropped before its
+    /// hold was recorded puts it back as the oldest orphan.
+    carries: bool,
+    phase: HoldPhase,
+}
+
+impl<'a> HoldLease<'a> {
+    fn new(slots: &'a HoldSlots, slot: u32, carries: bool) -> Self {
+        Self {
+            slots,
+            slot,
+            carries,
+            phase: HoldPhase::Idle,
+        }
+    }
+
+    /// Byte offset of the slot in `held`.
+    fn offset(&self) -> u64 {
+        u64::from(self.slot) * HOLD_SLOT_BYTES
+    }
+
+    /// The parameter words of this lease's `fault_hold`, taking the orphans
+    /// it folds in (up to [`HOLD_ORPHANS`], oldest first, this slot's own
+    /// pair first of all). Call it when the dispatch is about to be recorded
+    /// and nothing fallible remains: from here the lease owns an unseen pair.
+    fn record(&mut self) -> [u32; 16] {
+        let mut words = [0u32; 16];
+        words[0] = self.slot;
+        let mut folded = Vec::with_capacity(HOLD_ORPHANS);
+        if std::mem::take(&mut self.carries) {
+            folded.push(self.slot);
+        }
+        {
+            let mut state = lock(&self.slots.state);
+            while folded.len() < HOLD_ORPHANS {
+                match state.orphans.pop_front() {
+                    Some(slot) => folded.push(slot),
+                    None => break,
+                }
+            }
+        }
+        words[1] = folded.len() as u32;
+        words[2..2 + folded.len()].copy_from_slice(&folded);
+        self.phase = HoldPhase::Recorded;
+        words
+    }
+
+    /// The host has read the copy; the slot has nothing left to report.
+    fn seen(&mut self) {
+        self.phase = HoldPhase::Seen;
+    }
+}
+
+impl Drop for HoldLease<'_> {
+    fn drop(&mut self) {
+        let mut state = lock(&self.slots.state);
+        match (self.phase, self.carries) {
+            (HoldPhase::Recorded, _) => state.orphans.push_back(self.slot),
+            (HoldPhase::Idle, true) => state.orphans.push_front(self.slot),
+            _ => state.free.push(self.slot),
+        }
+        drop(state);
+        self.slots.freed.notify_one();
+    }
+}
+
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -867,8 +1037,12 @@ impl WgpuContext {
                 *guard = Some(format!("device lost ({reason:?}): {message}"));
             }
         });
-        let fault = zeroed_words(&device, "ojas-fault")?;
-        let held = zeroed_words(&device, "ojas-fault-held")?;
+        let fault = zeroed_words(&device, "ojas-fault", HOLD_SLOT_BYTES)?;
+        let held = zeroed_words(
+            &device,
+            "ojas-fault-held",
+            u64::from(HOLD_SLOTS) * HOLD_SLOT_BYTES,
+        )?;
         let param_stride = PARAM_BYTES
             .next_multiple_of(u64::from(limits.min_uniform_buffer_offset_alignment.max(1)));
         let param_slots = ring_slots(limits.max_buffer_size, param_stride)?;
@@ -897,6 +1071,7 @@ impl WgpuContext {
                 scratch_flush_at: AtomicU64::new(SCRATCH_FLUSH_AT),
                 fault,
                 held,
+                slots: HoldSlots::new(),
                 hold: Mutex::new(None),
                 faults: Faults::default(),
                 errors,
@@ -908,6 +1083,8 @@ impl WgpuContext {
                 fail_countdown: AtomicU32::new(0),
                 #[cfg(test)]
                 fail_allocs: AtomicU32::new(0),
+                #[cfg(test)]
+                torn_pairs: AtomicU64::new(0),
             }),
         })
     }
@@ -1721,8 +1898,8 @@ impl WgpuContext {
     /// One piece of [`Self::read`]: its span, rounded out to words, plus the
     /// 16 fault bytes fit one staging buffer. The fault words ride in the
     /// same copy and are cleared. Returns the bytes and the normalized mask
-    /// this piece observed; if the release or the error check after it
-    /// fails, the mask is deferred to the shared pair and the error returned.
+    /// this piece observed; if the error check after it fails, the mask is
+    /// deferred to the shared pair and the error returned.
     fn read_once(
         &self,
         buf: &wgpu::Buffer,
@@ -1735,19 +1912,22 @@ impl WgpuContext {
         let stage_bytes = span + 16;
         let staging = self.staging(stage_bytes)?;
         let (hold_pipe, hold_group) = self.hold()?;
+        let mut lease = self.inner.slots.lease()?;
         let index = {
             let mut rec = lock(&self.inner.rec);
             if rec.slots >= self.inner.param_slots {
                 self.submit_locked(&mut rec);
             }
-            let at = rec.slot(&[0; 16], self.inner.param_stride);
+            // Nothing below can fail: from here the slot owns an unseen pair.
+            let words = lease.record();
+            let at = rec.slot(&words, self.inner.param_stride);
             let encoder = rec.encoder.get_or_insert_with(|| self.encoder());
             if span > 0 {
                 encoder.copy_buffer_to_buffer(buf, start, &staging, 0, span);
             }
-            // Move the live fault words into `held` and copy `held` out. The
-            // live word is cleared, but `held` is only cleared by a release
-            // the host records after it has seen these bytes.
+            // Move the live fault words (and any orphans) into this read's
+            // slot and copy the slot out. The slot is this read's alone until
+            // the host has seen the copy, so nothing needs releasing.
             {
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("ojas-fault-hold"),
@@ -1757,7 +1937,7 @@ impl WgpuContext {
                 pass.set_bind_group(0, &hold_group, &[at]);
                 pass.dispatch_workgroups(1, 1, 1);
             }
-            encoder.copy_buffer_to_buffer(&self.inner.held, 0, &staging, span, 16);
+            encoder.copy_buffer_to_buffer(&self.inner.held, lease.offset(), &staging, span, 16);
             self.submit_locked(&mut rec)
         };
         let index = index.ok_or_else(|| backend_err("read recorded no commands"))?;
@@ -1814,29 +1994,19 @@ impl WgpuContext {
             (view[lo..lo + len as usize].to_vec(), bits, word(2))
         };
         staging.unmap();
+        // The host has the pair: only now is the slot free to hand out again.
+        lease.seen();
         // Unmapped and idle again: the next read may take it.
         self.staging_back(staging);
-        let released = if bits != 0 || first != 0 {
-            // Seen: now, and only now, clear exactly these from `held`, as
-            // read (not as normalized). The release allocates nothing, so it
-            // charges an empty budget.
-            let none = Budget::new(0);
-            let mut job = self.job(&none, 0);
-            job.dispatch(
-                &FAULT_RELEASE,
-                &[bits as u32, (bits >> 32) as u32, first],
-                &[&self.inner.held],
-                (1, 1, 1),
-            )
-            .and_then(|()| job.commit())
-        } else {
-            Ok(())
-        };
+        #[cfg(test)]
+        if raw_pair_is_torn(bits, first) {
+            self.inner.torn_pairs.fetch_add(1, Ordering::Relaxed);
+        }
         let (bits, first) = normalize_fault_words(bits, first);
         let c = &self.inner.counters;
         c.reads.fetch_add(1, Ordering::Relaxed);
         c.read_bytes.fetch_add(len, Ordering::Relaxed);
-        if let Err(err) = released.and_then(|()| self.check_errors()) {
+        if let Err(err) = self.check_errors() {
             if bits != 0 || first != 0 {
                 self.inner.faults.record(bits, first);
             }
@@ -1894,6 +2064,21 @@ impl WgpuContext {
     #[cfg(test)]
     pub(crate) fn fail_next_read(&self) {
         self.inner.fail_next_read.store(true, Ordering::Relaxed);
+    }
+
+    /// Lease a hold slot as a read does, for the tests that exhaust them.
+    #[cfg(test)]
+    pub(crate) fn lease_hold_slot(
+        &self,
+        wait: std::time::Duration,
+    ) -> Result<HoldLease<'_>, OjasError> {
+        self.inner.slots.lease_within(wait)
+    }
+
+    /// Raw torn pairs the reads of this context copied out so far.
+    #[cfg(test)]
+    pub(crate) fn torn_pairs(&self) -> u64 {
+        self.inner.torn_pairs.load(Ordering::Relaxed)
     }
 
     /// `(bits, first)` deferred to the shared pair since the last call, then
@@ -2075,11 +2260,15 @@ fn param_ring(
 }
 
 /// A 16-byte storage buffer of four zero words.
-fn zeroed_words(device: &wgpu::Device, label: &str) -> Result<wgpu::Buffer, DeviceError> {
+fn zeroed_words(
+    device: &wgpu::Device,
+    label: &str,
+    bytes: u64,
+) -> Result<wgpu::Buffer, DeviceError> {
     let scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
     let buf = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some(label),
-        size: 16,
+        size: bytes,
         usage: storage_usage(),
         mapped_at_creation: true,
     });
@@ -2094,7 +2283,7 @@ fn zeroed_words(device: &wgpu::Device, label: &str) -> Result<wgpu::Buffer, Devi
             .slice(..)
             .get_mapped_range_mut()
             .map_err(|err| gpu_error(format!("{label} map: {err}")))?;
-        view.copy_from_slice(&[0u8; 16]);
+        view.copy_from_slice(&vec![0u8; bytes as usize]);
     }
     buf.unmap();
     Ok(buf)

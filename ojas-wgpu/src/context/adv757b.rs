@@ -2,16 +2,19 @@
 use super::*;
 
 impl WgpuContext {
-    /// Test seam: write raw words into the held fault buffer (as a torn copy
-    /// would leave them) and let the next read observe them.
+    /// Test seam: write raw words into a hold slot (as a torn copy would
+    /// leave them), orphaned so the next read folds them in and observes them.
     pub(crate) fn adv_set_held(&self, bits: u64, first: u32) {
         let words = [bits as u32, (bits >> 32) as u32, first, 0u32];
         let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
-        self.inner
-            .queue
-            .as_ref()
-            .expect("queue")
-            .write_buffer(&self.inner.held, 0, &bytes);
+        let mut state = lock(&self.inner.slots.state);
+        let slot = state.free.pop().expect("a free hold slot");
+        self.inner.queue.as_ref().expect("queue").write_buffer(
+            &self.inner.held,
+            u64::from(slot) * HOLD_SLOT_BYTES,
+            &bytes,
+        );
+        state.orphans.push_back(slot);
     }
 }
 
