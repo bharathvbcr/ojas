@@ -14,7 +14,9 @@ impl WgpuContext {
             u64::from(slot) * HOLD_SLOT_BYTES,
             &bytes,
         );
-        state.orphans.push_back(slot);
+        let age = state.next_seq;
+        state.next_seq += 1;
+        state.orphans.insert(age, slot);
     }
 }
 

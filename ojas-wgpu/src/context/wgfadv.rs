@@ -12,8 +12,8 @@ use std::cell::RefCell;
 pub(crate) enum Stage {
     /// The slot is leased, nothing recorded.
     AfterLease,
-    /// `HoldLease::record` ran (folded slots are back in the pool), the
-    /// hold itself is not yet recorded into the encoder.
+    /// `HoldLease::record` ran (the lease owns the folded slots), the hold
+    /// itself is not yet recorded into the encoder.
     AfterRecord,
     /// Submitted, before the wait for the submission.
     BeforeWait,
@@ -70,6 +70,9 @@ impl WgpuContext {
     /// `(free, orphans)` slot lists right now; a slot in neither is leased.
     pub(crate) fn slot_census(&self) -> (Vec<u32>, Vec<u32>) {
         let state = lock(&self.inner.slots.state);
-        (state.free.clone(), state.orphans.iter().copied().collect())
+        (
+            state.free.clone(),
+            state.orphans.values().copied().collect(),
+        )
     }
 }

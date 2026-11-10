@@ -53,7 +53,7 @@
 //! no wgpu object and pops no error scope. [`CacheStats`] counts what is
 //! still created and every blocking error-scope pop.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap};
 use std::num::NonZeroU64;
 #[cfg(test)]
 use std::sync::atomic::AtomicU32;
@@ -825,8 +825,14 @@ pub(crate) struct HoldSlots {
 struct SlotState {
     /// Slots whose pair the host has seen: nothing in them to report.
     free: Vec<u32>,
-    /// Slots that hold a pair no host has seen, oldest first.
-    orphans: VecDeque<u32>,
+    /// Slots that hold a pair no host has seen, keyed by the age of the
+    /// oldest pair in the slot ([`HoldLease::record`]'s sequence number), so
+    /// the first entry is the slot holding the oldest unseen pair.
+    orphans: BTreeMap<u64, u32>,
+    /// Sequence number the next recorded hold takes. A hold's number follows
+    /// the order its dispatch is queued, which is the order the faults in it
+    /// were raised relative to other holds.
+    next_seq: u64,
 }
 
 impl HoldSlots {
@@ -834,7 +840,8 @@ impl HoldSlots {
         Self {
             state: Mutex::new(SlotState {
                 free: (0..HOLD_SLOTS).rev().collect(),
-                orphans: VecDeque::new(),
+                orphans: BTreeMap::new(),
+                next_seq: 0,
             }),
             freed: Condvar::new(),
         }
@@ -855,10 +862,10 @@ impl HoldSlots {
         let mut state = lock(&self.state);
         loop {
             if let Some(slot) = state.free.pop() {
-                return Ok(HoldLease::new(self, slot, false));
+                return Ok(HoldLease::new(self, slot, None));
             }
-            if let Some(slot) = state.orphans.pop_front() {
-                return Ok(HoldLease::new(self, slot, true));
+            if let Some((age, slot)) = state.orphans.pop_first() {
+                return Ok(HoldLease::new(self, slot, Some(age)));
             }
             let left = deadline
                 .checked_duration_since(std::time::Instant::now())
@@ -879,30 +886,49 @@ impl HoldSlots {
 /// How far a read got with its slot.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum HoldPhase {
-    /// No hold recorded for it: the slot holds only what `carries` says.
+    /// The hold is not submitted: the slot holds only what `carries` says,
+    /// and the orphans in `folded` are still the lease's to give back.
     Idle,
-    /// The hold is recorded; the pair is in the slot, unseen.
+    /// The hold is submitted; the pair is in the slot, unseen.
     Recorded,
     /// The host has the pair.
     Seen,
 }
 
+/// One read's slot, from lease to observation.
+///
+/// Invariant of the slot pool. A slot is in exactly one place: `free` (its
+/// pair was seen, or it never held one), `orphans` (it holds an unseen pair,
+/// keyed by the age of the oldest pair in it), or a lease. Only the lease
+/// writes its slot's words, through its own submitted `fault_hold`, which
+/// stores the oldest-first fold of the orphans it names and then the live
+/// words. A slot's age is the smallest sequence number of any pair folded
+/// into it, so folding in age order makes the first op of a pair the oldest.
+/// An orphan is folded by one hold only, and a slot is returned to `free`
+/// only after the hold that zeroed it was submitted ([`Self::submitted`]).
 pub(crate) struct HoldLease<'a> {
     slots: &'a HoldSlots,
     pub(crate) slot: u32,
-    /// The slot still holds an orphan's unseen pair (a lease taken when
-    /// none was free): the hold folds it in, and a lease dropped before its
-    /// hold was recorded puts it back as the oldest orphan.
-    carries: bool,
+    /// The slot still holds an orphan's unseen pair of this age (a lease
+    /// taken when none was free): the hold folds it in.
+    carries: Option<u64>,
+    /// Orphans (and the carried pair, own slot included) the hold names, by
+    /// age, taken by [`Self::record`] and owned here until the hold is
+    /// submitted.
+    folded: Vec<(u64, u32)>,
+    /// Age of the oldest pair the slot holds once the hold ran.
+    age: u64,
     phase: HoldPhase,
 }
 
 impl<'a> HoldLease<'a> {
-    fn new(slots: &'a HoldSlots, slot: u32, carries: bool) -> Self {
+    fn new(slots: &'a HoldSlots, slot: u32, carries: Option<u64>) -> Self {
         Self {
             slots,
             slot,
             carries,
+            folded: Vec::new(),
+            age: 0,
             phase: HoldPhase::Idle,
         }
     }
@@ -914,47 +940,66 @@ impl<'a> HoldLease<'a> {
 
     /// The parameter words of this lease's `fault_hold`, taking the orphans
     /// it folds in (up to [`HOLD_ORPHANS`], oldest first, this slot's own
-    /// pair first of all). Call it when the dispatch is about to be recorded
-    /// and nothing fallible remains: from here the lease owns an unseen pair.
-    /// The folded slots return to the free list (see the comment there).
+    /// carried pair among them by its age). They stay owned by the lease
+    /// until [`Self::submitted`]: a lease dropped before that gives them
+    /// back, since the hold that would have zeroed them never ran. Call it
+    /// when the dispatch is about to be recorded.
     fn record(&mut self) -> [u32; 16] {
-        let mut words = [0u32; 16];
-        words[0] = self.slot;
-        let mut folded = Vec::with_capacity(HOLD_ORPHANS);
-        if std::mem::take(&mut self.carries) {
-            folded.push(self.slot);
-        }
-        let mut returned = false;
-        {
+        let mut folded: Vec<(u64, u32)> = Vec::with_capacity(HOLD_ORPHANS);
+        let seq = {
             let mut state = lock(&self.slots.state);
+            if let Some(age) = self.carries.take() {
+                folded.push((age, self.slot));
+            }
             while folded.len() < HOLD_ORPHANS {
-                match state.orphans.pop_front() {
-                    Some(slot) => folded.push(slot),
+                match state.orphans.pop_first() {
+                    Some(entry) => folded.push(entry),
                     None => break,
                 }
             }
-            // The hold zeroes every folded slot and moves its pair into this
-            // one, so each folded slot except our own is free again. That is
-            // safe to hand out now: the caller holds the recorder lock from
-            // here through the submit of this hold, so a later read can lease
-            // a returned slot only after taking that lock itself, its hold is
-            // queued after this one, and its store lands after this hold's
-            // exchange to zero. Were this read to fail later, the folded
-            // pairs live on in our own slot, which then becomes the orphan.
-            for &slot in &folded {
-                if slot != self.slot {
-                    state.free.push(slot);
-                    returned = true;
-                }
+            let seq = state.next_seq;
+            state.next_seq += 1;
+            seq
+        };
+        // The kernel folds in list order and the live words last: a pair
+        // older than the ones after it leads, so the slot's first op is the
+        // oldest. Every folded pair was recorded before `seq`.
+        folded.sort_unstable_by_key(|&(age, _)| age);
+        self.age = folded.first().map_or(seq, |&(age, _)| age);
+        let mut words = [0u32; 16];
+        words[0] = self.slot;
+        words[1] = folded.len() as u32;
+        for (word, &(_, slot)) in words[2..].iter_mut().zip(&folded) {
+            *word = slot;
+        }
+        self.folded = folded;
+        words
+    }
+
+    /// The hold is submitted: the pair is in the slot, unseen, and each
+    /// folded slot but our own is free again.
+    ///
+    /// Safe to hand out now: the caller holds the recorder lock from before
+    /// [`Self::record`] through the submit of this hold, so a later read can
+    /// lease a returned slot only after taking that lock itself, its hold is
+    /// queued after this one, and its store lands after this hold's exchange
+    /// to zero. Were this read to fail later, the folded pairs live on in our
+    /// own slot, which then becomes the orphan.
+    fn submitted(&mut self) {
+        self.phase = HoldPhase::Recorded;
+        let folded = std::mem::take(&mut self.folded);
+        let mut returned = false;
+        let mut state = lock(&self.slots.state);
+        for (_, slot) in folded {
+            if slot != self.slot {
+                state.free.push(slot);
+                returned = true;
             }
         }
+        drop(state);
         if returned {
             self.slots.freed.notify_all();
         }
-        words[1] = folded.len() as u32;
-        words[2..2 + folded.len()].copy_from_slice(&folded);
-        self.phase = HoldPhase::Recorded;
-        words
     }
 
     /// The host has read the copy; the slot has nothing left to report.
@@ -966,13 +1011,34 @@ impl<'a> HoldLease<'a> {
 impl Drop for HoldLease<'_> {
     fn drop(&mut self) {
         let mut state = lock(&self.slots.state);
-        match (self.phase, self.carries) {
-            (HoldPhase::Recorded, _) => state.orphans.push_back(self.slot),
-            (HoldPhase::Idle, true) => state.orphans.push_front(self.slot),
-            _ => state.free.push(self.slot),
+        match self.phase {
+            HoldPhase::Seen => state.free.push(self.slot),
+            HoldPhase::Recorded => {
+                state.orphans.insert(self.age, self.slot);
+            }
+            HoldPhase::Idle => {
+                // The hold never ran: every pair this lease took goes back
+                // under its own age, and the own slot is an orphan only if
+                // it holds one of them, else it is free (its words are a
+                // delivered pair's leftovers).
+                let mut own_unseen = false;
+                for (age, slot) in self
+                    .carries
+                    .take()
+                    .map(|a| (a, self.slot))
+                    .into_iter()
+                    .chain(self.folded.drain(..))
+                {
+                    own_unseen |= slot == self.slot;
+                    state.orphans.insert(age, slot);
+                }
+                if !own_unseen {
+                    state.free.push(self.slot);
+                }
+            }
         }
         drop(state);
-        self.slots.freed.notify_one();
+        self.slots.freed.notify_all();
     }
 }
 
@@ -1939,7 +2005,7 @@ impl WgpuContext {
             if rec.slots >= self.inner.param_slots {
                 self.submit_locked(&mut rec);
             }
-            // Nothing below can fail: from here the slot owns an unseen pair.
+            // The lease owns the folded orphans until `submitted` below.
             let words = lease.record();
             #[cfg(test)]
             self.fire(wgfadv::Stage::AfterRecord)?;
@@ -1961,7 +2027,11 @@ impl WgpuContext {
                 pass.dispatch_workgroups(1, 1, 1);
             }
             encoder.copy_buffer_to_buffer(&self.inner.held, lease.offset(), &staging, span, 16);
-            self.submit_locked(&mut rec)
+            let index = self.submit_locked(&mut rec);
+            if index.is_some() {
+                lease.submitted();
+            }
+            index
         };
         let index = index.ok_or_else(|| backend_err("read recorded no commands"))?;
         let (sender, receiver) = std::sync::mpsc::channel();
