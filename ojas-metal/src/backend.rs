@@ -145,6 +145,8 @@ mod pool;
 mod spatial_bwd;
 #[cfg(all(test, target_os = "macos", feature = "metal"))]
 mod wait_timeout_tests;
+#[cfg(all(test, target_os = "macos", feature = "metal"))]
+mod wait_timeout_adv_tests;
 
 /// A Metal allocation owned by the device thread, named by id.
 pub struct MetalBuffer {

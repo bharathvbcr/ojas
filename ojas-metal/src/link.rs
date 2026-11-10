@@ -717,6 +717,30 @@ pub(crate) enum Cmd {
     /// poisoned, as `Reply::Flag`.
     #[cfg(test)]
     RuntimePoisoned,
+    /// Adversarial-test hook (e7adv), served outside `command`: the next
+    /// `settle` that has work to wait for, and whose reason is `why`, lowers
+    /// the event-wait budget to `budget_ms` first. It reaches the waits a
+    /// trigger hook cannot: a scratch recycle, a full status slab, a freed
+    /// bytes recycle, an upload or read.
+    #[cfg(test)]
+    ForceWaitAt {
+        why: Wait,
+        budget_ms: u64,
+    },
+    /// Adversarial-test hook, served outside `command`: every status slot
+    /// taken, as after 4096 ops whose slots nothing has scanned yet.
+    #[cfg(test)]
+    FillSlab,
+    /// Adversarial-test hook, served outside `command`: the bytes counted as
+    /// freed since the last waited commit.
+    #[cfg(test)]
+    SetFreed {
+        bytes: u64,
+    },
+    /// Adversarial-test hook, served outside `command`: whether the GPU still
+    /// has submitted work tessl has not seen complete (`Reply::Flag`).
+    #[cfg(test)]
+    GpuOutstanding,
     /// Test hook: set tessl's pool cache cap, for an A/B of the cap a
     /// backend opens with against another.
     #[cfg(test)]

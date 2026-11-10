@@ -585,6 +585,9 @@ struct Book {
     /// say (`Cmd::ForceWaitNext`).
     #[cfg(test)]
     force_wait: Option<u64>,
+    /// `Cmd::ForceWaitAt`: the wait reason to lower the budget at, and to what.
+    #[cfg(test)]
+    force_at: Option<(Wait, u64)>,
 }
 
 /// What one per-head gate command runs.
@@ -746,6 +749,8 @@ impl Worker {
             fail_next_read: false,
             #[cfg(test)]
             force_wait: None,
+            #[cfg(test)]
+            force_at: None,
         };
         Ok(Self {
             rt,
@@ -838,6 +843,21 @@ impl Worker {
                 Ok(Reply::Done)
             }
             Cmd::RuntimePoisoned => Ok(Reply::Flag(self.rt.is_poisoned())),
+            Cmd::ForceWaitAt { why, budget_ms } => {
+                self.book.borrow_mut().force_at = Some((*why, *budget_ms));
+                Ok(Reply::Done)
+            }
+            Cmd::FillSlab => {
+                self.book.borrow_mut().used = SLAB_SLOTS;
+                Ok(Reply::Done)
+            }
+            Cmd::SetFreed { bytes } => {
+                self.book.borrow_mut().freed_since_wait = *bytes;
+                Ok(Reply::Done)
+            }
+            Cmd::GpuOutstanding => Ok(Reply::Flag(
+                self.rt.last_completed_value() < self.rt.last_signaled_value(),
+            )),
             _ => return false,
         };
         if let Some(reply) = &msg.reply {
@@ -1048,6 +1068,22 @@ impl Worker {
         self.note_dispatches();
         if self.book.borrow().dirty {
             self.waits.count(why);
+            #[cfg(test)]
+            {
+                let hit = {
+                    let mut book = self.book.borrow_mut();
+                    match book.force_at {
+                        Some((at, ms)) if at == why => {
+                            book.force_at = None;
+                            Some(ms)
+                        }
+                        _ => None,
+                    }
+                };
+                if let Some(ms) = hit {
+                    self.rt.set_event_wait_ms(ms).map_err(metal_err)?;
+                }
+            }
             self.rt.synchronize().map_err(|e| self.rt_err(e))?;
             let mut book = self.book.borrow_mut();
             book.dirty = false;
@@ -1712,7 +1748,13 @@ impl Worker {
                 Ok(Reply::Done)
             }
             #[cfg(test)]
-            Cmd::SetEventWaitMs { .. } | Cmd::ForceWaitNext { .. } | Cmd::RuntimePoisoned => Err(
+            Cmd::SetEventWaitMs { .. }
+            | Cmd::ForceWaitNext { .. }
+            | Cmd::RuntimePoisoned
+            | Cmd::ForceWaitAt { .. }
+            | Cmd::FillSlab
+            | Cmd::SetFreed { .. }
+            | Cmd::GpuOutstanding => Err(
                 metal_err("a wait test hook is served outside command, never run"),
             ),
             #[cfg(test)]
@@ -5876,6 +5918,8 @@ impl Worker {
 
 mod enc_bwd_dev;
 mod gemma_dev;
+#[cfg(test)]
+mod wait_timeout_adv;
 
 #[cfg(test)]
 mod tests {
