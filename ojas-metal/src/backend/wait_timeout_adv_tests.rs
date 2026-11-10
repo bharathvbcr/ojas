@@ -816,21 +816,18 @@ fn a_provider_run_whose_final_wait_times_out_is_held_and_the_closure_ran_once() 
     let provider = |runs: Arc<AtomicUsize>, budget: u64| {
         move |rt: &Arc<tessl::GpuRuntime>| -> Result<(), OjasError> {
             runs.fetch_add(1, Ordering::SeqCst);
-            rt.set_async_encode(true).map_err(|e| metal_err(e))?;
+            rt.set_async_encode(true).map_err(metal_err)?;
             let bytes = SIDE * SIDE * 4;
-            let side =
-                |b| TT::from_buffer(rt, b, &[SIDE, SIDE], DType::F32, 0).map_err(|e| metal_err(e));
+            let side = |b| TT::from_buffer(rt, b, &[SIDE, SIDE], DType::F32, 0).map_err(metal_err);
             let (x, w, o) = (
-                side(rt.alloc_buffer(bytes).map_err(|e| metal_err(e))?)?,
-                side(rt.alloc_buffer(bytes).map_err(|e| metal_err(e))?)?,
-                side(rt.alloc_buffer(bytes).map_err(|e| metal_err(e))?)?,
+                side(rt.alloc_buffer(bytes).map_err(metal_err)?)?,
+                side(rt.alloc_buffer(bytes).map_err(metal_err)?)?,
+                side(rt.alloc_buffer(bytes).map_err(metal_err)?)?,
             );
             for _ in 0..n * 2 {
-                GemmOperands::ExactF32
-                    .nn(&x, &w, &o)
-                    .map_err(|e| metal_err(e))?;
+                GemmOperands::ExactF32.nn(&x, &w, &o).map_err(metal_err)?;
             }
-            rt.set_event_wait_ms(budget).map_err(|e| metal_err(e))?;
+            rt.set_event_wait_ms(budget).map_err(metal_err)?;
             Ok(())
         }
     };
