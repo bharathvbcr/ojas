@@ -95,6 +95,7 @@ var inBandKinds = []struct {
 }{
 	{"ojas:E_CAPACITY:", ErrCapacity},
 	{"ojas:E_DEVICE_LOST:", ErrDeviceLost},
+	{"ojas:E_TIMEOUT:", ErrTimeout},
 	{"ojas:E_BUSY:", ErrBusy},
 	{"ojas:E_NONFINITE:", ErrNonFinite},
 	{"ojas:E_POISONED:", ErrPoisoned},

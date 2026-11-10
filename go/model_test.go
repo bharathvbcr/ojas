@@ -299,6 +299,7 @@ func TestAUserPathNeverSelectsAnErrorKind(t *testing.T) {
 		"ojas:E_CAPACITY: x.safetensors",
 		"ojas:E_NONFINITE: x.safetensors",
 		"ojas:E_DEVICE_LOST: x.safetensors",
+		"ojas:E_TIMEOUT: x.safetensors",
 		"ojas:E_POISONED: x.safetensors",
 		"ojas:E_PRESSURE: x.safetensors",
 		"ojas:E_TARGET: x.safetensors",
@@ -322,6 +323,7 @@ func TestInBandKindsMustLeadTheEngineMessage(t *testing.T) {
 	}{
 		{"ojas:E_CAPACITY: capacity exceeded", ErrCapacity},
 		{"ojas:E_DEVICE_LOST: train_step: device lost", ErrDeviceLost},
+		{"ojas:E_TIMEOUT: train_step: device wait timed out", ErrTimeout},
 		{"ojas:E_BUSY: model 3 is busy", ErrBusy},
 		{"ojas:E_NONFINITE: step: non-finite value", ErrNonFinite},
 		{"ojas:E_POISONED: train_step: poisoned", ErrPoisoned},

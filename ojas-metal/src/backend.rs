@@ -143,6 +143,10 @@ mod enc_bwd_host;
 mod gemma_host;
 mod pool;
 mod spatial_bwd;
+#[cfg(all(test, target_os = "macos", feature = "metal"))]
+mod wait_timeout_adv_tests;
+#[cfg(all(test, target_os = "macos", feature = "metal"))]
+mod wait_timeout_tests;
 
 /// A Metal allocation owned by the device thread, named by id.
 pub struct MetalBuffer {
@@ -430,6 +434,13 @@ impl MetalBackend {
     /// waited idle after; see `Worker::run_provider`. A panic in `f`
     /// poisons this backend like any device-thread panic. Other ops queue
     /// behind `f` for as long as it runs.
+    ///
+    /// An [`OjasError::WaitTimeout`] from the final wait means `f` ran and
+    /// its work is committed, not complete. The timeout is held: call
+    /// `sync` until it returns `Ok` (the budget may need
+    /// raising), and read `f`'s buffers only after that. **Never call
+    /// `with_runtime` with the same `f` again**: it would run `f` a second
+    /// time and apply its work twice.
     ///
     /// `f` may use the `MTLDevice` and queue objects directly, but it must
     /// not make a blocking call into any ojas Metal backend, its own or
@@ -5279,7 +5290,8 @@ mod tests {
         (p, m1, m2)
     }
 
-    /// A tessl runtime poisoned by a failed or timed-out command buffer is
+    /// A tessl runtime poisoned (a command buffer that faulted, or the third
+    /// consecutive event-wait timeout) is
     /// the device's loss: every later op, sync, upload and read is the
     /// typed [`OjasError::DeviceLost`], not a `Backend` string.
     #[test]
@@ -5952,7 +5964,7 @@ mod tests {
     /// min of the steps in each. A measurement, not a pass/fail: run with
     /// `--ignored --nocapture` under the machine lock.
     #[test]
-    #[ignore]
+    #[ignore = "timing benchmark, not a pass/fail; run with --ignored --nocapture under the machine lock"]
     fn bench_the_pool_cap_against_the_tessl_default() {
         use std::time::{Duration, Instant};
         const N: usize = 16 << 20;

@@ -121,6 +121,8 @@ const MaxCPUThreads uint32 = 256
 //	                    64-session table or a context length: the work does
 //	                    not fit, and retrying the same call will not help
 //	ojas:E_DEVICE_LOST: the device was lost
+//	ojas:E_TIMEOUT:     a wait for the device ran out of its budget; the
+//	                    work is queued, not faulted; retry, see ErrTimeout
 //	ojas:E_BUSY:        another call holds this model id
 //	ojas:E_NONFINITE:   a NaN or infinity in a loss, gradient or logit
 //	ojas:E_POISONED:    the trainer was left partly updated by a failed
@@ -133,6 +135,22 @@ const MaxCPUThreads uint32 = 256
 var (
 	ErrCapacity   = errors.New("ojas: capacity")
 	ErrDeviceLost = errors.New("ojas: device lost")
+	// ErrTimeout is a wait for the device to finish recorded work that ran
+	// out of its budget (Metal: tessl's event-wait budget, 30 s unless
+	// TESSL_EVENT_WAIT_MS says otherwise). The work is slow, not faulted:
+	// nothing is lost and the model is usable. Retryable: let the next call
+	// synchronize, and it waits again. Work the device had already accepted
+	// (a step, a write, a provider run: the Rust with_runtime closure) is
+	// committed, not complete, when this is reported: its effect lands
+	// exactly once when the device finishes, so synchronize until the error
+	// clears and never re-issue that work, which would apply it twice. A
+	// call that failed before it committed anything may be repeated. The
+	// count of three below includes the backend's own waits while it encodes
+	// an op, not only the waits a caller asked for. A device that times
+	// out three waits in a row is lost instead (ErrDeviceLost): the limit is
+	// tessl's CONSECUTIVE_EVENT_WAIT_TIMEOUTS (tessl/src/runtime.rs), which a
+	// completed wait resets.
+	ErrTimeout = errors.New("ojas: device wait timed out")
 	ErrBusy       = errors.New("ojas: busy")
 	ErrNonFinite  = errors.New("ojas: non-finite")
 	// ErrPoisoned is the model's state, not the gusset handle's

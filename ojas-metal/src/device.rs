@@ -581,6 +581,13 @@ struct Book {
     fail_allocs: (u32, u32),
     #[cfg(test)]
     fail_next_read: bool,
+    /// The budget the next trigger check waits under, whatever the triggers
+    /// say (`Cmd::ForceWaitNext`).
+    #[cfg(test)]
+    force_wait: Option<u64>,
+    /// `Cmd::ForceWaitAt`: the wait reason to lower the budget at, and to what.
+    #[cfg(test)]
+    force_at: Option<(Wait, u64)>,
 }
 
 /// What one per-head gate command runs.
@@ -740,6 +747,10 @@ impl Worker {
             fail_allocs: (0, 0),
             #[cfg(test)]
             fail_next_read: false,
+            #[cfg(test)]
+            force_wait: None,
+            #[cfg(test)]
+            force_at: None,
         };
         Ok(Self {
             rt,
@@ -786,11 +797,15 @@ impl Worker {
                 }
                 continue;
             }
+            #[cfg(test)]
+            if self.serve_wait_hook(&msg) {
+                continue;
+            }
             let out = if self.poisoned {
                 Err(OjasError::Poisoned)
             } else if self.rt.is_poisoned() {
                 Err(device_lost(
-                    "the tessl runtime is poisoned by an earlier failed or timed-out command buffer",
+                    "the tessl runtime is poisoned by an earlier faulted command buffer or by its third consecutive event-wait timeout",
                 ))
             } else {
                 self.book.borrow_mut().bf16_accum = msg.bf16_accum;
@@ -810,6 +825,47 @@ impl Worker {
         }
     }
 
+    /// The test hooks that set up or read the event-wait state. They run
+    /// outside `command`, so a hook neither waits nor spends one of tessl's
+    /// consecutive timeouts, and they still answer on a poisoned runtime
+    /// (a test must raise the budget before the runtime drops, or tessl's
+    /// final wait gives up and leaks). `true` when `msg` was one of them.
+    #[cfg(test)]
+    fn serve_wait_hook(&self, msg: &Msg) -> bool {
+        let out = match &msg.cmd {
+            Cmd::SetEventWaitMs { ms } => self
+                .rt
+                .set_event_wait_ms(*ms)
+                .map(|()| Reply::Done)
+                .map_err(metal_err),
+            Cmd::ForceWaitNext { budget_ms } => {
+                self.book.borrow_mut().force_wait = Some(*budget_ms);
+                Ok(Reply::Done)
+            }
+            Cmd::RuntimePoisoned => Ok(Reply::Flag(self.rt.is_poisoned())),
+            Cmd::ForceWaitAt { why, budget_ms } => {
+                self.book.borrow_mut().force_at = Some((*why, *budget_ms));
+                Ok(Reply::Done)
+            }
+            Cmd::FillSlab => {
+                self.book.borrow_mut().used = SLAB_SLOTS;
+                Ok(Reply::Done)
+            }
+            Cmd::SetFreed { bytes } => {
+                self.book.borrow_mut().freed_since_wait = *bytes;
+                Ok(Reply::Done)
+            }
+            Cmd::GpuOutstanding => Ok(Reply::Flag(
+                self.rt.last_completed_value() < self.rt.last_signaled_value(),
+            )),
+            _ => return false,
+        };
+        if let Some(reply) = &msg.reply {
+            let _ = reply.send(out);
+        }
+        true
+    }
+
     /// Run a provider closure (`MetalBackend::with_runtime`) on this thread
     /// with this worker's runtime: the pool, queue, pipeline cache and
     /// residency set every ojas op uses, not a second `GpuRuntime::new`.
@@ -826,6 +882,11 @@ impl Worker {
     /// provider's own), and its allocations are not counted toward the
     /// worker's memory cap: the provider charges its own bytes to the
     /// `Budget` it is given.
+    ///
+    /// If that final wait runs out of budget the closure has run and its
+    /// work is committed but not complete: the call returns
+    /// [`OjasError::WaitTimeout`] and leaves `dirty` set, so the next sync
+    /// point waits again. The closure is never run again by the backend.
     fn run_provider(&self, job: RunBox) -> Res<Reply> {
         self.settle(Scan::All, Wait::Sync)?;
         self.report()?;
@@ -833,7 +894,15 @@ impl Worker {
         self.rt.set_async_encode(false).map_err(metal_err)?;
         let ran = (job.0)(&self.rt);
         let _ = self.rt.take_dispatch_count();
-        let idle = self.rt.synchronize().map_err(metal_err);
+        let idle = self.rt.synchronize().map_err(|e| self.rt_err(e));
+        if matches!(idle, Err(OjasError::WaitTimeout { .. })) {
+            // The closure ran and its work is committed, only not complete.
+            // Hold the timeout as for any committed op: `dirty` makes the
+            // next sync point wait again. It is still returned, not `Ok`: a
+            // caller may read the closure's tessl buffers once this returns,
+            // and `Ok` would hand it unfinished data.
+            self.book.borrow_mut().dirty = true;
+        }
         let restored = self.rt.set_async_encode(async_encode).map_err(metal_err);
         ran?;
         idle?;
@@ -841,15 +910,36 @@ impl Worker {
         Ok(Reply::Done)
     }
 
-    /// A command that failed on a runtime tessl has poisoned (a command
-    /// buffer that failed or timed out) failed because the device is gone:
-    /// its tessl error becomes [`OjasError::DeviceLost`]. Typed errors (a
-    /// fault, a capacity refusal) keep their kind.
+    /// A tessl error from a wait or commit, typed. A wait that ran out of its
+    /// budget (tessl's own predicate, [`GpuRuntime::is_event_wait_timeout`],
+    /// never a text match here) did not poison the runtime: the work is
+    /// queued, only slow. It is the retryable [`OjasError::WaitTimeout`],
+    /// carrying the budget it ran out of. Anything else is a plain
+    /// [`OjasError::Backend`] (a command buffer that faulted, or tessl's
+    /// third consecutive timeout, which `is_event_wait_timeout` does not
+    /// match and which [`Self::lost_if_poisoned`] turns into `DeviceLost`).
+    fn rt_err(&self, detail: String) -> OjasError {
+        if !GpuRuntime::is_event_wait_timeout(&detail) {
+            return metal_err(detail);
+        }
+        self.waits.note_timeout();
+        OjasError::wait_timeout(ojas_core::BackendId::Metal, self.rt.event_wait_ms(), detail)
+    }
+
+    /// The serve seam: a command that failed on a runtime tessl has poisoned
+    /// (a command buffer that faulted, or the third consecutive event-wait
+    /// timeout) failed because the device is gone, so its tessl error becomes
+    /// [`OjasError::DeviceLost`]. Poison is checked first: a leftover timeout
+    /// string on a poisoned runtime is a loss, not a retry. On a runtime that
+    /// is not poisoned, a leftover timeout string from a path that did not
+    /// classify it at the wait is retyped as [`OjasError::WaitTimeout`] here.
+    /// Typed errors (a fault, a capacity refusal) keep their kind.
     fn lost_if_poisoned(&self, err: OjasError) -> OjasError {
         match err {
             OjasError::Backend { detail, .. } if self.rt.is_poisoned() => {
                 device_lost(format!("tessl runtime poisoned: {detail}"))
             }
+            OjasError::Backend { detail, .. } => self.rt_err(detail),
             other => other,
         }
     }
@@ -887,6 +977,16 @@ impl Worker {
             return out;
         }
         if let Err(err) = self.after_command() {
+            // The op committed before its trigger wait ran out of budget
+            // (owner decision E7 (a)): its effect lands exactly once when the
+            // device finishes, so it returns its result. The timeout is held,
+            // not dropped: `settle` left `dirty` set on the failed wait, so
+            // the next sync point, or the next trigger check, waits again,
+            // and a wait that completes clears it. A timeout that repeats
+            // three times is tessl's poison, which is not this variant.
+            if matches!(err, OjasError::WaitTimeout { .. }) {
+                return out;
+            }
             if let Ok(Reply::Bufs(bufs)) = &out {
                 for b in bufs {
                     self.bufs.remove(&b.id);
@@ -952,6 +1052,13 @@ impl Worker {
         if !dirty {
             return Ok(());
         }
+        #[cfg(test)]
+        let forced = self.book.borrow_mut().force_wait.take();
+        #[cfg(test)]
+        if let Some(budget_ms) = forced {
+            self.rt.set_event_wait_ms(budget_ms).map_err(metal_err)?;
+            return self.settle(Scan::All, Wait::MemCap);
+        }
         if alloc > cap {
             return self.settle(Scan::All, Wait::MemCap);
         }
@@ -959,7 +1066,7 @@ impl Worker {
             return self.settle(Scan::All, Wait::WorkingSet);
         }
         if since >= overlap {
-            self.rt.commit(false).map_err(metal_err)?;
+            self.rt.commit(false).map_err(|e| self.rt_err(e))?;
             self.book.borrow_mut().since_overlap = 0;
         }
         Ok(())
@@ -974,7 +1081,23 @@ impl Worker {
         self.note_dispatches();
         if self.book.borrow().dirty {
             self.waits.count(why);
-            self.rt.synchronize().map_err(metal_err)?;
+            #[cfg(test)]
+            {
+                let hit = {
+                    let mut book = self.book.borrow_mut();
+                    match book.force_at {
+                        Some((at, ms)) if at == why => {
+                            book.force_at = None;
+                            Some(ms)
+                        }
+                        _ => None,
+                    }
+                };
+                if let Some(ms) = hit {
+                    self.rt.set_event_wait_ms(ms).map_err(metal_err)?;
+                }
+            }
+            self.rt.synchronize().map_err(|e| self.rt_err(e))?;
             let mut book = self.book.borrow_mut();
             book.dirty = false;
             book.since_overlap = 0;
@@ -1637,6 +1760,16 @@ impl Worker {
                 self.rt.poison_as_shared_event_timeout_for_test();
                 Ok(Reply::Done)
             }
+            #[cfg(test)]
+            Cmd::SetEventWaitMs { .. }
+            | Cmd::ForceWaitNext { .. }
+            | Cmd::RuntimePoisoned
+            | Cmd::ForceWaitAt { .. }
+            | Cmd::FillSlab
+            | Cmd::SetFreed { .. }
+            | Cmd::GpuOutstanding => Err(metal_err(
+                "a wait test hook is served outside command, never run",
+            )),
             #[cfg(test)]
             Cmd::Tune {
                 overlap,
@@ -5798,6 +5931,8 @@ impl Worker {
 
 mod enc_bwd_dev;
 mod gemma_dev;
+#[cfg(test)]
+mod wait_timeout_adv;
 
 #[cfg(test)]
 mod tests {
