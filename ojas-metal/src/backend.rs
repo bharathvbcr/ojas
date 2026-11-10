@@ -435,6 +435,13 @@ impl MetalBackend {
     /// poisons this backend like any device-thread panic. Other ops queue
     /// behind `f` for as long as it runs.
     ///
+    /// An [`OjasError::WaitTimeout`] from the final wait means `f` ran and
+    /// its work is committed, not complete. The timeout is held: call
+    /// `sync` until it returns `Ok` (the budget may need
+    /// raising), and read `f`'s buffers only after that. **Never call
+    /// `with_runtime` with the same `f` again**: it would run `f` a second
+    /// time and apply its work twice.
+    ///
     /// `f` may use the `MTLDevice` and queue objects directly, but it must
     /// not make a blocking call into any ojas Metal backend, its own or
     /// another's (an op, `sync`, `trim_pool`, `download`, or a budget

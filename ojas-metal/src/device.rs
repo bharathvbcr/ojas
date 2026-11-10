@@ -882,6 +882,11 @@ impl Worker {
     /// provider's own), and its allocations are not counted toward the
     /// worker's memory cap: the provider charges its own bytes to the
     /// `Budget` it is given.
+    ///
+    /// If that final wait runs out of budget the closure has run and its
+    /// work is committed but not complete: the call returns
+    /// [`OjasError::WaitTimeout`] and leaves `dirty` set, so the next sync
+    /// point waits again. The closure is never run again by the backend.
     fn run_provider(&self, job: RunBox) -> Res<Reply> {
         self.settle(Scan::All, Wait::Sync)?;
         self.report()?;
@@ -890,6 +895,14 @@ impl Worker {
         let ran = (job.0)(&self.rt);
         let _ = self.rt.take_dispatch_count();
         let idle = self.rt.synchronize().map_err(|e| self.rt_err(e));
+        if matches!(idle, Err(OjasError::WaitTimeout { .. })) {
+            // The closure ran and its work is committed, only not complete.
+            // Hold the timeout as for any committed op: `dirty` makes the
+            // next sync point wait again. It is still returned, not `Ok`: a
+            // caller may read the closure's tessl buffers once this returns,
+            // and `Ok` would hand it unfinished data.
+            self.book.borrow_mut().dirty = true;
+        }
         let restored = self.rt.set_async_encode(async_encode).map_err(metal_err);
         ran?;
         idle?;

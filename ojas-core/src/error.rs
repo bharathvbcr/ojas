@@ -61,8 +61,13 @@ pub enum OjasError {
     /// A wait for the device to finish recorded work ran out of its budget
     /// before the work did. The work is slow, not faulted: it is still
     /// queued, nothing was reset or recycled early, and the backend stays
-    /// usable. **Retryable**: the same call, or the next sync point, waits
-    /// again, and a wait that completes means everything recorded finished.
+    /// usable. **Retryable**: the next sync point waits again, and a wait
+    /// that completes means everything recorded finished. A call that failed
+    /// before it committed anything (an upload, a read) can be repeated. A
+    /// call whose work was already committed must not be: for a provider run
+    /// (`MetalBackend::with_runtime`) the closure ran and its work is
+    /// committed, not complete, so call `sync` until it returns `Ok` and never
+    /// run the closure again, which would apply it twice.
     ///
     /// An op that had already committed its work before the wait (an in-place
     /// optimizer step, a cache write, a gradient accumulation) returns `Ok`,
@@ -72,7 +77,10 @@ pub enum OjasError {
     /// a completed wait clears it and nothing else does. A sync point that
     /// times out again keeps the work pending. A backend that gives up after
     /// repeated timeouts reports [`OjasError::DeviceLost`] instead (Metal:
-    /// the third consecutive one).
+    /// the third consecutive one). The streak counts every wait on the
+    /// device, including the backend's own waits while it encodes an op
+    /// (command-buffer backpressure), not only the waits a caller asked for:
+    /// the op that takes the third one gets `DeviceLost`.
     ///
     /// `waited_ms` is the budget that ran out and `detail` is the backend's
     /// own description. Shared by every backend that bounds a device wait

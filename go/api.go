@@ -138,10 +138,15 @@ var (
 	// ErrTimeout is a wait for the device to finish recorded work that ran
 	// out of its budget (Metal: tessl's event-wait budget, 30 s unless
 	// TESSL_EVENT_WAIT_MS says otherwise). The work is slow, not faulted:
-	// nothing is lost and the model is usable. Retryable: call again, or let
-	// the next call synchronize, and wait again. A step or write that had
-	// already been committed to the device is not repeated by the retry; its
-	// effect lands exactly once when the device finishes. A device that times
+	// nothing is lost and the model is usable. Retryable: let the next call
+	// synchronize, and it waits again. Work the device had already accepted
+	// (a step, a write, a provider run: the Rust with_runtime closure) is
+	// committed, not complete, when this is reported: its effect lands
+	// exactly once when the device finishes, so synchronize until the error
+	// clears and never re-issue that work, which would apply it twice. A
+	// call that failed before it committed anything may be repeated. The
+	// count of three below includes the backend's own waits while it encodes
+	// an op, not only the waits a caller asked for. A device that times
 	// out three waits in a row is lost instead (ErrDeviceLost): the limit is
 	// tessl's CONSECUTIVE_EVENT_WAIT_TIMEOUTS (tessl/src/runtime.rs), which a
 	// completed wait resets.
