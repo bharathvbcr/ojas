@@ -61,10 +61,7 @@ fn hook(m: &MetalBackend, cmd: Cmd) -> Reply {
 }
 
 fn set_budget(m: &MetalBackend, ms: u64) {
-    assert!(matches!(
-        hook(m, Cmd::SetEventWaitMs { ms }),
-        Reply::Done
-    ));
+    assert!(matches!(hook(m, Cmd::SetEventWaitMs { ms }), Reply::Done));
 }
 
 fn poisoned(m: &MetalBackend) -> bool {
@@ -160,7 +157,11 @@ fn a_waited_commit_past_the_budget_is_the_typed_timeout_and_the_runtime_is_not_p
     assert!(!poisoned(&m));
     // The chain's results are real.
     let last = outs.last().expect("chain").to_host(&host()).expect("read");
-    assert!(last.to_f32_vec().expect("f32").iter().all(|v| v.is_finite()));
+    assert!(last
+        .to_f32_vec()
+        .expect("f32")
+        .iter()
+        .all(|v| v.is_finite()));
     assert_eq!(m.link.timeouts(), 1);
 }
 
@@ -176,8 +177,14 @@ fn a_read_whose_wait_times_out_returns_the_timeout_not_bytes() {
     assert!(is_timeout(&r), "{r:?}");
     assert_eq!(m.link.timeouts(), 1);
     set_budget(&m, AMPLE_MS);
-    let vals = outs[0].to_host(&host()).expect("retry after the budget was raised");
-    assert!(vals.to_f32_vec().expect("f32").iter().all(|v| v.is_finite()));
+    let vals = outs[0]
+        .to_host(&host())
+        .expect("retry after the budget was raised");
+    assert!(vals
+        .to_f32_vec()
+        .expect("f32")
+        .iter()
+        .all(|v| v.is_finite()));
 }
 
 /// Criterion 3: three consecutive timeouts are tessl's definition of a lost
@@ -374,7 +381,11 @@ fn an_in_place_op_whose_wait_times_out_is_ok_and_lands_exactly_once() {
             case.twice_shows,
             "{}: a double application {} in the bits",
             case.name,
-            if case.twice_shows { "must show" } else { "cannot show" }
+            if case.twice_shows {
+                "must show"
+            } else {
+                "cannot show"
+            }
         );
 
         let m = open();
