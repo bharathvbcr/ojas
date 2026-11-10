@@ -231,7 +231,9 @@ impl Objective for Heads {
 
 fn config() -> TrainConfig {
     TrainConfig {
-        schedule: LrSchedule::new(LR, 1, 1, 0.0).expect("schedule"),
+        // The schedule refuses a warmup that is not shorter than the run, so the run has two
+        // steps; step 0's rate is the peak either way, and one batch ends it (DataExhausted).
+        schedule: LrSchedule::new(LR, 2, 1, 0.0).expect("schedule"),
         cap: WallClockCap::new(3600.0).expect("cap"),
         grad_accum: 1,
         optimizer: OptimizerRecipe {
