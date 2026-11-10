@@ -276,7 +276,7 @@ const GOLDEN: &[(&str, u64)] = &[
 ];
 
 #[test]
-#[ignore]
+#[ignore = "generator: prints the GOLDEN digest table for re-recording, asserts nothing; run with --ignored --nocapture"]
 fn print_exact_digests() {
     for (name, digest) in digests(&backend(1)) {
         println!("    (\"{name}\", 0x{digest:016x}),");
