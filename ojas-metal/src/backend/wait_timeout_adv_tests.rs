@@ -284,7 +284,12 @@ enum Site {
 fn arm(m: &MetalBackend, site: Site) {
     match site {
         Site::Freed => {
-            hook(m, Cmd::SetFreed { bytes: (1 << 36) + 1 });
+            hook(
+                m,
+                Cmd::SetFreed {
+                    bytes: (1 << 36) + 1,
+                },
+            );
             force_at(m, Wait::Freed, 1);
         }
         Site::SlabFull => {
@@ -341,7 +346,10 @@ fn run_site(
         settled.map_err(|e| format!("sync after raising the budget: {e:?}"))?;
         if !is_timeout(&first) {
             if first.is_err() {
-                return Err(format!("the op failed with something else: {}", show(&first)));
+                return Err(format!(
+                    "the op failed with something else: {}",
+                    show(&first)
+                ));
             }
             if after_first != reference {
                 return Err("the site never fired, and the op did not land exactly once".into());
@@ -360,7 +368,8 @@ fn run_site(
         }
         let again = (case.apply)(&m, &mut t);
         again.map_err(|e| format!("the retry failed: {e:?}"))?;
-        m.sync().map_err(|e| format!("sync after the retry: {e:?}"))?;
+        m.sync()
+            .map_err(|e| format!("sync after the retry: {e:?}"))?;
         if bits(&t) != reference {
             return Err("after the retry the tensors are not one application of the op".into());
         }
@@ -402,9 +411,10 @@ fn a_timeout_at_a_wait_inside_an_op_leaves_nothing_applied_and_a_retry_lands_onc
         for site in [Site::Freed, Site::SlabFull] {
             match run_site(&case, site, n, &initial, &reference) {
                 Ok(Reach::Hit) => coverage.push(format!("{} @ {site:?}: hit", case.name)),
-                Ok(Reach::Missed) => {
-                    failures.push(format!("{} @ {site:?}: the wait was never taken", case.name))
-                }
+                Ok(Reach::Missed) => failures.push(format!(
+                    "{} @ {site:?}: the wait was never taken",
+                    case.name
+                )),
                 Err(e) => failures.push(format!("{} @ {site:?}: {e}", case.name)),
             }
         }
@@ -416,9 +426,15 @@ fn a_timeout_at_a_wait_inside_an_op_leaves_nothing_applied_and_a_retry_lands_onc
                 Err(e) => failures.push(format!("{} @ Recycle({k}): {e}", case.name)),
             }
         }
-        coverage.push(format!("{} @ Recycle: {sites} scratch-allocation sites hit", case.name));
+        coverage.push(format!(
+            "{} @ Recycle: {sites} scratch-allocation sites hit",
+            case.name
+        ));
         if case.scratch && sites < 1 {
-            failures.push(format!("{}: no scratch recycle site was reachable", case.name));
+            failures.push(format!(
+                "{}: no scratch recycle site was reachable",
+                case.name
+            ));
         }
         if !case.scratch && sites != 0 {
             failures.push(format!(
@@ -427,7 +443,10 @@ fn a_timeout_at_a_wait_inside_an_op_leaves_nothing_applied_and_a_retry_lands_onc
             ));
         }
         if case.name.starts_with("muon") && sites < 8 {
-            failures.push(format!("{}: only {sites} recycle sites (expected >= 8)", case.name));
+            failures.push(format!(
+                "{}: only {sites} recycle sites (expected >= 8)",
+                case.name
+            ));
         }
     }
     eprintln!("{}", coverage.join("\n"));
@@ -471,7 +490,14 @@ fn a_held_timeout_is_not_cleared_by_anything_but_a_completed_wait() {
             name: "overlap commit(false) from the next ops",
             waits: false,
             run: |m, t| {
-                hook(m, Cmd::Tune { overlap: Some(1), ws_limit: None, fail_allocs: (0, 0) });
+                hook(
+                    m,
+                    Cmd::Tune {
+                        overlap: Some(1),
+                        ws_limit: None,
+                        fail_allocs: (0, 0),
+                    },
+                );
                 let [acc, g] = &mut t[..] else { unreachable!() };
                 m.accumulate_grad(acc, g).expect("next op");
                 None
@@ -486,7 +512,10 @@ fn a_held_timeout_is_not_cleared_by_anything_but_a_completed_wait() {
                 m.set_mem_cap(1 << 36).expect("mem cap");
                 m.set_inline_uploads(true).expect("inline");
                 assert!(matches!(hook(m, Cmd::SetPoolCap { bytes: 0 }), Reply::Done));
-                assert!(matches!(hook(m, Cmd::SetPoolCap { bytes: 1 << 28 }), Reply::Done));
+                assert!(matches!(
+                    hook(m, Cmd::SetPoolCap { bytes: 1 << 28 }),
+                    Reply::Done
+                ));
                 None
             },
         },
@@ -520,7 +549,8 @@ fn a_held_timeout_is_not_cleared_by_anything_but_a_completed_wait() {
                 if !is_timeout(&r) {
                     return Some(format!("with_runtime: {}", show(&r)));
                 }
-                (ran.load(Ordering::SeqCst) != 0).then(|| "the provider ran behind a timed-out settle".into())
+                (ran.load(Ordering::SeqCst) != 0)
+                    .then(|| "the provider ran behind a timed-out settle".into())
             },
         },
         Act {
@@ -569,11 +599,18 @@ fn a_held_timeout_is_not_cleared_by_anything_but_a_completed_wait() {
         let landed = if lost { Vec::new() } else { bits(&t[..2]) };
         drop(outs);
         if lost {
-            failures.push(format!("{}: poisoned (classified timeouts {tmo}, held={after_held:?}, follow={:?})", act.name, follow.as_ref().map(show)));
+            failures.push(format!(
+                "{}: poisoned (classified timeouts {tmo}, held={after_held:?}, follow={:?})",
+                act.name,
+                follow.as_ref().map(show)
+            ));
             continue;
         }
         if after_held != (true, 1) {
-            failures.push(format!("{}: the op did not return Ok over one timeout: {after_held:?}", act.name));
+            failures.push(format!(
+                "{}: the op did not return Ok over one timeout: {after_held:?}",
+                act.name
+            ));
         }
         if let Some(w) = waited {
             failures.push(format!("{}: {w}", act.name));
@@ -589,7 +626,10 @@ fn a_held_timeout_is_not_cleared_by_anything_but_a_completed_wait() {
             }
         }
         if !pending {
-            failures.push(format!("{}: the GPU finished before the check (setup too short)", act.name));
+            failures.push(format!(
+                "{}: the GPU finished before the check (setup too short)",
+                act.name
+            ));
         }
         if lost {
             failures.push(format!("{}: poisoned", act.name));
@@ -609,7 +649,10 @@ fn a_held_timeout_is_not_cleared_by_anything_but_a_completed_wait() {
             reference.clone()
         };
         if landed != expect {
-            failures.push(format!("{}: the tensors are not the expected applications", act.name));
+            failures.push(format!(
+                "{}: the tensors are not the expected applications",
+                act.name
+            ));
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
@@ -668,7 +711,10 @@ fn timeouts_from_mixed_sites_share_one_streak_and_the_third_is_device_lost() {
                 let [acc, g] = &mut t[..] else { unreachable!() };
                 m.accumulate_grad(acc, g)
             }),
-            ("clip_grad_norm", m.clip_grad_norm(&mut grads, 1.0).map(drop)),
+            (
+                "clip_grad_norm",
+                m.clip_grad_norm(&mut grads, 1.0).map(drop),
+            ),
             ("upload", m.upload(&src).map(drop)),
             ("download", m.download(&t[0]).map(drop)),
             ("to_host", t[0].to_host(&host()).map(drop)),
@@ -689,11 +735,18 @@ fn timeouts_from_mixed_sites_share_one_streak_and_the_third_is_device_lost() {
     for (name, ok) in &log {
         assert!(ok, "{name}: log {log:?}; third={}", show(&third));
     }
-    assert_eq!(counted, 4, "the third timeout of the streak is tessl's poison, not a counted retry");
+    assert_eq!(
+        counted, 4,
+        "the third timeout of the streak is tessl's poison, not a counted retry"
+    );
     for (name, lost, text) in &later {
         assert!(lost, "{name} after the third timeout: {text}");
     }
-    assert_eq!(ran.load(Ordering::SeqCst), 0, "a provider ran on a poisoned runtime");
+    assert_eq!(
+        ran.load(Ordering::SeqCst),
+        0,
+        "a provider ran on a poisoned runtime"
+    );
 }
 
 /// Attack 3b. Nothing ojas does resets tessl's streak without a completed
@@ -733,7 +786,12 @@ fn nothing_that_does_not_wait_resets_the_streak() {
     drop(outs);
     assert!(held.is_ok() && first == 1, "{}", show(&held));
     assert!(second_ok, "second: {}", show(&second));
-    assert!(silu.is_ok() && more.is_ok(), "{}, {}", show(&silu), show(&more));
+    assert!(
+        silu.is_ok() && more.is_ok(),
+        "{}, {}",
+        show(&silu),
+        show(&more)
+    );
     assert!(still_two, "poisoned before the third timeout");
     assert!(lost, "third after non-waiting work: {}", show(&third));
     assert!(after);
@@ -741,11 +799,13 @@ fn nothing_that_does_not_wait_resets_the_streak() {
 
 /// Attack 3c (provider site) and attack 2 (a provider run). A provider whose
 /// own final wait times out: the closure already ran to the end, so the call
-/// reports `WaitTimeout` for work that is done and still running. Retrying the
-/// call is the documented way to wait again, and the next `sync` is the
-/// documented place the timeout is reported.
+/// reports `WaitTimeout` for work that is committed and not complete. The
+/// documented contract (`MetalBackend::with_runtime`): the timeout is held,
+/// `sync` reports it while work is outstanding, and once the budget is raised
+/// `sync` completes. The closure is never run again (calling `with_runtime`
+/// again would apply it twice), so it ran exactly once.
 #[test]
-fn a_provider_run_whose_final_wait_times_out_is_held_and_a_retry_does_not_rerun_it() {
+fn a_provider_run_whose_final_wait_times_out_is_held_and_the_closure_ran_once() {
     use tessl::gemm::GemmOperands;
     use tessl::tensor::Tensor as TT;
     use tessl::DType;
@@ -758,9 +818,8 @@ fn a_provider_run_whose_final_wait_times_out_is_held_and_a_retry_does_not_rerun_
             runs.fetch_add(1, Ordering::SeqCst);
             rt.set_async_encode(true).map_err(|e| metal_err(e))?;
             let bytes = SIDE * SIDE * 4;
-            let side = |b| {
-                TT::from_buffer(rt, b, &[SIDE, SIDE], DType::F32, 0).map_err(|e| metal_err(e))
-            };
+            let side =
+                |b| TT::from_buffer(rt, b, &[SIDE, SIDE], DType::F32, 0).map_err(|e| metal_err(e));
             let (x, w, o) = (
                 side(rt.alloc_buffer(bytes).map_err(|e| metal_err(e))?)?,
                 side(rt.alloc_buffer(bytes).map_err(|e| metal_err(e))?)?,
@@ -781,14 +840,20 @@ fn a_provider_run_whose_final_wait_times_out_is_held_and_a_retry_does_not_rerun_
     let still = outstanding(&m);
     let poisoned_now = poisoned(&m);
     drain(&m, took);
+    set_budget(&m, AMPLE_MS);
     let settled = m.sync();
-    let retry_runs = Arc::clone(&runs);
-    let retry = m.with_runtime(provider(Arc::clone(&runs), AMPLE_MS));
-    let total_runs = retry_runs.load(Ordering::SeqCst);
+    let total_runs = runs.load(Ordering::SeqCst);
     drain(&m, took);
 
-    assert!(is_timeout(&first), "the provider's final wait: {}", show(&first));
-    assert!(pending, "the GPU had finished: the setup was too short to test anything");
+    assert!(
+        is_timeout(&first),
+        "the provider's final wait: {}",
+        show(&first)
+    );
+    assert!(
+        pending,
+        "the GPU had finished: the setup was too short to test anything"
+    );
     assert!(!poisoned_now);
     assert!(
         is_timeout(&sync),
@@ -797,11 +862,7 @@ fn a_provider_run_whose_final_wait_times_out_is_held_and_a_retry_does_not_rerun_
         show(&sync)
     );
     assert!(settled.is_ok(), "{}", show(&settled));
-    assert!(retry.is_ok(), "{}", show(&retry));
-    assert_eq!(
-        total_runs, 1,
-        "retrying the call that returned the retryable WaitTimeout ran the provider again ({total_runs} runs)"
-    );
+    assert_eq!(total_runs, 1, "the closure ran {total_runs} times");
 }
 
 /// Attack 4. An upload whose wait times out is never applied and leaks no
@@ -828,11 +889,21 @@ fn an_upload_whose_wait_times_out_applies_nothing_and_the_retry_applies_once() {
     drop(outs);
     assert!(is_timeout(&first), "{}", show(&first));
     assert_eq!(counted, 1);
-    assert_eq!(after_fail, before, "a failed upload leaked its budget reservation");
+    assert_eq!(
+        after_fail, before,
+        "a failed upload leaked its budget reservation"
+    );
     assert!(again.is_ok(), "{}", show(&again));
-    assert_eq!(landed.expect("bits")[0], vals.iter().map(|v| v.to_bits()).collect::<Vec<_>>());
+    assert_eq!(
+        landed.expect("bits")[0],
+        vals.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+    );
     assert_eq!(after_ok, before + 256 * 4);
-    assert_eq!(m.wait_counts().upload - waits_before, 2, "waits counted: the failed attempt and the retry");
+    assert_eq!(
+        m.wait_counts().upload - waits_before,
+        2,
+        "waits counted: the failed attempt and the retry"
+    );
 }
 
 /// Attack 6. One backend, two threads. Thread A's op returns `Ok` over a
@@ -881,55 +952,152 @@ fn a_held_timeout_is_reported_to_the_thread_that_syncs_next() {
     assert_eq!(landed, reference, "the op did not land exactly once");
 }
 
-/// Attack 6b. Interleaved: thread A applies an op 40 times (all `Ok`, no wait
-/// of its own) while thread B syncs twice under a 1 ms budget. The bits are
-/// 40 applications whatever the interleaving, and B never sees `Ok` over the
-/// pending backlog.
+/// Drive `case`'s op one call at a time, each a separate command with an
+/// unwaited commit of its own (`overlap` 1), under a 1 ms budget over a deep
+/// backlog, until `stop` says so or [`MAX_OPS`] calls were made. tessl has two
+/// command-buffer allocators: once both are in flight, the next op's own
+/// encoding waits for one (`ensure_m4_cb_open`), through the same fence and
+/// the same streak as ojas's waits. Returns every call's result.
+fn drive(
+    m: &MetalBackend,
+    case: &Case,
+    t: &mut [Tensor],
+    stop: impl Fn(&[Result<(), OjasError>]) -> bool,
+) -> Vec<Result<(), OjasError>> {
+    let mut rs = Vec::new();
+    while rs.len() < MAX_OPS && !stop(&rs) {
+        rs.push((case.apply)(m, t));
+    }
+    rs
+}
+
+const MAX_OPS: usize = 40;
+
+fn timeouts_in(rs: &[Result<(), OjasError>]) -> usize {
+    rs.iter().filter(|r| is_timeout(r)).count()
+}
+
+/// Attack 6b, made deterministic. Ops with no wait of their own run over a
+/// backlog under a 1 ms budget. Once both of tessl's allocators are in flight
+/// an op's own encoding waits and times out: that op fails with the typed
+/// `WaitTimeout`, having recorded no dispatch, so it applied nothing. Every
+/// other op was `Ok` and applied once: after a completed wait the bits are
+/// exactly `k` applications, `k` being the number of `Ok` results. None of
+/// those waits is one of ojas's own (`WaitCounts` does not move).
 #[test]
-fn interleaved_ops_and_timed_out_syncs_apply_every_op_exactly_once() {
-    const OPS: usize = 40;
+fn encoding_waits_count_toward_the_streak_and_a_failed_op_applied_nothing() {
     let (n, took) = chain_len();
     let m = open();
     let case = held_op();
-    let t = (case.make)(&m);
+    let mut t = (case.make)(&m);
+    let outs = Chain::new(&m, n).record(&m);
+    m.set_overlap_dispatches(1).expect("overlap");
+    set_budget(&m, 1);
+    let waits0 = m.wait_counts();
+    let rs = drive(&m, &case, &mut t, |rs| timeouts_in(rs) == 2);
+    let waits = m.wait_counts().since(&waits0);
+    let pending = outstanding(&m);
+    let lost = poisoned(&m);
+    let classified = m.link.timeouts();
+    let shown: Vec<String> = rs.iter().map(show).collect();
+    set_budget(&m, AMPLE_MS);
+    let settled = m.sync();
+    let landed = bits(&t);
+    drain(&m, took);
+    drop(outs);
+
+    let k = rs.iter().filter(|r| r.is_ok()).count();
     let reference = {
         let r = open();
         let mut c = (case.make)(&r);
-        for _ in 0..OPS {
+        for _ in 0..k {
             (case.apply)(&r, &mut c).expect("apply");
         }
         r.sync().expect("sync");
         bits(&c)
     };
+    assert!(
+        pending,
+        "the GPU had finished: the backlog was too short to test anything"
+    );
+    assert_eq!(timeouts_in(&rs), 2, "calls: {shown:?}");
+    assert!(
+        rs.iter().all(|r| r.is_ok() || is_timeout(r)),
+        "calls: {shown:?}"
+    );
+    assert!(!lost, "two timeouts poisoned the runtime: {shown:?}");
+    assert_eq!(classified, 2, "{shown:?}");
+    assert_eq!(
+        waits.total(),
+        0,
+        "ojas made a wait of its own, so the timeouts were not tessl's encoding waits: {waits:?}"
+    );
+    assert!(settled.is_ok(), "{}", show(&settled));
+    assert_eq!(
+        landed, reference,
+        "{k} Ok ops did not land exactly {k} times: {shown:?}"
+    );
+}
+
+/// The same drive, run until the third consecutive timeout. The op that takes
+/// it is `DeviceLost`, and so is every call after it (ops and `sync`). The
+/// timeouts before it were typed and classified (two), the ops before them
+/// were `Ok`, and there is no `Ok` after the first `DeviceLost`. A lost
+/// device has nothing readable, so the exactly-once bits are pinned by the
+/// test above, which stops one timeout short.
+#[test]
+fn the_third_encoding_wait_timeout_is_device_lost_and_so_is_every_call_after_it() {
+    let (n, took) = chain_len();
+    let m = open();
+    let case = held_op();
+    let mut t = (case.make)(&m);
     let outs = Chain::new(&m, n).record(&m);
+    m.set_overlap_dispatches(1).expect("overlap");
     set_budget(&m, 1);
-    let a_backend = m.clone();
-    let a = std::thread::spawn(move || {
-        let mut t = t;
-        let rs: Vec<Result<(), OjasError>> =
-            (0..OPS).map(|_| (case.apply)(&a_backend, &mut t)).collect();
-        let oks = rs.iter().filter(|r| r.is_ok()).count();
-        let first_err = rs.iter().find(|r| r.is_err()).map(show);
-        eprintln!("A first error: {first_err:?}");
-        (oks, t)
-    });
-    let syncs: Vec<Result<(), OjasError>> = (0..2).map(|_| m.sync()).collect();
-    let (oks, t) = a.join().expect("A");
+    let waits0 = m.wait_counts();
+    let rs = drive(&m, &case, &mut t, |rs| rs.iter().any(is_lost));
+    let waits = m.wait_counts().since(&waits0);
+    let classified = m.link.timeouts();
     let lost = poisoned(&m);
+    let after: Vec<(&str, Result<(), OjasError>)> = vec![
+        ("op", (case.apply)(&m, &mut t)),
+        ("op", (case.apply)(&m, &mut t)),
+        ("sync", m.sync()),
+        ("sync", m.sync()),
+    ];
+    let shown: Vec<String> = rs.iter().map(show).collect();
     drain(&m, took);
-    let settled = m.sync();
-    let tmo = m.link.timeouts();
-    let syncs_shown: Vec<String> = syncs.iter().map(show).collect();
-    assert!(!lost, "poisoned: classified timeouts {tmo}, A oks {oks}, B syncs {syncs_shown:?}");
-    let landed = bits(&t);
     drop(outs);
-    assert_eq!(oks, OPS, "an op without a wait of its own failed");
-    assert!(!lost, "two timeouts poisoned the runtime");
-    for (i, s) in syncs.iter().enumerate() {
-        assert!(is_timeout(s), "B's sync {i}: {}", show(s));
+
+    let first_lost = rs.iter().position(is_lost);
+    assert!(
+        first_lost.is_some(),
+        "no op was lost within {MAX_OPS}: {shown:?}"
+    );
+    let i = first_lost.unwrap_or(0);
+    assert_eq!(
+        i,
+        rs.len() - 1,
+        "a call after the first DeviceLost: {shown:?}"
+    );
+    assert_eq!(
+        timeouts_in(&rs),
+        2,
+        "two typed timeouts precede the loss: {shown:?}"
+    );
+    assert!(
+        rs[..i].iter().all(|r| r.is_ok() || is_timeout(r)),
+        "{shown:?}"
+    );
+    assert!(lost, "tessl's runtime is not poisoned");
+    assert_eq!(
+        classified, 2,
+        "the third timeout is tessl's poison, not a typed one"
+    );
+    assert_eq!(waits.total(), 0, "ojas made a wait of its own: {waits:?}");
+    for (name, r) in &after {
+        assert!(is_lost(r), "{name} after the loss: {}", show(r));
     }
-    assert!(settled.is_ok());
-    assert_eq!(landed, reference, "the {OPS} ops did not land exactly once each");
 }
 
 /// Attack 3d. The serial form of the interleaving above: two timed-out syncs,
@@ -954,7 +1122,12 @@ fn ops_with_no_wait_of_their_own_after_two_timeouts_all_succeed() {
     let tmo = m.link.timeouts();
     drain(&m, took);
     drop(outs);
-    assert!(is_timeout(&syncs[0]) && is_timeout(&syncs[1]), "{}, {}", show(&syncs[0]), show(&syncs[1]));
+    assert!(
+        is_timeout(&syncs[0]) && is_timeout(&syncs[1]),
+        "{}, {}",
+        show(&syncs[0]),
+        show(&syncs[1])
+    );
     assert!(
         results.is_empty() && !lost,
         "{} of {OPS} ops failed after two timeouts (poisoned={lost}, classified timeouts {tmo}); first: {:?}",
