@@ -157,7 +157,8 @@ fn dequantiser_reproduces_mlx_from_mlx_parts() {
 
 /// The goldens must exercise what the quantiser's decisions are about, or a quantiser that
 /// ignored them would still pass: the subnormal rows (flushed side test), the bf16-max constant
-/// group (NaN code), and the .5-code ties are in the data.
+/// group (NaN code) are in the data. (The .5-code ties are present too, 380 in q8 `kinds_w64`, but
+/// this test does not assert them.)
 #[test]
 fn goldens_exercise_the_flush_nan_and_tie_decisions() {
     let golden = load("kinds_w64");

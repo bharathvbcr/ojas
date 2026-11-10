@@ -25,7 +25,7 @@ impl SplitMix64 {
 
     /// Approximately normal (sum of four uniforms, centred).
     fn normal(&mut self) -> f32 {
-        (self.unit() + self.unit() + self.unit() + self.unit() - 2.0) * 1.7320508
+        (self.unit() + self.unit() + self.unit() + self.unit() - 2.0) * 3f32.sqrt()
     }
 }
 
@@ -183,8 +183,8 @@ fn a_range_that_overflows_f32_is_refused_and_leaves_nothing_charged() {
 
 #[test]
 fn bf16_max_alone_quantises_and_round_trips() {
-    // +max with a small partner: the range is finite. A constant +max group has no range at all
-    // (scale = -0.0, codes via the NaN rule) and dequantises back to +max.
+    // A constant +max or -max group has no range at all (scale = -0.0, codes via the NaN rule)
+    // and dequantises back to itself.
     let b = big();
     let max = bf16_to_f32(0x7F7F);
     for v in [max, -max] {
@@ -364,7 +364,7 @@ fn quantise_and_dequantise_are_deterministic() {
 }
 
 #[test]
-fn round_trip_error_stays_within_half_a_scale_plus_bf16_rounding() {
+fn round_trip_error_stays_within_one_scale_plus_bf16_rounding() {
     let b = big();
     for seed in 0..48u64 {
         let mut rng = SplitMix64(seed.wrapping_mul(7919).wrapping_add(1));
@@ -390,9 +390,11 @@ fn round_trip_error_stays_within_half_a_scale_plus_bf16_rounding() {
                 let g = i / 64;
                 let (s, bias) = (bf16_to_f32(sv[g]).abs(), bf16_to_f32(bv[g]).abs());
                 let (got, orig) = (bf16_to_f32(got), bf16_to_f32(orig));
-                // Half a code step; the bf16 scale's relative error (2^-9) times the largest
-                // code; the bias's and the result's bf16 rounding.
-                let bound = s * (0.5 + levels / 512.0) + (bias + orig.abs()) / 128.0;
+                // One code step: mlx rounds the edge code q0, which can put the far end of the
+                // range at n_bins + 1 before the clamp drops it by one (q4 hits this on 25 of these
+                // 48 seeds; the goldens show mlx does the same). Plus the bf16 scale's relative
+                // error (2^-9) times the largest code, and the bias's and the result's bf16 rounding.
+                let bound = s * (1.0 + levels / 512.0) + (bias + orig.abs()) / 128.0;
                 assert!(
                     (got - orig).abs() <= bound,
                     "seed {seed} {:?} element {i}: |{got} - {orig}| > {bound}",
