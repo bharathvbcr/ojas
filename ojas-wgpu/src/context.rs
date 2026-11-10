@@ -1932,6 +1932,8 @@ impl WgpuContext {
         let staging = self.staging(stage_bytes)?;
         let (hold_pipe, hold_group) = self.hold()?;
         let mut lease = self.inner.slots.lease()?;
+        #[cfg(test)]
+        self.fire(wgfadv::Stage::AfterLease)?;
         let index = {
             let mut rec = lock(&self.inner.rec);
             if rec.slots >= self.inner.param_slots {
@@ -1939,6 +1941,8 @@ impl WgpuContext {
             }
             // Nothing below can fail: from here the slot owns an unseen pair.
             let words = lease.record();
+            #[cfg(test)]
+            self.fire(wgfadv::Stage::AfterRecord)?;
             let at = rec.slot(&words, self.inner.param_stride);
             let encoder = rec.encoder.get_or_insert_with(|| self.encoder());
             if span > 0 {
@@ -1966,7 +1970,11 @@ impl WgpuContext {
             .map_async(wgpu::MapMode::Read, move |result| {
                 let _ = sender.send(result);
             });
+        #[cfg(test)]
+        self.fire(wgfadv::Stage::BeforeWait)?;
         self.wait(index)?;
+        #[cfg(test)]
+        self.fire(wgfadv::Stage::AfterWait)?;
         #[cfg(test)]
         if self.inner.fail_next_read.swap(false, Ordering::Relaxed) || self.fail_countdown_expired()
         {
@@ -1997,6 +2005,8 @@ impl WgpuContext {
             }
         };
         mapped.map_err(|err| self.failure(format!("map_async: {err}")))?;
+        #[cfg(test)]
+        self.fire(wgfadv::Stage::AfterMap)?;
         let (out, bits, first) = {
             let view = staging
                 .slice(..stage_bytes)
@@ -3321,3 +3331,6 @@ mod adversarial_oom;
 
 #[cfg(test)]
 mod adv757b;
+
+#[cfg(test)]
+pub(crate) mod wgfadv;
