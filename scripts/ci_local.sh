@@ -20,6 +20,9 @@ echo "==> fmt"
 echo "==> cargo target sources are tracked"
 ./scripts/check_tracked_targets.sh
 
+echo "==> no bare #[ignore]"
+./scripts/check_ignore_reasons.sh
+
 echo "==> clippy"
 cargo clippy --workspace --all-targets -- -D warnings
 

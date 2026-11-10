@@ -76,6 +76,11 @@ jobs:
           ./scripts/check_tracked_targets_test.sh
           ./scripts/check_tracked_targets_adversarial_test.sh
           ./scripts/check_tracked_targets.sh
+      - name: Every #[ignore] carries a reason
+        working-directory: ${{ env.OJAS }}
+        run: |
+          ./scripts/check_ignore_reasons_test.sh
+          ./scripts/check_ignore_reasons.sh
       - name: Sibling layout guard self-tests
         working-directory: ${{ env.OJAS }}
         # The self-test, not check_siblings.sh itself: the guard runs first in

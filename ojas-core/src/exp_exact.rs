@@ -221,7 +221,7 @@ mod tests {
     /// cargo test -p ojas-core --release --lib exp_exact::tests::sweep -- --ignored --nocapture
     /// ```
     #[test]
-    #[ignore]
+    #[ignore = "exhaustive sweep of about 2.2e9 f32 inputs against libm f64 exp; run with --ignored --nocapture"]
     fn sweep() {
         let ranges = [
             (0x0000_0000u32, EXACT_HI.to_bits()),
@@ -293,7 +293,7 @@ mod tests {
     /// cargo test -p ojas-core --release --lib exp_exact::tests::per_call_cost -- --ignored --nocapture
     /// ```
     #[test]
-    #[ignore]
+    #[ignore = "timing benchmark, no assertions; run with --ignored --nocapture"]
     fn per_call_cost() {
         let xs: Vec<f32> = (0..1 << 20)
             .map(|i| -(i as f32) * (20.0 / (1 << 20) as f32))
@@ -316,7 +316,7 @@ mod tests {
     /// Prints the inputs `exp_exact_pins.txt` was made from, with this
     /// crate's outputs, for the decimal oracle to check.
     #[test]
-    #[ignore]
+    #[ignore = "generator: prints the inputs exp_exact_pins.txt was made from, asserts nothing; run with --ignored --nocapture"]
     fn print_pin_candidates() {
         let mut xs: Vec<u32> = Vec::new();
         for (lo, hi) in [

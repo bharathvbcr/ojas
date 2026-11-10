@@ -3267,7 +3267,7 @@ mod tests {
     /// 4_278_190_080 values with `changed = 0` and `nonfinite_scale = 0`.
     #[cfg(target_os = "macos")]
     #[test]
-    #[ignore]
+    #[ignore = "exhaustive sweep of every finite f32 logit (about 9 s, macOS only); run with --ignored"]
     fn every_finite_logit_sigmoid_matches_its_clamp() {
         const CHUNK: usize = 1 << 22;
         const END: u32 = 0x7f80_0000;
