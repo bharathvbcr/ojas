@@ -1767,9 +1767,9 @@ impl Worker {
             | Cmd::ForceWaitAt { .. }
             | Cmd::FillSlab
             | Cmd::SetFreed { .. }
-            | Cmd::GpuOutstanding => Err(
-                metal_err("a wait test hook is served outside command, never run"),
-            ),
+            | Cmd::GpuOutstanding => Err(metal_err(
+                "a wait test hook is served outside command, never run",
+            )),
             #[cfg(test)]
             Cmd::Tune {
                 overlap,

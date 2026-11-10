@@ -65,7 +65,11 @@ fn a_real_timeout_text_is_wait_timeout_and_everything_else_keeps_its_kind() {
         is_backend(&wrapped),
         "a prefixed timeout text must stay Backend (not retryable, not lost, not Ok): {wrapped:?}"
     );
-    assert_eq!(w.waits.timeouts(), 1, "a wrapped text was counted as a timeout");
+    assert_eq!(
+        w.waits.timeouts(),
+        1,
+        "a wrapped text was counted as a timeout"
+    );
 
     let mid = w.lost_if_poisoned(backend(&format!("{REAL} ... wait budget exceeded")));
     assert!(
