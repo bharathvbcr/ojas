@@ -800,7 +800,7 @@ impl Worker {
                 Err(OjasError::Poisoned)
             } else if self.rt.is_poisoned() {
                 Err(device_lost(
-                    "the tessl runtime is poisoned by an earlier failed or timed-out command buffer",
+                    "the tessl runtime is poisoned by an earlier faulted command buffer or by its third consecutive event-wait timeout",
                 ))
             } else {
                 self.book.borrow_mut().bf16_accum = msg.bf16_accum;
@@ -869,7 +869,7 @@ impl Worker {
         self.rt.set_async_encode(false).map_err(metal_err)?;
         let ran = (job.0)(&self.rt);
         let _ = self.rt.take_dispatch_count();
-        let idle = self.rt.synchronize().map_err(metal_err);
+        let idle = self.rt.synchronize().map_err(|e| self.rt_err(e));
         let restored = self.rt.set_async_encode(async_encode).map_err(metal_err);
         ran?;
         idle?;
@@ -877,15 +877,36 @@ impl Worker {
         Ok(Reply::Done)
     }
 
-    /// A command that failed on a runtime tessl has poisoned (a command
-    /// buffer that failed or timed out) failed because the device is gone:
-    /// its tessl error becomes [`OjasError::DeviceLost`]. Typed errors (a
-    /// fault, a capacity refusal) keep their kind.
+    /// A tessl error from a wait or commit, typed. A wait that ran out of its
+    /// budget (tessl's own predicate, [`GpuRuntime::is_event_wait_timeout`],
+    /// never a text match here) did not poison the runtime: the work is
+    /// queued, only slow. It is the retryable [`OjasError::WaitTimeout`],
+    /// carrying the budget it ran out of. Anything else is a plain
+    /// [`OjasError::Backend`] (a command buffer that faulted, or tessl's
+    /// third consecutive timeout, which `is_event_wait_timeout` does not
+    /// match and which [`Self::lost_if_poisoned`] turns into `DeviceLost`).
+    fn rt_err(&self, detail: String) -> OjasError {
+        if !GpuRuntime::is_event_wait_timeout(&detail) {
+            return metal_err(detail);
+        }
+        self.waits.note_timeout();
+        OjasError::wait_timeout(ojas_core::BackendId::Metal, self.rt.event_wait_ms(), detail)
+    }
+
+    /// The serve seam: a command that failed on a runtime tessl has poisoned
+    /// (a command buffer that faulted, or the third consecutive event-wait
+    /// timeout) failed because the device is gone, so its tessl error becomes
+    /// [`OjasError::DeviceLost`]. Poison is checked first: a leftover timeout
+    /// string on a poisoned runtime is a loss, not a retry. On a runtime that
+    /// is not poisoned, a leftover timeout string from a path that did not
+    /// classify it at the wait is retyped as [`OjasError::WaitTimeout`] here.
+    /// Typed errors (a fault, a capacity refusal) keep their kind.
     fn lost_if_poisoned(&self, err: OjasError) -> OjasError {
         match err {
             OjasError::Backend { detail, .. } if self.rt.is_poisoned() => {
                 device_lost(format!("tessl runtime poisoned: {detail}"))
             }
+            OjasError::Backend { detail, .. } => self.rt_err(detail),
             other => other,
         }
     }
@@ -923,6 +944,16 @@ impl Worker {
             return out;
         }
         if let Err(err) = self.after_command() {
+            // The op committed before its trigger wait ran out of budget
+            // (owner decision E7 (a)): its effect lands exactly once when the
+            // device finishes, so it returns its result. The timeout is held,
+            // not dropped: `settle` left `dirty` set on the failed wait, so
+            // the next sync point, or the next trigger check, waits again,
+            // and a wait that completes clears it. A timeout that repeats
+            // three times is tessl's poison, which is not this variant.
+            if matches!(err, OjasError::WaitTimeout { .. }) {
+                return out;
+            }
             if let Ok(Reply::Bufs(bufs)) = &out {
                 for b in bufs {
                     self.bufs.remove(&b.id);
@@ -1002,7 +1033,7 @@ impl Worker {
             return self.settle(Scan::All, Wait::WorkingSet);
         }
         if since >= overlap {
-            self.rt.commit(false).map_err(metal_err)?;
+            self.rt.commit(false).map_err(|e| self.rt_err(e))?;
             self.book.borrow_mut().since_overlap = 0;
         }
         Ok(())
@@ -1017,7 +1048,7 @@ impl Worker {
         self.note_dispatches();
         if self.book.borrow().dirty {
             self.waits.count(why);
-            self.rt.synchronize().map_err(metal_err)?;
+            self.rt.synchronize().map_err(|e| self.rt_err(e))?;
             let mut book = self.book.borrow_mut();
             book.dirty = false;
             book.since_overlap = 0;

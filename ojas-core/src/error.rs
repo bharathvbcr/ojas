@@ -8,7 +8,13 @@ use std::fmt;
 /// stays in the enum so existing matches keep compiling. [`crate::Budget`]
 /// charges an atomic counter, and its trim-handler list recovers a poisoned
 /// lock instead of failing, so no budget call returns `Poisoned`.
+///
+/// `#[non_exhaustive]`: new variants may be added (the typed
+/// [`OjasError::WaitTimeout`] was), so a `match` outside `ojas-core` needs a
+/// wildcard arm. Make it fail closed: an error this build does not know is
+/// never success, and never a weaker kind than the nearest known one.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum OjasError {
     Shape {
         op: &'static str,
@@ -93,6 +99,20 @@ pub enum OjasError {
         expected: Option<BackendId>,
         found: Option<BackendId>,
     },
+}
+
+impl OjasError {
+    /// The one way to build [`OjasError::WaitTimeout`]: a wait on `backend`
+    /// ran out of its `waited_ms` budget, and `detail` is the backend's own
+    /// description. Every backend that classifies a timed-out wait goes
+    /// through here, so the variant is built in one place.
+    pub fn wait_timeout(backend: BackendId, waited_ms: u64, detail: impl Into<String>) -> Self {
+        OjasError::WaitTimeout {
+            backend,
+            waited_ms,
+            detail: detail.into(),
+        }
+    }
 }
 
 impl fmt::Display for OjasError {

@@ -5281,7 +5281,8 @@ mod tests {
         (p, m1, m2)
     }
 
-    /// A tessl runtime poisoned by a failed or timed-out command buffer is
+    /// A tessl runtime poisoned (a command buffer that faulted, or the third
+    /// consecutive event-wait timeout) is
     /// the device's loss: every later op, sync, upload and read is the
     /// typed [`OjasError::DeviceLost`], not a `Backend` string.
     #[test]
@@ -5954,7 +5955,7 @@ mod tests {
     /// min of the steps in each. A measurement, not a pass/fail: run with
     /// `--ignored --nocapture` under the machine lock.
     #[test]
-    #[ignore]
+    #[ignore = "timing benchmark, not a pass/fail; run with --ignored --nocapture under the machine lock"]
     fn bench_the_pool_cap_against_the_tessl_default() {
         use std::time::{Duration, Instant};
         const N: usize = 16 << 20;

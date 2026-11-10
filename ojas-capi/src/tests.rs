@@ -1771,19 +1771,11 @@ fn error_kinds_follow_the_ojas_error_variant() {
         // A device wait that ran out of budget is retryable: its own kind,
         // never DeviceLost.
         (
-            OjasError::WaitTimeout {
-                backend: BackendId::Metal,
-                waited_ms: 30_000,
-                detail: "wait budget exceeded".into(),
-            },
+            OjasError::wait_timeout(BackendId::Metal, 30_000, "wait budget exceeded"),
             Some(ErrorKind::Timeout),
         ),
         (
-            OjasError::WaitTimeout {
-                backend: BackendId::Cuda,
-                waited_ms: 1,
-                detail: String::new(),
-            },
+            OjasError::wait_timeout(BackendId::Cuda, 1, ""),
             Some(ErrorKind::Timeout),
         ),
         // Pre-fix, these two were DeviceLost by substring. A Backend error

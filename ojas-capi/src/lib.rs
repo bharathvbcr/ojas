@@ -117,6 +117,18 @@ pub(crate) fn kind_of(err: &ojas_core::OjasError) -> Option<ErrorKind> {
         OjasError::Poisoned => Some(ErrorKind::Poisoned),
         OjasError::DeviceLost { .. } => Some(ErrorKind::DeviceLost),
         OjasError::WaitTimeout { .. } => Some(ErrorKind::Timeout),
+        // Every other current variant has no kind, named so that a new
+        // variant is a decision here rather than a silent `None`.
+        OjasError::Shape { .. }
+        | OjasError::Dtype { .. }
+        | OjasError::OutOfRange { .. }
+        | OjasError::UnsupportedHeadDim { .. }
+        | OjasError::Backend { .. }
+        | OjasError::Unsupported { .. }
+        | OjasError::Placement { .. } => None,
+        // `OjasError` is `#[non_exhaustive]`: a variant this build does not
+        // know has no kind, so it reaches the caller as a plain error string,
+        // never as success.
         _ => None,
     }
 }
