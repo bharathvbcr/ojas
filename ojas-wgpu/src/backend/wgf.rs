@@ -277,3 +277,76 @@ fn many_orphans_are_folded_oldest_first_each_reported_once() {
         assert_eq!(gpu.ctx.torn_pairs(), 0);
     }
 }
+
+/// Every hold slot is leasable at once: no wait, all distinct.
+fn assert_every_hold_slot_is_free(gpu: &WgpuBackend, what: &str) {
+    let leases: Vec<_> = (0..HOLD_SLOTS)
+        .map(|i| {
+            gpu.ctx
+                .lease_hold_slot(Duration::ZERO)
+                .unwrap_or_else(|e| panic!("{what}: lease {i} of {HOLD_SLOTS}: {e:?}"))
+        })
+        .collect();
+    let mut slots: Vec<u32> = leases.iter().map(|l| l.slot).collect();
+    slots.sort_unstable();
+    slots.dedup();
+    assert_eq!(
+        slots.len(),
+        HOLD_SLOTS as usize,
+        "{what}: a slot was shared"
+    );
+}
+
+/// The slots a hold folds go back to the pool: after the orphans are all
+/// reported, every slot can be leased again. 5 fits one fold, 20 is past
+/// the 13 one hold folds, and 64 leaves no free slot, so the first read
+/// folds its own carried slot too.
+#[test]
+fn folded_orphan_slots_return_to_the_pool() {
+    for orphans in [5u32, 20, HOLD_SLOTS] {
+        let budget = Budget::new(1 << 20);
+        let gpu = WgpuBackend::open(budget).expect("wgpu adapter");
+        gpu.sync().unwrap();
+        for id in 1..=orphans {
+            gpu.ctx.adv_set_held(1u64 << (id - 1), id);
+        }
+        let mut union = 0u64;
+        loop {
+            let (bits, first) = gpu.ctx.sync_observed().unwrap();
+            if (bits, first) == (0, 0) {
+                break;
+            }
+            assert_eq!(union & bits, 0, "{orphans}: bits {bits:#x} reported twice");
+            union |= bits;
+        }
+        let want = if orphans == 64 {
+            u64::MAX
+        } else {
+            (1u64 << orphans) - 1
+        };
+        assert_eq!(union, want, "{orphans} orphans: a fault was lost");
+        assert_every_hold_slot_is_free(&gpu, &format!("{orphans} orphans"));
+    }
+}
+
+/// Reads that fail before the host sees their copy fold the previous
+/// orphan each: ten of them, then one good read, leave the pool whole and
+/// the faults reported once.
+#[test]
+fn failed_reads_do_not_leak_hold_slots() {
+    let budget = Budget::new(1 << 20);
+    let gpu = WgpuBackend::open(budget.clone()).expect("wgpu adapter");
+    gpu.sync().unwrap();
+    let buf = bad_buffer(&gpu, &budget);
+    let mut want = 0u64;
+    for id in 1..=10u32 {
+        raise_as(&gpu, id, &buf, 2);
+        want |= 1u64 << (id - 1);
+        gpu.ctx.fail_next_read();
+        gpu.ctx.sync().expect_err("the injected read failure");
+    }
+    let (bits, first) = gpu.ctx.sync_observed().unwrap();
+    assert_eq!((bits, first), (want, 1));
+    assert_eq!(gpu.ctx.sync_observed().unwrap(), (0, 0), "reported once");
+    assert_every_hold_slot_is_free(&gpu, "ten failed reads");
+}

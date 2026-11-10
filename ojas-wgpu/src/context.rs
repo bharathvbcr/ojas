@@ -916,6 +916,7 @@ impl<'a> HoldLease<'a> {
     /// it folds in (up to [`HOLD_ORPHANS`], oldest first, this slot's own
     /// pair first of all). Call it when the dispatch is about to be recorded
     /// and nothing fallible remains: from here the lease owns an unseen pair.
+    /// The folded slots return to the free list (see the comment there).
     fn record(&mut self) -> [u32; 16] {
         let mut words = [0u32; 16];
         words[0] = self.slot;
@@ -923,6 +924,7 @@ impl<'a> HoldLease<'a> {
         if std::mem::take(&mut self.carries) {
             folded.push(self.slot);
         }
+        let mut returned = false;
         {
             let mut state = lock(&self.slots.state);
             while folded.len() < HOLD_ORPHANS {
@@ -931,6 +933,23 @@ impl<'a> HoldLease<'a> {
                     None => break,
                 }
             }
+            // The hold zeroes every folded slot and moves its pair into this
+            // one, so each folded slot except our own is free again. That is
+            // safe to hand out now: the caller holds the recorder lock from
+            // here through the submit of this hold, so a later read can lease
+            // a returned slot only after taking that lock itself, its hold is
+            // queued after this one, and its store lands after this hold's
+            // exchange to zero. Were this read to fail later, the folded
+            // pairs live on in our own slot, which then becomes the orphan.
+            for &slot in &folded {
+                if slot != self.slot {
+                    state.free.push(slot);
+                    returned = true;
+                }
+            }
+        }
+        if returned {
+            self.slots.freed.notify_all();
         }
         words[1] = folded.len() as u32;
         words[2..2 + folded.len()].copy_from_slice(&folded);
