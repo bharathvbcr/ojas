@@ -90,7 +90,7 @@ pub enum WgslModule {
     Optim,
     /// Bit-exact moves (permute) over `u32` words.
     Layout,
-    /// The host hand-off of the fault words (`fault_hold`, `fault_release`).
+    /// The host hand-off of the fault words (`fault_hold`).
     Fault,
     /// Tiled flash attention for one padded head width and block plan.
     Attention(AttentionTiles),
