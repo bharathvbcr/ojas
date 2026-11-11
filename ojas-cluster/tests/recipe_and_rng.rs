@@ -497,3 +497,49 @@ fn test_rng_permutations_gumbel_and_spherical_prescale() {
         );
     }
 }
+
+#[test]
+fn test_resolve_recipe_rejects_unassigned_label_k() {
+    let sentinel_k = UNASSIGNED_LABEL as usize;
+
+    // 1. Even when `global_n >= k`, `k == UNASSIGNED_LABEL as usize` (and `k > UNASSIGNED_LABEL`)
+    //    must be rejected so `UNASSIGNED_LABEL` (`u32::MAX`) can never collide with a cluster ID.
+    let err_large_n = resolve_recipe(
+        sentinel_k.saturating_add(16),
+        1,
+        &EmeansConfig::new(sentinel_k),
+    )
+    .expect_err("resolve_recipe must reject k == UNASSIGNED_LABEL even when global_n >= k");
+    assert!(
+        matches!(
+            &err_large_n,
+            OjasError::OutOfRange { op: "emeans", detail } if detail.contains("UNASSIGNED_LABEL")
+        ),
+        "expected OutOfRange mentioning UNASSIGNED_LABEL, got {err_large_n:?}"
+    );
+
+    // 2. Upfront entry check: with tiny `global_n = 1, d = 0`, `k >= UNASSIGNED_LABEL` is rejected
+    //    at function entry before `d == 0` or `global_n < k`.
+    let err_tiny = resolve_recipe(1, 0, &EmeansConfig::new(sentinel_k))
+        .expect_err("resolve_recipe must reject k == UNASSIGNED_LABEL upfront");
+    assert!(
+        matches!(
+            &err_tiny,
+            OjasError::OutOfRange { op: "emeans", detail } if detail.contains("UNASSIGNED_LABEL")
+        ),
+        "expected upfront OutOfRange mentioning UNASSIGNED_LABEL, got {err_tiny:?}"
+    );
+
+    if let Some(above_sentinel) = sentinel_k.checked_add(1) {
+        let err_above = resolve_recipe(
+            above_sentinel.saturating_add(16),
+            1,
+            &EmeansConfig::new(above_sentinel),
+        )
+        .expect_err("resolve_recipe must reject k > UNASSIGNED_LABEL");
+        assert!(matches!(
+            err_above,
+            OjasError::OutOfRange { op: "emeans", .. }
+        ));
+    }
+}

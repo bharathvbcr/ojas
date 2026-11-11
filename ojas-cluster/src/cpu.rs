@@ -1436,6 +1436,16 @@ pub(crate) fn assign_chunk_validated(
     need_shared_rows_after: bool,
     budget: &Budget,
 ) -> Result<AssignedChunk, OjasError> {
+    if k == 0 || k >= (UNASSIGNED_LABEL as usize) {
+        return Err(out_of_range(format!(
+            "k ({k}) must be in 1..UNASSIGNED_LABEL ({UNASSIGNED_LABEL})"
+        )));
+    }
+    if chunk_rows > (u32::MAX as usize) {
+        return Err(out_of_range(format!(
+            "chunk_rows ({chunk_rows}) exceeds u32::MAX"
+        )));
+    }
     let expected_len = checked_mul_len(chunk_rows, d, "chunk elements")?;
     if rows.len() != expected_len {
         return Err(shape_err(format!(
@@ -1569,7 +1579,17 @@ pub(crate) fn build_csr_ascending(
     k: usize,
     budget: &Budget,
 ) -> Result<(Scratch<u32>, Scratch<u32>), OjasError> {
+    if k == 0 || k >= (UNASSIGNED_LABEL as usize) {
+        return Err(out_of_range(format!(
+            "k ({k}) must be in 1..UNASSIGNED_LABEL ({UNASSIGNED_LABEL})"
+        )));
+    }
     let chunk_rows = labels.len();
+    if chunk_rows > (u32::MAX as usize) {
+        return Err(out_of_range(format!(
+            "chunk_rows ({chunk_rows}) exceeds u32::MAX"
+        )));
+    }
     let offsets_len = k
         .checked_add(1)
         .ok_or_else(|| out_of_range("k + 1 overflows usize"))?;
@@ -1755,6 +1775,11 @@ impl CpuSession {
         if k == 0 {
             return Err(out_of_range("k must be >= 1"));
         }
+        if k >= (UNASSIGNED_LABEL as usize) {
+            return Err(out_of_range(format!(
+                "k ({k}) must be < UNASSIGNED_LABEL ({UNASSIGNED_LABEL})"
+            )));
+        }
         if d == 0 {
             return Err(out_of_range("d must be >= 1"));
         }
@@ -1896,6 +1921,11 @@ impl CpuSession {
         labels_out: Option<&mut [u32]>,
         budget: &Budget,
     ) -> Result<(), OjasError> {
+        if chunk_rows > (u32::MAX as usize) {
+            return Err(out_of_range(format!(
+                "chunk_rows ({chunk_rows}) exceeds u32::MAX"
+            )));
+        }
         if let Some(ref out) = labels_out {
             if out.len() != chunk_rows {
                 return Err(shape_err(format!(
@@ -2084,6 +2114,11 @@ impl CpuSession {
         labels_out: Option<&mut [u32]>,
         budget: &Budget,
     ) -> Result<(), OjasError> {
+        if chunk_rows > (u32::MAX as usize) {
+            return Err(out_of_range(format!(
+                "chunk_rows ({chunk_rows}) exceeds u32::MAX"
+            )));
+        }
         let expected = checked_mul_len(chunk_rows, self.d, "bf16 chunk elements")?;
         if rows_bf16.len() != expected {
             return Err(shape_err(format!(
@@ -2114,6 +2149,11 @@ impl CpuSession {
         labels_out: Option<&mut [u32]>,
         budget: &Budget,
     ) -> Result<(), OjasError> {
+        if chunk_rows > (u32::MAX as usize) {
+            return Err(out_of_range(format!(
+                "chunk_rows ({chunk_rows}) exceeds u32::MAX"
+            )));
+        }
         let expected = checked_mul_len(chunk_rows, self.d, "mapped bf16 chunk elements")?;
         if rows_bf16.len() != expected {
             return Err(shape_err(format!(
@@ -2338,6 +2378,11 @@ pub fn assign_cpu_f32(
     if k == 0 {
         return Err(out_of_range("k must be >= 1"));
     }
+    if k >= (UNASSIGNED_LABEL as usize) {
+        return Err(out_of_range(format!(
+            "k ({k}) must be < UNASSIGNED_LABEL ({UNASSIGNED_LABEL})"
+        )));
+    }
     if d == 0 {
         return Err(out_of_range("d must be >= 1"));
     }
@@ -2416,6 +2461,11 @@ pub fn assign_cpu_bf16(
 ) -> Result<(Vec<u32>, f64), OjasError> {
     if k == 0 {
         return Err(out_of_range("k must be >= 1"));
+    }
+    if k >= (UNASSIGNED_LABEL as usize) {
+        return Err(out_of_range(format!(
+            "k ({k}) must be < UNASSIGNED_LABEL ({UNASSIGNED_LABEL})"
+        )));
     }
     if d == 0 {
         return Err(out_of_range("d must be >= 1"));
@@ -2496,6 +2546,11 @@ pub fn assign_cpu_tensor(
     let k = c_view.rows();
     if k == 0 {
         return Err(out_of_range("k must be >= 1"));
+    }
+    if k >= (UNASSIGNED_LABEL as usize) {
+        return Err(out_of_range(format!(
+            "k ({k}) must be < UNASSIGNED_LABEL ({UNASSIGNED_LABEL})"
+        )));
     }
     if d == 0 {
         return Err(out_of_range("d must be >= 1"));
@@ -2588,6 +2643,15 @@ pub fn fit_cpu(
     math: CpuMath,
     budget: &Budget,
 ) -> Result<EmeansFit, OjasError> {
+    if cfg.k == 0 {
+        return Err(out_of_range("k must be >= 1"));
+    }
+    if cfg.k >= (UNASSIGNED_LABEL as usize) {
+        return Err(out_of_range(format!(
+            "k ({}) must be < UNASSIGNED_LABEL ({UNASSIGNED_LABEL})",
+            cfg.k
+        )));
+    }
     let x_view = MatrixView::open(x, "emeans")?;
     let global_n = x_view.rows();
     let d = x_view.cols();

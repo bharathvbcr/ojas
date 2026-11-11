@@ -346,6 +346,11 @@ impl EmeansSession {
         if chunk_rows == 0 {
             return Err(out_of_range("chunk must contain >= 1 row"));
         }
+        if chunk_rows > (u32::MAX as usize) {
+            return Err(out_of_range(format!(
+                "chunk rows ({chunk_rows}) exceed u32::MAX"
+            )));
+        }
         let rem_batch = self.remaining_in_batch();
         if rem_batch == 0 {
             return Err(out_of_range(

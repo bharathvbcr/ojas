@@ -1526,3 +1526,170 @@ fn test_spherical_fit_cpu_single_normalizes_init_centroids_matching_cpu_session(
         );
     }
 }
+
+#[test]
+fn test_cpu_and_lloyd_u32_upper_bound_refusals() {
+    let tiny_budget = Budget::new(16 * 1024);
+    let pool = CpuPool::new(Some(2)).expect("pool");
+    let sentinel_k = UNASSIGNED_LABEL as usize;
+
+    // 1. `CpuSession::new` rejects `k >= UNASSIGNED_LABEL` upfront before slice-length or `Scratch` checks.
+    let Err(err_sess) = CpuSession::new(
+        sentinel_k,
+        1,
+        false,
+        0.0,
+        1.0e-4,
+        1.0,
+        42,
+        &[1.0_f32],
+        &tiny_budget,
+    ) else {
+        panic!("CpuSession::new must reject k == UNASSIGNED_LABEL");
+    };
+    assert!(
+        matches!(err_sess, OjasError::OutOfRange { op: "emeans", .. }),
+        "expected OutOfRange from CpuSession::new, got {err_sess:?}"
+    );
+
+    // 2. `assign_cpu_f32`, `assign_cpu_bf16`, and `assign_cpu_tensor` reject `k >= UNASSIGNED_LABEL` upfront.
+    let err_f32 = assign_cpu_f32(
+        &pool,
+        &[1.0_f32],
+        1,
+        1,
+        &[1.0_f32],
+        sentinel_k,
+        64,
+        CpuMath::Exact,
+        false,
+        &tiny_budget,
+    )
+    .expect_err("assign_cpu_f32 must reject k == UNASSIGNED_LABEL");
+    assert!(
+        matches!(err_f32, OjasError::OutOfRange { op: "emeans", .. }),
+        "expected OutOfRange from assign_cpu_f32, got {err_f32:?}"
+    );
+
+    let err_bf16 = assign_cpu_bf16(
+        &pool,
+        &[0x3f80_u16],
+        1,
+        1,
+        &[1.0_f32],
+        sentinel_k,
+        64,
+        CpuMath::Exact,
+        false,
+        &tiny_budget,
+    )
+    .expect_err("assign_cpu_bf16 must reject k == UNASSIGNED_LABEL");
+    assert!(
+        matches!(err_bf16, OjasError::OutOfRange { op: "emeans", .. }),
+        "expected OutOfRange from assign_cpu_bf16, got {err_bf16:?}"
+    );
+
+    // Zero-byte `[UNASSIGNED_LABEL as usize, 0]` centroids tensor exercises `assign_cpu_tensor` in microseconds!
+    let x_one = Tensor::from_f32(&[1.0_f32], &[1, 1], &tiny_budget).expect("x_one");
+    let c_sentinel_zero_d =
+        Tensor::from_f32(&[], &[sentinel_k, 0], &tiny_budget).expect("c_sentinel_zero_d");
+    let err_tensor = assign_cpu_tensor(
+        &pool,
+        &x_one,
+        &c_sentinel_zero_d,
+        64,
+        CpuMath::Exact,
+        false,
+        &tiny_budget,
+    )
+    .expect_err("assign_cpu_tensor must reject k == UNASSIGNED_LABEL upfront");
+    assert!(
+        matches!(err_tensor, OjasError::OutOfRange { op: "emeans", .. }),
+        "expected OutOfRange from assign_cpu_tensor, got {err_tensor:?}"
+    );
+
+    // 3. `fit_cpu` and `lloyd_fit` reject `k >= UNASSIGNED_LABEL` upfront with `OjasError::OutOfRange`.
+    let err_fit_cpu = fit_cpu(
+        &pool,
+        &x_one,
+        None,
+        &EmeansConfig::new(sentinel_k),
+        CpuMath::Exact,
+        &tiny_budget,
+    )
+    .expect_err("fit_cpu must reject k == UNASSIGNED_LABEL");
+    assert!(
+        matches!(
+            &err_fit_cpu,
+            OjasError::OutOfRange { op: "emeans", detail } if detail.contains("UNASSIGNED_LABEL")
+        ),
+        "expected OutOfRange mentioning UNASSIGNED_LABEL from fit_cpu, got {err_fit_cpu:?}"
+    );
+
+    let x_zero_d = Tensor::from_f32(&[], &[1, 0], &tiny_budget).expect("x_zero_d");
+    let err_lloyd = lloyd_fit(&x_zero_d, None, &LloydConfig::new(sentinel_k), &tiny_budget)
+        .expect_err("lloyd_fit must reject k == UNASSIGNED_LABEL upfront before d == 0");
+    assert!(
+        matches!(
+            &err_lloyd,
+            OjasError::OutOfRange { op: "emeans", detail } if detail.contains("UNASSIGNED_LABEL")
+        ),
+        "expected upfront OutOfRange mentioning UNASSIGNED_LABEL from lloyd_fit, got {err_lloyd:?}"
+    );
+
+    // 4. `CpuSession::accumulate_{f32,bf16,bf16_bytes}_chunk` reject `chunk_rows > u32::MAX as usize` upfront.
+    if let Some(over_u32_rows) = (u32::MAX as usize).checked_add(1) {
+        let mut sess =
+            CpuSession::new(2, 1, false, 0.0, 1.0e-4, 1.0, 42, &[0.0, 1.0], &tiny_budget)
+                .expect("valid CpuSession");
+        let err_acc_f32 = sess
+            .accumulate_f32_chunk(
+                &pool,
+                &[],
+                over_u32_rows,
+                CpuMath::Exact,
+                None,
+                &tiny_budget,
+            )
+            .expect_err("accumulate_f32_chunk must reject chunk_rows > u32::MAX");
+        assert!(
+            matches!(err_acc_f32, OjasError::OutOfRange { op: "emeans", .. }),
+            "expected OutOfRange from accumulate_f32_chunk, got {err_acc_f32:?}"
+        );
+
+        let err_acc_bf16 = sess
+            .accumulate_bf16_chunk(
+                &pool,
+                &[],
+                over_u32_rows,
+                CpuMath::Exact,
+                None,
+                &tiny_budget,
+            )
+            .expect_err("accumulate_bf16_chunk must reject chunk_rows > u32::MAX");
+        assert!(
+            matches!(err_acc_bf16, OjasError::OutOfRange { op: "emeans", .. }),
+            "expected OutOfRange from accumulate_bf16_chunk, got {err_acc_bf16:?}"
+        );
+
+        let err_acc_bytes = sess
+            .accumulate_bf16_bytes_chunk(
+                &pool,
+                &[],
+                over_u32_rows,
+                CpuMath::Exact,
+                None,
+                &tiny_budget,
+            )
+            .expect_err("accumulate_bf16_bytes_chunk must reject chunk_rows > u32::MAX");
+        assert!(
+            matches!(err_acc_bytes, OjasError::OutOfRange { op: "emeans", .. }),
+            "expected OutOfRange from accumulate_bf16_bytes_chunk, got {err_acc_bytes:?}"
+        );
+    }
+
+    drop(x_one);
+    drop(x_zero_d);
+    drop(c_sentinel_zero_d);
+    assert_eq!(tiny_budget.live_bytes().unwrap(), 0);
+}

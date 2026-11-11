@@ -2,7 +2,7 @@
 
 use ojas_core::OjasError;
 
-use crate::{BatchLaw, EmeansConfig, ResolvedRecipe};
+use crate::{BatchLaw, EmeansConfig, ResolvedRecipe, UNASSIGNED_LABEL};
 
 /// Upper cap on `nepochs` (`2^20` passes) so malformed huge floats fail closed with
 /// [`OjasError::OutOfRange`] instead of attempting unbounded schedule vector allocations.
@@ -51,6 +51,12 @@ pub fn resolve_recipe(
 ) -> Result<ResolvedRecipe, OjasError> {
     if cfg.k == 0 {
         return Err(out_of_range("k must be >= 1"));
+    }
+    if cfg.k >= (UNASSIGNED_LABEL as usize) {
+        return Err(out_of_range(format!(
+            "k ({}) must be < UNASSIGNED_LABEL ({UNASSIGNED_LABEL})",
+            cfg.k
+        )));
     }
     if d == 0 {
         return Err(out_of_range("d must be >= 1"));

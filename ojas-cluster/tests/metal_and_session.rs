@@ -1593,3 +1593,253 @@ fn test_upstream_numpy_emeans_golden_parity() {
         );
     }
 }
+
+#[test]
+fn test_engine_assign_rejects_unassigned_label_k() {
+    let _guard = serial();
+    let budget = Budget::new(4 << 20);
+    let sentinel_k = UNASSIGNED_LABEL as usize;
+
+    let x_one = Tensor::from_f32(&[1.0_f32], &[1, 1], &budget).expect("x_one");
+    let c_sentinel = Tensor::from_f32(&[], &[sentinel_k, 0], &budget).expect("c_sentinel");
+
+    let cpu_dev = ClusterDevice::Cpu {
+        threads: Some(2),
+        math: CpuMath::Exact,
+    };
+    let cpu_eng = EmeansEngine::new(cpu_dev, &budget).expect("cpu_eng");
+    let cpu_err = cpu_eng
+        .assign(&x_one, &c_sentinel, false, 64)
+        .expect_err("CPU engine.assign must reject k == UNASSIGNED_LABEL");
+    assert!(
+        matches!(cpu_err, OjasError::OutOfRange { op: "emeans", .. }),
+        "expected OutOfRange on CPU assign, got {cpu_err:?}"
+    );
+    let cpu_fn_err = emeans_assign(&x_one, &c_sentinel, false, cpu_dev, &budget)
+        .expect_err("emeans_assign on CPU must reject k == UNASSIGNED_LABEL");
+    assert!(matches!(
+        cpu_fn_err,
+        OjasError::OutOfRange { op: "emeans", .. }
+    ));
+
+    if let Some(metal_eng) = open_metal_engine(MetalPrecision::Bf16, &budget) {
+        let metal_err = metal_eng
+            .assign(&x_one, &c_sentinel, false, 64)
+            .expect_err("Metal engine.assign must reject k == UNASSIGNED_LABEL");
+        assert!(
+            matches!(metal_err, OjasError::OutOfRange { op: "emeans", .. }),
+            "expected OutOfRange on Metal assign, got {metal_err:?}"
+        );
+    }
+}
+
+#[test]
+fn test_metal_near_flt_max_euclidean_parity_and_nonfinite_recovery() {
+    let _guard = serial();
+    let budget = Budget::new(32 << 20);
+
+    let cpu_eng = EmeansEngine::new(
+        ClusterDevice::Cpu {
+            threads: Some(2),
+            math: CpuMath::Exact,
+        },
+        &budget,
+    )
+    .expect("cpu_eng");
+
+    // 1. Same-sign `2.0f * dot` overflow (`x = [0.93e19]`, `c = [[1.84e19], [0.5e19]]` -> selects cluster `1`).
+    let x_same = Tensor::from_f32(&[0.93e19_f32, 0.93e19_f32], &[2, 1], &budget).expect("x_same");
+    let c_same = Tensor::from_f32(&[1.84e19_f32, 0.5e19_f32], &[2, 1], &budget).expect("c_same");
+    let (cpu_lbls, cpu_obj) = cpu_eng
+        .assign(&x_same, &c_same, false, 64)
+        .expect("cpu assign");
+    assert_eq!(cpu_lbls, vec![1, 1]);
+    assert!(cpu_obj.is_finite() && cpu_obj > 0.0);
+
+    let mut same_cfg = EmeansConfig::new(2);
+    same_cfg.nepochs = 1.0;
+    same_cfg.batch_size = Some(2);
+    same_cfg.unused_threshold = Some(0.0);
+    let cpu_fit = cpu_eng
+        .fit_with_init(&x_same, &c_same, &same_cfg)
+        .expect("cpu fit same");
+    assert_eq!(cpu_fit.labels, vec![1, 1]);
+
+    // 2. Opposite-sign overflows (`[-1.0e19]` vs `[+1.0e19]` and `[-1.5e19]` vs `[+1.5e19]`).
+    let x_opp1 = Tensor::from_f32(&[-1.0e19_f32, -1.0e19_f32], &[2, 1], &budget).expect("x_opp1");
+    let c_opp1 = Tensor::from_f32(&[1.0e19_f32], &[1, 1], &budget).expect("c_opp1");
+    let x_opp2 = Tensor::from_f32(&[-1.5e19_f32, -1.5e19_f32], &[2, 1], &budget).expect("x_opp2");
+    let c_opp2 = Tensor::from_f32(&[1.5e19_f32], &[1, 1], &budget).expect("c_opp2");
+
+    for (x_bad, c_bad) in [(&x_opp1, &c_opp1), (&x_opp2, &c_opp2)] {
+        assert!(matches!(
+            cpu_eng.assign(x_bad, c_bad, false, 64),
+            Err(OjasError::NonFinite { op: "emeans" })
+        ));
+    }
+
+    let x_valid = Tensor::from_f32(&[1.0_f32, 2.0, 10.0, 11.0], &[4, 1], &budget).expect("x_valid");
+    let c_valid = Tensor::from_f32(&[1.5_f32, 10.5], &[2, 1], &budget).expect("c_valid");
+
+    for prec in [
+        MetalPrecision::Bf16,
+        MetalPrecision::Bf16AssignF32Stats,
+        MetalPrecision::F32,
+    ] {
+        let Some(metal_eng) = open_metal_engine(prec, &budget) else {
+            return;
+        };
+
+        // Same-sign `[0.93e19]` vs `[[1.84e19], [0.5e19]]` must select cluster `1` across `assign`,
+        // `fit_with_init`, and `EmeansSession`, matching CPU!
+        let (m_lbls, m_obj) = metal_eng
+            .assign(&x_same, &c_same, false, 64)
+            .expect("metal assign same-sign");
+        assert_eq!(m_lbls, cpu_lbls, "Metal {prec:?} assign hijacked argmin");
+        let tol = if matches!(prec, MetalPrecision::F32) {
+            1.0e-5
+        } else {
+            2.0e-2
+        };
+        assert!(
+            ((m_obj - cpu_obj).abs() / cpu_obj) <= tol,
+            "Metal {prec:?} assign obj {m_obj:e} vs CPU {cpu_obj:e}"
+        );
+
+        let m_fit = metal_eng
+            .fit_with_init(&x_same, &c_same, &same_cfg)
+            .expect("metal fit same-sign");
+        assert_eq!(m_fit.labels, vec![1, 1]);
+        assert!(m_fit.epoch_stats[0].mean_objective.is_finite());
+
+        let mut m_sess =
+            EmeansSession::begin(&metal_eng, 2, &c_same, &same_cfg).expect("begin same-sign");
+        let (_, cap_lbls) = m_sess.accumulate(&x_same).expect("accum same-sign");
+        assert_eq!(cap_lbls.as_deref(), Some(&[1_u32, 1_u32][..]));
+        m_sess.update().expect("update same-sign");
+        let ep_stat = m_sess.end_epoch().expect("end_epoch same-sign");
+        assert!(ep_stat.mean_objective.is_finite() && ep_stat.mean_objective > 0.0);
+        let sess_fit = m_sess.finalize().expect("finalize same-sign");
+        assert_eq!(sess_fit.labels, vec![1, 1]);
+
+        // Opposite-sign `[-1.0e19]` vs `[+1.0e19]` and `[-1.5e19]` vs `[+1.5e19]` must refuse with
+        // `Err(OjasError::NonFinite { op: "emeans" })` on `assign`, `fit_with_init`, and `EmeansSession`
+        // (both 1-epoch sync and 2-epoch async) without poisoning `metal_eng`!
+        let mut bad_cfg_1ep = EmeansConfig::new(1);
+        bad_cfg_1ep.nepochs = 1.0;
+        bad_cfg_1ep.batch_size = Some(2);
+        bad_cfg_1ep.unused_threshold = Some(0.0);
+
+        let mut bad_cfg_2ep = bad_cfg_1ep.clone();
+        bad_cfg_2ep.nepochs = 2.0;
+
+        for (x_bad, c_bad) in [(&x_opp1, &c_opp1), (&x_opp2, &c_opp2)] {
+            let a_err = metal_eng
+                .assign(x_bad, c_bad, false, 64)
+                .expect_err("Metal assign must refuse distance overflow");
+            assert!(
+                matches!(a_err, OjasError::NonFinite { op: "emeans" }),
+                "expected NonFinite on Metal {prec:?} assign, got {a_err:?}"
+            );
+
+            let f_err = metal_eng
+                .fit_with_init(x_bad, c_bad, &bad_cfg_1ep)
+                .expect_err("Metal fit must refuse distance overflow");
+            assert!(
+                matches!(f_err, OjasError::NonFinite { op: "emeans" }),
+                "expected NonFinite on Metal {prec:?} fit, got {f_err:?}"
+            );
+
+            // 1-epoch session (`capture_labels == true` -> fails immediately on `accumulate`)
+            let mut s1 =
+                EmeansSession::begin(&metal_eng, 2, c_bad, &bad_cfg_1ep).expect("begin s1");
+            let s1_err = s1
+                .accumulate(x_bad)
+                .expect_err("1-epoch Metal session accumulate must refuse distance overflow");
+            assert!(
+                matches!(s1_err, OjasError::NonFinite { op: "emeans" }),
+                "expected NonFinite on Metal {prec:?} 1-ep session, got {s1_err:?}"
+            );
+            drop(s1);
+
+            // 2-epoch session (`capture_labels == false` -> fails closed before `update` mutates state)
+            let mut s2 =
+                EmeansSession::begin(&metal_eng, 2, c_bad, &bad_cfg_2ep).expect("begin s2");
+            let s2_res = s2.accumulate(x_bad).and_then(|_| s2.update());
+            assert!(
+                matches!(s2_res, Err(OjasError::NonFinite { op: "emeans" })),
+                "expected NonFinite on Metal {prec:?} 2-ep session, got {s2_res:?}"
+            );
+            drop(s2);
+        }
+
+        // Engine remains completely healthy for subsequent `assign`, `fit`, and `EmeansSession`!
+        let (ok_lbls, ok_obj) = metal_eng
+            .assign(&x_valid, &c_valid, false, 64)
+            .expect("assign after NonFinite recovery");
+        assert_eq!(ok_lbls, vec![0, 0, 1, 1]);
+        assert!(ok_obj.is_finite());
+
+        let mut valid_cfg = EmeansConfig::new(2);
+        valid_cfg.nepochs = 1.0;
+        valid_cfg.batch_size = Some(4);
+        let ok_fit = metal_eng
+            .fit_with_init(&x_valid, &c_valid, &valid_cfg)
+            .expect("fit after NonFinite recovery");
+        assert_eq!(ok_fit.labels.len(), 4);
+
+        let mut ok_sess = EmeansSession::begin(&metal_eng, 4, &c_valid, &valid_cfg)
+            .expect("session after recovery");
+        ok_sess.accumulate(&x_valid).expect("ok_sess accum");
+        ok_sess.update().expect("ok_sess update");
+        ok_sess.end_epoch().expect("ok_sess end_epoch");
+        let _ = ok_sess.finalize().expect("ok_sess finalize");
+    }
+}
+
+#[test]
+fn test_metal_fresh_engine_tight_budget_reclaims_upload_staging() {
+    let _guard = serial();
+
+    #[cfg(all(target_os = "macos", feature = "metal"))]
+    {
+        // Size a dataset (`n = 65_536, d = 8`, `F32` = `2 MiB`) on a FRESH `EmeansEngine`
+        // (`cached_bytes == 0`) with a tight `Budget` (`6_750_000` bytes ≈ `6.44 MiB`):
+        // - `x` (`2.00 MiB`) + `init_c` (`256 B`) + `runner` (~`0.29 MiB`) + `ResidentDataset` (`2.25 MiB`)
+        //   + transient upload `staged` (`2.00 MiB`) peaks at `6_595_072` bytes during `upload_dataset_f32`.
+        // - Immediately after upload, `epoch_permutation` (`262_144` bytes) + `run_resident_epoch`
+        //   (`order_buf`, `epoch_labels_buf`, `labels_vec`) fit comfortably once `staged` (`2 MiB`) is
+        //   reclaimed (~`5.29 MiB` peak), whereas leaving `staged` in `pending_cold_recycle` (`live = 6_595_072`,
+        //   `cached_bytes == 0`) overflows `6_750_000` at `epoch_permutation` (`6_857_216 > 6_750_000`)!
+        let n = 65_536_usize;
+        let d = 8_usize;
+        let k = 8_usize;
+        let x_vec = make_golden_mixture(n, d, k, 0x2026_1111, 2.0, 0.3, false);
+
+        let tight_budget = Budget::new(6_750_000);
+        let Some(fresh_eng) = open_metal_engine(MetalPrecision::F32, &tight_budget) else {
+            return;
+        };
+
+        let x = Tensor::from_f32(&x_vec, &[n, d], &tight_budget).expect("x on tight_budget");
+        let init_c = Tensor::from_f32(&x_vec[..k * d], &[k, d], &tight_budget)
+            .expect("init_c on tight_budget");
+
+        let mut cfg = EmeansConfig::new(k);
+        cfg.nepochs = 1.0;
+        cfg.batch_size = Some(256);
+        cfg.assignment_chunk_size = 256;
+
+        let fit = fresh_eng
+            .fit_with_init(&x, &init_c, &cfg)
+            .expect("fresh Metal engine must reclaim upload staging buffer under tight Budget");
+        assert_eq!(fit.labels.len(), n);
+        assert!(fit.epoch_stats[0].mean_objective.is_finite());
+
+        drop(fit);
+        drop(init_c);
+        drop(x);
+        drop(fresh_eng);
+        assert_eq!(tight_budget.live_bytes().unwrap(), 0);
+    }
+}

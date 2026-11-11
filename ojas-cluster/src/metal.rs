@@ -459,15 +459,16 @@ mod imp {
         let _ = rt.reclaim(u64::MAX);
     }
 
-    /// Allocate a `Budget`-charged host buffer from `"ojas-cluster-metal"`, evicting idle
-    /// GPU free-list buffers first if `ON_EMEANS_WORKER` suppressed `MetalWorkerTrimHandler`.
+    /// Allocate a `Budget`-charged host buffer from `"ojas-cluster-metal"`, draining any
+    /// `pending_cold_recycle` or cached `free_list` buffers first if `ON_EMEANS_WORKER`
+    /// suppressed `MetalWorkerTrimHandler`.
     fn alloc_on_worker<T>(
         rt: &GpuRuntime,
         mut f: impl FnMut() -> Result<T, OjasError>,
     ) -> Result<T, OjasError> {
         match f() {
             Ok(val) => Ok(val),
-            Err(OjasError::CapacityExceeded { .. }) if rt.pool_resident().cached_bytes > 0 => {
+            Err(OjasError::CapacityExceeded { .. }) if rt.pool_resident().total() > 0 => {
                 let _ = trim_runtime_all(rt);
                 f()
             }
@@ -541,6 +542,7 @@ mod imp {
         drop(init_centroids);
 
         let ds = upload_payload_to_dataset(&runner, payload, recipe.effective_n as u32)?;
+        reclaim_runtime_warm(rt);
 
         let num_epochs = recipe.epoch_rows.len();
         let mut epoch_stats = Vec::with_capacity(num_epochs);
@@ -1189,6 +1191,11 @@ mod imp {
             let k = c_view.rows();
             if k == 0 {
                 return Err(out_of_range("k must be >= 1"));
+            }
+            if k >= (UNASSIGNED_LABEL as usize) {
+                return Err(out_of_range(format!(
+                    "k ({k}) must be < UNASSIGNED_LABEL ({UNASSIGNED_LABEL})"
+                )));
             }
             if d == 0 {
                 return Err(out_of_range("d must be >= 1"));

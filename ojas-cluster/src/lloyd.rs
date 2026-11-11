@@ -81,6 +81,13 @@ pub fn lloyd_fit(
     if cfg.k == 0 {
         return Err(out_of_range("LloydConfig::k must be >= 1"));
     }
+    if cfg.k >= (crate::UNASSIGNED_LABEL as usize) {
+        return Err(out_of_range(format!(
+            "LloydConfig::k ({}) must be < UNASSIGNED_LABEL ({})",
+            cfg.k,
+            crate::UNASSIGNED_LABEL
+        )));
+    }
     if cfg.max_iters == 0 {
         return Err(out_of_range("LloydConfig::max_iters must be >= 1"));
     }
