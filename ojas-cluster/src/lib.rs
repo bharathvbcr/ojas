@@ -4,8 +4,10 @@
 
 pub mod cpu;
 pub mod lloyd;
+mod metal;
 pub mod recipe;
 pub mod rng;
+pub mod session;
 
 pub use cpu::{assign_cpu_bf16, assign_cpu_f32, assign_cpu_tensor, fit_cpu, CpuPool, CpuSession};
 pub use lloyd::{lloyd_fit, LloydConfig, LloydFit};
@@ -15,6 +17,7 @@ pub use rng::{
     prescaled_unit_normalize_f64, sample_subset_sorted, separate_collapsed_split_bf16,
     separate_collapsed_split_f32, SplitMix64,
 };
+pub use session::{emeans_assign, emeans_fit, EmeansEngine, EmeansSession};
 
 /// Sentinel cluster label assigned to rows excluded by `max_points_per_centroid` subsampling.
 pub const UNASSIGNED_LABEL: u32 = u32::MAX;
