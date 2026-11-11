@@ -910,6 +910,16 @@ fn run_bench() -> Result<(), OjasError> {
 
     println!("peak_budget_bytes: {}", budget.peak_bytes());
     println!("live_budget_bytes_before_drop: {}", budget.live_bytes()?);
+    drop(metal_bf16);
+    drop(metal_mixed);
+    drop(metal_f32);
+    drop(cpu_engine);
+    let live_after = budget.live_bytes()?;
+    println!("live_budget_bytes_after_drop: {live_after}");
+    assert_eq!(
+        live_after, 0,
+        "expected live_budget_bytes_after_drop == 0 after dropping all engines, got {live_after}"
+    );
     Ok(())
 }
 

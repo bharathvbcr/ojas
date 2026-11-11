@@ -21,11 +21,11 @@ Benchmark driver: [`ojas-cluster/examples/emeans_bench.rs`](../../../ojas-cluste
 | Rustc | `rustc 1.99.1 (58cf8f9c3 2026-10-13)` |
 | Sibling `tessl` | `17471e7` (`fix(emeans): eliminate intra-threadgroup EMA device race for k=1024 bit-identity`) |
 | CPU Pool | `pool = 18`, `host_available_parallelism = 18`, `simd_backend = neon` (`accelerate` enabled on macOS) |
-| Memory Budget | `Budget::new(4 GiB)` (`peak_budget_bytes = 651,601,920`, `live_bytes == 0` verified after engine drop) |
-| Host Load Average | `77.54 57.68 45.36` at start, `75.58 60.26 47.02` after Shape A, `109.19 78.73 55.80` after Shape B |
+| Memory Budget | `Budget::new(4 GiB)` (`peak_budget_bytes = 651,601,920`, `live_budget_bytes_before_drop = 158,319,360`, `live_budget_bytes_after_drop = 0` verified fail-closed after engine drop) |
+| Host Load Average | `15.63 23.03 31.70` at start, `22.60 23.97 31.65` after Shape A, `30.47 25.67 31.83` after Shape B |
 
 > [!NOTE]
-> Because concurrent background processes held machine load average at `58–109` during capture, absolute wall-clock latencies have wider `max_ms - min_ms` spread than an idle machine. The benchmark runs **cyclic-interleaved paired rounds** (`round = 1..=5`, cycling through all 9 contenders inside each round after 1 untimed warmup per contender) so every contender experiences the same contemporaneous thermal and scheduling conditions, and reports both global ratios (`speedup_min`, `speedup_med`) and within-round paired speedups (`paired_med [min-max]`).
+> Because concurrent background processes held 1-minute machine load average at `15.6–30.5` during capture, absolute wall-clock latencies have wider `max_ms - min_ms` spread than an idle machine. The benchmark runs **cyclic-interleaved paired rounds** (`round = 1..=5`, cycling through all 9 contenders inside each round after 1 untimed warmup per contender) so every contender experiences the same contemporaneous thermal and scheduling conditions, and reports both global ratios (`speedup_min`, `speedup_med`) and within-round paired speedups (`paired_med [min-max]`).
 
 ## Methodology & Workloads
 
@@ -45,15 +45,15 @@ $$\text{MSE}_{f64}(X, C) = \frac{1}{n} \sum_{i=0}^{n-1} \min_{0 \le j < k} \sum_
 
 | Contender | `min_ms` | `median_ms` | `max_ms` | `spread_ms (%)` | `MSE (f64)` | `MSE vs Lloyd` | `speedup_min` | `speedup_med` | `paired_med [min-max]` | `non_empty` | `revived` |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | :--- | ---: | ---: |
-| `Lloyd 25-iter (CpuMath::Fast)` | 5047.01 | 5285.93 | 6304.91 | 1257.90 (24.9%) | 0.228053 | +0.00% (1.0000x) | 1.00x | 1.00x | 1.00x [1.00-1.00x] | 982/1024 | 0 |
-| `e-means T=2.0 (CpuMath::Fast)` | 494.40 | 591.82 | 656.89 | 162.49 (32.9%) | 0.170040 | -25.44% (0.7456x) | 10.21x | 8.93x | 10.21x [8.92-10.68x] | 1024/1024 | 532 |
-| `e-means T=2.6 (CpuMath::Fast)` | 548.34 | 733.95 | 949.48 | 401.14 (73.2%) | 0.160376 | -29.68% (0.7032x) | 9.20x | 7.20x | 7.87x [6.41-9.64x] | 1024/1024 | 588 |
-| `e-means T=2.0 (Metal::F32)` | 49.64 | 63.66 | 92.57 | 42.94 (86.5%) | 0.169943 | -25.48% (0.7452x) | 101.68x | 83.03x | 82.94x [65.76-101.68x] | 1024/1024 | 527 |
-| `e-means T=2.6 (Metal::F32)` | 49.62 | 54.17 | 76.78 | 27.16 (54.7%) | 0.162137 | -28.90% (0.7110x) | 101.71x | 97.58x | 99.03x [79.29-114.80x] | 1024/1024 | 581 |
-| `e-means T=2.0 (Metal::Bf16AssignF32Stats)` | 50.21 | 57.80 | 64.02 | 13.81 (27.5%) | 0.165726 | -27.33% (0.7267x) | 100.53x | 91.45x | 95.09x [82.46-109.08x] | 1024/1024 | 543 |
-| `e-means T=2.6 (Metal::Bf16AssignF32Stats)` | 50.77 | 62.44 | 66.83 | 16.06 (31.6%) | 0.160264 | -29.73% (0.7027x) | 99.40x | 84.66x | 94.34x [80.67-104.11x] | 1024/1024 | 582 |
-| `e-means T=2.0 (Metal::Bf16)` | 48.44 | 56.60 | 68.43 | 20.00 (41.3%) | 0.172521 | -24.35% (0.7565x) | 104.20x | 93.38x | 106.91x [88.95-109.01x] | 1024/1024 | 529 |
-| `e-means T=2.6 (Metal::Bf16)` | 46.19 | 54.47 | 60.01 | 13.82 (29.9%) | 0.163665 | -28.23% (0.7177x) | 109.27x | 97.04x | 101.45x [90.61-115.74x] | 1024/1024 | 591 |
+| `Lloyd 25-iter (CpuMath::Fast)` | 4005.60 | 4327.02 | 4976.89 | 971.29 (24.2%) | 0.228053 | +0.00% (1.0000x) | 1.00x | 1.00x | 1.00x [1.00-1.00x] | 982/1024 | 0 |
+| `e-means T=2.0 (CpuMath::Fast)` | 376.94 | 387.35 | 488.56 | 111.62 (29.6%) | 0.170040 | -25.44% (0.7456x) | 10.63x | 11.17x | 11.06x [9.48-12.98x] | 1024/1024 | 532 |
+| `e-means T=2.6 (CpuMath::Fast)` | 500.20 | 520.05 | 879.93 | 379.73 (75.9%) | 0.160376 | -29.68% (0.7032x) | 8.01x | 8.32x | 7.75x [5.66-8.33x] | 1024/1024 | 588 |
+| `e-means T=2.0 (Metal::F32)` | 48.62 | 63.99 | 123.64 | 75.02 (154.3%) | 0.169943 | -25.48% (0.7452x) | 82.39x | 67.62x | 75.01x [37.46-82.39x] | 1024/1024 | 527 |
+| `e-means T=2.6 (Metal::F32)` | 47.98 | 65.84 | 71.91 | 23.93 (49.9%) | 0.162137 | -28.90% (0.7110x) | 83.49x | 65.72x | 64.41x [63.30-83.90x] | 1024/1024 | 581 |
+| `e-means T=2.0 (Metal::Bf16AssignF32Stats)` | 49.78 | 65.71 | 74.30 | 24.52 (49.3%) | 0.165726 | -27.33% (0.7267x) | 80.46x | 65.85x | 65.85x [62.33-80.46x] | 1024/1024 | 543 |
+| `e-means T=2.6 (Metal::Bf16AssignF32Stats)` | 47.30 | 58.95 | 90.98 | 43.68 (92.4%) | 0.160264 | -29.73% (0.7027x) | 84.69x | 73.40x | 71.85x [54.70-84.69x] | 1024/1024 | 582 |
+| `e-means T=2.0 (Metal::Bf16)` | 44.16 | 59.26 | 66.63 | 22.47 (50.9%) | 0.172521 | -24.35% (0.7565x) | 90.72x | 73.01x | 77.00x [73.01-90.72x] | 1024/1024 | 529 |
+| `e-means T=2.6 (Metal::Bf16)` | 46.30 | 57.74 | 84.68 | 38.38 (82.9%) | 0.163665 | -28.23% (0.7177x) | 86.52x | 74.94x | 77.57x [58.77-86.52x] | 1024/1024 | 591 |
 
 ---
 
@@ -65,21 +65,21 @@ $$\text{MSE}_{f64}(X, C) = \frac{1}{n} \sum_{i=0}^{n-1} \min_{0 \le j < k} \sum_
 
 | Contender | `min_ms` | `median_ms` | `max_ms` | `spread_ms (%)` | `MSE (f64)` | `MSE vs Lloyd` | `speedup_min` | `speedup_med` | `paired_med [min-max]` | `non_empty` | `revived` |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | :--- | ---: | ---: |
-| `Lloyd 25-iter (CpuMath::Fast)` | 5991.42 | 6935.69 | 8653.08 | 2661.65 (44.4%) | 0.248275 | +0.00% (1.0000x) | 1.00x | 1.00x | 1.00x [1.00-1.00x] | 953/1024 | 0 |
-| `e-means T=2.0 (CpuMath::Fast)` | 654.95 | 866.32 | 1014.26 | 359.30 (54.9%) | 0.197876 | -20.30% (0.7970x) | 9.15x | 8.01x | 9.33x [6.84-10.28x] | 1023/1024 | 801 |
-| `e-means T=2.6 (CpuMath::Fast)` | 725.66 | 1014.84 | 1566.73 | 841.06 (115.9%) | 0.179865 | -27.55% (0.7245x) | 8.26x | 6.83x | 7.12x [5.32-9.28x] | 1023/1024 | 654 |
-| `e-means T=2.0 (Metal::F32)` | 148.07 | 211.90 | 286.01 | 137.95 (93.2%) | 0.192224 | -22.58% (0.7742x) | 40.46x | 32.73x | 31.77x [22.28-58.44x] | 1022/1024 | 809 |
-| `e-means T=2.6 (Metal::F32)` | 126.32 | 131.04 | 132.69 | 6.36 (5.0%) | 0.178966 | -27.92% (0.7208x) | 47.43x | 52.93x | 53.66x [47.43-65.81x] | 1023/1024 | 663 |
-| `e-means T=2.0 (Metal::Bf16AssignF32Stats)` | 108.61 | 138.45 | 146.31 | 37.70 (34.7%) | 0.199768 | -19.54% (0.8046x) | 55.17x | 50.10x | 55.17x [46.80-63.40x] | 1023/1024 | 802 |
-| `e-means T=2.6 (Metal::Bf16AssignF32Stats)` | 112.95 | 144.79 | 180.84 | 67.88 (60.1%) | 0.181201 | -27.02% (0.7298x) | 53.04x | 47.90x | 47.90x [39.91-69.27x] | 1022/1024 | 680 |
-| `e-means T=2.0 (Metal::Bf16)` | 108.06 | 136.56 | 224.17 | 116.10 (107.4%) | 0.193460 | -22.08% (0.7792x) | 55.44x | 50.79x | 50.79x [37.17-72.96x] | 1024/1024 | 806 |
-| `e-means T=2.6 (Metal::Bf16)` | 91.72 | 128.13 | 210.75 | 119.03 (129.8%) | 0.183158 | -26.23% (0.7377x) | 65.33x | 54.13x | 52.94x [39.54-76.73x] | 1024/1024 | 688 |
+| `Lloyd 25-iter (CpuMath::Fast)` | 4052.29 | 4766.71 | 5195.83 | 1143.53 (28.2%) | 0.248275 | +0.00% (1.0000x) | 1.00x | 1.00x | 1.00x [1.00-1.00x] | 953/1024 | 0 |
+| `e-means T=2.0 (CpuMath::Fast)` | 428.62 | 572.35 | 750.19 | 321.57 (75.0%) | 0.197876 | -20.30% (0.7970x) | 9.45x | 8.33x | 8.33x [6.56-9.45x] | 1023/1024 | 801 |
+| `e-means T=2.6 (CpuMath::Fast)` | 501.02 | 545.76 | 759.32 | 258.30 (51.6%) | 0.179865 | -27.55% (0.7245x) | 8.09x | 8.73x | 8.09x [6.48-8.73x] | 1023/1024 | 654 |
+| `e-means T=2.0 (Metal::F32)` | 87.66 | 108.06 | 174.72 | 87.06 (99.3%) | 0.192224 | -22.58% (0.7742x) | 46.23x | 44.11x | 46.23x [28.18-47.27x] | 1022/1024 | 809 |
+| `e-means T=2.6 (Metal::F32)` | 92.23 | 93.54 | 170.36 | 78.14 (84.7%) | 0.178966 | -27.92% (0.7208x) | 43.94x | 50.96x | 46.10x [28.90-50.96x] | 1023/1024 | 663 |
+| `e-means T=2.0 (Metal::Bf16AssignF32Stats)` | 101.69 | 118.72 | 122.75 | 21.06 (20.7%) | 0.199768 | -19.54% (0.8046x) | 39.85x | 40.15x | 40.18x [33.96-46.88x] | 1023/1024 | 802 |
+| `e-means T=2.6 (Metal::Bf16AssignF32Stats)` | 95.90 | 116.23 | 123.62 | 27.73 (28.9%) | 0.181201 | -27.02% (0.7298x) | 42.26x | 41.01x | 42.03x [36.51-49.71x] | 1022/1024 | 680 |
+| `e-means T=2.0 (Metal::Bf16)` | 88.49 | 95.96 | 152.52 | 64.02 (72.3%) | 0.193460 | -22.08% (0.7792x) | 45.79x | 49.67x | 45.79x [34.07-52.87x] | 1024/1024 | 806 |
+| `e-means T=2.6 (Metal::Bf16)` | 86.84 | 103.19 | 154.53 | 67.69 (78.0%) | 0.183158 | -26.23% (0.7377x) | 46.67x | 46.19x | 44.00x [33.62-56.69x] | 1024/1024 | 688 |
 
 ---
 
 ## Verified Observations
 
 1. **Wall-Clock Speedup & Lower Distortion Simultaneously:** Every `e-means` contender (`T = 2.0` and `T = 2.6` across CPU and all three Metal 4 precision lanes) achieves **19.5%–29.7% lower exact `f64` MSE** than 25-iteration Lloyd (`0.1603–0.1725` vs `0.2281` on Shape A; `0.1790–0.1998` vs `0.2483` on Shape B) because Gumbel dead-cluster split revival reallocates centroids trapped in empty tail modes while mini-batch EMA + cosine decay escapes bad Forgy local minima in `2.0–2.6` passes instead of `25` full passes.
-2. **CPU Speedup (`CpuMath::Fast`):** On the same 18-thread Apple M5 Pro CPU substrate, `e-means` runs **8.3x–10.2x faster** (`min_ms`) and **6.8x–8.9x faster** (`median_ms`) than 25-iteration `lloyd_fit`. Note on Shape B (`n = 65_536, d = 512`): `T = 2.6` resolves `batch_size = 4096` (`42` batch updates across `170,394` row visits) whereas `T = 2.0` resolves `batch_size = 2048` (`64` batch updates across `131,072` row visits), which explains why `Metal::Bf16` and `Metal::F32` `min_ms` and `median_ms` are slightly faster at `T = 2.6` (`91.72 ms` vs `108.06 ms` `min_ms` and `128.13 ms` vs `136.56 ms` `median_ms` on `Bf16`) due to fewer per-batch EMA/revival/centroid-prep barrier rounds.
-3. **Metal 4 Speedup (`TensorOps`):** Against 25-iteration CPU Lloyd, `ClusterDevice::Metal` achieves **99.4x–109.3x `min_ms` speedup** (`83.0x–97.6x` `median_ms`) on Shape A (`d = 128`, `46.2–50.8 ms` `min_ms`) and **40.5x–65.3x `min_ms` speedup** (`32.7x–54.1x` `median_ms`) on compute-heavier Shape B (`d = 512`, `91.7–148.1 ms` `min_ms`, with `Metal::Bf16` fastest at `91.72 ms` `min_ms` / `128.13 ms` `median_ms`). Against same-epoch CPU `e-means`, Metal 4 is **9.8x–11.9x faster** on Shape A (`min_ms`) and **4.4x–7.9x faster** on Shape B (`min_ms`).
+2. **CPU Speedup (`CpuMath::Fast`):** On the same 18-thread Apple M5 Pro CPU substrate, `e-means` runs **8.0x–10.6x faster** (`min_ms`) and **8.3x–11.2x faster** (`median_ms`) than 25-iteration `lloyd_fit`. Note on Shape B (`n = 65_536, d = 512`): `T = 2.6` resolves `batch_size = 4096` (`42` batch updates across `170,394` row visits) whereas `T = 2.0` resolves `batch_size = 2048` (`64` batch updates across `131,072` row visits), which explains why several contenders (`CpuMath::Fast` `median_ms` `545.76 ms` vs `572.35 ms`, `Metal::Bf16` `min_ms` `86.84 ms` vs `88.49 ms`, `Metal::Bf16AssignF32Stats` `min_ms` `95.90 ms` vs `101.69 ms`, and `Metal::F32` `median_ms` `93.54 ms` vs `108.06 ms`) are faster at `T = 2.6` due to fewer per-batch EMA/revival/centroid-prep barrier rounds.
+3. **Metal 4 Speedup (`TensorOps`):** Against 25-iteration CPU Lloyd, `ClusterDevice::Metal` achieves **80.5x–90.7x `min_ms` speedup** (`65.7x–74.9x` `median_ms`) on Shape A (`d = 128`, `44.2–49.8 ms` `min_ms`) and **39.9x–46.7x `min_ms` speedup** (`40.2x–51.0x` `median_ms`) on compute-heavier Shape B (`d = 512`, `86.8–101.7 ms` `min_ms`, with `Metal::Bf16` `T = 2.6` fastest `min_ms` at `86.84 ms` and `Metal::F32` `T = 2.6` fastest `median_ms` at `93.54 ms`). Against same-epoch CPU `e-means`, Metal 4 is **7.6x–10.8x faster** on Shape A (`min_ms`) and **4.2x–5.8x faster** on Shape B (`min_ms`).
 4. **0-ULP Repeat Bit-Identity Across CPU and Metal 4 (`unique_centroid_hashes = 1` in [`emeans_m5pro.txt`](emeans_m5pro.txt)):** Across 1 untimed warmup + 5 cyclic-interleaved rounds (`6` runs per contender, `108` runs total), **all 9 contenders**—`Lloyd 25-iter (CpuMath::Fast)`, `e-means` on `CpuMath::Fast`, and all three Metal 4 `TensorOps` precision lanes (`Metal::F32`, `Metal::Bf16AssignF32Stats`, `Metal::Bf16`)—recorded `unique_centroid_hashes = 1` with bit-for-bit identical `[k, d]` `f32` centroids, closing labels, cluster counts, and revived-cluster counts on both Shape A and Shape B (`k = 1024`). Repeat-run bit-identity is enforced fail-closed in [`ojas-cluster/examples/emeans_bench.rs`](../../../ojas-cluster/examples/emeans_bench.rs) and [`ojas-cluster/tests/metal_and_session.rs`](../../../ojas-cluster/tests/metal_and_session.rs).

@@ -25,17 +25,17 @@ flowchart TD
     end
 
     subgraph CPU["ClusterDevice::Cpu (src/cpu.rs)"]
-        CpuFast["CpuMath::Fast (Accelerate AMX / ojas-simd tiles)"]
-        CpuDet["CpuMath::DeterministicFma (thread-independent FMA tiles)"]
+        CpuFast["CpuMath::Fast (Accelerate AMX 2048x4096 / 64x256 ojas-simd tiles)"]
+        CpuDet["CpuMath::DeterministicFma (64x256 ojas-simd FMA tiles)"]
         CpuExact["CpuMath::Exact (non-FMA ascending f32 dot products)"]
-        CpuCSR["Ascending local-row CSR gather + f64 closing pass"]
+        CpuCSR["Direct ascending-row CSR fold (16-cluster blocks) + f64 closing pass"]
     end
 
     subgraph Metal["ClusterDevice::Metal (macOS + metal feature)"]
         Worker["Dedicated Metal worker thread + PoolLedger"]
-        TOps["64x64 cooperative TensorOps / 32x32 simdgroup argmin"]
-        Radix["64-bit GPU radix sort + 256-row slice CSR gather"]
-        Revive["GPU EMA update + SplitMix64 Gumbel split revival"]
+        TOps["64x64 cooperative TensorOps / 32x32 simdgroup_float8x8 argmin"]
+        Radix["8-bit ulong GPU radix-sort CSR + 256-row slice gather"]
+        Revive["GPU EMA update + SplitMix64 Gumbel split revival + f64 host closing divide"]
     end
 
     Fit --> Recipe
@@ -73,8 +73,8 @@ $$\alpha_0 = \text{clamp}_{[10^{-4},\, 1.0]}\!\left(0.8244 \cdot k^{-0.4617} \cd
 
 $$\alpha(s) = \alpha_0 \cdot \left(0.1 + 0.9 \cdot \frac{1 + \cos(\pi \cdot \min(s, S) / \max(S, 1))}{2}\right)$$
 
-4. **Fractional Epoch Schedule & Exact Closing Pass:** For $T = \lfloor T \rfloor + f$ with $\lfloor T \rfloor \ge 1$, `epoch_rows` places any fractional remainder pass $\text{round\_ties\_even}(f \cdot n_{\text{eff}})$ **before** a full $n_{\text{eff}}$-row final epoch (for example, $T = 2.6$ on $n = 100{,}000$ executes `[100_000, 60_000, 100_000]`). During the final epoch, every batch accumulates exact closing sums and counts alongside EMA updates so [`EmeansFit::centroids`](src/lib.rs) are finalized in `f64` from full-pass sufficient statistics (retaining the latest EMA centroid for any cluster with zero closing-pass assignments).
-5. **EMA Update & Gumbel Dead-Cluster Split Revival:** Each mini-batch updates cluster usage $u_j \leftarrow (1 - \alpha) u_j + \alpha n_j$ (or $u_j \leftarrow \alpha n_j$ when $\alpha = 1$) and blends centroids with exact `weight == 1.0` replacement when $u_{\text{old}} = 0$. On steps $s \ge 1$ where $s \le 8$ or $s \equiv 0 \pmod 4$, clusters with $u_j < \tau \cdot \bar{u}$ ($\tau = 0.1$ for $d > 2$, $0.0$ for $d \le 2$) are revived by splitting live donor clusters ranked by stateless `SplitMix64` Gumbel keys $g_j = \ln(u_j) - \ln(-\ln U_j)$ with alternating $\pm\epsilon$ coordinate perturbations (`split_epsilon = 1e-4`), plus 1-ULP deterministic tie separation when `(1 +/- eps)` underflows representation precision.
+4. **Fractional Epoch Schedule & Closing Pass:** For $T = \lfloor T \rfloor + f$ with $\lfloor T \rfloor \ge 1$, `epoch_rows` places any fractional remainder pass $\text{round\_ties\_even}(f \cdot n_{\text{eff}})$ **before** a full $n_{\text{eff}}$-row final epoch (for example, $T = 2.6$ on $n = 100{,}000$ executes `[100_000, 60_000, 100_000]`). During the final epoch, every batch accumulates closing sufficient statistics alongside EMA updates (`f64` `pass_sums` + `f64` divide on CPU; `f32` GPU slice/CSR `pass_sums` + `f64` host closing divide on Metal) so [`EmeansFit::centroids`](src/lib.rs) are finalized from the full closing pass, retaining the latest EMA centroid for any cluster with zero closing-pass assignments.
+5. **EMA Update & Gumbel Dead-Cluster Split Revival:** Each mini-batch updates cluster usage $u_j \leftarrow (1 - \alpha) u_j + \alpha n_j$ (or $u_j \leftarrow \alpha n_j$ when $\alpha = 1$) and blends centroids with exact `weight == 1.0` replacement when $u_{\text{old}} = 0$. Every 5th mini-batch step (`CHECK_UNUSED_EVERY = 5`; `(step + 1) % 5 == 0` when `unused_threshold > 0.0`, i.e., 0-based `step` in $\{4, 9, 14, \dots\}$ or 1-based $s \equiv 0 \pmod 5$), clusters with $u_j < \tau \cdot \bar{u}$ ($\tau = 0.1$ for $d > 2$, $0.0$ for $d \le 2$) are revived by splitting live donor clusters ranked by stateless `SplitMix64` Gumbel keys $g_j = \ln(u_j) - \ln(-\ln U_j)$ with alternating $\pm\epsilon$ coordinate perturbations (`split_epsilon = 1e-4`), plus 1-ULP deterministic tie separation when `(1 +/- eps)` underflows representation precision.
 
 ---
 
@@ -84,12 +84,12 @@ $$\alpha(s) = \alpha_0 \cdot \left(0.1 + 0.9 \cdot \frac{1 + \cos(\pi \cdot \min
 
 | Substrate | Variant | Assignment Math | Accumulation & Closing Stats | Determinism Profile |
 | :--- | :--- | :--- | :--- | :--- |
-| CPU | `CpuMath::Fast` | Apple Accelerate AMX (macOS unpinned) or L2-tiled `ojas-simd` | Ascending row CSR gather (`f32` batch, `f64` closing divide) | Deterministic per host/OS (`unique_centroid_hashes = 1` across repeated M5 Pro runs); Accelerate AMX may vary across OS/thread heuristics |
-| CPU | `CpuMath::DeterministicFma` | L2-tiled `ojas-simd` FMA micro-kernels (`sgemm_tile_with`) | Ascending row CSR gather (`256`-row slices, `f64` closing divide) | Bit-identical (`0` ULP) across arbitrary worker thread counts (`1..N`) |
-| CPU | `CpuMath::Exact` | Non-FMA ascending-$d$ `f32` dot products | Ascending row CSR gather (`256`-row slices, `f64` closing divide) | Bit-identical (`0` ULP) across thread counts and CPU microarchitectures |
-| Metal 4 | `MetalPrecision::Bf16` | `64x64` `bf16` cooperative `TensorOps` (`32x32` `simdgroup` fallback) | `bf16`-rounded rows gathered in `256`-row radix-CSR slices (`f32` acc) | Bit-identical (`0` ULP) across repeated fits and [`EmeansSession`](src/session.rs) streaming vs resident `fit_with_init` on the same GPU (verified through $k = 1024$) |
-| Metal 4 | `MetalPrecision::Bf16AssignF32Stats` | `64x64` `bf16` cooperative `TensorOps` (`32x32` `simdgroup` fallback) | Unrounded `f32` rows gathered in `256`-row radix-CSR slices | Mixed-precision lane with `0`-ULP repeat-run and streaming-vs-resident bit-identity on the same GPU (verified through $k = 1024$) |
-| Metal 4 | `MetalPrecision::F32` | `64x64` exact `f32` cooperative `TensorOps` (`RELAXED=false`) | Unrounded `f32` rows gathered in `256`-row radix-CSR slices | Full `f32` pipeline with `0`-ULP repeat-run and streaming-vs-resident bit-identity on the same GPU (verified through $k = 1024$) |
+| CPU | `CpuMath::Fast` | Apple Accelerate AMX (`2048x4096` panels when unpinned on macOS) or `64x256` L2-tiled `ojas-simd::sgemm_tile` | Direct ascending-row CSR fold (`16`-cluster blocks; `f32` `batch_sums`, `f64` closing `pass_sums` + `f64` divide) | Deterministic per host/OS (`unique_centroid_hashes = 1` across repeated M5 Pro runs); Accelerate AMX may vary across OS/thread heuristics |
+| CPU | `CpuMath::DeterministicFma` | `64x256` L2-tiled `ojas-simd::sgemm_tile` FMA micro-kernels (`ROW_TILE = 64, C_TILE = 256`) | Direct ascending-row CSR fold (`16`-cluster blocks; `f32` `batch_sums`, `f64` closing `pass_sums` + `f64` divide) | Bit-identical (`0` ULP) across arbitrary worker thread counts (`1..N`) |
+| CPU | `CpuMath::Exact` | Non-FMA ascending-$d$ `f32` dot products over `ROW_TILE = 64` row tiles | Direct ascending-row CSR fold (`16`-cluster blocks; `f32` `batch_sums`, `f64` closing `pass_sums` + `f64` divide) | Bit-identical (`0` ULP) across thread counts and CPU microarchitectures |
+| Metal 4 | `MetalPrecision::Bf16` | `64x64` 4-simdgroup `bf16` cooperative `TensorOps` (`32x32` `simdgroup_float8x8` fallback) | 8-bit `ulong` GPU radix-sort CSR + `256`-row slice gather & ascending slice fold of `bf16`-rounded rows into `f32` `batch_sums`/`pass_sums` + `f64` host closing divide | Bit-identical (`0` ULP) across repeated fits and [`EmeansSession`](src/session.rs) streaming vs resident `fit_with_init` on the same GPU (verified through $k = 1024$) |
+| Metal 4 | `MetalPrecision::Bf16AssignF32Stats` | `64x64` 4-simdgroup `bf16` cooperative `TensorOps` (`32x32` `simdgroup_float8x8` fallback) | 8-bit `ulong` GPU radix-sort CSR + `256`-row slice gather & ascending slice fold of unrounded `f32` rows into `f32` `batch_sums`/`pass_sums` + `f64` host closing divide | Mixed-precision lane with `0`-ULP repeat-run and streaming-vs-resident bit-identity on the same GPU (verified through $k = 1024$) |
+| Metal 4 | `MetalPrecision::F32` | `64x64` 4-simdgroup exact `f32` cooperative `TensorOps` (`RELAXED=false`; `32x32` `simdgroup_float8x8` fallback) | 8-bit `ulong` GPU radix-sort CSR + `256`-row slice gather & ascending slice fold of unrounded `f32` rows into `f32` `batch_sums`/`pass_sums` + `f64` host closing divide | Full `f32` pipeline with `0`-ULP repeat-run and streaming-vs-resident bit-identity on the same GPU (verified through $k = 1024$) |
 
 > [!IMPORTANT]
 > Every host scratch buffer (`Scratch<T>`) and Metal pool slab (`OjasBudgetLedger` -> `tessl::PoolLedger`) charges [`ojas_core::Budget`](../ojas-core/README.md) **before** allocation and refuses over-cap requests with `OjasError::CapacityExceeded` without mutating engine state or poisoning the GPU runtime. Dropping `EmeansSession` and `EmeansEngine` (or calling `EmeansEngine::trim_pool`) returns `Budget::live_bytes()` to `0`.
@@ -161,24 +161,24 @@ Measured by [`examples/emeans_bench.rs`](examples/emeans_bench.rs) against `tess
 
 | Shape | Contender | `min_ms` | `median_ms` | `MSE (f64)` | `MSE vs Lloyd` | `speedup_min` | `speedup_med` |
 | :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `100k x 128, k=1024` | `Lloyd 25-iter (CpuMath::Fast)` | 5047.01 | 5285.93 | 0.228053 | +0.00% | 1.00x | 1.00x |
-| `100k x 128, k=1024` | `e-means T=2.0 (CpuMath::Fast)` | 494.40 | 591.82 | 0.170040 | -25.44% | 10.21x | 8.93x |
-| `100k x 128, k=1024` | `e-means T=2.6 (CpuMath::Fast)` | 548.34 | 733.95 | 0.160376 | -29.68% | 9.20x | 7.20x |
-| `100k x 128, k=1024` | `e-means T=2.0 (Metal::F32)` | 49.64 | 63.66 | 0.169943 | -25.48% | 101.68x | 83.03x |
-| `100k x 128, k=1024` | `e-means T=2.6 (Metal::F32)` | 49.62 | 54.17 | 0.162137 | -28.90% | 101.71x | 97.58x |
-| `100k x 128, k=1024` | `e-means T=2.0 (Metal::Bf16AssignF32Stats)` | 50.21 | 57.80 | 0.165726 | -27.33% | 100.53x | 91.45x |
-| `100k x 128, k=1024` | `e-means T=2.6 (Metal::Bf16AssignF32Stats)` | 50.77 | 62.44 | 0.160264 | -29.73% | 99.40x | 84.66x |
-| `100k x 128, k=1024` | `e-means T=2.0 (Metal::Bf16)` | 48.44 | 56.60 | 0.172521 | -24.35% | 104.20x | 93.38x |
-| `100k x 128, k=1024` | `e-means T=2.6 (Metal::Bf16)` | 46.19 | 54.47 | 0.163665 | -28.23% | 109.27x | 97.04x |
-| `65.5k x 512, k=1024` | `Lloyd 25-iter (CpuMath::Fast)` | 5991.42 | 6935.69 | 0.248275 | +0.00% | 1.00x | 1.00x |
-| `65.5k x 512, k=1024` | `e-means T=2.0 (CpuMath::Fast)` | 654.95 | 866.32 | 0.197876 | -20.30% | 9.15x | 8.01x |
-| `65.5k x 512, k=1024` | `e-means T=2.6 (CpuMath::Fast)` | 725.66 | 1014.84 | 0.179865 | -27.55% | 8.26x | 6.83x |
-| `65.5k x 512, k=1024` | `e-means T=2.0 (Metal::F32)` | 148.07 | 211.90 | 0.192224 | -22.58% | 40.46x | 32.73x |
-| `65.5k x 512, k=1024` | `e-means T=2.6 (Metal::F32)` | 126.32 | 131.04 | 0.178966 | -27.92% | 47.43x | 52.93x |
-| `65.5k x 512, k=1024` | `e-means T=2.0 (Metal::Bf16AssignF32Stats)` | 108.61 | 138.45 | 0.199768 | -19.54% | 55.17x | 50.10x |
-| `65.5k x 512, k=1024` | `e-means T=2.6 (Metal::Bf16AssignF32Stats)` | 112.95 | 144.79 | 0.181201 | -27.02% | 53.04x | 47.90x |
-| `65.5k x 512, k=1024` | `e-means T=2.0 (Metal::Bf16)` | 108.06 | 136.56 | 0.193460 | -22.08% | 55.44x | 50.79x |
-| `65.5k x 512, k=1024` | `e-means T=2.6 (Metal::Bf16)` | 91.72 | 128.13 | 0.183158 | -26.23% | 65.33x | 54.13x |
+| `100k x 128, k=1024` | `Lloyd 25-iter (CpuMath::Fast)` | 4005.60 | 4327.02 | 0.228053 | +0.00% | 1.00x | 1.00x |
+| `100k x 128, k=1024` | `e-means T=2.0 (CpuMath::Fast)` | 376.94 | 387.35 | 0.170040 | -25.44% | 10.63x | 11.17x |
+| `100k x 128, k=1024` | `e-means T=2.6 (CpuMath::Fast)` | 500.20 | 520.05 | 0.160376 | -29.68% | 8.01x | 8.32x |
+| `100k x 128, k=1024` | `e-means T=2.0 (Metal::F32)` | 48.62 | 63.99 | 0.169943 | -25.48% | 82.39x | 67.62x |
+| `100k x 128, k=1024` | `e-means T=2.6 (Metal::F32)` | 47.98 | 65.84 | 0.162137 | -28.90% | 83.49x | 65.72x |
+| `100k x 128, k=1024` | `e-means T=2.0 (Metal::Bf16AssignF32Stats)` | 49.78 | 65.71 | 0.165726 | -27.33% | 80.46x | 65.85x |
+| `100k x 128, k=1024` | `e-means T=2.6 (Metal::Bf16AssignF32Stats)` | 47.30 | 58.95 | 0.160264 | -29.73% | 84.69x | 73.40x |
+| `100k x 128, k=1024` | `e-means T=2.0 (Metal::Bf16)` | 44.16 | 59.26 | 0.172521 | -24.35% | 90.72x | 73.01x |
+| `100k x 128, k=1024` | `e-means T=2.6 (Metal::Bf16)` | 46.30 | 57.74 | 0.163665 | -28.23% | 86.52x | 74.94x |
+| `65.5k x 512, k=1024` | `Lloyd 25-iter (CpuMath::Fast)` | 4052.29 | 4766.71 | 0.248275 | +0.00% | 1.00x | 1.00x |
+| `65.5k x 512, k=1024` | `e-means T=2.0 (CpuMath::Fast)` | 428.62 | 572.35 | 0.197876 | -20.30% | 9.45x | 8.33x |
+| `65.5k x 512, k=1024` | `e-means T=2.6 (CpuMath::Fast)` | 501.02 | 545.76 | 0.179865 | -27.55% | 8.09x | 8.73x |
+| `65.5k x 512, k=1024` | `e-means T=2.0 (Metal::F32)` | 87.66 | 108.06 | 0.192224 | -22.58% | 46.23x | 44.11x |
+| `65.5k x 512, k=1024` | `e-means T=2.6 (Metal::F32)` | 92.23 | 93.54 | 0.178966 | -27.92% | 43.94x | 50.96x |
+| `65.5k x 512, k=1024` | `e-means T=2.0 (Metal::Bf16AssignF32Stats)` | 101.69 | 118.72 | 0.199768 | -19.54% | 39.85x | 40.15x |
+| `65.5k x 512, k=1024` | `e-means T=2.6 (Metal::Bf16AssignF32Stats)` | 95.90 | 116.23 | 0.181201 | -27.02% | 42.26x | 41.01x |
+| `65.5k x 512, k=1024` | `e-means T=2.0 (Metal::Bf16)` | 88.49 | 95.96 | 0.193460 | -22.08% | 45.79x | 49.67x |
+| `65.5k x 512, k=1024` | `e-means T=2.6 (Metal::Bf16)` | 86.84 | 103.19 | 0.183158 | -26.23% | 46.67x | 46.19x |
 
 ---
 
