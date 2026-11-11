@@ -19,6 +19,7 @@ mod exp_exact;
 mod gelu_tanh;
 mod hal;
 mod limits;
+mod quant;
 mod rope;
 mod shapes;
 mod spatial;
@@ -62,6 +63,10 @@ pub use hal::{
 };
 pub use limits::{
     checked_product, shape_product, CPU_THREAD_CEILING, GIBIBYTE, KIBIBYTE, MEBIBYTE,
+};
+pub use quant::{
+    dequantize_affine_bf16, quantize_affine, AffineBits, AffineQuantized, AffineSpec,
+    AFFINE_GROUP_SIZE,
 };
 pub use rope::{mrope_tables, mrope_text_tables, MropeSection};
 pub use shapes::{
