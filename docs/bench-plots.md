@@ -751,3 +751,7 @@ No chart: the folder holds only scripts, logs or text that is not a measurement 
 ## 2026-11-08-clip-scale-share
 
 No chart: the folder holds only scripts, logs or text that is not a measurement table.
+
+## 2026-11-10-emeans
+
+No chart: the folder holds only scripts, logs or text that is not a measurement table.

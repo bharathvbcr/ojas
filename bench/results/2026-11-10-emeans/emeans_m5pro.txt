@@ -1,0 +1,180 @@
+# ojas-cluster e-means vs 25-iter Lloyd A/B benchmark
+cpu_brand: Apple M5 Pro
+os: macOS 27.2 (aarch64)
+rustc: rustc 1.99.1 (58cf8f9c3 2026-10-13)
+cpu_threads: pool=18 host_available_parallelism=18 simd_backend=neon
+metal_4_gpu: enabled (F32, Bf16AssignF32Stats, Bf16)
+protocol: 1 untimed warmup per contender + 5 cyclic-interleaved paired rounds per shape
+objective: exact f64 Euclidean MSE = (1/n) * sum_i min_j ||x_i - c_j||_2^2
+loadavg_start: 67.87 52.73 57.02
+
+================================================================================
+Shape A (n=100_000, d=128, k=1024)
+shape_meta: id=shape_a n=100000 d=128 k=1024 seed=0x2026111001281024 init_mse_f64=0.530833
+recipe_t2.0: law=Throughput batch_size=4096 alpha0=0.314537 epoch_rows=[100000, 100000] total_steps=50
+recipe_t2.6: law=Throughput batch_size=4096 alpha0=0.305934 epoch_rows=[100000, 60000, 100000] total_steps=65
+loadavg_before_shape_a: 67.87 52.73 57.02
+WARMUP shape=shape_a contender=lloyd_25_cpu_fast elapsed_ms=5305.094 mse_f64=0.228053 non_empty=982 revived=0
+WARMUP shape=shape_a contender=emeans_t2.0_cpu_fast elapsed_ms=586.042 mse_f64=0.170040 non_empty=1024 revived=532
+WARMUP shape=shape_a contender=emeans_t2.6_cpu_fast elapsed_ms=622.362 mse_f64=0.160376 non_empty=1024 revived=588
+WARMUP shape=shape_a contender=emeans_t2.0_metal_f32 elapsed_ms=68.270 mse_f64=0.169926 non_empty=1024 revived=528
+WARMUP shape=shape_a contender=emeans_t2.6_metal_f32 elapsed_ms=68.304 mse_f64=0.161319 non_empty=1024 revived=583
+WARMUP shape=shape_a contender=emeans_t2.0_metal_bf16_f32stats elapsed_ms=65.413 mse_f64=0.165721 non_empty=1024 revived=543
+WARMUP shape=shape_a contender=emeans_t2.6_metal_bf16_f32stats elapsed_ms=59.317 mse_f64=0.160265 non_empty=1024 revived=581
+WARMUP shape=shape_a contender=emeans_t2.0_metal_bf16 elapsed_ms=67.335 mse_f64=0.172970 non_empty=1024 revived=528
+WARMUP shape=shape_a contender=emeans_t2.6_metal_bf16 elapsed_ms=72.767 mse_f64=0.164142 non_empty=1024 revived=581
+ROUND shape=shape_a round=1 contender=lloyd_25_cpu_fast elapsed_ms=5160.613 mse_f64=0.228053 non_empty=982 revived=0
+ROUND shape=shape_a round=1 contender=emeans_t2.0_cpu_fast elapsed_ms=514.230 mse_f64=0.170040 non_empty=1024 revived=532
+ROUND shape=shape_a round=1 contender=emeans_t2.6_cpu_fast elapsed_ms=689.002 mse_f64=0.160376 non_empty=1024 revived=588
+ROUND shape=shape_a round=1 contender=emeans_t2.0_metal_f32 elapsed_ms=77.538 mse_f64=0.169836 non_empty=1024 revived=527
+ROUND shape=shape_a round=1 contender=emeans_t2.6_metal_f32 elapsed_ms=72.832 mse_f64=0.159797 non_empty=1024 revived=587
+ROUND shape=shape_a round=1 contender=emeans_t2.0_metal_bf16_f32stats elapsed_ms=115.711 mse_f64=0.165650 non_empty=1024 revived=543
+ROUND shape=shape_a round=1 contender=emeans_t2.6_metal_bf16_f32stats elapsed_ms=74.790 mse_f64=0.160264 non_empty=1024 revived=582
+ROUND shape=shape_a round=1 contender=emeans_t2.0_metal_bf16 elapsed_ms=75.888 mse_f64=0.169901 non_empty=1024 revived=529
+ROUND shape=shape_a round=1 contender=emeans_t2.6_metal_bf16 elapsed_ms=79.512 mse_f64=0.163411 non_empty=1024 revived=591
+ROUND shape=shape_a round=2 contender=lloyd_25_cpu_fast elapsed_ms=4837.166 mse_f64=0.228053 non_empty=982 revived=0
+ROUND shape=shape_a round=2 contender=emeans_t2.0_cpu_fast elapsed_ms=493.621 mse_f64=0.170040 non_empty=1024 revived=532
+ROUND shape=shape_a round=2 contender=emeans_t2.6_cpu_fast elapsed_ms=629.909 mse_f64=0.160376 non_empty=1024 revived=588
+ROUND shape=shape_a round=2 contender=emeans_t2.0_metal_f32 elapsed_ms=67.704 mse_f64=0.168415 non_empty=1024 revived=528
+ROUND shape=shape_a round=2 contender=emeans_t2.6_metal_f32 elapsed_ms=73.174 mse_f64=0.160387 non_empty=1024 revived=581
+ROUND shape=shape_a round=2 contender=emeans_t2.0_metal_bf16_f32stats elapsed_ms=63.381 mse_f64=0.165726 non_empty=1024 revived=543
+ROUND shape=shape_a round=2 contender=emeans_t2.6_metal_bf16_f32stats elapsed_ms=61.066 mse_f64=0.160834 non_empty=1024 revived=599
+ROUND shape=shape_a round=2 contender=emeans_t2.0_metal_bf16 elapsed_ms=52.250 mse_f64=0.172511 non_empty=1024 revived=529
+ROUND shape=shape_a round=2 contender=emeans_t2.6_metal_bf16 elapsed_ms=54.298 mse_f64=0.163661 non_empty=1024 revived=591
+ROUND shape=shape_a round=3 contender=lloyd_25_cpu_fast elapsed_ms=4982.381 mse_f64=0.228053 non_empty=982 revived=0
+ROUND shape=shape_a round=3 contender=emeans_t2.0_cpu_fast elapsed_ms=557.206 mse_f64=0.170040 non_empty=1024 revived=532
+ROUND shape=shape_a round=3 contender=emeans_t2.6_cpu_fast elapsed_ms=641.624 mse_f64=0.160376 non_empty=1024 revived=588
+ROUND shape=shape_a round=3 contender=emeans_t2.0_metal_f32 elapsed_ms=67.031 mse_f64=0.169897 non_empty=1024 revived=529
+ROUND shape=shape_a round=3 contender=emeans_t2.6_metal_f32 elapsed_ms=52.036 mse_f64=0.160009 non_empty=1024 revived=580
+ROUND shape=shape_a round=3 contender=emeans_t2.0_metal_bf16_f32stats elapsed_ms=63.066 mse_f64=0.168032 non_empty=1024 revived=540
+ROUND shape=shape_a round=3 contender=emeans_t2.6_metal_bf16_f32stats elapsed_ms=75.721 mse_f64=0.160216 non_empty=1024 revived=582
+ROUND shape=shape_a round=3 contender=emeans_t2.0_metal_bf16 elapsed_ms=74.317 mse_f64=0.172521 non_empty=1024 revived=529
+ROUND shape=shape_a round=3 contender=emeans_t2.6_metal_bf16 elapsed_ms=72.143 mse_f64=0.163665 non_empty=1024 revived=591
+ROUND shape=shape_a round=4 contender=lloyd_25_cpu_fast elapsed_ms=4793.410 mse_f64=0.228053 non_empty=982 revived=0
+ROUND shape=shape_a round=4 contender=emeans_t2.0_cpu_fast elapsed_ms=471.123 mse_f64=0.170040 non_empty=1024 revived=532
+ROUND shape=shape_a round=4 contender=emeans_t2.6_cpu_fast elapsed_ms=587.021 mse_f64=0.160376 non_empty=1024 revived=588
+ROUND shape=shape_a round=4 contender=emeans_t2.0_metal_f32 elapsed_ms=53.681 mse_f64=0.169943 non_empty=1024 revived=527
+ROUND shape=shape_a round=4 contender=emeans_t2.6_metal_f32 elapsed_ms=71.312 mse_f64=0.159899 non_empty=1024 revived=574
+ROUND shape=shape_a round=4 contender=emeans_t2.0_metal_bf16_f32stats elapsed_ms=54.082 mse_f64=0.165722 non_empty=1024 revived=543
+ROUND shape=shape_a round=4 contender=emeans_t2.6_metal_bf16_f32stats elapsed_ms=88.825 mse_f64=0.165363 non_empty=1024 revived=597
+ROUND shape=shape_a round=4 contender=emeans_t2.0_metal_bf16 elapsed_ms=64.231 mse_f64=0.172521 non_empty=1024 revived=529
+ROUND shape=shape_a round=4 contender=emeans_t2.6_metal_bf16 elapsed_ms=60.913 mse_f64=0.161658 non_empty=1024 revived=579
+ROUND shape=shape_a round=5 contender=lloyd_25_cpu_fast elapsed_ms=4842.809 mse_f64=0.228053 non_empty=982 revived=0
+ROUND shape=shape_a round=5 contender=emeans_t2.0_cpu_fast elapsed_ms=487.935 mse_f64=0.170040 non_empty=1024 revived=532
+ROUND shape=shape_a round=5 contender=emeans_t2.6_cpu_fast elapsed_ms=638.655 mse_f64=0.160376 non_empty=1024 revived=588
+ROUND shape=shape_a round=5 contender=emeans_t2.0_metal_f32 elapsed_ms=63.332 mse_f64=0.165852 non_empty=1024 revived=538
+ROUND shape=shape_a round=5 contender=emeans_t2.6_metal_f32 elapsed_ms=76.073 mse_f64=0.159354 non_empty=1024 revived=573
+ROUND shape=shape_a round=5 contender=emeans_t2.0_metal_bf16_f32stats elapsed_ms=63.591 mse_f64=0.165726 non_empty=1024 revived=543
+ROUND shape=shape_a round=5 contender=emeans_t2.6_metal_bf16_f32stats elapsed_ms=55.125 mse_f64=0.159642 non_empty=1024 revived=582
+ROUND shape=shape_a round=5 contender=emeans_t2.0_metal_bf16 elapsed_ms=63.544 mse_f64=0.172171 non_empty=1024 revived=530
+ROUND shape=shape_a round=5 contender=emeans_t2.6_metal_bf16 elapsed_ms=65.085 mse_f64=0.161477 non_empty=1024 revived=583
+loadavg_after_shape_a: 55.99 52.15 56.54
+
+| Contender                                 |    min_ms | median_ms |    max_ms |   spread_ms (%) |  MSE (f64) |     MSE vs Lloyd | speedup_min | speedup_med |  paired_med [min-max] | non_empty | revived |
+| :---------------------------------------- | --------: | --------: | --------: | --------------: | ---------: | ---------------: | ----------: | ----------: | :-------------------- | --------: | ------: |
+| Lloyd 25-iter (CpuMath::Fast)             |   4793.41 |   4842.81 |   5160.61 |  367.20 ( 7.7%) |   0.228053 |  +0.00% (1.0000x) |       1.00x |       1.00x |  1.00x [ 1.00- 1.00x] |  982/1024 |       0 |
+| e-means T=2.0 (CpuMath::Fast)             |    471.12 |    493.62 |    557.21 |   86.08 (18.3%) |   0.170040 | -25.44% (0.7456x) |      10.17x |       9.81x |  9.93x [ 8.94-10.17x] | 1024/1024 |     532 |
+| e-means T=2.6 (CpuMath::Fast)             |    587.02 |    638.66 |    689.00 |  101.98 (17.4%) |   0.160376 | -29.68% (0.7032x) |       8.17x |       7.58x |  7.68x [ 7.49- 8.17x] | 1024/1024 |     588 |
+| e-means T=2.0 (Metal::F32)                |     53.68 |     67.03 |     77.54 |   23.86 (44.4%) |   0.169836 | -25.53% (0.7447x) |      89.29x |      72.25x | 74.33x [66.56-89.29x] | 1024/1024 |     538 |
+| e-means T=2.6 (Metal::F32)                |     52.04 |     72.83 |     76.07 |   24.04 (46.2%) |   0.159899 | -29.89% (0.7011x) |      92.12x |      66.49x | 67.22x [63.66-95.75x] | 1024/1024 |     573 |
+| e-means T=2.0 (Metal::Bf16AssignF32Stats) |     54.08 |     63.38 |    115.71 |   61.63 (114.0%) |   0.165726 | -27.33% (0.7267x) |      88.63x |      76.41x | 76.32x [44.60-88.63x] | 1024/1024 |     543 |
+| e-means T=2.6 (Metal::Bf16AssignF32Stats) |     55.12 |     74.79 |     88.82 |   33.70 (61.1%) |   0.160264 | -29.73% (0.7027x) |      86.96x |      64.75x | 69.00x [53.96-87.85x] | 1024/1024 |     582 |
+| e-means T=2.0 (Metal::Bf16)               |     52.25 |     64.23 |     75.89 |   23.64 (45.2%) |   0.172511 | -24.35% (0.7565x) |      91.74x |      75.40x | 74.63x [67.04-92.58x] | 1024/1024 |     530 |
+| e-means T=2.6 (Metal::Bf16)               |     54.30 |     65.08 |     79.51 |   25.21 (46.4%) |   0.163411 | -28.34% (0.7166x) |      88.28x |      74.41x | 74.41x [64.90-89.09x] | 1024/1024 |     583 |
+
+SUMMARY shape=shape_a contender=lloyd_25_cpu_fast min_ms=4793.410 median_ms=4842.809 max_ms=5160.613 spread_ms=367.203 spread_pct=7.66 mse_f64=0.22805299 mse_delta_pct=+0.0000 mse_ratio=1.000000 speedup_min=1.000 speedup_med=1.000 paired_speedup_med=1.000 non_empty=982 revived=0 unique_centroid_hashes=1
+SUMMARY shape=shape_a contender=emeans_t2.0_cpu_fast min_ms=471.123 median_ms=493.621 max_ms=557.206 spread_ms=86.083 spread_pct=18.27 mse_f64=0.17004028 mse_delta_pct=-25.4383 mse_ratio=0.745617 speedup_min=10.174 speedup_med=9.811 paired_speedup_med=9.925 non_empty=1024 revived=532 unique_centroid_hashes=1
+SUMMARY shape=shape_a contender=emeans_t2.6_cpu_fast min_ms=587.021 median_ms=638.655 max_ms=689.002 spread_ms=101.981 spread_pct=17.37 mse_f64=0.16037617 mse_delta_pct=-29.6759 mse_ratio=0.703241 speedup_min=8.166 speedup_med=7.583 paired_speedup_med=7.679 non_empty=1024 revived=588 unique_centroid_hashes=1
+SUMMARY shape=shape_a contender=emeans_t2.0_metal_f32 min_ms=53.681 median_ms=67.031 max_ms=77.538 spread_ms=23.856 spread_pct=44.44 mse_f64=0.16983585 mse_delta_pct=-25.5279 mse_ratio=0.744721 speedup_min=89.294 speedup_med=72.247 paired_speedup_med=74.329 non_empty=1024 revived=538 unique_centroid_hashes=6
+SUMMARY shape=shape_a contender=emeans_t2.6_metal_f32 min_ms=52.036 median_ms=72.832 max_ms=76.073 spread_ms=24.037 spread_pct=46.19 mse_f64=0.15989900 mse_delta_pct=-29.8852 mse_ratio=0.701148 speedup_min=92.117 speedup_med=66.493 paired_speedup_med=67.218 non_empty=1024 revived=573 unique_centroid_hashes=6
+SUMMARY shape=shape_a contender=emeans_t2.0_metal_bf16_f32stats min_ms=54.082 median_ms=63.381 max_ms=115.711 spread_ms=61.628 spread_pct=113.95 mse_f64=0.16572591 mse_delta_pct=-27.3301 mse_ratio=0.726699 speedup_min=88.632 speedup_med=76.408 paired_speedup_med=76.319 non_empty=1024 revived=543 unique_centroid_hashes=5
+SUMMARY shape=shape_a contender=emeans_t2.6_metal_bf16_f32stats min_ms=55.125 median_ms=74.790 max_ms=88.825 spread_ms=33.700 spread_pct=61.13 mse_f64=0.16026369 mse_delta_pct=-29.7252 mse_ratio=0.702748 speedup_min=86.956 speedup_med=64.752 paired_speedup_med=69.001 non_empty=1024 revived=582 unique_centroid_hashes=6
+SUMMARY shape=shape_a contender=emeans_t2.0_metal_bf16 min_ms=52.250 median_ms=64.231 max_ms=75.888 spread_ms=23.637 spread_pct=45.24 mse_f64=0.17251136 mse_delta_pct=-24.3547 mse_ratio=0.756453 speedup_min=91.739 speedup_med=75.397 paired_speedup_med=74.628 non_empty=1024 revived=530 unique_centroid_hashes=6
+SUMMARY shape=shape_a contender=emeans_t2.6_metal_bf16 min_ms=54.298 median_ms=65.085 max_ms=79.512 spread_ms=25.215 spread_pct=46.44 mse_f64=0.16341144 mse_delta_pct=-28.3450 mse_ratio=0.716550 speedup_min=88.280 speedup_med=74.408 paired_speedup_med=74.408 non_empty=1024 revived=583 unique_centroid_hashes=6
+
+================================================================================
+Shape B (n=65_536, d=512, k=1024)
+shape_meta: id=shape_b n=65536 d=512 k=1024 seed=0x2026111005121024 init_mse_f64=0.610870
+recipe_t2.0: law=Throughput batch_size=2048 alpha0=0.203799 epoch_rows=[65536, 65536] total_steps=64
+recipe_t2.6: law=Throughput batch_size=4096 alpha0=0.369977 epoch_rows=[65536, 39322, 65536] total_steps=42
+loadavg_before_shape_b: 55.99 52.15 56.54
+WARMUP shape=shape_b contender=lloyd_25_cpu_fast elapsed_ms=5417.308 mse_f64=0.248275 non_empty=953 revived=0
+WARMUP shape=shape_b contender=emeans_t2.0_cpu_fast elapsed_ms=593.974 mse_f64=0.197876 non_empty=1023 revived=801
+WARMUP shape=shape_b contender=emeans_t2.6_cpu_fast elapsed_ms=657.151 mse_f64=0.179865 non_empty=1023 revived=654
+WARMUP shape=shape_b contender=emeans_t2.0_metal_f32 elapsed_ms=220.124 mse_f64=0.195588 non_empty=1023 revived=801
+WARMUP shape=shape_b contender=emeans_t2.6_metal_f32 elapsed_ms=120.171 mse_f64=0.181126 non_empty=1023 revived=659
+WARMUP shape=shape_b contender=emeans_t2.0_metal_bf16_f32stats elapsed_ms=130.239 mse_f64=0.199768 non_empty=1023 revived=802
+WARMUP shape=shape_b contender=emeans_t2.6_metal_bf16_f32stats elapsed_ms=146.331 mse_f64=0.184240 non_empty=1023 revived=671
+WARMUP shape=shape_b contender=emeans_t2.0_metal_bf16 elapsed_ms=114.941 mse_f64=0.193983 non_empty=1024 revived=805
+WARMUP shape=shape_b contender=emeans_t2.6_metal_bf16 elapsed_ms=132.111 mse_f64=0.183158 non_empty=1024 revived=688
+ROUND shape=shape_b round=1 contender=lloyd_25_cpu_fast elapsed_ms=5933.100 mse_f64=0.248275 non_empty=953 revived=0
+ROUND shape=shape_b round=1 contender=emeans_t2.0_cpu_fast elapsed_ms=700.534 mse_f64=0.197876 non_empty=1023 revived=801
+ROUND shape=shape_b round=1 contender=emeans_t2.6_cpu_fast elapsed_ms=791.786 mse_f64=0.179865 non_empty=1023 revived=654
+ROUND shape=shape_b round=1 contender=emeans_t2.0_metal_f32 elapsed_ms=122.014 mse_f64=0.194251 non_empty=1023 revived=802
+ROUND shape=shape_b round=1 contender=emeans_t2.6_metal_f32 elapsed_ms=115.904 mse_f64=0.177965 non_empty=1023 revived=665
+ROUND shape=shape_b round=1 contender=emeans_t2.0_metal_bf16_f32stats elapsed_ms=134.286 mse_f64=0.199768 non_empty=1023 revived=802
+ROUND shape=shape_b round=1 contender=emeans_t2.6_metal_bf16_f32stats elapsed_ms=123.137 mse_f64=0.181201 non_empty=1022 revived=680
+ROUND shape=shape_b round=1 contender=emeans_t2.0_metal_bf16 elapsed_ms=153.129 mse_f64=0.193460 non_empty=1024 revived=806
+ROUND shape=shape_b round=1 contender=emeans_t2.6_metal_bf16 elapsed_ms=104.889 mse_f64=0.182816 non_empty=1024 revived=688
+ROUND shape=shape_b round=2 contender=lloyd_25_cpu_fast elapsed_ms=5116.863 mse_f64=0.248275 non_empty=953 revived=0
+ROUND shape=shape_b round=2 contender=emeans_t2.0_cpu_fast elapsed_ms=591.964 mse_f64=0.197876 non_empty=1023 revived=801
+ROUND shape=shape_b round=2 contender=emeans_t2.6_cpu_fast elapsed_ms=707.017 mse_f64=0.179865 non_empty=1023 revived=654
+ROUND shape=shape_b round=2 contender=emeans_t2.0_metal_f32 elapsed_ms=145.715 mse_f64=0.193514 non_empty=1023 revived=810
+ROUND shape=shape_b round=2 contender=emeans_t2.6_metal_f32 elapsed_ms=114.777 mse_f64=0.178966 non_empty=1023 revived=663
+ROUND shape=shape_b round=2 contender=emeans_t2.0_metal_bf16_f32stats elapsed_ms=151.367 mse_f64=0.199768 non_empty=1023 revived=802
+ROUND shape=shape_b round=2 contender=emeans_t2.6_metal_bf16_f32stats elapsed_ms=139.865 mse_f64=0.181201 non_empty=1022 revived=680
+ROUND shape=shape_b round=2 contender=emeans_t2.0_metal_bf16 elapsed_ms=100.916 mse_f64=0.193460 non_empty=1024 revived=806
+ROUND shape=shape_b round=2 contender=emeans_t2.6_metal_bf16 elapsed_ms=95.656 mse_f64=0.183158 non_empty=1024 revived=688
+ROUND shape=shape_b round=3 contender=lloyd_25_cpu_fast elapsed_ms=5767.675 mse_f64=0.248275 non_empty=953 revived=0
+ROUND shape=shape_b round=3 contender=emeans_t2.0_cpu_fast elapsed_ms=598.826 mse_f64=0.197876 non_empty=1023 revived=801
+ROUND shape=shape_b round=3 contender=emeans_t2.6_cpu_fast elapsed_ms=656.682 mse_f64=0.179865 non_empty=1023 revived=654
+ROUND shape=shape_b round=3 contender=emeans_t2.0_metal_f32 elapsed_ms=176.615 mse_f64=0.192224 non_empty=1022 revived=809
+ROUND shape=shape_b round=3 contender=emeans_t2.6_metal_f32 elapsed_ms=116.155 mse_f64=0.179078 non_empty=1023 revived=662
+ROUND shape=shape_b round=3 contender=emeans_t2.0_metal_bf16_f32stats elapsed_ms=135.592 mse_f64=0.197234 non_empty=1023 revived=806
+ROUND shape=shape_b round=3 contender=emeans_t2.6_metal_bf16_f32stats elapsed_ms=123.091 mse_f64=0.181201 non_empty=1022 revived=680
+ROUND shape=shape_b round=3 contender=emeans_t2.0_metal_bf16 elapsed_ms=98.278 mse_f64=0.193460 non_empty=1024 revived=806
+ROUND shape=shape_b round=3 contender=emeans_t2.6_metal_bf16 elapsed_ms=92.985 mse_f64=0.183158 non_empty=1024 revived=688
+ROUND shape=shape_b round=4 contender=lloyd_25_cpu_fast elapsed_ms=5480.388 mse_f64=0.248275 non_empty=953 revived=0
+ROUND shape=shape_b round=4 contender=emeans_t2.0_cpu_fast elapsed_ms=609.795 mse_f64=0.197876 non_empty=1023 revived=801
+ROUND shape=shape_b round=4 contender=emeans_t2.6_cpu_fast elapsed_ms=711.223 mse_f64=0.179865 non_empty=1023 revived=654
+ROUND shape=shape_b round=4 contender=emeans_t2.0_metal_f32 elapsed_ms=104.978 mse_f64=0.192223 non_empty=1022 revived=809
+ROUND shape=shape_b round=4 contender=emeans_t2.6_metal_f32 elapsed_ms=157.306 mse_f64=0.179256 non_empty=1023 revived=663
+ROUND shape=shape_b round=4 contender=emeans_t2.0_metal_bf16_f32stats elapsed_ms=240.957 mse_f64=0.199768 non_empty=1023 revived=802
+ROUND shape=shape_b round=4 contender=emeans_t2.6_metal_bf16_f32stats elapsed_ms=197.910 mse_f64=0.181194 non_empty=1023 revived=677
+ROUND shape=shape_b round=4 contender=emeans_t2.0_metal_bf16 elapsed_ms=157.128 mse_f64=0.192773 non_empty=1024 revived=807
+ROUND shape=shape_b round=4 contender=emeans_t2.6_metal_bf16 elapsed_ms=96.951 mse_f64=0.183233 non_empty=1024 revived=689
+ROUND shape=shape_b round=5 contender=lloyd_25_cpu_fast elapsed_ms=5055.079 mse_f64=0.248275 non_empty=953 revived=0
+ROUND shape=shape_b round=5 contender=emeans_t2.0_cpu_fast elapsed_ms=587.148 mse_f64=0.197876 non_empty=1023 revived=801
+ROUND shape=shape_b round=5 contender=emeans_t2.6_cpu_fast elapsed_ms=671.412 mse_f64=0.179865 non_empty=1023 revived=654
+ROUND shape=shape_b round=5 contender=emeans_t2.0_metal_f32 elapsed_ms=161.689 mse_f64=0.192224 non_empty=1022 revived=809
+ROUND shape=shape_b round=5 contender=emeans_t2.6_metal_f32 elapsed_ms=194.923 mse_f64=0.178966 non_empty=1023 revived=663
+ROUND shape=shape_b round=5 contender=emeans_t2.0_metal_bf16_f32stats elapsed_ms=136.241 mse_f64=0.199768 non_empty=1023 revived=802
+ROUND shape=shape_b round=5 contender=emeans_t2.6_metal_bf16_f32stats elapsed_ms=154.812 mse_f64=0.181201 non_empty=1022 revived=680
+ROUND shape=shape_b round=5 contender=emeans_t2.0_metal_bf16 elapsed_ms=109.551 mse_f64=0.193460 non_empty=1024 revived=806
+ROUND shape=shape_b round=5 contender=emeans_t2.6_metal_bf16 elapsed_ms=116.635 mse_f64=0.180956 non_empty=1024 revived=688
+loadavg_after_shape_b: 56.32 54.33 57.08
+
+| Contender                                 |    min_ms | median_ms |    max_ms |   spread_ms (%) |  MSE (f64) |     MSE vs Lloyd | speedup_min | speedup_med |  paired_med [min-max] | non_empty | revived |
+| :---------------------------------------- | --------: | --------: | --------: | --------------: | ---------: | ---------------: | ----------: | ----------: | :-------------------- | --------: | ------: |
+| Lloyd 25-iter (CpuMath::Fast)             |   5055.08 |   5480.39 |   5933.10 |  878.02 (17.4%) |   0.248275 |  +0.00% (1.0000x) |       1.00x |       1.00x |  1.00x [ 1.00- 1.00x] |  953/1024 |       0 |
+| e-means T=2.0 (CpuMath::Fast)             |    587.15 |    598.83 |    700.53 |  113.39 (19.3%) |   0.197876 | -20.30% (0.7970x) |       8.61x |       9.15x |  8.64x [ 8.47- 9.63x] | 1023/1024 |     801 |
+| e-means T=2.6 (CpuMath::Fast)             |    656.68 |    707.02 |    791.79 |  135.10 (20.6%) |   0.179865 | -27.55% (0.7245x) |       7.70x |       7.75x |  7.53x [ 7.24- 8.78x] | 1023/1024 |     654 |
+| e-means T=2.0 (Metal::F32)                |    104.98 |    145.71 |    176.62 |   71.64 (68.2%) |   0.192224 | -22.58% (0.7742x) |      48.15x |      37.61x | 35.12x [31.26-52.20x] | 1022/1024 |     809 |
+| e-means T=2.6 (Metal::F32)                |    114.78 |    116.15 |    194.92 |   80.15 (69.8%) |   0.178966 | -27.92% (0.7208x) |      44.04x |      47.18x | 44.58x [25.93-51.19x] | 1023/1024 |     663 |
+| e-means T=2.0 (Metal::Bf16AssignF32Stats) |    134.29 |    136.24 |    240.96 |  106.67 (79.4%) |   0.199768 | -19.54% (0.8046x) |      37.64x |      40.23x | 37.10x [22.74-44.18x] | 1023/1024 |     802 |
+| e-means T=2.6 (Metal::Bf16AssignF32Stats) |    123.09 |    139.86 |    197.91 |   74.82 (60.8%) |   0.181201 | -27.02% (0.7298x) |      41.07x |      39.18x | 36.58x [27.69-48.18x] | 1022/1024 |     680 |
+| e-means T=2.0 (Metal::Bf16)               |     98.28 |    109.55 |    157.13 |   58.85 (59.9%) |   0.193460 | -22.08% (0.7792x) |      51.44x |      50.03x | 46.14x [34.88-58.69x] | 1024/1024 |     806 |
+| e-means T=2.6 (Metal::Bf16)               |     92.99 |     96.95 |    116.64 |   23.65 (25.4%) |   0.183158 | -26.23% (0.7377x) |      54.36x |      56.53x | 56.53x [43.34-62.03x] | 1024/1024 |     688 |
+
+SUMMARY shape=shape_b contender=lloyd_25_cpu_fast min_ms=5055.079 median_ms=5480.388 max_ms=5933.100 spread_ms=878.021 spread_pct=17.37 mse_f64=0.24827455 mse_delta_pct=+0.0000 mse_ratio=1.000000 speedup_min=1.000 speedup_med=1.000 paired_speedup_med=1.000 non_empty=953 revived=0 unique_centroid_hashes=1
+SUMMARY shape=shape_b contender=emeans_t2.0_cpu_fast min_ms=587.148 median_ms=598.826 max_ms=700.534 spread_ms=113.386 spread_pct=19.31 mse_f64=0.19787572 mse_delta_pct=-20.2996 mse_ratio=0.797004 speedup_min=8.610 speedup_med=9.152 paired_speedup_med=8.644 non_empty=1023 revived=801 unique_centroid_hashes=1
+SUMMARY shape=shape_b contender=emeans_t2.6_cpu_fast min_ms=656.682 median_ms=707.017 max_ms=791.786 spread_ms=135.104 spread_pct=20.57 mse_f64=0.17986469 mse_delta_pct=-27.5541 mse_ratio=0.724459 speedup_min=7.698 speedup_med=7.751 paired_speedup_med=7.529 non_empty=1023 revived=654 unique_centroid_hashes=1
+SUMMARY shape=shape_b contender=emeans_t2.0_metal_f32 min_ms=104.978 median_ms=145.715 max_ms=176.615 spread_ms=71.637 spread_pct=68.24 mse_f64=0.19222357 mse_delta_pct=-22.5762 mse_ratio=0.774238 speedup_min=48.153 speedup_med=37.610 paired_speedup_med=35.116 non_empty=1022 revived=809 unique_centroid_hashes=5
+SUMMARY shape=shape_b contender=emeans_t2.6_metal_f32 min_ms=114.777 median_ms=116.155 max_ms=194.923 spread_ms=80.146 spread_pct=69.83 mse_f64=0.17896607 mse_delta_pct=-27.9161 mse_ratio=0.720839 speedup_min=44.043 speedup_med=47.182 paired_speedup_med=44.581 non_empty=1023 revived=663 unique_centroid_hashes=5
+SUMMARY shape=shape_b contender=emeans_t2.0_metal_bf16_f32stats min_ms=134.286 median_ms=136.241 max_ms=240.957 spread_ms=106.671 spread_pct=79.44 mse_f64=0.19976824 mse_delta_pct=-19.5374 mse_ratio=0.804626 speedup_min=37.644 speedup_med=40.226 paired_speedup_med=37.104 non_empty=1023 revived=802 unique_centroid_hashes=3
+SUMMARY shape=shape_b contender=emeans_t2.6_metal_bf16_f32stats min_ms=123.091 median_ms=139.865 max_ms=197.910 spread_ms=74.819 spread_pct=60.78 mse_f64=0.18120067 mse_delta_pct=-27.0160 mse_ratio=0.729840 speedup_min=41.068 speedup_med=39.184 paired_speedup_med=36.584 non_empty=1022 revived=680 unique_centroid_hashes=3
+SUMMARY shape=shape_b contender=emeans_t2.0_metal_bf16 min_ms=98.278 median_ms=109.551 max_ms=157.128 spread_ms=58.850 spread_pct=59.88 mse_f64=0.19345970 mse_delta_pct=-22.0783 mse_ratio=0.779217 speedup_min=51.437 speedup_med=50.026 paired_speedup_med=46.144 non_empty=1024 revived=806 unique_centroid_hashes=3
+SUMMARY shape=shape_b contender=emeans_t2.6_metal_bf16 min_ms=92.985 median_ms=96.951 max_ms=116.635 spread_ms=23.650 spread_pct=25.43 mse_f64=0.18315784 mse_delta_pct=-26.2277 mse_ratio=0.737723 speedup_min=54.364 speedup_med=56.527 paired_speedup_med=56.527 non_empty=1024 revived=688 unique_centroid_hashes=4
+
+peak_budget_bytes: 651601920
+live_budget_bytes_before_drop: 158319360

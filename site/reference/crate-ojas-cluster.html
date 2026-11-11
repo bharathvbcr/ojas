@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ojas-cluster · ojas reference</title>
+  <meta name="description" content="ojas-cluster implements scaling-law e-means clustering (canonical_v1, arXiv:2611.09501) and a reference full-pass Lloyd&#39;s $k$-means baseline (lloyd_fit) for ojas. It executes over multi-core CPU SIMD…">
+  <meta name="keywords" content="ojas, ojas-cluster, rust deep learning, machine learning, pytorch alternative, neural network, autograd, tensors, metal, wgpu">
+  <meta name="author" content="Bharath Chandra Vaddaram">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#08080a">
+  <link rel="canonical" href="https://ojas.vbcr.dev/reference/crate-ojas-cluster.html">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="ojas">
+  <meta property="og:url" content="https://ojas.vbcr.dev/reference/crate-ojas-cluster.html">
+  <meta property="og:title" content="ojas-cluster · ojas reference">
+  <meta property="og:description" content="ojas-cluster implements scaling-law e-means clustering (canonical_v1, arXiv:2611.09501) and a reference full-pass Lloyd&#39;s $k$-means baseline (lloyd_fit) for ojas. It executes over multi-core CPU SIMD…">
+  <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="ojas-cluster · ojas reference">
+  <meta property="og:locale" content="en_US">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="ojas-cluster · ojas reference">
+  <meta name="twitter:description" content="ojas-cluster implements scaling-law e-means clustering (canonical_v1, arXiv:2611.09501) and a reference full-pass Lloyd&#39;s $k$-means baseline (lloyd_fit) for ojas. It executes over multi-core CPU SIMD…">
+  <meta name="twitter:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
+  <meta name="twitter:image:alt" content="ojas-cluster · ojas reference">
+  <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="../site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{brand:{50:'#fff1f2',100:'#ffe4e6',200:'#fecdd3',300:'#fda4af',400:'#fb7185',500:'#f43f5e',600:'#e11d48',700:'#be123c',800:'#9f1239',900:'#881337',950:'#4c0519',crimson:'#ff2d55',ruby:'#d90429',flame:'#ff4b2b',glow:'#ff3366'}},fontFamily:{sans:['"Plus Jakarta Sans"','system-ui','-apple-system','sans-serif'],mono:['"Fira Code"','ui-monospace','monospace']},boxShadow:{'glow-red':'0 0 35px -5px rgba(255,45,85,0.35)','glow-subtle':'0 0 20px -5px rgba(255,45,85,0.15)'}}}}</script>
+  <link rel="stylesheet" href="../assets/ojas.css">
+  <link rel="stylesheet" href="../assets/reference.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "ojas-cluster · ojas reference",
+    "description": "ojas-cluster implements scaling-law e-means clustering (canonical_v1, arXiv:2611.09501) and a reference full-pass Lloyd's $k$-means baseline (lloyd_fit) for ojas. It executes over multi-core CPU SIMD…",
+    "url": "https://ojas.vbcr.dev/reference/crate-ojas-cluster.html",
+    "image": "https://ojas.vbcr.dev/assets/ojas-og.png",
+    "author": {
+      "@type": "Person",
+      "name": "Bharath Chandra Vaddaram",
+      "url": "https://bharath.vbcr.dev/"
+    },
+    "publisher": {
+      "@type": "Organization",
+      "name": "ojas",
+      "url": "https://ojas.vbcr.dev"
+    }
+  }
+  </script>
+</head>
+<body class="font-sans antialiased bg-[#08080a] text-slate-100 min-h-screen relative bg-grid">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="sticky top-0 z-50 glass-nav">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <a href="../" class="flex items-center gap-3 shrink-0">
+        <img src="../assets/ojas-tile-512.png" alt="ojas" class="w-9 h-9" width="36" height="36">
+        <span class="text-xl font-extrabold tracking-wider font-mono text-gradient-red">ojas</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm" aria-label="Site">
+        <a href="../#labs" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Labs</a>
+        <a href="../#benchmarks" class="hidden sm:inline px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Benchmarks</a>
+        <a href="../#guide" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">Guide</a>
+        <a href="./" class="px-2.5 py-1.5 rounded-lg text-white bg-white/10 transition" aria-current="page">Reference</a>
+        <a href="https://github.com/bharathvbcr/ojas" rel="noopener" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_13rem] gap-8">
+    <aside class="ref-side"><details class="lg:open-always" open>
+<summary class="lg:hidden">Reference pages</summary>
+<nav class="ref-nav" aria-label="Reference">
+<a href="./" class="ref-nav-home">All reference pages</a>
+<p class="ref-nav-cat">Design and contracts</p>
+<ul>
+<li><a href="adapter-checkpoint.html">Adapter checkpoint, layout version 1</a></li>
+<li><a href="adaptive-resources.html">Adaptive resources audit</a></li>
+<li><a href="architecture.html">ojas Architecture &amp; System Design</a></li>
+<li><a href="backends.html">Hardware Backends &amp; Device Architecture</a></li>
+<li><a href="checkpoint-v1.html">Checkpoint v1 Specification</a></li>
+<li><a href="data-formats.html">Image data formats</a></li>
+<li><a href="dtype-policy.html">Dtype Policy (v1)</a></li>
+<li><a href="framework-design.html">Framework layer design (approved; items 1–13 landed)</a></li>
+<li><a href="io-ownership.html">Decision: ojas owns safetensors IO and checkpoints</a></li>
+<li><a href="modular-extensions.html">Modular Compute Extensions Architecture</a></li>
+<li><a href="op-coverage.html">Op Coverage — nanolab Default GPT</a></li>
+<li><a href="shape-contract.html">Shape contract: ojas_core::shapes</a></li>
+</ul>
+<p class="ref-nav-cat">Status and plans</p>
+<ul>
+<li><a href="baseline.html">p0-env Baseline</a></li>
+<li><a href="cuda-backend-scoping.html">L-cuda: scoping an ojas CUDA backend for Lappi on the GH200 (design only, 2026-10-01)</a></li>
+<li><a href="lappi-lora-mac-runbook.html">Runbook: Lappi decision-model LoRA on the M5 Pro, bf16 then quantised (2026-10-17)</a></li>
+<li><a href="metal-deferred-faults.html">Metal deferred-fault contract</a></li>
+<li><a href="pytorch-parity-plan.html">PyTorch parity plan</a></li>
+<li><a href="status.html">ojas Status &amp; Verification Matrix</a></li>
+<li><a href="status-archive-2026-10-05.html">ojas Status Archive: test runs through 2026-10-05</a></li>
+<li><a href="typed-storage-plan.html">Typed Host Storage: Plan</a></li>
+<li><a href="unification-plan.html">Unification Plan: ojas as the Training Framework, tessl as the Metal Extension</a></li>
+</ul>
+<p class="ref-nav-cat">Benchmarks</p>
+<ul>
+<li><a href="bench-cpu-vs-torch.html">CPU Reference versus PyTorch CPU Benchmarks</a></li>
+<li><a href="bench-gpu-vs-torch.html">GPU Backends versus PyTorch MPS</a></li>
+<li><a href="bench-plots.html">Benchmark Plots, Every Result Folder</a></li>
+</ul>
+<p class="ref-nav-cat">Audits</p>
+<ul>
+<li><a href="audit.html">Audit Notes &amp; Structural Defect Countermeasures</a></li>
+<li><a href="audit-close.html">Audit Close &amp; Liveness Verification</a></li>
+<li><a href="audit-cpu-hot.html">CPU hot path for one step</a></li>
+<li><a href="audit-larger-step.html">Larger-step section times</a></li>
+<li><a href="audit-phase2.html">Phase 2 audit</a></li>
+<li><a href="audit-phase3.html">Phase 3 audit</a></li>
+<li><a href="audit-resources.html">Resource governor audit</a></li>
+</ul>
+<p class="ref-nav-cat">Crates</p>
+<ul>
+<li><a href="readme.html">Project README</a></li>
+<li><a href="crate-ojas-autograd.html">ojas-autograd</a></li>
+<li><a href="crate-ojas-capi.html">ojas-capi</a></li>
+<li><a href="crate-ojas-cluster.html" class="current" aria-current="page">ojas-cluster</a></li>
+<li><a href="crate-ojas-core.html">ojas-core</a></li>
+<li><a href="crate-ojas-cpu.html">ojas-cpu</a></li>
+<li><a href="crate-ojas-cuda.html">ojas-cuda</a></li>
+<li><a href="crate-ojas-data.html">ojas-data</a></li>
+<li><a href="crate-ojas-device.html">ojas-device</a></li>
+<li><a href="crate-ojas-gusset-engine.html">ojas-gusset-engine</a></li>
+<li><a href="crate-ojas-hip.html">ojas-hip</a></li>
+<li><a href="crate-ojas-infer.html">ojas-infer</a></li>
+<li><a href="crate-ojas-io.html">ojas-io</a></li>
+<li><a href="crate-ojas-kernels.html">ojas-kernels</a></li>
+<li><a href="crate-ojas-metal.html">ojas-metal</a></li>
+<li><a href="crate-ojas-model.html">ojas-model</a></li>
+<li><a href="crate-ojas-oracle.html">ojas-oracle</a></li>
+<li><a href="crate-ojas-qwen35.html">ojas-qwen35</a></li>
+<li><a href="crate-ojas-simd.html">ojas-simd</a></li>
+<li><a href="crate-ojas-wgpu.html">ojas-wgpu</a></li>
+</ul>
+</nav>
+</details></aside>
+    <main id="main" class="min-w-0">
+      <p class="ref-crumb"><a href="./">Reference</a> / Crates</p>
+      <article class="prose-ojas">
+<h1 id="ojas-cluster">ojas-cluster <a class="anchor" href="#ojas-cluster" aria-label="Link to this section">#</a></h1>
+<p><code>ojas-cluster</code> implements <strong>scaling-law <code>e-means</code> clustering</strong> (<code>canonical_v1</code>, <a href="https://arxiv.org/abs/2611.09501" rel="noopener">arXiv:2611.09501</a>) and a reference full-pass <strong>Lloyd&#39;s $k$-means</strong> baseline (<code>lloyd_fit</code>) for <code>ojas</code>. It executes over multi-core CPU SIMD/BLAS (<a href="crate-ojas-simd.html"><code>ojas-simd</code></a>) and Apple Silicon Metal 4 (<code>64x64</code> cooperative <code>TensorOps</code> and <code>32x32</code> <code>simdgroup_float8x8</code> kernels via <a href="https://github.com/bharathvbcr/tessl" rel="noopener">tessl</a>) behind a single safe-Rust engine and streaming session API (<code>#![forbid(unsafe_code)]</code>).</p>
+<aside class="alert alert-note"><p class="alert-title">Note</p><p>Following <a href="modular-extensions.html"><code>docs/modular-extensions.md</code></a>, all generic clustering policy—<code>canonical_v1</code> scaling laws, cosine step decay, <code>SplitMix64</code> sampling and epoch permutations, <code>Budget</code> accounting, and streaming session state machines—lives once in <code>ojas-cluster</code>. When built on macOS with the default <code>metal</code> feature, <code>ClusterDevice::Metal</code> delegates GPU execution to a dedicated worker thread owning a private Metal 4 <code>GpuRuntime</code> and <code>EmeansGpuRunner</code> in <code>tessl</code>.</p>
+</aside>
+<hr>
+<h2 id="architecture--dispatch">Architecture &amp; Dispatch <a class="anchor" href="#architecture--dispatch" aria-label="Link to this section">#</a></h2>
+<figure class="diagram"><pre class="mermaid">flowchart TD
+    subgraph API[&#34;Public Surface (src/lib.rs, src/session.rs, src/lloyd.rs)&#34;]
+        Fit[&#34;emeans_fit / EmeansEngine::fit&#34;]
+        Assign[&#34;emeans_assign / EmeansEngine::assign&#34;]
+        Stream[&#34;EmeansSession (accumulate / step_ready_batch / end_epoch / finalize)&#34;]
+        Lloyd[&#34;lloyd::lloyd_fit (full-pass baseline)&#34;]
+    end
+
+    subgraph Policy[&#34;Host-Neutral Policy (src/recipe.rs, src/rng.rs)&#34;]
+        Recipe[&#34;resolve_recipe (BatchLaw, alpha0, fractional epoch_rows)&#34;]
+        RNG[&#34;SplitMix64 (Forgy init, epoch_permutation, Gumbel keys)&#34;]
+        BudgetGuard[&#34;ojas_core::Budget (host Scratch + PoolLedger charge)&#34;]
+    end
+
+    subgraph CPU[&#34;ClusterDevice::Cpu (src/cpu.rs)&#34;]
+        CpuFast[&#34;CpuMath::Fast (Accelerate AMX / ojas-simd tiles)&#34;]
+        CpuDet[&#34;CpuMath::DeterministicFma (thread-independent FMA tiles)&#34;]
+        CpuExact[&#34;CpuMath::Exact (non-FMA ascending f32 dot products)&#34;]
+        CpuCSR[&#34;Ascending local-row CSR gather + f64 closing pass&#34;]
+    end
+
+    subgraph Metal[&#34;ClusterDevice::Metal (macOS + metal feature)&#34;]
+        Worker[&#34;Dedicated Metal worker thread + PoolLedger&#34;]
+        TOps[&#34;64x64 cooperative TensorOps / 32x32 simdgroup argmin&#34;]
+        Radix[&#34;64-bit GPU radix sort + 256-row slice CSR gather&#34;]
+        Revive[&#34;GPU EMA update + SplitMix64 Gumbel split revival&#34;]
+    end
+
+    Fit --&gt; Recipe
+    Stream --&gt; Recipe
+    Assign --&gt; BudgetGuard
+    Lloyd --&gt; BudgetGuard
+    Recipe --&gt; RNG
+    RNG --&gt; BudgetGuard
+    BudgetGuard --&gt; CpuFast
+    BudgetGuard --&gt; CpuDet
+    BudgetGuard --&gt; CpuExact
+    CpuFast --&gt; CpuCSR
+    CpuDet --&gt; CpuCSR
+    CpuExact --&gt; CpuCSR
+    BudgetGuard --&gt; Worker
+    Worker --&gt; TOps
+    TOps --&gt; Radix
+    Radix --&gt; Revive</pre></figure>
+<hr>
+<h2 id="canonical-v1-recipe--algorithmic-mechanics"><code>canonical_v1</code> Recipe &amp; Algorithmic Mechanics <a class="anchor" href="#canonical-v1-recipe--algorithmic-mechanics" aria-label="Link to this section">#</a></h2>
+<p><a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-cluster/src/recipe.rs" rel="noopener"><code>resolve_recipe</code></a> translates <code>(global_n, d, EmeansConfig)</code> into a <a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-cluster/src/lib.rs" rel="noopener"><code>ResolvedRecipe</code></a> before any device memory is reserved:</p>
+<ol>
+<li><strong>Subsampling (<code>max_points_per_centroid</code>):</strong> When set to $m \ge 1$, <a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-cluster/src/rng.rs" rel="noopener"><code>sample_subset_sorted</code></a> deterministically draws $n_{\text{eff}} = \min(n, m \cdot k)$ sorted row indices via partial Fisher-Yates over <code>SplitMix64</code>. Unsampled rows receive <a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-cluster/src/lib.rs" rel="noopener"><code>UNASSIGNED_LABEL</code></a> (<code>u32::MAX</code>) when <code>capture_assignments</code> is enabled.
+</li>
+<li><strong>Batch-Size Law (<code>BatchLaw</code>):</strong> <code>BatchLaw::Auto</code> selects <code>Quality</code> ($C_B = 0.00439175$, capped at $\max(1, \lfloor n_{\text{eff}} / 2 \rfloor)$) when $d \le 16$, and <code>Throughput</code> ($C_B = 0.035134$, capped at $\text{round\_pow2}(n_{\text{eff}} / 2)$) when $d &gt; 16$:
+</li>
+</ol>
+<p>$$B_0 = \text{round\_pow2}\!\left(C_B \cdot k^{0.134749} \cdot n_{\text{eff}}^{0.876473} \cdot T^{0.813344}\right)$$</p>
+<ol>
+<li><strong>Initial EMA Rate &amp; Cosine Schedule:</strong> Unless overridden via <code>EmeansConfig::alpha0</code>, the initial EMA rate $\alpha_0$ follows the empirical scaling law clamped to $[10^{-4}, 1.0]$ and decays over <code>total_steps</code> via <a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-cluster/src/recipe.rs" rel="noopener"><code>scheduled_alpha</code></a>:
+</li>
+</ol>
+<p>$$\alpha_0 = \text{clamp}_{[10^{-4},\, 1.0]}\!\left(0.8244 \cdot k^{-0.4617} \cdot B^{0.9003} \cdot n_{\text{eff}}^{-0.4498} \cdot T^{-0.1057}\right)$$</p>
+<p>$$\alpha(s) = \alpha_0 \cdot \left(0.1 + 0.9 \cdot \frac{1 + \cos(\pi \cdot \min(s, S) / \max(S, 1))}{2}\right)$$</p>
+<ol>
+<li><strong>Fractional Epoch Schedule &amp; Exact Closing Pass:</strong> For $T = \lfloor T \rfloor + f$ with $\lfloor T \rfloor \ge 1$, <code>epoch_rows</code> places any fractional remainder pass $\text{round\_ties\_even}(f \cdot n_{\text{eff}})$ <strong>before</strong> a full $n_{\text{eff}}$-row final epoch (for example, $T = 2.6$ on $n = 100{,}000$ executes <code>[100_000, 60_000, 100_000]</code>). During the final epoch, every batch accumulates exact closing sums and counts alongside EMA updates so <a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-cluster/src/lib.rs" rel="noopener"><code>EmeansFit::centroids</code></a> are finalized in <code>f64</code> from full-pass sufficient statistics (retaining the latest EMA centroid for any cluster with zero closing-pass assignments).
+</li>
+<li><strong>EMA Update &amp; Gumbel Dead-Cluster Split Revival:</strong> Each mini-batch updates cluster usage $u_j \leftarrow (1 - \alpha) u_j + \alpha n_j$ (or $u_j \leftarrow \alpha n_j$ when $\alpha = 1$) and blends centroids with exact <code>weight == 1.0</code> replacement when $u_{\text{old}} = 0$. On steps $s \ge 1$ where $s \le 8$ or $s \equiv 0 \pmod 4$, clusters with $u_j &lt; \tau \cdot \bar{u}$ ($\tau = 0.1$ for $d &gt; 2$, $0.0$ for $d \le 2$) are revived by splitting live donor clusters ranked by stateless <code>SplitMix64</code> Gumbel keys $g_j = \ln(u_j) - \ln(-\ln U_j)$ with alternating $\pm\epsilon$ coordinate perturbations (<code>split_epsilon = 1e-4</code>), plus 1-ULP deterministic tie separation when <code>(1 +/- eps)</code> underflows representation precision.
+</li>
+</ol>
+<hr>
+<h2 id="execution-substrates--precision-lanes">Execution Substrates &amp; Precision Lanes <a class="anchor" href="#execution-substrates--precision-lanes" aria-label="Link to this section">#</a></h2>
+<p><a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-cluster/src/lib.rs" rel="noopener"><code>ClusterDevice</code></a> never falls back silently across devices or features (<code>OjasError::Unsupported</code> when <code>ClusterDevice::Metal</code> is requested without macOS + <code>metal</code> or without a Metal 4 GPU):</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Substrate</th><th>Variant</th><th>Assignment Math</th><th>Accumulation &amp; Closing Stats</th><th>Determinism Profile</th></tr></thead>
+<tbody>
+<tr><td>CPU</td><td><code>CpuMath::Fast</code></td><td>Apple Accelerate AMX (macOS unpinned) or L2-tiled <code>ojas-simd</code></td><td>Ascending row CSR gather (<code>f32</code> batch, <code>f64</code> closing divide)</td><td>Deterministic per host/OS when single-threaded or NEON-tiled; Accelerate AMX may vary across OS/thread heuristics</td></tr>
+<tr><td>CPU</td><td><code>CpuMath::DeterministicFma</code></td><td>L2-tiled <code>ojas-simd</code> FMA micro-kernels (<code>sgemm_tile_with</code>)</td><td>Ascending row CSR gather (<code>256</code>-row slices, <code>f64</code> closing divide)</td><td>Bit-identical (<code>0</code> ULP) across arbitrary worker thread counts (<code>1..N</code>)</td></tr>
+<tr><td>CPU</td><td><code>CpuMath::Exact</code></td><td>Non-FMA ascending-$d$ <code>f32</code> dot products</td><td>Ascending row CSR gather (<code>256</code>-row slices, <code>f64</code> closing divide)</td><td>Bit-identical (<code>0</code> ULP) across thread counts and CPU microarchitectures</td></tr>
+<tr><td>Metal 4</td><td><code>MetalPrecision::Bf16</code></td><td><code>64x64</code> <code>bf16</code> cooperative <code>TensorOps</code> (<code>32x32</code> <code>simdgroup</code> fallback)</td><td><code>bf16</code>-rounded rows gathered in <code>256</code>-row radix-CSR slices (<code>f32</code> acc)</td><td>Atomic-free CSR gather; streaming <a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-cluster/src/session.rs" rel="noopener"><code>EmeansSession</code></a> verified bit-identical to resident <code>fit</code> at $k=12$, minor run-to-run variation observed at $k=1024$ (<code>TensorOps</code>)</td></tr>
+<tr><td>Metal 4</td><td><code>MetalPrecision::Bf16AssignF32Stats</code></td><td><code>64x64</code> <code>bf16</code> cooperative <code>TensorOps</code> (<code>32x32</code> <code>simdgroup</code> fallback)</td><td>Unrounded <code>f32</code> rows gathered in <code>256</code>-row radix-CSR slices</td><td>Mixed-precision lane pairing <code>bf16</code> TensorOps assignment with <code>f32</code> sufficient statistics</td></tr>
+<tr><td>Metal 4</td><td><code>MetalPrecision::F32</code></td><td><code>64x64</code> exact <code>f32</code> cooperative <code>TensorOps</code> (<code>RELAXED=false</code>)</td><td>Unrounded <code>f32</code> rows gathered in <code>256</code>-row radix-CSR slices</td><td>Full <code>f32</code> operand and TensorOps pipeline</td></tr>
+</tbody></table></div>
+<aside class="alert alert-important"><p class="alert-title">Important</p><p>Every host scratch buffer (<code>Scratch&lt;T&gt;</code>) and Metal pool slab (<code>OjasBudgetLedger</code> -&gt; <code>tessl::PoolLedger</code>) charges <a href="crate-ojas-core.html"><code>ojas_core::Budget</code></a> <strong>before</strong> allocation and refuses over-cap requests with <code>OjasError::CapacityExceeded</code> without mutating engine state or poisoning the GPU runtime. Dropping <code>EmeansSession</code> and <code>EmeansEngine</code> (or calling <code>EmeansEngine::trim_pool</code>) returns <code>Budget::live_bytes()</code> to <code>0</code>.</p>
+</aside>
+<hr>
+<h2 id="usage">Usage <a class="anchor" href="#usage" aria-label="Link to this section">#</a></h2>
+<h3 id="one-shot-fit--assignment">One-Shot Fit &amp; Assignment <a class="anchor" href="#one-shot-fit--assignment" aria-label="Link to this section">#</a></h3>
+<div class="code"><span class="code-lang">rust</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>use ojas_cluster::{emeans_assign, ClusterDevice, CpuMath, EmeansConfig, EmeansEngine};
+use ojas_core::{Budget, Tensor};
+
+let budget = Budget::new(256 * 1024 * 1024);
+let engine = EmeansEngine::new(
+    ClusterDevice::Cpu {
+        threads: None,
+        math: CpuMath::DeterministicFma,
+    },
+    &amp;budget,
+)?;
+
+let x = Tensor::from_f32(&amp;rows, &amp;[n, d], &amp;budget)?;
+let mut cfg = EmeansConfig::new(k);
+cfg.nepochs = 2.6;
+cfg.seed = 42;
+
+let fit = engine.fit(&amp;x, &amp;cfg)?;
+let (labels, total_obj) = emeans_assign(
+    &amp;x,
+    &amp;fit.centroids,
+    engine.device(),
+    cfg.spherical,
+    cfg.assignment_chunk_size,
+    &amp;budget,
+)?;</code></pre></div>
+<h3 id="out-of-core-streaming-emeanssession">Out-of-Core Streaming (<code>EmeansSession</code>) <a class="anchor" href="#out-of-core-streaming-emeanssession" aria-label="Link to this section">#</a></h3>
+<p><a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-cluster/src/session.rs" rel="noopener"><code>EmeansSession</code></a> accepts arbitrary <code>[chunk_rows, d]</code> <code>F32</code> or <code>Bf16</code> tensor chunks (including chunks that straddle mini-batch boundaries, clamping to <code>remaining_in_batch</code> and reporting <code>rows_accepted</code> in <a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-cluster/src/lib.rs" rel="noopener"><code>AccumulateStep</code></a>):</p>
+<div class="code"><span class="code-lang">rust</span><button type="button" class="copy" aria-label="Copy code">Copy</button><pre><code>let mut session = engine.begin_session(&amp;init_centroids, &amp;cfg, global_n)?;
+while !session.is_finished() {
+    while !session.is_epoch_complete() {
+        let mut cursor = 0;
+        while cursor &lt; chunk_rows {
+            let step = session.accumulate(&amp;chunk_slice(cursor), None)?;
+            cursor += step.rows_accepted;
+            if step.batch_ready {
+                let _revived = session.step_ready_batch()?;
+            }
+        }
+    }
+    let _stat = session.end_epoch()?;
+}
+let fit = session.finalize()?;</code></pre></div>
+<hr>
+<h2 id="apple-m5-pro-benchmark-e-means-vs-25-iter-lloyd">Apple M5 Pro Benchmark (<code>e-means</code> vs 25-Iter Lloyd) <a class="anchor" href="#apple-m5-pro-benchmark-e-means-vs-25-iter-lloyd" aria-label="Link to this section">#</a></h2>
+<p>Measured by <a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-cluster/examples/emeans_bench.rs" rel="noopener"><code>examples/emeans_bench.rs</code></a> (1 untimed warmup + 5 cyclic-interleaved paired rounds per shape on Apple M5 Pro, macOS 27.2, <code>rustc 1.99.1</code>, 18 CPU pool threads; full raw output and load disclosure in <a href="https://github.com/bharathvbcr/ojas/blob/main/bench/results/2026-11-10-emeans/README.md" rel="noopener"><code>bench/results/2026-11-10-emeans</code></a>). All contenders start from identical Forgy <code>init_centroids</code> and are scored by exact <code>f64</code> Euclidean MSE $\frac{1}{n}\sum_i \min_j \|x_i - c_j\|_2^2$:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Shape</th><th>Contender</th><th style="text-align:right"><code>min_ms</code></th><th style="text-align:right"><code>median_ms</code></th><th style="text-align:right"><code>MSE (f64)</code></th><th style="text-align:right"><code>MSE vs Lloyd</code></th><th style="text-align:right"><code>speedup_min</code></th><th style="text-align:right"><code>speedup_med</code></th></tr></thead>
+<tbody>
+<tr><td><code>100k x 128, k=1024</code></td><td><code>Lloyd 25-iter (CpuMath::Fast)</code></td><td style="text-align:right">4793.41</td><td style="text-align:right">4842.81</td><td style="text-align:right">0.228053</td><td style="text-align:right">+0.00%</td><td style="text-align:right">1.00x</td><td style="text-align:right">1.00x</td></tr>
+<tr><td><code>100k x 128, k=1024</code></td><td><code>e-means T=2.0 (CpuMath::Fast)</code></td><td style="text-align:right">471.12</td><td style="text-align:right">493.62</td><td style="text-align:right">0.170040</td><td style="text-align:right">-25.44%</td><td style="text-align:right">10.17x</td><td style="text-align:right">9.81x</td></tr>
+<tr><td><code>100k x 128, k=1024</code></td><td><code>e-means T=2.6 (CpuMath::Fast)</code></td><td style="text-align:right">587.02</td><td style="text-align:right">638.66</td><td style="text-align:right">0.160376</td><td style="text-align:right">-29.68%</td><td style="text-align:right">8.17x</td><td style="text-align:right">7.58x</td></tr>
+<tr><td><code>100k x 128, k=1024</code></td><td><code>e-means T=2.0 (Metal::F32)</code></td><td style="text-align:right">53.68</td><td style="text-align:right">67.03</td><td style="text-align:right">0.169836</td><td style="text-align:right">-25.53%</td><td style="text-align:right">89.29x</td><td style="text-align:right">72.25x</td></tr>
+<tr><td><code>100k x 128, k=1024</code></td><td><code>e-means T=2.6 (Metal::F32)</code></td><td style="text-align:right">52.04</td><td style="text-align:right">72.83</td><td style="text-align:right">0.159899</td><td style="text-align:right">-29.89%</td><td style="text-align:right">92.12x</td><td style="text-align:right">66.49x</td></tr>
+<tr><td><code>100k x 128, k=1024</code></td><td><code>e-means T=2.0 (Metal::Bf16AssignF32Stats)</code></td><td style="text-align:right">54.08</td><td style="text-align:right">63.38</td><td style="text-align:right">0.165726</td><td style="text-align:right">-27.33%</td><td style="text-align:right">88.63x</td><td style="text-align:right">76.41x</td></tr>
+<tr><td><code>100k x 128, k=1024</code></td><td><code>e-means T=2.6 (Metal::Bf16AssignF32Stats)</code></td><td style="text-align:right">55.12</td><td style="text-align:right">74.79</td><td style="text-align:right">0.160264</td><td style="text-align:right">-29.73%</td><td style="text-align:right">86.96x</td><td style="text-align:right">64.75x</td></tr>
+<tr><td><code>100k x 128, k=1024</code></td><td><code>e-means T=2.0 (Metal::Bf16)</code></td><td style="text-align:right">52.25</td><td style="text-align:right">64.23</td><td style="text-align:right">0.172511</td><td style="text-align:right">-24.35%</td><td style="text-align:right">91.74x</td><td style="text-align:right">75.40x</td></tr>
+<tr><td><code>100k x 128, k=1024</code></td><td><code>e-means T=2.6 (Metal::Bf16)</code></td><td style="text-align:right">54.30</td><td style="text-align:right">65.08</td><td style="text-align:right">0.163411</td><td style="text-align:right">-28.34%</td><td style="text-align:right">88.28x</td><td style="text-align:right">74.41x</td></tr>
+<tr><td><code>65.5k x 512, k=1024</code></td><td><code>Lloyd 25-iter (CpuMath::Fast)</code></td><td style="text-align:right">5055.08</td><td style="text-align:right">5480.39</td><td style="text-align:right">0.248275</td><td style="text-align:right">+0.00%</td><td style="text-align:right">1.00x</td><td style="text-align:right">1.00x</td></tr>
+<tr><td><code>65.5k x 512, k=1024</code></td><td><code>e-means T=2.0 (CpuMath::Fast)</code></td><td style="text-align:right">587.15</td><td style="text-align:right">598.83</td><td style="text-align:right">0.197876</td><td style="text-align:right">-20.30%</td><td style="text-align:right">8.61x</td><td style="text-align:right">9.15x</td></tr>
+<tr><td><code>65.5k x 512, k=1024</code></td><td><code>e-means T=2.6 (CpuMath::Fast)</code></td><td style="text-align:right">656.68</td><td style="text-align:right">707.02</td><td style="text-align:right">0.179865</td><td style="text-align:right">-27.55%</td><td style="text-align:right">7.70x</td><td style="text-align:right">7.75x</td></tr>
+<tr><td><code>65.5k x 512, k=1024</code></td><td><code>e-means T=2.0 (Metal::F32)</code></td><td style="text-align:right">104.98</td><td style="text-align:right">145.71</td><td style="text-align:right">0.192224</td><td style="text-align:right">-22.58%</td><td style="text-align:right">48.15x</td><td style="text-align:right">37.61x</td></tr>
+<tr><td><code>65.5k x 512, k=1024</code></td><td><code>e-means T=2.6 (Metal::F32)</code></td><td style="text-align:right">114.78</td><td style="text-align:right">116.15</td><td style="text-align:right">0.178966</td><td style="text-align:right">-27.92%</td><td style="text-align:right">44.04x</td><td style="text-align:right">47.18x</td></tr>
+<tr><td><code>65.5k x 512, k=1024</code></td><td><code>e-means T=2.0 (Metal::Bf16AssignF32Stats)</code></td><td style="text-align:right">134.29</td><td style="text-align:right">136.24</td><td style="text-align:right">0.199768</td><td style="text-align:right">-19.54%</td><td style="text-align:right">37.64x</td><td style="text-align:right">40.23x</td></tr>
+<tr><td><code>65.5k x 512, k=1024</code></td><td><code>e-means T=2.6 (Metal::Bf16AssignF32Stats)</code></td><td style="text-align:right">123.09</td><td style="text-align:right">139.86</td><td style="text-align:right">0.181201</td><td style="text-align:right">-27.02%</td><td style="text-align:right">41.07x</td><td style="text-align:right">39.18x</td></tr>
+<tr><td><code>65.5k x 512, k=1024</code></td><td><code>e-means T=2.0 (Metal::Bf16)</code></td><td style="text-align:right">98.28</td><td style="text-align:right">109.55</td><td style="text-align:right">0.193460</td><td style="text-align:right">-22.08%</td><td style="text-align:right">51.44x</td><td style="text-align:right">50.03x</td></tr>
+<tr><td><code>65.5k x 512, k=1024</code></td><td><code>e-means T=2.6 (Metal::Bf16)</code></td><td style="text-align:right">92.99</td><td style="text-align:right">96.95</td><td style="text-align:right">0.183158</td><td style="text-align:right">-26.23%</td><td style="text-align:right">54.36x</td><td style="text-align:right">56.53x</td></tr>
+</tbody></table></div>
+<hr>
+<h2 id="test-suites-17-integration-tests">Test Suites (17 integration tests) <a class="anchor" href="#test-suites-17-integration-tests" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-cluster/tests/recipe_and_rng.rs" rel="noopener"><code>tests/recipe_and_rng.rs</code></a> (4 tests): <code>canonical_v1</code> batch-law resolution against upstream Python values, fractional epoch ordering and invalid-bound refusals, <code>SplitMix64</code> sampling/permutations and spherical prescaling, and collapsed-split 1-ULP separation across <code>-0.0</code>, subnormals, and finite extremes.
+</li>
+<li><a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-cluster/tests/cpu_and_lloyd.rs" rel="noopener"><code>tests/cpu_and_lloyd.rs</code></a> (8 tests): <code>CpuMath::DeterministicFma</code> and <code>CpuMath::Exact</code> multi-thread bit-identity and thread-ceiling refusal, pinned-thread vs Accelerate panel parity, <code>f64</code> closing-pass accumulation without <code>f32</code> stall, spherical zero-row/unassigned edge cases, <code>e-means</code> <code>T = 2.6</code> vs 25-iter <code>lloyd_fit</code> convergence, and fail-closed non-finite/overflow/<code>Budget</code> refusals.
+</li>
+<li><a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-cluster/tests/metal_and_session.rs" rel="noopener"><code>tests/metal_and_session.rs</code></a> (5 tests): <code>faiss/contrib/e_means</code> <code>canonical_v1</code> golden parity across CPU and all three Metal precision lanes, resident <code>fit</code> vs streaming <code>EmeansSession</code> bit-identity, cross-runtime <code>Mapped</code> (<code>SharedBuf</code>) zero-copy safety and <code>Budget</code> trim recovery without <code>GpuRuntime</code> poison, 200-iteration engine reuse and early-drop zero-leak checks, and dtype/state-machine refusals.
+</li>
+</ul>
+      </article>
+      <p class="ref-source">Rendered from <a href="https://github.com/bharathvbcr/ojas/blob/main/ojas-cluster/README.md" rel="noopener"><code>ojas-cluster/README.md</code></a>. If this page and the repository disagree, the repository wins.</p>
+      <nav class="ref-pager" aria-label="Previous and next">
+        <a href="crate-ojas-capi.html" rel="prev"><span>Previous</span>ojas-capi</a>
+        <a href="crate-ojas-core.html" rel="next" class="next"><span>Next</span>ojas-core</a>
+      </nav>
+    </main>
+    <nav class="ref-toc" aria-label="On this page"><p>On this page</p><ol>
+<li><a href="#architecture--dispatch">Architecture &amp; Dispatch</a></li>
+<li><a href="#canonical-v1-recipe--algorithmic-mechanics">canonical_v1 Recipe &amp; Algorithmic Mechanics</a></li>
+<li><a href="#execution-substrates--precision-lanes">Execution Substrates &amp; Precision Lanes</a></li>
+<li><a href="#usage">Usage</a></li>
+<li class="sub"><a href="#one-shot-fit--assignment">One-Shot Fit &amp; Assignment</a></li>
+<li class="sub"><a href="#out-of-core-streaming-emeanssession">Out-of-Core Streaming (EmeansSession)</a></li>
+<li><a href="#apple-m5-pro-benchmark-e-means-vs-25-iter-lloyd">Apple M5 Pro Benchmark (e-means vs 25-Iter Lloyd)</a></li>
+<li><a href="#test-suites-17-integration-tests">Test Suites (17 integration tests)</a></li>
+</ol></nav>
+  </div>
+  <footer class="border-t border-white/10 bg-black py-8 mt-16 text-slate-500 text-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+      <span class="font-mono">ojas · dual licensed MIT OR Apache-2.0</span>
+      <span>Pages are rendered from the repository's markdown; <a class="underline hover:text-white" href="https://github.com/bharathvbcr/ojas/tree/main/docs" rel="noopener">the markdown is the source</a>.</span>
+    </div>
+  </footer>
+  <script src="../assets/reference.js"></script>
+</body>
+</html>
