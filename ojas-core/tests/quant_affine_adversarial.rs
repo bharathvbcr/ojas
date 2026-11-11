@@ -371,7 +371,11 @@ fn round_trip_error_stays_within_one_scale_plus_bf16_rounding() {
         let rows = 1 + (rng.next() % 4) as usize;
         let cols = 64 * (1 + (rng.next() % 6) as usize);
         let magnitude = 10f32.powf(rng.unit() * 8.0 - 5.0);
-        let offset = if seed % 3 == 0 { magnitude * 3.0 } else { 0.0 };
+        let offset = if seed.is_multiple_of(3) {
+            magnitude * 3.0
+        } else {
+            0.0
+        };
         let v: Vec<f32> = (0..rows * cols)
             .map(|_| rng.normal() * magnitude + offset)
             .collect();

@@ -86,18 +86,28 @@ pub fn load(case: &str) -> Golden {
         let shape: Vec<usize> = shape.iter().map(num).collect();
         let raw = &data[num(&offs[0])..num(&offs[1])];
         let (words, halves) = match dtype.as_str() {
-            "U32" => (
-                raw.chunks_exact(4)
-                    .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
-                    .collect(),
-                Vec::new(),
-            ),
-            "BF16" => (
-                Vec::new(),
-                raw.chunks_exact(2)
-                    .map(|c| u16::from_le_bytes(c.try_into().unwrap()))
-                    .collect(),
-            ),
+            "U32" => {
+                let (words, rest) = raw.as_chunks::<4>();
+                assert!(
+                    rest.is_empty(),
+                    "{name}: U32 data is not a whole number of words"
+                );
+                (
+                    words.iter().map(|c| u32::from_le_bytes(*c)).collect(),
+                    Vec::new(),
+                )
+            }
+            "BF16" => {
+                let (halves, rest) = raw.as_chunks::<2>();
+                assert!(
+                    rest.is_empty(),
+                    "{name}: BF16 data is not a whole number of halves"
+                );
+                (
+                    Vec::new(),
+                    halves.iter().map(|c| u16::from_le_bytes(*c)).collect(),
+                )
+            }
             other => panic!("{name}: unexpected dtype {other}"),
         };
         out.insert(

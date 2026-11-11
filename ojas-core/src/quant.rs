@@ -179,7 +179,7 @@ fn geometry(
             detail: format!("an empty matrix [{rows}, {cols}] cannot be quantised"),
         });
     }
-    if cols % spec.group_size != 0 {
+    if !cols.is_multiple_of(spec.group_size) {
         return Err(OjasError::Shape {
             op,
             detail: format!(
@@ -569,7 +569,7 @@ pub fn dequantize_affine_bf16(q: &AffineQuantized, budget: &Budget) -> Result<Te
     let dst = out.bf16_slice_mut()?;
     for (g, (words, values)) in packed
         .chunks_exact(wpg)
-        .zip(dst.chunks_exact_mut(AFFINE_GROUP_SIZE))
+        .zip(dst.as_chunks_mut::<AFFINE_GROUP_SIZE>().0)
         .enumerate()
     {
         let scale = flush(bf16_to_f32(scales[g]));
