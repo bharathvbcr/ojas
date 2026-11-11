@@ -84,6 +84,9 @@ struct RoundSample {
 
 struct CachedMse {
     bits: Vec<u32>,
+    labels: Vec<u32>,
+    cluster_counts: Vec<u64>,
+    revived: usize,
     mse_f64: f64,
 }
 
@@ -351,6 +354,7 @@ fn run_contender_once(
     workload: &Workload,
     budget: &Budget,
     eval_workers: usize,
+    run_tag: &str,
     mse_cache: &mut Vec<CachedMse>,
 ) -> Result<RoundSample, OjasError> {
     match &contender.kind {
@@ -366,16 +370,19 @@ fn run_contender_once(
             );
             assert_eq!(fit.labels.len(), workload.spec.n);
             let c_slice = fit.centroids.f32_slice()?;
+            let non_empty = fit.cluster_counts.iter().filter(|&&c| c > 0).count();
             let mse_f64 = lookup_or_eval_mse(
+                workload.spec,
+                contender.id,
+                run_tag,
                 &workload.x_rows,
                 c_slice,
-                workload.spec.n,
-                workload.spec.d,
-                workload.spec.k,
+                &fit.labels,
+                &fit.cluster_counts,
+                0,
                 eval_workers,
                 mse_cache,
             );
-            let non_empty = fit.cluster_counts.iter().filter(|&&c| c > 0).count();
             Ok(RoundSample {
                 elapsed_ms,
                 mse_f64,
@@ -390,17 +397,20 @@ fn run_contender_once(
 
             assert_eq!(fit.labels.len(), workload.spec.n);
             let c_slice = fit.centroids.f32_slice()?;
+            let non_empty = fit.cluster_counts.iter().filter(|&&c| c > 0).count();
+            let revived = fit.epoch_stats.iter().map(|s| s.revived_clusters).sum();
             let mse_f64 = lookup_or_eval_mse(
+                workload.spec,
+                contender.id,
+                run_tag,
                 &workload.x_rows,
                 c_slice,
-                workload.spec.n,
-                workload.spec.d,
-                workload.spec.k,
+                &fit.labels,
+                &fit.cluster_counts,
+                revived,
                 eval_workers,
                 mse_cache,
             );
-            let non_empty = fit.cluster_counts.iter().filter(|&&c| c > 0).count();
-            let revived = fit.epoch_stats.iter().map(|s| s.revived_clusters).sum();
             Ok(RoundSample {
                 elapsed_ms,
                 mse_f64,
@@ -411,21 +421,85 @@ fn run_contender_once(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lookup_or_eval_mse(
+    spec: &ShapeSpec,
+    contender_id: &str,
+    run_tag: &str,
     x_rows: &[f32],
     centroids: &[f32],
-    n: usize,
-    d: usize,
-    k: usize,
+    labels: &[u32],
+    cluster_counts: &[u64],
+    revived: usize,
     eval_workers: usize,
     cache: &mut Vec<CachedMse>,
 ) -> f64 {
     let bits: Vec<u32> = centroids.iter().map(|v| v.to_bits()).collect();
-    if let Some(hit) = cache.iter().find(|entry| entry.bits == bits) {
-        return hit.mse_f64;
+    if let Some(baseline) = cache.first() {
+        if bits != baseline.bits {
+            let mse_f64 =
+                exact_euclidean_mse_f64(x_rows, centroids, spec.n, spec.d, spec.k, eval_workers);
+            let (first_idx, (&wb, &rb)) = baseline
+                .bits
+                .iter()
+                .zip(bits.iter())
+                .enumerate()
+                .find(|(_, (a, b))| a != b)
+                .expect("bits differed from warmup baseline");
+            let cluster = first_idx / spec.d;
+            let col = first_idx % spec.d;
+            let warm_mse = baseline.mse_f64;
+            cache.push(CachedMse {
+                bits,
+                labels: labels.to_vec(),
+                cluster_counts: cluster_counts.to_vec(),
+                revived,
+                mse_f64,
+            });
+            panic!(
+                "repeat-run non-determinism on shape={} contender={} ({run_tag}): \
+                 unique_centroid_hashes={} != 1; first centroid bit mismatch at \
+                 cluster={cluster} col={col} (warmup={:#010x} [{}] mse={warm_mse:.8} vs \
+                 {run_tag}={:#010x} [{}] mse={mse_f64:.8})",
+                spec.id,
+                contender_id,
+                cache.len(),
+                wb,
+                f32::from_bits(wb),
+                rb,
+                f32::from_bits(rb),
+            );
+        }
+        assert_eq!(
+            revived, baseline.revived,
+            "repeat-run non-determinism on shape={} contender={} ({run_tag}): revived_clusters {} != warmup {}",
+            spec.id, contender_id, revived, baseline.revived
+        );
+        assert_eq!(
+            cluster_counts,
+            baseline.cluster_counts.as_slice(),
+            "repeat-run non-determinism on shape={} contender={} ({run_tag}): cluster_counts diverged from warmup",
+            spec.id,
+            contender_id
+        );
+        assert_eq!(
+            labels,
+            baseline.labels.as_slice(),
+            "repeat-run non-determinism on shape={} contender={} ({run_tag}): labels diverged from warmup",
+            spec.id,
+            contender_id
+        );
+        return baseline.mse_f64;
     }
-    let mse_f64 = exact_euclidean_mse_f64(x_rows, centroids, n, d, k, eval_workers);
-    cache.push(CachedMse { bits, mse_f64 });
+
+    let mse_f64 = exact_euclidean_mse_f64(x_rows, centroids, spec.n, spec.d, spec.k, eval_workers);
+    cache.push(CachedMse {
+        bits,
+        labels: labels.to_vec(),
+        cluster_counts: cluster_counts.to_vec(),
+        revived,
+        mse_f64,
+    });
     mse_f64
 }
 
@@ -634,8 +708,16 @@ fn run_bench() -> Result<(), OjasError> {
                 &workload,
                 &budget,
                 eval_workers,
+                "warmup",
                 &mut mse_caches[c_idx],
             )?;
+            assert_eq!(
+                mse_caches[c_idx].len(),
+                1,
+                "warmup must seed baseline centroid hash for shape={} contender={}",
+                spec.id,
+                contender.id
+            );
             println!(
                 "WARMUP shape={} contender={} elapsed_ms={:.3} mse_f64={:.6} non_empty={} revived={}",
                 spec.id, contender.id, warm.elapsed_ms, warm.mse_f64, warm.non_empty, warm.revived
@@ -644,6 +726,7 @@ fn run_bench() -> Result<(), OjasError> {
 
         // 5 cyclic-interleaved paired rounds across all contenders.
         for round in 0..ROUNDS {
+            let run_tag = format!("round={}", round + 1);
             let mut round_slots: Vec<Option<RoundSample>> = (0..num_c).map(|_| None).collect();
             for offset in 0..num_c {
                 let c_idx = (round + offset) % num_c;
@@ -652,6 +735,7 @@ fn run_bench() -> Result<(), OjasError> {
                     &workload,
                     &budget,
                     eval_workers,
+                    &run_tag,
                     &mut mse_caches[c_idx],
                 )?;
                 round_slots[c_idx] = Some(sample);
@@ -796,6 +880,11 @@ fn run_bench() -> Result<(), OjasError> {
         println!();
 
         for row in &summaries {
+            assert_eq!(
+                row.unique_hashes, 1,
+                "shape={} contender={} expected unique_centroid_hashes == 1 across warmup + {ROUNDS} timed rounds, got {}",
+                spec.id, row.id, row.unique_hashes
+            );
             println!(
                 "SUMMARY shape={} contender={} min_ms={:.3} median_ms={:.3} max_ms={:.3} spread_ms={:.3} spread_pct={:.2} mse_f64={:.8} mse_delta_pct={:+.4} mse_ratio={:.6} speedup_min={:.3} speedup_med={:.3} paired_speedup_med={:.3} non_empty={} revived={} unique_centroid_hashes={}",
                 spec.id,

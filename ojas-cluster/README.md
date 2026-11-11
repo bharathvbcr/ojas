@@ -14,7 +14,7 @@ flowchart TD
     subgraph API["Public Surface (src/lib.rs, src/session.rs, src/lloyd.rs)"]
         Fit["emeans_fit / EmeansEngine::fit"]
         Assign["emeans_assign / EmeansEngine::assign"]
-        Stream["EmeansSession (accumulate / step_ready_batch / end_epoch / finalize)"]
+        Stream["EmeansSession (begin / accumulate / update / end_epoch / finalize)"]
         Lloyd["lloyd::lloyd_fit (full-pass baseline)"]
     end
 
@@ -84,12 +84,12 @@ $$\alpha(s) = \alpha_0 \cdot \left(0.1 + 0.9 \cdot \frac{1 + \cos(\pi \cdot \min
 
 | Substrate | Variant | Assignment Math | Accumulation & Closing Stats | Determinism Profile |
 | :--- | :--- | :--- | :--- | :--- |
-| CPU | `CpuMath::Fast` | Apple Accelerate AMX (macOS unpinned) or L2-tiled `ojas-simd` | Ascending row CSR gather (`f32` batch, `f64` closing divide) | Deterministic per host/OS when single-threaded or NEON-tiled; Accelerate AMX may vary across OS/thread heuristics |
+| CPU | `CpuMath::Fast` | Apple Accelerate AMX (macOS unpinned) or L2-tiled `ojas-simd` | Ascending row CSR gather (`f32` batch, `f64` closing divide) | Deterministic per host/OS (`unique_centroid_hashes = 1` across repeated M5 Pro runs); Accelerate AMX may vary across OS/thread heuristics |
 | CPU | `CpuMath::DeterministicFma` | L2-tiled `ojas-simd` FMA micro-kernels (`sgemm_tile_with`) | Ascending row CSR gather (`256`-row slices, `f64` closing divide) | Bit-identical (`0` ULP) across arbitrary worker thread counts (`1..N`) |
 | CPU | `CpuMath::Exact` | Non-FMA ascending-$d$ `f32` dot products | Ascending row CSR gather (`256`-row slices, `f64` closing divide) | Bit-identical (`0` ULP) across thread counts and CPU microarchitectures |
-| Metal 4 | `MetalPrecision::Bf16` | `64x64` `bf16` cooperative `TensorOps` (`32x32` `simdgroup` fallback) | `bf16`-rounded rows gathered in `256`-row radix-CSR slices (`f32` acc) | Atomic-free CSR gather; streaming [`EmeansSession`](src/session.rs) verified bit-identical to resident `fit` at $k=12$, minor run-to-run variation observed at $k=1024$ (`TensorOps`) |
-| Metal 4 | `MetalPrecision::Bf16AssignF32Stats` | `64x64` `bf16` cooperative `TensorOps` (`32x32` `simdgroup` fallback) | Unrounded `f32` rows gathered in `256`-row radix-CSR slices | Mixed-precision lane pairing `bf16` TensorOps assignment with `f32` sufficient statistics |
-| Metal 4 | `MetalPrecision::F32` | `64x64` exact `f32` cooperative `TensorOps` (`RELAXED=false`) | Unrounded `f32` rows gathered in `256`-row radix-CSR slices | Full `f32` operand and TensorOps pipeline |
+| Metal 4 | `MetalPrecision::Bf16` | `64x64` `bf16` cooperative `TensorOps` (`32x32` `simdgroup` fallback) | `bf16`-rounded rows gathered in `256`-row radix-CSR slices (`f32` acc) | Bit-identical (`0` ULP) across repeated fits and [`EmeansSession`](src/session.rs) streaming vs resident `fit_with_init` on the same GPU (verified through $k = 1024$) |
+| Metal 4 | `MetalPrecision::Bf16AssignF32Stats` | `64x64` `bf16` cooperative `TensorOps` (`32x32` `simdgroup` fallback) | Unrounded `f32` rows gathered in `256`-row radix-CSR slices | Mixed-precision lane with `0`-ULP repeat-run and streaming-vs-resident bit-identity on the same GPU (verified through $k = 1024$) |
+| Metal 4 | `MetalPrecision::F32` | `64x64` exact `f32` cooperative `TensorOps` (`RELAXED=false`) | Unrounded `f32` rows gathered in `256`-row radix-CSR slices | Full `f32` pipeline with `0`-ULP repeat-run and streaming-vs-resident bit-identity on the same GPU (verified through $k = 1024$) |
 
 > [!IMPORTANT]
 > Every host scratch buffer (`Scratch<T>`) and Metal pool slab (`OjasBudgetLedger` -> `tessl::PoolLedger`) charges [`ojas_core::Budget`](../ojas-core/README.md) **before** allocation and refuses over-cap requests with `OjasError::CapacityExceeded` without mutating engine state or poisoning the GPU runtime. Dropping `EmeansSession` and `EmeansEngine` (or calling `EmeansEngine::trim_pool`) returns `Budget::live_bytes()` to `0`.
@@ -119,30 +119,32 @@ cfg.nepochs = 2.6;
 cfg.seed = 42;
 
 let fit = engine.fit(&x, &cfg)?;
-let (labels, total_obj) = emeans_assign(
+let (labels, total_obj) = engine.assign(
     &x,
     &fit.centroids,
-    engine.device(),
     cfg.spherical,
     cfg.assignment_chunk_size,
-    &budget,
 )?;
+let (_one_shot_labels, _one_shot_obj) =
+    emeans_assign(&x, &fit.centroids, cfg.spherical, engine.device(), &budget)?;
 ```
 
 ### Out-of-Core Streaming (`EmeansSession`)
 
-[`EmeansSession`](src/session.rs) accepts arbitrary `[chunk_rows, d]` `F32` or `Bf16` tensor chunks (including chunks that straddle mini-batch boundaries, clamping to `remaining_in_batch` and reporting `rows_accepted` in [`AccumulateStep`](src/lib.rs)):
+[`EmeansSession`](src/session.rs) accepts arbitrary `[m, d]` `F32` or `Bf16` (`Host` or `Mapped`) row chunks bounded by `1 <= m <= session.remaining_in_batch()`, returning `(AccumulateStep, Option<Vec<u32>>)` and producing a `0`-ULP bit-identical [`EmeansFit`](src/lib.rs) relative to `EmeansEngine::fit_with_init`:
 
 ```rust
-let mut session = engine.begin_session(&init_centroids, &cfg, global_n)?;
-while !session.is_finished() {
-    while !session.is_epoch_complete() {
-        let mut cursor = 0;
-        while cursor < chunk_rows {
-            let step = session.accumulate(&chunk_slice(cursor), None)?;
-            cursor += step.rows_accepted;
+use ojas_cluster::EmeansSession;
+
+let mut session = EmeansSession::begin(&engine, global_n, &init_centroids, &cfg)?;
+let num_epochs = session.recipe().epoch_rows.len();
+while session.epoch() < num_epochs {
+    while session.remaining_in_epoch() > 0 {
+        while session.remaining_in_batch() > 0 {
+            let take = next_chunk_len.min(session.remaining_in_batch());
+            let (step, _maybe_closing_labels) = session.accumulate(&next_chunk(take))?;
             if step.batch_ready {
-                let _revived = session.step_ready_batch()?;
+                let _revived = session.update()?;
             }
         }
     }
@@ -155,33 +157,33 @@ let fit = session.finalize()?;
 
 ## Apple M5 Pro Benchmark (`e-means` vs 25-Iter Lloyd)
 
-Measured by [`examples/emeans_bench.rs`](examples/emeans_bench.rs) (1 untimed warmup + 5 cyclic-interleaved paired rounds per shape on Apple M5 Pro, macOS 27.2, `rustc 1.99.1`, 18 CPU pool threads; full raw output and load disclosure in [`bench/results/2026-11-10-emeans`](../bench/results/2026-11-10-emeans/README.md)). All contenders start from identical Forgy `init_centroids` and are scored by exact `f64` Euclidean MSE $\frac{1}{n}\sum_i \min_j \|x_i - c_j\|_2^2$:
+Measured by [`examples/emeans_bench.rs`](examples/emeans_bench.rs) against `tessl @ 17471e7` (1 untimed warmup + 5 cyclic-interleaved paired rounds per shape on Apple M5 Pro, macOS 27.2, `rustc 1.99.1`, 18 CPU pool threads; full raw output and load disclosure in [`bench/results/2026-11-10-emeans`](../bench/results/2026-11-10-emeans/README.md)). All 9 contenders start from identical Forgy `init_centroids`, produce `0`-ULP identical centroid bits across all 6 runs (`unique_centroid_hashes = 1`), and are scored by exact `f64` Euclidean MSE $\frac{1}{n}\sum_i \min_j \|x_i - c_j\|_2^2$:
 
 | Shape | Contender | `min_ms` | `median_ms` | `MSE (f64)` | `MSE vs Lloyd` | `speedup_min` | `speedup_med` |
 | :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `100k x 128, k=1024` | `Lloyd 25-iter (CpuMath::Fast)` | 4793.41 | 4842.81 | 0.228053 | +0.00% | 1.00x | 1.00x |
-| `100k x 128, k=1024` | `e-means T=2.0 (CpuMath::Fast)` | 471.12 | 493.62 | 0.170040 | -25.44% | 10.17x | 9.81x |
-| `100k x 128, k=1024` | `e-means T=2.6 (CpuMath::Fast)` | 587.02 | 638.66 | 0.160376 | -29.68% | 8.17x | 7.58x |
-| `100k x 128, k=1024` | `e-means T=2.0 (Metal::F32)` | 53.68 | 67.03 | 0.169836 | -25.53% | 89.29x | 72.25x |
-| `100k x 128, k=1024` | `e-means T=2.6 (Metal::F32)` | 52.04 | 72.83 | 0.159899 | -29.89% | 92.12x | 66.49x |
-| `100k x 128, k=1024` | `e-means T=2.0 (Metal::Bf16AssignF32Stats)` | 54.08 | 63.38 | 0.165726 | -27.33% | 88.63x | 76.41x |
-| `100k x 128, k=1024` | `e-means T=2.6 (Metal::Bf16AssignF32Stats)` | 55.12 | 74.79 | 0.160264 | -29.73% | 86.96x | 64.75x |
-| `100k x 128, k=1024` | `e-means T=2.0 (Metal::Bf16)` | 52.25 | 64.23 | 0.172511 | -24.35% | 91.74x | 75.40x |
-| `100k x 128, k=1024` | `e-means T=2.6 (Metal::Bf16)` | 54.30 | 65.08 | 0.163411 | -28.34% | 88.28x | 74.41x |
-| `65.5k x 512, k=1024` | `Lloyd 25-iter (CpuMath::Fast)` | 5055.08 | 5480.39 | 0.248275 | +0.00% | 1.00x | 1.00x |
-| `65.5k x 512, k=1024` | `e-means T=2.0 (CpuMath::Fast)` | 587.15 | 598.83 | 0.197876 | -20.30% | 8.61x | 9.15x |
-| `65.5k x 512, k=1024` | `e-means T=2.6 (CpuMath::Fast)` | 656.68 | 707.02 | 0.179865 | -27.55% | 7.70x | 7.75x |
-| `65.5k x 512, k=1024` | `e-means T=2.0 (Metal::F32)` | 104.98 | 145.71 | 0.192224 | -22.58% | 48.15x | 37.61x |
-| `65.5k x 512, k=1024` | `e-means T=2.6 (Metal::F32)` | 114.78 | 116.15 | 0.178966 | -27.92% | 44.04x | 47.18x |
-| `65.5k x 512, k=1024` | `e-means T=2.0 (Metal::Bf16AssignF32Stats)` | 134.29 | 136.24 | 0.199768 | -19.54% | 37.64x | 40.23x |
-| `65.5k x 512, k=1024` | `e-means T=2.6 (Metal::Bf16AssignF32Stats)` | 123.09 | 139.86 | 0.181201 | -27.02% | 41.07x | 39.18x |
-| `65.5k x 512, k=1024` | `e-means T=2.0 (Metal::Bf16)` | 98.28 | 109.55 | 0.193460 | -22.08% | 51.44x | 50.03x |
-| `65.5k x 512, k=1024` | `e-means T=2.6 (Metal::Bf16)` | 92.99 | 96.95 | 0.183158 | -26.23% | 54.36x | 56.53x |
+| `100k x 128, k=1024` | `Lloyd 25-iter (CpuMath::Fast)` | 5047.01 | 5285.93 | 0.228053 | +0.00% | 1.00x | 1.00x |
+| `100k x 128, k=1024` | `e-means T=2.0 (CpuMath::Fast)` | 494.40 | 591.82 | 0.170040 | -25.44% | 10.21x | 8.93x |
+| `100k x 128, k=1024` | `e-means T=2.6 (CpuMath::Fast)` | 548.34 | 733.95 | 0.160376 | -29.68% | 9.20x | 7.20x |
+| `100k x 128, k=1024` | `e-means T=2.0 (Metal::F32)` | 49.64 | 63.66 | 0.169943 | -25.48% | 101.68x | 83.03x |
+| `100k x 128, k=1024` | `e-means T=2.6 (Metal::F32)` | 49.62 | 54.17 | 0.162137 | -28.90% | 101.71x | 97.58x |
+| `100k x 128, k=1024` | `e-means T=2.0 (Metal::Bf16AssignF32Stats)` | 50.21 | 57.80 | 0.165726 | -27.33% | 100.53x | 91.45x |
+| `100k x 128, k=1024` | `e-means T=2.6 (Metal::Bf16AssignF32Stats)` | 50.77 | 62.44 | 0.160264 | -29.73% | 99.40x | 84.66x |
+| `100k x 128, k=1024` | `e-means T=2.0 (Metal::Bf16)` | 48.44 | 56.60 | 0.172521 | -24.35% | 104.20x | 93.38x |
+| `100k x 128, k=1024` | `e-means T=2.6 (Metal::Bf16)` | 46.19 | 54.47 | 0.163665 | -28.23% | 109.27x | 97.04x |
+| `65.5k x 512, k=1024` | `Lloyd 25-iter (CpuMath::Fast)` | 5991.42 | 6935.69 | 0.248275 | +0.00% | 1.00x | 1.00x |
+| `65.5k x 512, k=1024` | `e-means T=2.0 (CpuMath::Fast)` | 654.95 | 866.32 | 0.197876 | -20.30% | 9.15x | 8.01x |
+| `65.5k x 512, k=1024` | `e-means T=2.6 (CpuMath::Fast)` | 725.66 | 1014.84 | 0.179865 | -27.55% | 8.26x | 6.83x |
+| `65.5k x 512, k=1024` | `e-means T=2.0 (Metal::F32)` | 148.07 | 211.90 | 0.192224 | -22.58% | 40.46x | 32.73x |
+| `65.5k x 512, k=1024` | `e-means T=2.6 (Metal::F32)` | 126.32 | 131.04 | 0.178966 | -27.92% | 47.43x | 52.93x |
+| `65.5k x 512, k=1024` | `e-means T=2.0 (Metal::Bf16AssignF32Stats)` | 108.61 | 138.45 | 0.199768 | -19.54% | 55.17x | 50.10x |
+| `65.5k x 512, k=1024` | `e-means T=2.6 (Metal::Bf16AssignF32Stats)` | 112.95 | 144.79 | 0.181201 | -27.02% | 53.04x | 47.90x |
+| `65.5k x 512, k=1024` | `e-means T=2.0 (Metal::Bf16)` | 108.06 | 136.56 | 0.193460 | -22.08% | 55.44x | 50.79x |
+| `65.5k x 512, k=1024` | `e-means T=2.6 (Metal::Bf16)` | 91.72 | 128.13 | 0.183158 | -26.23% | 65.33x | 54.13x |
 
 ---
 
-## Test Suites (17 integration tests)
+## Test Suites (18 integration tests)
 
 - [`tests/recipe_and_rng.rs`](tests/recipe_and_rng.rs) (4 tests): `canonical_v1` batch-law resolution against upstream Python values, fractional epoch ordering and invalid-bound refusals, `SplitMix64` sampling/permutations and spherical prescaling, and collapsed-split 1-ULP separation across `-0.0`, subnormals, and finite extremes.
 - [`tests/cpu_and_lloyd.rs`](tests/cpu_and_lloyd.rs) (8 tests): `CpuMath::DeterministicFma` and `CpuMath::Exact` multi-thread bit-identity and thread-ceiling refusal, pinned-thread vs Accelerate panel parity, `f64` closing-pass accumulation without `f32` stall, spherical zero-row/unassigned edge cases, `e-means` `T = 2.6` vs 25-iter `lloyd_fit` convergence, and fail-closed non-finite/overflow/`Budget` refusals.
-- [`tests/metal_and_session.rs`](tests/metal_and_session.rs) (5 tests): `faiss/contrib/e_means` `canonical_v1` golden parity across CPU and all three Metal precision lanes, resident `fit` vs streaming `EmeansSession` bit-identity, cross-runtime `Mapped` (`SharedBuf`) zero-copy safety and `Budget` trim recovery without `GpuRuntime` poison, 200-iteration engine reuse and early-drop zero-leak checks, and dtype/state-machine refusals.
+- [`tests/metal_and_session.rs`](tests/metal_and_session.rs) (6 tests): `faiss/contrib/e_means` `canonical_v1` golden parity across CPU and all three Metal precision lanes, resident `fit` vs streaming `EmeansSession` bit-identity, `k = 1024` multi-epoch Gumbel revival repeat-run and streaming-vs-resident `0`-ULP bit-identity across all three Metal 4 precision lanes, cross-runtime `Mapped` (`SharedBuf`) zero-copy safety and `Budget` trim recovery without `GpuRuntime` poison, 200-iteration engine reuse and early-drop zero-leak checks, and dtype/state-machine refusals.

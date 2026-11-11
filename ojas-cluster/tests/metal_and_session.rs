@@ -559,6 +559,109 @@ fn test_streaming_session_is_bit_identical_to_emeans_fit_on_cpu_and_metal() {
     }
 }
 
+#[test]
+fn test_metal_k1024_multi_epoch_revival_repeat_and_streaming_bit_identity() {
+    let _guard = serial();
+
+    // `k = 1024` (> 256 multi-tile donor radix sort + 1024-threadgroup `emeans_apply_ema`),
+    // `d = 320` (> 256 multi-simdgroup + `col += 256` loop + 5 x 64 cooperative TensorOps K-tiles),
+    // `n = 4096` drawn from 192 tight modes so Forgy `init_centroids` (`x[..k*d]`) starves hundreds
+    // of clusters per 1024-row mini-batch and drives heavy Gumbel dead-cluster split revival across
+    // a 3-pass fractional schedule (`nepochs = 2.5` -> `[4096, 2048, 4096]`).
+    let n = 4_096;
+    let d = 320;
+    let k = 1_024;
+    let active_modes = 192;
+    let x_euc = make_golden_mixture(n, d, active_modes, 0x2026_1111_1024_0320, 2.5, 0.25, false);
+    let x_sph = make_golden_mixture(n, d, active_modes, 0x2026_1111_1024_5150, 2.5, 0.25, true);
+
+    let mut cfg_euc = EmeansConfig::new(k);
+    cfg_euc.nepochs = 2.5;
+    cfg_euc.batch_size = Some(1_024);
+    cfg_euc.assignment_chunk_size = 384; // 384 + 384 + 256 = 1024 irregular sub-batches
+    cfg_euc.seed = 0x5150_1024;
+
+    let mut cfg_sph = EmeansConfig::new(k);
+    cfg_sph.nepochs = 2.5;
+    cfg_sph.spherical = true;
+    cfg_sph.batch_size = Some(1_024);
+    cfg_sph.assignment_chunk_size = 384;
+    cfg_sph.seed = 0x5150_2048;
+
+    let io_budget = Budget::new(64 << 20);
+    let x_euc_t = Tensor::from_f32(&x_euc, &[n, d], &io_budget).expect("x_euc tensor");
+    let init_euc_t =
+        Tensor::from_f32(&x_euc[..k * d], &[k, d], &io_budget).expect("init_euc tensor");
+    let x_sph_t = Tensor::from_f32(&x_sph, &[n, d], &io_budget).expect("x_sph tensor");
+    let init_sph_t =
+        Tensor::from_f32(&x_sph[..k * d], &[k, d], &io_budget).expect("init_sph tensor");
+
+    for precision in [
+        MetalPrecision::Bf16,
+        MetalPrecision::Bf16AssignF32Stats,
+        MetalPrecision::F32,
+    ] {
+        let metal_budget = Budget::new(256 << 20);
+        let Some(metal_engine) = open_metal_engine(precision, &metal_budget) else {
+            break;
+        };
+        assert_eq!(metal_engine.device(), ClusterDevice::Metal { precision });
+
+        for (mode_tag, x_slice, x_t, init_t, cfg) in [
+            ("euc", x_euc.as_slice(), &x_euc_t, &init_euc_t, &cfg_euc),
+            ("sph", x_sph.as_slice(), &x_sph_t, &init_sph_t, &cfg_sph),
+        ] {
+            let ctx = format!("metal-k1024-{precision:?}-{mode_tag}");
+            let fit_1 = metal_engine
+                .fit_with_init(x_t, init_t, cfg)
+                .expect("fit_with_init run 1");
+            assert_eq!(
+                fit_1.epoch_stats.len(),
+                3,
+                "{ctx}: expected 3 passes for nepochs=2.5"
+            );
+            let total_revived: usize = fit_1.epoch_stats.iter().map(|s| s.revived_clusters).sum();
+            assert!(
+                total_revived >= 128,
+                "{ctx}: expected heavy Gumbel dead-cluster revival at k=1024, got {total_revived}"
+            );
+
+            let fit_2 = metal_engine
+                .fit_with_init(x_t, init_t, cfg)
+                .expect("fit_with_init run 2");
+            let fit_3 = metal_engine
+                .fit_with_init(x_t, init_t, cfg)
+                .expect("fit_with_init run 3");
+
+            assert_fits_bit_identical(&fit_1, &fit_2, &format!("{ctx}-repeat-1v2"));
+            assert_eq!(
+                fit_1.labels, fit_2.labels,
+                "{ctx}: repeat 1v2 labels mismatch"
+            );
+            assert_fits_bit_identical(&fit_1, &fit_3, &format!("{ctx}-repeat-1v3"));
+            assert_eq!(
+                fit_1.labels, fit_3.labels,
+                "{ctx}: repeat 1v3 labels mismatch"
+            );
+            drop(fit_1);
+            drop(fit_2);
+            drop(fit_3);
+
+            verify_streaming_parity_for_engine(
+                &metal_engine,
+                x_slice,
+                n,
+                d,
+                cfg,
+                &format!("{ctx}-stream"),
+            );
+        }
+
+        drop(metal_engine);
+        assert_eq!(metal_budget.live_bytes().unwrap(), 0);
+    }
+}
+
 fn run_early_drop_and_200_reuse_check(device: ClusterDevice) -> bool {
     let io_budget = Budget::new(64 << 20);
     let n = 192;
