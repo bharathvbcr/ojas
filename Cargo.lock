@@ -587,6 +587,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ojas-cluster"
+version = "0.1.0"
+dependencies = [
+ "ojas-core",
+ "ojas-simd",
+ "tessl",
+]
+
+[[package]]
 name = "ojas-core"
 version = "0.1.0"
 

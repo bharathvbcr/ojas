@@ -1,0 +1,24 @@
+[package]
+name = "ojas-cluster"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Deterministic scaling-law e-means clustering engine on CPU SIMD and Metal 4."
+
+[features]
+default = ["metal"]
+# GPU execution via tessl on macOS. Without this feature, or off macOS,
+# requesting `ClusterDevice::Metal` refuses cleanly with `OjasError::Unsupported`.
+metal = ["dep:tessl"]
+
+[dependencies]
+ojas-core = { path = "../ojas-core" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+ojas-simd = { path = "../ojas-simd", features = ["accelerate"] }
+tessl = { path = "../../tessl", optional = true }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+ojas-simd = { path = "../ojas-simd" }

@@ -20,6 +20,7 @@ members = [
     "ojas-qwen35",
     "ojas-model",
     "ojas-train",
+    "ojas-cluster",
 ]
 
 [workspace.package]
