@@ -2,9 +2,13 @@
 
 #![forbid(unsafe_code)]
 
+pub mod cpu;
+pub mod lloyd;
 pub mod recipe;
 pub mod rng;
 
+pub use cpu::{assign_cpu_bf16, assign_cpu_f32, assign_cpu_tensor, fit_cpu, CpuPool, CpuSession};
+pub use lloyd::{lloyd_fit, LloydConfig, LloydFit};
 pub use recipe::{resolve_recipe, round_power_of_two, scheduled_alpha};
 pub use rng::{
     choose_splits, epoch_permutation, gumbel_key, prescaled_unit_normalize_f32,
