@@ -1160,3 +1160,369 @@ fn test_emeans_2_6_passes_matches_25_iter_lloyd_mse_on_gaussian_mixture() {
         early_fit.iter_objectives.len()
     );
 }
+
+#[test]
+fn test_closing_pass_sums_accumulate_in_f64_without_f32_stall() {
+    // 16_777_216.0_f32 + 1.0_f32 == 16_777_216.0_f32 in IEEE-754 binary32, so f32 `pass_sums`
+    // stalls at 16_777_216.0 / 4097.0 = 4095.0002, whereas f64 `pass_sums` computes the exact
+    // closing mean (16_777_216.0 + 4096.0) / 4097.0 = 4096.0.
+    // Use k = 32 (> CLUSTER_GATHER_TILE = 16) across threads = 1 and 4 so both inline and
+    // parallel CSR gather paths are verified.
+    let k = 32_usize;
+    let d = 1_usize;
+    let budget = Budget::new(16 * 1024 * 1024);
+
+    let mut init_c = vec![-1.0e9_f32; k];
+    init_c[0] = 1_000.0_f32;
+
+    let ones = vec![1.0_f32; 4_096];
+
+    for threads in [1_usize, 4] {
+        let pool = CpuPool::new(Some(threads)).expect("pool");
+        let mut sess =
+            CpuSession::new(k, d, false, 0.0, 1.0e-4, 1.0, 42, &init_c, &budget).expect("sess");
+        sess.reset_pass_accumulators(true);
+        sess.accumulate_f32_chunk(&pool, &[16_777_216.0_f32], 1, CpuMath::Exact, None, &budget)
+            .expect("big row");
+        sess.accumulate_f32_chunk(
+            &pool,
+            &ones,
+            4_096,
+            CpuMath::DeterministicFma,
+            None,
+            &budget,
+        )
+        .expect("ones chunk");
+
+        let closing = sess.finalize_closing_centroids().expect("closing");
+        assert_eq!(
+            closing[0].to_bits(),
+            4_096.0_f32.to_bits(),
+            "f64 closing pass_sums must produce exact 4096.0 (got {}) for threads={threads}",
+            closing[0]
+        );
+    }
+}
+
+#[test]
+fn test_near_f32_max_dot_overflow_and_opposite_sign_dist_overflow() {
+    let budget = Budget::new(32 * 1024 * 1024);
+    let pool_auto = CpuPool::new(None).expect("pool_auto");
+    let pool_pinned = CpuPool::new(Some(2)).expect("pool_pinned");
+
+    // 1. Same-sign near-f32::MAX vectors: rn = 1.69e38, cn_1 = 1.96e38 are finite,
+    //    2.0 * dot_1 = 3.64e38 > f32::MAX overflows in f32, yet true squared distances are
+    //    0.0 (c_0) vs 1.0e36 (c_1) -> MUST assign cluster 0 with dist = 0.0!
+    let x_vals = [1.3e19_f32, 1.3e19_f32];
+    let c_vals = [1.3e19_f32, 1.4e19_f32];
+    let x_t = Tensor::from_f32(&x_vals, &[2, 1], &budget).unwrap();
+    let c_t = Tensor::from_f32(&c_vals, &[2, 1], &budget).unwrap();
+
+    for (pool, math) in [
+        (&pool_auto, CpuMath::Fast),
+        (&pool_pinned, CpuMath::Fast),
+        (&pool_pinned, CpuMath::DeterministicFma),
+        (&pool_pinned, CpuMath::Exact),
+    ] {
+        let (lbls, obj) =
+            assign_cpu_f32(pool, &x_vals, 2, 1, &c_vals, 2, 2, math, false, &budget).unwrap();
+        assert_eq!(
+            lbls,
+            vec![0, 0],
+            "mis-assigned near-f32::MAX row ({math:?})"
+        );
+        assert_eq!(
+            obj, 0.0,
+            "expected exact 0.0 objective ({math:?}), got {obj}"
+        );
+
+        let mut cfg = EmeansConfig::new(2);
+        cfg.nepochs = 1.0;
+        cfg.batch_size = Some(2);
+        cfg.unused_threshold = Some(0.0);
+        let fit = fit_cpu(pool, &x_t, Some(&c_t), &cfg, math, &budget).unwrap();
+        assert_eq!(fit.labels, vec![0, 0]);
+        assert!(fit.epoch_stats[0].mean_objective.is_finite());
+        assert_eq!(fit.epoch_stats[0].mean_objective, 0.0);
+    }
+
+    let mut lcfg = LloydConfig::new(2);
+    lcfg.max_iters = 2;
+    lcfg.tol = 0.0;
+    let lfit = lloyd_fit(&x_t, Some(&c_t), &lcfg, &budget).unwrap();
+    assert_eq!(lfit.labels, vec![0, 0]);
+    assert!(lfit.iter_objectives.iter().all(|v| *v == 0.0));
+
+    // Also test multi-panel k = 300 (> C_TILE = 256) where overflowing c_1 = 1.4e19 is in panel 0
+    // and exact match c_280 = 1.3e19 is in panel 1!
+    let mut c300 = vec![0.0_f32; 300];
+    c300[1] = 1.4e19_f32;
+    c300[280] = 1.3e19_f32;
+    for (pool, math) in [
+        (&pool_auto, CpuMath::Fast),
+        (&pool_pinned, CpuMath::DeterministicFma),
+        (&pool_pinned, CpuMath::Exact),
+    ] {
+        let (lbls, obj) =
+            assign_cpu_f32(pool, &x_vals, 2, 1, &c300, 300, 2, math, false, &budget).unwrap();
+        assert_eq!(lbls, vec![280, 280]);
+        assert_eq!(obj, 0.0);
+    }
+
+    // Also test non-zero finite distance where `c_0 = 1.84e19` overflows `2 * dot` to +Inf
+    // (`sc_0 = -Inf`), yet `c_1 = 0.5e19` with finite `sc_1` is genuinely closer (`0.1849e38 < 0.8281e38`)!
+    let x_mid = [0.93e19_f32];
+    let c_mid = [1.84e19_f32, 0.5e19_f32];
+    for (pool, math) in [
+        (&pool_auto, CpuMath::Fast),
+        (&pool_pinned, CpuMath::DeterministicFma),
+        (&pool_pinned, CpuMath::Exact),
+    ] {
+        let (lbls, obj) =
+            assign_cpu_f32(pool, &x_mid, 1, 1, &c_mid, 2, 1, math, false, &budget).unwrap();
+        assert_eq!(lbls, vec![1]);
+        assert!(obj.is_finite() && (obj - 1.849e37).abs() < 1.0e32);
+    }
+
+    drop(lfit);
+    drop(x_t);
+    drop(c_t);
+
+    // 2. Opposite-sign near-f32::MAX vectors whose true squared distance overflows f32:
+    //    - (-1.5e19 - 1.5e19)^2 = 9.0e38 > f32::MAX (`2 * dot` overflows to -Inf)
+    //    - (-1.0e19 - 1.0e19)^2 = 4.0e38 > f32::MAX (`2 * dot` and `sc` are finite, `rn + sc` overflows!)
+    for mag in [1.5e19_f32, 1.0e19_f32] {
+        let opp_x_vals = [-mag, -mag];
+        let opp_c_vals = [mag];
+        let opp_x = Tensor::from_f32(&opp_x_vals, &[2, 1], &budget).unwrap();
+        let opp_c = Tensor::from_f32(&opp_c_vals, &[1, 1], &budget).unwrap();
+
+        for (pool, math) in [
+            (&pool_auto, CpuMath::Fast),
+            (&pool_pinned, CpuMath::Fast),
+            (&pool_pinned, CpuMath::DeterministicFma),
+            (&pool_pinned, CpuMath::Exact),
+        ] {
+            assert!(
+                matches!(
+                    assign_cpu_f32(
+                        pool,
+                        &opp_x_vals,
+                        2,
+                        1,
+                        &opp_c_vals,
+                        1,
+                        2,
+                        math,
+                        false,
+                        &budget
+                    ),
+                    Err(OjasError::NonFinite { op: "emeans" })
+                ),
+                "assign_cpu_f32 must refuse dist overflow for mag={mag:e} ({math:?})"
+            );
+            assert!(matches!(
+                fit_cpu(
+                    pool,
+                    &opp_x,
+                    Some(&opp_c),
+                    &EmeansConfig::new(1),
+                    math,
+                    &budget
+                ),
+                Err(OjasError::NonFinite { op: "emeans" })
+            ));
+        }
+        assert!(matches!(
+            lloyd_fit(&opp_x, Some(&opp_c), &LloydConfig::new(1), &budget),
+            Err(OjasError::NonFinite { op: "emeans" })
+        ));
+
+        // Verify `CpuSession` refuses atomically without mutating accumulators!
+        let mut sess =
+            CpuSession::new(1, 1, false, 0.0, 1e-4, 1.0, 42, &opp_c_vals, &budget).unwrap();
+        sess.reset_pass_accumulators(true);
+        sess.accumulate_f32_chunk(&pool_pinned, &[mag], 1, CpuMath::Exact, None, &budget)
+            .unwrap();
+        assert!(matches!(
+            sess.accumulate_f32_chunk(
+                &pool_pinned,
+                &[-mag],
+                1,
+                CpuMath::DeterministicFma,
+                None,
+                &budget
+            ),
+            Err(OjasError::NonFinite { op: "emeans" })
+        ));
+        let (ep_obj, ep_counts) = sess.finish_epoch();
+        assert_eq!(ep_counts, vec![1]);
+        assert_eq!(ep_obj, 0.0);
+        drop(sess);
+        drop(opp_x);
+        drop(opp_c);
+    }
+    assert_eq!(budget.live_bytes().unwrap(), 0);
+}
+
+#[test]
+fn test_spherical_fit_cpu_single_normalizes_init_centroids_matching_cpu_session() {
+    use ojas_cluster::{
+        epoch_permutation, prescaled_unit_normalize_f32, resolve_recipe, scheduled_alpha,
+    };
+
+    let d = 4_usize;
+    let k = 2_usize;
+    let budget = Budget::new(16 * 1024 * 1024);
+    let pool = CpuPool::new(Some(2)).expect("pool");
+
+    // Deterministically pick a 4D vector where double-normalizing `init_centroids` in `fit_cpu`
+    // (`twice` instead of `once`) produces a 1-ULP difference in epoch 1's `c_eff` and objective
+    // after epoch 0's small-step EMA update (`alpha0 = 1.0e-7`, `n_0 = 4`, `init_usage = 2^-16`).
+    let probe_row = [0.25_f32, -0.5_f32, 0.75_f32, -0.125_f32];
+    let alpha0 = 1.0e-7_f32;
+    let init_u = f32::from_bits(0x3780_0000); // 2^-16
+    let w_step0 = (alpha0 * 4.0) / ((1.0 - alpha0) * init_u + alpha0 * 4.0);
+
+    let mut chosen_raw = None;
+    let mut rng_state = 0x1234_5678_9abc_def0_u64;
+    let mut next_f32 = || -> f32 {
+        rng_state = rng_state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = rng_state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^= z >> 31;
+        ((z >> 40) as i32 - 8_388_608) as f32 * (1.0 / 1_048_576.0)
+    };
+    for _trial in 0..20_000 {
+        let raw = [next_f32(), next_f32(), next_f32(), next_f32()];
+        let mut once = [0.0_f32; 4];
+        let mut twice = [0.0_f32; 4];
+        prescaled_unit_normalize_f32(&raw, &mut once);
+        prescaled_unit_normalize_f32(&once, &mut twice);
+        if once == twice {
+            continue;
+        }
+        if once.iter().zip(&probe_row).map(|(a, b)| a * b).sum::<f32>() <= 0.1 {
+            continue;
+        }
+        let mut ema_once = [0.0_f32; 4];
+        let mut ema_twice = [0.0_f32; 4];
+        for col in 0..4 {
+            ema_once[col] = once[col] + w_step0 * (probe_row[col] - once[col]);
+            ema_twice[col] = twice[col] + w_step0 * (probe_row[col] - twice[col]);
+        }
+        let mut ceff_once = [0.0_f32; 4];
+        let mut ceff_twice = [0.0_f32; 4];
+        prescaled_unit_normalize_f32(&ema_once, &mut ceff_once);
+        prescaled_unit_normalize_f32(&ema_twice, &mut ceff_twice);
+        let dot_once: f32 = probe_row.iter().zip(&ceff_once).map(|(x, c)| x * c).sum();
+        let dot_twice: f32 = probe_row.iter().zip(&ceff_twice).map(|(x, c)| x * c).sum();
+        if (2.0_f32 - 2.0_f32 * dot_once).to_bits() != (2.0_f32 - 2.0_f32 * dot_twice).to_bits() {
+            chosen_raw = Some(raw);
+            break;
+        }
+    }
+    let c0_raw = chosen_raw.expect("found 4D vector exposing double-normalization after step 0");
+    let mut init_c = Vec::with_capacity(k * d);
+    init_c.extend_from_slice(&c0_raw);
+    // Keep cluster 1 antipodal to `probe_row` so all 8 `probe_row` copies hit cluster 0 in epoch 0
+    init_c.extend_from_slice(&[
+        -probe_row[0] * 10.0,
+        -probe_row[1] * 10.0,
+        -probe_row[2] * 10.0,
+        -probe_row[3] * 10.0,
+    ]);
+
+    let mut cfg = EmeansConfig::new(k);
+    cfg.spherical = true;
+    cfg.nepochs = 1.5; // epoch_rows = [4, 8]
+    cfg.batch_size = Some(8);
+    cfg.alpha0 = Some(alpha0);
+    cfg.unused_threshold = Some(0.0);
+    cfg.seed = 99;
+
+    let mut rows = Vec::with_capacity(8 * d);
+    for _ in 0..8 {
+        rows.extend_from_slice(&probe_row);
+    }
+
+    let x_t = Tensor::from_f32(&rows, &[8, d], &budget).unwrap();
+    let init_t = Tensor::from_f32(&init_c, &[k, d], &budget).unwrap();
+
+    let fit = fit_cpu(
+        &pool,
+        &x_t,
+        Some(&init_t),
+        &cfg,
+        CpuMath::DeterministicFma,
+        &budget,
+    )
+    .expect("spherical fit_cpu");
+
+    // Drive `CpuSession` directly from the same unnormalized `init_c` across both epochs
+    let recipe = resolve_recipe(8, d, &cfg).unwrap();
+    assert_eq!(recipe.epoch_rows, vec![4, 8]);
+    let mut sess = CpuSession::new(
+        recipe.k,
+        recipe.d,
+        recipe.spherical,
+        recipe.unused_threshold,
+        recipe.split_epsilon,
+        recipe.init_usage,
+        recipe.seed,
+        &init_c,
+        &budget,
+    )
+    .unwrap();
+
+    let mut sess_ep_objs = Vec::new();
+    let mut sess_counts = Vec::new();
+    for (epoch, &ep_rows) in recipe.epoch_rows.iter().enumerate() {
+        let final_ep = epoch + 1 == recipe.epoch_rows.len();
+        sess.reset_pass_accumulators(final_ep);
+        let order = epoch_permutation(8, recipe.seed, epoch, &budget).unwrap();
+        let mut perm_rows = vec![0.0_f32; ep_rows * d];
+        for (r_local, &src_r) in order.as_slice()[..ep_rows].iter().enumerate() {
+            perm_rows[r_local * d..(r_local + 1) * d]
+                .copy_from_slice(&rows[(src_r as usize) * d..(src_r as usize + 1) * d]);
+        }
+        sess.accumulate_f32_chunk(
+            &pool,
+            &perm_rows,
+            ep_rows,
+            CpuMath::DeterministicFma,
+            None,
+            &budget,
+        )
+        .unwrap();
+        let alpha = scheduled_alpha(recipe.alpha0, epoch, recipe.total_steps);
+        sess.apply_batch_update(alpha, epoch as u64, false).unwrap();
+        let (ep_obj, ep_cnt) = sess.finish_epoch();
+        sess_ep_objs.push(ep_obj / (ep_rows as f64));
+        sess_counts = ep_cnt;
+    }
+    let sess_closing = sess.finalize_closing_centroids().unwrap();
+
+    let fit_closing = fit.centroids.f32_slice().unwrap();
+    for idx in 0..(k * d) {
+        assert_eq!(
+            fit_closing[idx].to_bits(),
+            sess_closing[idx].to_bits(),
+            "spherical fit_cpu and CpuSession differed at idx={idx}: fit={} ({:#010x}) vs sess={} ({:#010x})",
+            fit_closing[idx],
+            fit_closing[idx].to_bits(),
+            sess_closing[idx],
+            sess_closing[idx].to_bits()
+        );
+    }
+    assert_eq!(fit.cluster_counts, sess_counts);
+    assert_eq!(fit.epoch_stats.len(), sess_ep_objs.len());
+    for (ep, (fit_stat, &sess_obj)) in fit.epoch_stats.iter().zip(&sess_ep_objs).enumerate() {
+        assert_eq!(
+            fit_stat.mean_objective.to_bits(),
+            sess_obj.to_bits(),
+            "epoch {ep} mean_objective differed"
+        );
+    }
+}

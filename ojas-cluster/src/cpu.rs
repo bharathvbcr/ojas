@@ -983,6 +983,66 @@ fn finalize_row_dist_f32(
     raw.max(0.0_f32)
 }
 
+/// Exact `f64` nearest-cluster fallback invoked only when an `f32` intermediate (`dot`,
+/// `cn - 2 * dot`, or `rn + best_s`) overflows near `f32::MAX`. Preserves lowest-index tie
+/// breaking and fails closed with [`OjasError::NonFinite`] if the true minimum distance exceeds
+/// finite `f32` range.
+#[cold]
+fn assign_row_exact_f64(
+    x_row: &[f32],
+    c_eff: &[f32],
+    k: usize,
+    d: usize,
+    spherical: bool,
+) -> Result<(u32, f32), OjasError> {
+    let mut best_l = 0_u32;
+    if spherical {
+        let mut best_s = f64::INFINITY;
+        for j in 0..k {
+            let c_row = &c_eff[j * d..(j + 1) * d];
+            let mut dot = 0.0_f64;
+            for col in 0..d {
+                dot += f64::from(x_row[col]) * f64::from(c_row[col]);
+            }
+            if !dot.is_finite() {
+                return Err(nonfinite_err());
+            }
+            let sc = -2.0_f64 * dot;
+            if sc < best_s {
+                best_s = sc;
+                best_l = j as u32;
+            }
+        }
+        let dist = ((2.0_f64 + best_s).max(0.0_f64)) as f32;
+        if !dist.is_finite() {
+            return Err(nonfinite_err());
+        }
+        Ok((best_l, dist))
+    } else {
+        let mut best_d = f64::INFINITY;
+        for j in 0..k {
+            let c_row = &c_eff[j * d..(j + 1) * d];
+            let mut sum_sq = 0.0_f64;
+            for col in 0..d {
+                let diff = f64::from(x_row[col]) - f64::from(c_row[col]);
+                sum_sq += diff * diff;
+            }
+            if !sum_sq.is_finite() {
+                return Err(nonfinite_err());
+            }
+            if sum_sq < best_d {
+                best_d = sum_sq;
+                best_l = j as u32;
+            }
+        }
+        let dist = (best_d.max(0.0_f64)) as f32;
+        if !dist.is_finite() {
+            return Err(nonfinite_err());
+        }
+        Ok((best_l, dist))
+    }
+}
+
 fn compute_row_norms_checked(
     pool: &CpuPool,
     rows: &[f32],
@@ -1113,12 +1173,14 @@ fn try_assign_accelerate_chunk(
         v.resize(m_cap, f32::INFINITY);
     })?;
     let mut best_labels = Scratch::<u32>::try_alloc(m_cap, budget)?;
+    let mut row_had_nonfinite = Scratch::<u8>::try_alloc(m_cap, budget)?;
 
     let mut r0 = 0_usize;
     while r0 < chunk_rows {
         let m_cur = (chunk_rows - r0).min(ACCEL_ROW_PANEL);
         best_scores.as_mut_slice()[..m_cur].fill(f32::INFINITY);
         best_labels.as_mut_slice()[..m_cur].fill(0);
+        row_had_nonfinite.as_mut_slice()[..m_cur].fill(0);
 
         let a_panel = &rows[r0 * d..(r0 + m_cur) * d];
         let mut c0 = 0_usize;
@@ -1137,13 +1199,19 @@ fn try_assign_accelerate_chunk(
 
             let bs_slice = &mut best_scores.as_mut_slice()[..m_cur];
             let bl_slice = &mut best_labels.as_mut_slice()[..m_cur];
+            let nf_slice = &mut row_had_nonfinite.as_mut_slice()[..m_cur];
             if spherical {
                 for mr in 0..m_cur {
                     let row_dots = &score_win[mr * n_cur..(mr + 1) * n_cur];
                     let mut bs = bs_slice[mr];
                     let mut bl = bl_slice[mr];
+                    let mut nf = nf_slice[mr];
                     for (nc, &dot) in row_dots.iter().enumerate() {
                         let sc = -2.0_f32 * dot;
+                        if !dot.is_finite() || !sc.is_finite() {
+                            nf = 1;
+                            continue;
+                        }
                         if sc < bs {
                             bs = sc;
                             bl = (c0 + nc) as u32;
@@ -1151,6 +1219,7 @@ fn try_assign_accelerate_chunk(
                     }
                     bs_slice[mr] = bs;
                     bl_slice[mr] = bl;
+                    nf_slice[mr] = nf;
                 }
             } else {
                 let cn_panel = &norm2_c[c0..c0 + n_cur];
@@ -1158,8 +1227,13 @@ fn try_assign_accelerate_chunk(
                     let row_dots = &score_win[mr * n_cur..(mr + 1) * n_cur];
                     let mut bs = bs_slice[mr];
                     let mut bl = bl_slice[mr];
+                    let mut nf = nf_slice[mr];
                     for (nc, (&dot, &cn)) in row_dots.iter().zip(cn_panel.iter()).enumerate() {
                         let sc = cn - 2.0_f32 * dot;
+                        if !dot.is_finite() || !sc.is_finite() {
+                            nf = 1;
+                            continue;
+                        }
                         if sc < bs {
                             bs = sc;
                             bl = (c0 + nc) as u32;
@@ -1167,6 +1241,7 @@ fn try_assign_accelerate_chunk(
                     }
                     bs_slice[mr] = bs;
                     bl_slice[mr] = bl;
+                    nf_slice[mr] = nf;
                 }
             }
 
@@ -1175,17 +1250,32 @@ fn try_assign_accelerate_chunk(
 
         let bs_slice = &best_scores.as_slice()[..m_cur];
         let bl_slice = &best_labels.as_slice()[..m_cur];
+        let nf_slice = &row_had_nonfinite.as_slice()[..m_cur];
         for mr in 0..m_cur {
             let r = r0 + mr;
+            let x_row = &rows[r * d..(r + 1) * d];
+            if nf_slice[mr] != 0 {
+                let (bl, dist) = assign_row_exact_f64(x_row, c_eff, k, d, spherical)?;
+                labels_out[r] = bl;
+                dists_out[r] = dist;
+                continue;
+            }
             let bl = bl_slice[mr];
-            labels_out[r] = bl;
-            dists_out[r] = finalize_row_dist_f32(
-                &rows[r * d..(r + 1) * d],
+            let dist = finalize_row_dist_f32(
+                x_row,
                 &c_eff[(bl as usize) * d..(bl as usize + 1) * d],
                 row_norm2[r],
                 bs_slice[mr],
                 spherical,
             );
+            if !dist.is_finite() {
+                let (exact_bl, exact_dist) = assign_row_exact_f64(x_row, c_eff, k, d, spherical)?;
+                labels_out[r] = exact_bl;
+                dists_out[r] = exact_dist;
+            } else {
+                labels_out[r] = bl;
+                dists_out[r] = dist;
+            }
         }
 
         r0 += m_cur;
@@ -1209,6 +1299,7 @@ fn eval_row_tile(
 ) -> Result<Vec<(u32, f32)>, OjasError> {
     let mut best_s = [f32::INFINITY; ROW_TILE];
     let mut best_l = [0_u32; ROW_TILE];
+    let mut row_had_nonfinite = [false; ROW_TILE];
 
     if use_fma_tile {
         let mut c0 = 0_usize;
@@ -1229,8 +1320,13 @@ fn eval_row_tile(
                     let row_dots = &scores[mr * n_tile..(mr + 1) * n_tile];
                     let mut bs = best_s[mr];
                     let mut bl = best_l[mr];
+                    let mut nf = row_had_nonfinite[mr];
                     for (nc, &dot) in row_dots.iter().enumerate() {
                         let sc = -2.0_f32 * dot;
+                        if !dot.is_finite() || !sc.is_finite() {
+                            nf = true;
+                            continue;
+                        }
                         if sc < bs {
                             bs = sc;
                             bl = (c0 + nc) as u32;
@@ -1238,6 +1334,7 @@ fn eval_row_tile(
                     }
                     best_s[mr] = bs;
                     best_l[mr] = bl;
+                    row_had_nonfinite[mr] = nf;
                 }
             } else {
                 let cn_panel = &norm2_c[c0..c0 + n_tile];
@@ -1245,8 +1342,13 @@ fn eval_row_tile(
                     let row_dots = &scores[mr * n_tile..(mr + 1) * n_tile];
                     let mut bs = best_s[mr];
                     let mut bl = best_l[mr];
+                    let mut nf = row_had_nonfinite[mr];
                     for (nc, (&dot, &cn)) in row_dots.iter().zip(cn_panel.iter()).enumerate() {
                         let sc = cn - 2.0_f32 * dot;
+                        if !dot.is_finite() || !sc.is_finite() {
+                            nf = true;
+                            continue;
+                        }
                         if sc < bs {
                             bs = sc;
                             bl = (c0 + nc) as u32;
@@ -1254,6 +1356,7 @@ fn eval_row_tile(
                     }
                     best_s[mr] = bs;
                     best_l[mr] = bl;
+                    row_had_nonfinite[mr] = nf;
                 }
             }
             c0 += n_tile;
@@ -1263,6 +1366,7 @@ fn eval_row_tile(
             let x_row = &x_rows[mr * d..(mr + 1) * d];
             let mut bs = f32::INFINITY;
             let mut bl = 0_u32;
+            let mut nf = false;
             for j in 0..k {
                 let c_row = &c_eff[j * d..(j + 1) * d];
                 let mut dot = 0.0_f32;
@@ -1274,6 +1378,10 @@ fn eval_row_tile(
                 } else {
                     norm2_c[j] - 2.0_f32 * dot
                 };
+                if !dot.is_finite() || !sc.is_finite() {
+                    nf = true;
+                    continue;
+                }
                 if sc < bs {
                     bs = sc;
                     bl = j as u32;
@@ -1281,20 +1389,30 @@ fn eval_row_tile(
             }
             best_s[mr] = bs;
             best_l[mr] = bl;
+            row_had_nonfinite[mr] = nf;
         }
     }
 
     let mut out = Vec::with_capacity(m_tile);
     for mr in 0..m_tile {
+        let x_row = &x_rows[mr * d..(mr + 1) * d];
+        if row_had_nonfinite[mr] {
+            out.push(assign_row_exact_f64(x_row, c_eff, k, d, spherical)?);
+            continue;
+        }
         let bl = best_l[mr];
         let dist = finalize_row_dist_f32(
-            &x_rows[mr * d..(mr + 1) * d],
+            x_row,
             &c_eff[(bl as usize) * d..(bl as usize + 1) * d],
             rn_tile[mr],
             best_s[mr],
             spherical,
         );
-        out.push((bl, dist));
+        if !dist.is_finite() {
+            out.push(assign_row_exact_f64(x_row, c_eff, k, d, spherical)?);
+        } else {
+            out.push((bl, dist));
+        }
     }
     Ok(out)
 }
@@ -1613,7 +1731,7 @@ pub struct CpuSession {
     batch_sums: Scratch<f32>,
     batch_counts: Scratch<u64>,
     epoch_counts: Scratch<u64>,
-    pass_sums: Scratch<f32>,
+    pass_sums: Scratch<f64>,
     pass_counts: Scratch<u64>,
     split_scratch: Scratch<f32>,
     closing_row_f64: Scratch<f64>,
@@ -1687,7 +1805,7 @@ impl CpuSession {
         let batch_sums = Scratch::<f32>::try_alloc(kd, budget)?;
         let batch_counts = Scratch::<u64>::try_alloc(k, budget)?;
         let epoch_counts = Scratch::<u64>::try_alloc(k, budget)?;
-        let pass_sums = Scratch::<f32>::try_alloc(kd, budget)?;
+        let pass_sums = Scratch::<f64>::try_alloc(kd, budget)?;
         let pass_counts = Scratch::<u64>::try_alloc(k, budget)?;
         let split_scratch =
             Scratch::<f32>::try_alloc(checked_mul_len(2, d, "split scratch")?, budget)?;
@@ -1831,7 +1949,7 @@ impl CpuSession {
                         for col in 0..d {
                             let xv = x_row[col];
                             b_row[col] += xv;
-                            p_row[col] += xv;
+                            p_row[col] += f64::from(xv);
                         }
                     }
                 } else {
@@ -1856,7 +1974,7 @@ impl CpuSession {
                 budget,
             )?);
             let prev_p = if final_epoch {
-                Some(Arc::new(Scratch::<f32>::try_from_slice(
+                Some(Arc::new(Scratch::<f64>::try_from_slice(
                     self.pass_sums.as_slice(),
                     budget,
                 )?))
@@ -1864,7 +1982,7 @@ impl CpuSession {
                 None
             };
 
-            let gathered = pool.run(num_c_tasks, move |task_idx| -> (Vec<f32>, Vec<f32>) {
+            let gathered = pool.run(num_c_tasks, move |task_idx| -> (Vec<f32>, Vec<f64>) {
                 let j_start = task_idx * CLUSTER_GATHER_TILE;
                 let j_end = (j_start + CLUSTER_GATHER_TILE).min(k);
                 let mut b_block = prev_b.as_slice()[j_start * d..j_end * d].to_vec();
@@ -1891,7 +2009,7 @@ impl CpuSession {
                             for col in 0..d {
                                 let xv = x_row[col];
                                 b_row[col] += xv;
-                                p_row[col] += xv;
+                                p_row[col] += f64::from(xv);
                             }
                         }
                     } else {
@@ -2167,7 +2285,7 @@ impl CpuSession {
                 if cnt > 0 {
                     let inv = 1.0 / (cnt as f64);
                     for col in 0..d {
-                        rf[col] = f64::from(sums[j * d + col]) * inv;
+                        rf[col] = sums[j * d + col] * inv;
                     }
                 } else {
                     for col in 0..d {
@@ -2491,12 +2609,14 @@ pub fn fit_cpu(
     // never miss a non-finite or norm-overflowing row.
     x_view.validate_rows_finite(subset_slice)?;
 
+    // Pass `spherical = false` so `CpuSession::new` is the single canonical owner of initial
+    // spherical unit-normalization on the `e-means` path (avoiding 1-ULP double normalization).
     let init_c = resolve_init_centroids(
         &x_view,
         subset_slice,
         init_centroids,
         recipe.k,
-        recipe.spherical,
+        false,
         recipe.seed,
         budget,
     )?;
