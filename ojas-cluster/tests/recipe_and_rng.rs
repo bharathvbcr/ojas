@@ -464,4 +464,36 @@ fn test_rng_permutations_gumbel_and_spherical_prescale() {
 
     prescaled_unit_normalize_f32(&[1.0e-30, -1.0e-30, 1.0e-30, -1.0e-30], &mut dst);
     assert_eq!(dst, [0.5, -0.5, 0.5, -0.5]);
+
+    // Non-finite corruption (`[1.0, NaN]`, `[0.0, NaN]`, `[1.0, Inf]`, `[1.0, -Inf]`) must
+    // propagate `NaN` across `dst[..d]` rather than being laundered into finite `0.0`s.
+    for bad64 in [
+        [1.0_f64, f64::NAN],
+        [f64::NAN, 1.0_f64],
+        [0.0_f64, f64::NAN],
+        [1.0_f64, f64::INFINITY],
+        [1.0_f64, f64::NEG_INFINITY],
+    ] {
+        let mut out2 = [1.0_f32; 2];
+        prescaled_unit_normalize_f64(&bad64, &mut out2);
+        assert!(
+            out2.iter().all(|v| v.is_nan()),
+            "expected all-NaN propagation for f64 {bad64:?}, got {out2:?}"
+        );
+    }
+
+    for bad32 in [
+        [1.0_f32, f32::NAN],
+        [f32::NAN, 1.0_f32],
+        [0.0_f32, f32::NAN],
+        [1.0_f32, f32::INFINITY],
+        [1.0_f32, f32::NEG_INFINITY],
+    ] {
+        let mut out2 = [1.0_f32; 2];
+        prescaled_unit_normalize_f32(&bad32, &mut out2);
+        assert!(
+            out2.iter().all(|v| v.is_nan()),
+            "expected all-NaN propagation for f32 {bad32:?}, got {out2:?}"
+        );
+    }
 }

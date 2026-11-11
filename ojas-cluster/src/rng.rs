@@ -283,70 +283,63 @@ pub fn separate_collapsed_split_bf16(donor: &[f32], child: &mut [f32]) {
     };
 }
 
-/// Normalize `src` to unit L2 length in `f64` via `max_abs` prescaling and write `f32` to `dst`.
-///
-/// All-zero vectors write `0.0f32` everywhere without producing `NaN`.
-pub fn prescaled_unit_normalize_f64(src: &[f64], dst: &mut [f32]) {
-    let d = src.len().min(dst.len());
+fn prescaled_unit_normalize_with(d: usize, dst: &mut [f32], get: impl Fn(usize) -> f64) {
     dst[d..].fill(0.0);
     if d == 0 {
         return;
     }
 
-    let max_abs = src[..d].iter().fold(0.0_f64, |m, &v| m.max(v.abs()));
-    if max_abs == 0.0 || !max_abs.is_finite() {
-        for (i, out) in dst[..d].iter_mut().enumerate() {
-            *out = if src[i].is_finite() { 0.0 } else { f32::NAN };
+    let mut max_abs = 0.0_f64;
+    for i in 0..d {
+        let v = get(i);
+        if !v.is_finite() {
+            dst[..d].fill(f32::NAN);
+            return;
         }
+        let a = v.abs();
+        if a > max_abs {
+            max_abs = a;
+        }
+    }
+    if max_abs == 0.0 {
+        dst[..d].fill(0.0);
         return;
     }
 
     let mut sum_sq = 0.0_f64;
-    for &v in &src[..d] {
-        let w = v / max_abs;
+    for i in 0..d {
+        let w = get(i) / max_abs;
         sum_sq += w * w;
     }
     let norm = sum_sq.sqrt();
-    if norm == 0.0 || !norm.is_finite() {
+    if !norm.is_finite() {
+        dst[..d].fill(f32::NAN);
+        return;
+    }
+    if norm == 0.0 {
         dst[..d].fill(0.0);
         return;
     }
 
     for (i, out) in dst[..d].iter_mut().enumerate() {
-        *out = ((src[i] / max_abs) / norm) as f32;
+        *out = ((get(i) / max_abs) / norm) as f32;
     }
 }
 
+/// Normalize `src` to unit L2 length in `f64` via `max_abs` prescaling and write `f32` to `dst`.
+///
+/// All-zero vectors write `0.0f32` everywhere without producing `NaN`. Any non-finite input
+/// coordinate propagates `f32::NAN` across `dst[..d]` instead of masking corruption as `0.0`.
+pub fn prescaled_unit_normalize_f64(src: &[f64], dst: &mut [f32]) {
+    let d = src.len().min(dst.len());
+    prescaled_unit_normalize_with(d, dst, |i| src[i]);
+}
+
 /// Normalize an `f32` row to unit L2 length via `f64` `max_abs` prescaling and write to `dst`.
+///
+/// All-zero vectors write `0.0f32` everywhere without producing `NaN`. Any non-finite input
+/// coordinate propagates `f32::NAN` across `dst[..d]` instead of masking corruption as `0.0`.
 pub fn prescaled_unit_normalize_f32(src: &[f32], dst: &mut [f32]) {
     let d = src.len().min(dst.len());
-    dst[d..].fill(0.0);
-    if d == 0 {
-        return;
-    }
-
-    let max_abs = src[..d]
-        .iter()
-        .fold(0.0_f64, |m, &v| m.max(f64::from(v).abs()));
-    if max_abs == 0.0 || !max_abs.is_finite() {
-        for (i, out) in dst[..d].iter_mut().enumerate() {
-            *out = if src[i].is_finite() { 0.0 } else { f32::NAN };
-        }
-        return;
-    }
-
-    let mut sum_sq = 0.0_f64;
-    for &v in &src[..d] {
-        let w = f64::from(v) / max_abs;
-        sum_sq += w * w;
-    }
-    let norm = sum_sq.sqrt();
-    if norm == 0.0 || !norm.is_finite() {
-        dst[..d].fill(0.0);
-        return;
-    }
-
-    for (i, out) in dst[..d].iter_mut().enumerate() {
-        *out = ((f64::from(src[i]) / max_abs) / norm) as f32;
-    }
+    prescaled_unit_normalize_with(d, dst, |i| f64::from(src[i]));
 }
