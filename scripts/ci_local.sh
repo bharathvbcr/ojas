@@ -328,6 +328,13 @@ cargo test --workspace --release --no-fail-fast -- --test-threads=1
 
 echo "==> rustdoc (intra-doc links resolve; no link to a private item)"
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+# The workspace run above builds ojas-simd with Accelerate on macOS (feature
+# unification), so the plain feature set is documented on its own, and on macOS the
+# accelerate set too. Off macOS that feature is a compile_error!.
+RUSTDOCFLAGS="-D warnings" cargo doc -p ojas-simd --no-deps
+if [ "$(uname -s)" = Darwin ]; then
+  RUSTDOCFLAGS="-D warnings" cargo doc -p ojas-simd --no-deps --features accelerate
+fi
 
 echo "==> ojas-metal without the metal feature (stub build, every target)"
 cargo clippy -p ojas-metal --no-default-features --all-targets -- -D warnings

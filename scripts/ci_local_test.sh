@@ -38,6 +38,7 @@ stub cargo 'echo "cargo $*" >>"$STUB_LOG"
 if [ -n "${STUB_CARGO_RC3:-}" ]; then case "$*" in *"$STUB_CARGO_RC3"*) exit 3 ;; esac; fi
 case "$*" in *"${STUB_CARGO_SLEEP:-@@none@@}"*) sleep 2 ;; esac
 case "$*" in *"${STUB_CARGO_HANG:-@@none@@}"*) sleep 600 ;; esac
+case "$*" in "doc "*) echo "rustdocflags[$*]=${RUSTDOCFLAGS:-}" >>"$STUB_LOG" ;; esac
 if [ -n "${STUB_CARGO_FAIL:-}" ]; then case "$*" in *"$STUB_CARGO_FAIL"*) exit 101 ;; esac; fi'
 stub cargo-deny 'exit 0'
 stub go 'echo "go $* PKG_CONFIG_PATH=${PKG_CONFIG_PATH:-}" >>"$STUB_LOG"; echo "go version stub"'
@@ -112,6 +113,9 @@ has() { grep -qF -- "$1" <<<"$out"; }
 lacks() { ! has "$1"; }
 log_has() { grep -qF -- "$1" "$LOG"; }
 log_lacks() { ! log_has "$1"; }
+# A whole line of the log: the plain `cargo doc -p ojas-simd --no-deps` is a substring of
+# the accelerate line, so a substring check on it would be vacuous.
+log_line() { grep -qxF -- "$1" "$LOG"; }
 last() { tail -n 1 <<<"$out"; }
 bare_ok() { grep -qx 'ci:local OK' <<<"$out"; }
 cnt() { grep -cF -- "$1" "$LOG"; }
@@ -129,6 +133,10 @@ log_has "cargo test -p ojas-cuda --features cuda --no-run"; check "1 all present
 log_has "cargo +nightly-2026-10-05 test -p ojas-simd --release --no-fail-fast"; check "1 all present: dated nightly ojas-simd ran" $?
 log_has "script run_paired_test.sh" && log_has "script ci_local_test.sh" && log_has "script gotip_simd_test.sh"; check "1 all present: self-tests ran (Darwin includes run_paired_test)" $?
 has "ojas-hip check: not applicable on macOS" && log_lacks "ojas-hip"; check "1 all present: hip is printed not applicable on Darwin" $?
+log_line "cargo doc --workspace --no-deps" && log_line "cargo doc -p ojas-simd --no-deps" && log_line "cargo doc -p ojas-simd --no-deps --features accelerate"
+check "1 all present: rustdoc runs the workspace, plain ojas-simd and accelerate ojas-simd (whole lines)" $?
+log_line "rustdocflags[doc -p ojas-simd --no-deps]=-D warnings" && log_line "rustdocflags[doc -p ojas-simd --no-deps --features accelerate]=-D warnings"
+check "1 all present: both ojas-simd doc runs carry RUSTDOCFLAGS=-D warnings" $?
 
 # 2. Already under mac_heavy: the wrapper is not taken again.
 run "$HEAVY" MAC_HEAVY_LABEL=x -- "${BASE[@]}" gotip
@@ -205,6 +213,8 @@ has "mac_heavy not used" && [[ "$(cnt mac_heavy)" -eq 0 ]]; check "14 Linux: wra
 grep -q 'PKG_CONFIG_PATH=.*/go/linux$' "$LOG"; check "14 Linux: PKG_CONFIG_PATH ends /go/linux" $?
 log_has "cargo check -p ojas-hip --all-targets"; check "14 Linux: ojas-hip check ran" $?
 log_lacks "accelerate" && has "accelerate: not applicable" && ! has "INCOMPLETE"; check "14 Linux: accelerate not run, printed not applicable, not a skip" $?
+log_line "cargo doc -p ojas-simd --no-deps" && log_line "rustdocflags[doc -p ojas-simd --no-deps]=-D warnings" && log_lacks "doc -p ojas-simd --no-deps --features"
+check "14 Linux: plain ojas-simd doc ran with -D warnings, no accelerate doc" $?
 log_lacks "script run_paired_test.sh"; check "14 Linux: run_paired_test (Darwin-only) not run" $?
 run "$HEAVY" -- "${BASE[@]}" gotip
 grep -q 'PKG_CONFIG_PATH=.*/go$' "$LOG" && ! grep -q 'PKG_CONFIG_PATH=.*/go/linux' "$LOG"; check "14b Darwin: PKG_CONFIG_PATH is go/, not go/linux" $?
