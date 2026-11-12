@@ -278,6 +278,7 @@ struct FileStamp {
 }
 
 impl FileStamp {
+    #[cfg(unix)]
     fn of(f: &File) -> std::io::Result<Self> {
         use std::os::unix::fs::MetadataExt;
         let md = f.metadata()?;
@@ -287,6 +288,17 @@ impl FileStamp {
             ino: md.ino(),
             dev: md.dev(),
         })
+    }
+
+    /// No inode or device number is available off unix without unstable std,
+    /// and a length-and-mtime-only stamp would weaken the fail-closed identity
+    /// check, so the open is refused (`io_kind()` is `Some(Unsupported)`).
+    #[cfg(not(unix))]
+    fn of(_f: &File) -> std::io::Result<Self> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "file identity (inode and device) is not available on this platform",
+        ))
     }
 
     /// Err if `f` no longer matches `self`.
