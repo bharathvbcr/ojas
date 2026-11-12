@@ -158,6 +158,14 @@ const O_NONBLOCK: Option<i32> = None;
 ///
 /// `O_NONBLOCK` is ignored for regular files, so it changes nothing for the
 /// files this is meant to open.
+///
+/// **Error contract.** Every failure carries the OS error as its source
+/// ([`IoError::io_kind`] is `Some`), except the not-a-regular-file refusal
+/// (a directory, FIFO, socket or device), which is raised by this crate and
+/// has none (`io_kind()` is `None`). Callers classify on that difference
+/// (tessl's `bounded_file::open_regular` does), so a new sourceless refusal of
+/// a regular file, or a sourced error for a non-regular one, is a contract
+/// change.
 pub fn open_regular_file(path: &Path) -> Result<(File, u64), IoError> {
     let what = path.display();
     let before = std::fs::metadata(path).map_err(|e| IoError::io(format!("{what}: {e}"), e))?;
@@ -343,6 +351,86 @@ mod tests {
         let err = open_flagged(&link, flag).unwrap_err();
         assert_eq!(err.raw_os_error(), Some(ELOOP), "{err}");
         assert!(open_flagged(&real, flag).is_ok());
+    }
+
+    fn assert_sourceless_refusal(p: &Path) {
+        let err = open_regular_file(p).unwrap_err();
+        let want = format!("{}: not a regular file", p.display());
+        assert!(std::error::Error::source(&err).is_none(), "{p:?}: {err:?}");
+        assert_eq!(err.io_kind(), None, "{p:?}: {err:?}");
+        assert_eq!(err.detail(), want, "{p:?}");
+    }
+
+    fn assert_sourced(p: &Path, kind: std::io::ErrorKind) {
+        let err = open_regular_file(p).unwrap_err();
+        assert!(std::error::Error::source(&err).is_some(), "{p:?}: {err:?}");
+        assert_eq!(err.io_kind(), Some(kind), "{p:?}: {err:?}");
+    }
+
+    /// `open_regular_file`'s sourceless-error contract (ft-629e52ef): a
+    /// directory, FIFO, socket, device and a symlink to a FIFO are refused with
+    /// no source and no `io_kind`; a missing path and a dangling symlink fail
+    /// with `NotFound` and a source; regular files (empty, one byte, behind a
+    /// symlink) open with the right length. Every refused input here is caught
+    /// by the `stat` refusal; the `fstat` refusal after the open is reachable
+    /// only by swapping the path between the two calls and is not pinned here.
+    #[test]
+    fn open_regular_file_error_contract() {
+        use std::io::ErrorKind;
+        let dir = tmp_dir("orf");
+
+        assert_sourceless_refusal(&dir.0);
+
+        let fifo = dir.0.join("f");
+        let made = std::process::Command::new("/usr/bin/mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let f = fifo.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(open_regular_file(&f));
+        });
+        let err = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("a FIFO blocked open_regular_file")
+            .unwrap_err();
+        assert!(std::error::Error::source(&err).is_none(), "{err:?}");
+        assert_eq!(err.io_kind(), None, "{err:?}");
+        assert_eq!(
+            err.detail(),
+            format!("{}: not a regular file", fifo.display())
+        );
+
+        let sock = dir.0.join("s");
+        assert!(
+            sock.as_os_str().len() < 100,
+            "socket path too long for sun_path: {sock:?}"
+        );
+        let _listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        assert_sourceless_refusal(&sock);
+
+        assert_sourceless_refusal(Path::new("/dev/null"));
+
+        let to_fifo = dir.0.join("lf");
+        std::os::unix::fs::symlink(&fifo, &to_fifo).unwrap();
+        assert_sourceless_refusal(&to_fifo);
+
+        assert_sourced(&dir.0.join("missing"), ErrorKind::NotFound);
+        let dangling = dir.0.join("d");
+        std::os::unix::fs::symlink(dir.0.join("nowhere"), &dangling).unwrap();
+        assert_sourced(&dangling, ErrorKind::NotFound);
+
+        let empty = dir.0.join("e");
+        std::fs::write(&empty, b"").unwrap();
+        assert_eq!(open_regular_file(&empty).unwrap().1, 0);
+        let one = dir.0.join("o");
+        std::fs::write(&one, b"x").unwrap();
+        assert_eq!(open_regular_file(&one).unwrap().1, 1);
+        let to_one = dir.0.join("lo");
+        std::os::unix::fs::symlink(&one, &to_one).unwrap();
+        assert_eq!(open_regular_file(&to_one).unwrap().1, 1);
     }
 
     fn err_is_refusal(p: &Path) -> bool {
