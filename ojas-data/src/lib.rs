@@ -7,9 +7,10 @@
 //! the Step-Audio-EditX virtualenv and the local Hugging Face table at
 //! `MLSystemsLab/Step-Audio-EditX/funasr_detach/models/whisper/utils/assets/gpt2`
 //! (`vocab.json`, `merges.txt`); it did not download ranks and it is not a
-//! million-line check. System `python3` does not import tiktoken. Tests also read
-//! `testdata/gpt2` when those two files are dropped in. [`bpe::fixture_bpe`] is a
-//! separate tiny vocabulary.
+//! million-line check. System `python3` does not import tiktoken. The test now
+//! runs against the vendored `testdata/gpt2` (MIT; source and SHA-256 in its
+//! README) and fails rather than skips when that table is missing.
+//! [`bpe::fixture_bpe`] is a separate tiny vocabulary.
 //!
 //! Token files are read with `File` positioned reads. There is no `memmap2`
 //! dependency.

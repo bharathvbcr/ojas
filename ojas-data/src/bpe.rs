@@ -27,10 +27,12 @@ use std::sync::OnceLock;
 ///
 /// The twenty strings in the encoder test match tiktoken 0.12.0
 /// `Encoding.encode_ordinary` using the gpt2 pattern (`r50k_pat_str`) and the
-/// ranks in the local Hugging Face `vocab.json`. The system `python3` does not
-/// import tiktoken; the check used
-/// `Step-Audio-EditX/.venv` (tiktoken 0.12.0) and did not download vocab files.
-/// This is not a million-line check.
+/// ranks in Hugging Face's `vocab.json`. The system `python3` does not
+/// import tiktoken; the original check used the Step-Audio-EditX virtualenv
+/// (tiktoken 0.12.0) and did not download vocab files. The test now runs
+/// against the vendored `testdata/gpt2` (MIT; source and SHA-256 in its
+/// README) and fails rather than skips when that table is missing. This is
+/// not a million-line check.
 pub const TIKTOKEN_GPT2_BYTE_IDENTITY: &str = "verified-20-strings";
 
 /// GPT-2's end-of-text piece; [`Bpe::piece_id`] gives its id (50256 in
@@ -1462,25 +1464,37 @@ mod tests {
         ]
     }
 
-    fn rank_table_dir() -> Option<std::path::PathBuf> {
-        let candidates = [
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata/gpt2"),
-            std::path::PathBuf::from(
-                "/Users/bharath/Code/research/MLSystemsLab/Step-Audio-EditX/funasr_detach/models/whisper/utils/assets/gpt2",
-            ),
-        ];
-        candidates
-            .into_iter()
-            .find(|dir| dir.join("vocab.json").is_file() && dir.join("merges.txt").is_file())
+    /// The vendored GPT-2 rank table. There is no other candidate: a missing
+    /// table must fail the test, never skip it.
+    fn rank_table_dir() -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata/gpt2")
     }
 
-    #[test]
-    fn verified_20_strings_match_tiktoken_encode_ordinary() {
-        assert_eq!(TIKTOKEN_GPT2_BYTE_IDENTITY, "verified-20-strings");
-        let Some(dir) = rank_table_dir() else {
-            return;
-        };
-        let bpe = load_hf_gpt2(&dir.join("vocab.json"), &dir.join("merges.txt"))
+    /// `vocab.json` and `merges.txt` in `dir`, or an error naming the dir and
+    /// every file that is missing.
+    fn rank_table_files(dir: &Path) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
+        let vocab = dir.join("vocab.json");
+        let merges = dir.join("merges.txt");
+        let missing: Vec<&str> = [("vocab.json", &vocab), ("merges.txt", &merges)]
+            .into_iter()
+            .filter(|(_, path)| !path.is_file())
+            .map(|(name, _)| name)
+            .collect();
+        if missing.is_empty() {
+            Ok((vocab, merges))
+        } else {
+            Err(format!(
+                "rank table at {} is missing {}",
+                dir.display(),
+                missing.join(" and ")
+            ))
+        }
+    }
+
+    /// Loads the table in `dir` and asserts GPT-2's fingerprint unconditionally.
+    fn load_gpt2_rank_table(dir: &Path) -> Bpe {
+        let (vocab, merges) = rank_table_files(dir).unwrap_or_else(|e| panic!("{e}"));
+        let bpe = load_hf_gpt2(&vocab, &merges)
             .unwrap_or_else(|e| panic!("rank table at {} failed: {e}", dir.display()));
         let piece = |id: u32, text: &str| bpe.decode(&[id]).ok().as_deref() == Some(text);
         let gpt2 = bpe.tokens.len() == 50257
@@ -1490,20 +1504,56 @@ mod tests {
             && piece(59, "\\")
             && piece(31373, "hello")
             && piece(50256, "<|endoftext|>");
-        if bpe.tokens.len() == 50257 {
-            assert!(
-                gpt2,
-                "50257-piece table did not match the GPT-2 fingerprint at {}",
-                dir.display()
-            );
-        } else {
-            for (text, _) in twenty_gpt2_ids() {
-                if let Ok(ids) = bpe.encode_ordinary(text) {
-                    assert_eq!(bpe.decode_ordinary(&ids).unwrap(), text);
-                }
-            }
-            return;
-        }
+        assert!(
+            gpt2,
+            "rank table at {} is not GPT-2's: {} pieces, {} merges",
+            dir.display(),
+            bpe.tokens.len(),
+            bpe.merges.len()
+        );
+        bpe
+    }
+
+    #[test]
+    fn rank_table_files_names_each_missing_file() {
+        let dir = tmp_dir("rank-files");
+        let _guard = RmDir(dir.clone());
+        let err = rank_table_files(&dir).unwrap_err();
+        assert!(err.contains("vocab.json"), "{err}");
+        assert!(err.contains("merges.txt"), "{err}");
+        assert!(err.contains(&dir.display().to_string()), "{err}");
+        std::fs::write(dir.join("vocab.json"), "{}").unwrap();
+        let err = rank_table_files(&dir).unwrap_err();
+        assert!(err.contains("merges.txt"), "{err}");
+        assert!(!err.contains("vocab.json"), "{err}");
+        std::fs::write(dir.join("merges.txt"), "").unwrap();
+        let (vocab, merges) = rank_table_files(&dir).unwrap();
+        assert_eq!(vocab, dir.join("vocab.json"));
+        assert_eq!(merges, dir.join("merges.txt"));
+    }
+
+    #[test]
+    #[should_panic(expected = "vocab.json")]
+    fn rank_table_load_panics_on_an_empty_dir() {
+        let dir = tmp_dir("rank-empty");
+        let _guard = RmDir(dir.clone());
+        load_gpt2_rank_table(&dir);
+    }
+
+    #[test]
+    #[should_panic(expected = "is not GPT-2's")]
+    fn rank_table_load_panics_on_a_non_gpt2_table() {
+        let dir = tmp_dir("rank-tiny");
+        let _guard = RmDir(dir.clone());
+        std::fs::write(dir.join("vocab.json"), r#"{"a":0}"#).unwrap();
+        std::fs::write(dir.join("merges.txt"), "#version: 0.2\n").unwrap();
+        load_gpt2_rank_table(&dir);
+    }
+
+    #[test]
+    fn verified_20_strings_match_tiktoken_encode_ordinary() {
+        assert_eq!(TIKTOKEN_GPT2_BYTE_IDENTITY, "verified-20-strings");
+        let bpe = load_gpt2_rank_table(&rank_table_dir());
         assert_eq!(bpe.encode_ordinary(" t").unwrap(), vec![256]);
         assert_eq!(bpe.encode_ordinary("###").unwrap(), vec![21017]);
         assert_eq!(bpe.piece_id(ENDOFTEXT), Some(50256));

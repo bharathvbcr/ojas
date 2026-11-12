@@ -46,6 +46,19 @@
 //! Every length and stride is validated with checked arithmetic before any
 //! `unsafe` code runs. A bad shape returns [`SimdError`]. It never panics and
 //! never reads out of bounds. All `unsafe` code is in the private `arch` module.
+//!
+//! # Testing
+//!
+//! `-p ojas-simd` alone compiles none of the Accelerate surface (the
+//! `accelerate` feature is off by default), and the feature is a
+//! `compile_error!` off macOS. On macOS run both:
+//!
+//! ```text
+//! cargo test -p ojas-simd --features accelerate
+//! cargo clippy -p ojas-simd --features accelerate --all-targets -- -D warnings
+//! ```
+//!
+//! `scripts/ci_local.sh` runs these and the plain `cargo test -p ojas-simd`.
 
 #![deny(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]

@@ -18,10 +18,22 @@
 #
 # The metal and wgpu lanes run their kernel rows, then the decode rows
 # (ojas-infer's decode_vs_torch), into the same lane file.
+#
+# macOS only (Metal, MPS): it uses BSD `tail -r`, `stat -f`, `sw_vers` and `ioreg`.
+#
+# Exit codes: 0 every row ok in every round; 1 the aggregate failed, or a lane
+# process crashed (even when the aggregate passed); 64 bad usage (ROUNDS not an
+# integer 1-999 without a leading zero, or OUT_DIR a file or not empty: the row
+# writers append, so a second run into the same dir would mix the two);
+# 130/143 a signal. Any other non-zero is the aggregate's.
 set -euo pipefail
 
 REPO=$(dirname "$(dirname "$(realpath "$0")")")
-ROUNDS=${1:-5}
+ROUNDS=${1-5}
+if ! [[ $ROUNDS =~ ^[1-9][0-9]{0,2}$ ]]; then
+    echo "run_paired: rounds must be an integer 1-999 without a leading zero, got '$ROUNDS'" >&2
+    exit 64
+fi
 STAMP=$(date +%Y%m%d-%H%M%S)
 OUT=${OUT_DIR:-$REPO/bench/out/$STAMP}
 PY=${PYTHON:-/opt/homebrew/opt/python@3.14/bin/python3.14}
@@ -30,7 +42,26 @@ export PYTHONDONTWRITEBYTECODE=1
 export RIPGREP_CONFIG_PATH=
 EX=$CARGO_TARGET_DIR/release/examples
 
-mkdir -p "$OUT"
+case "$OUT" in
+    -*)
+        echo "run_paired: OUT_DIR '$OUT' starts with '-'; give a path that does not" >&2
+        exit 64
+        ;;
+esac
+if [ -e "$OUT" ] && [ ! -d "$OUT" ]; then
+    echo "run_paired: OUT_DIR $OUT exists and is not a directory" >&2
+    exit 64
+fi
+if [ -d "$OUT" ]; then
+    entries=$(ls -A -- "$OUT/")
+    if [ -n "$entries" ]; then
+        echo "run_paired: OUT_DIR $OUT is not empty; ojas_rows.rs and torch_rows.py append, so two runs would mix; choose a new OUT_DIR" >&2
+        exit 64
+    fi
+fi
+trap 'exit 130' INT
+trap 'exit 143' TERM
+mkdir -p -- "$OUT"
 echo "output: $OUT" >&2
 
 # 1. Build first: a stale binary produces numbers that look valid.
@@ -84,12 +115,17 @@ run_lane() { # round lane
     esac
     snapshot "$1" "$2" after
     if [ "$rc" -ne 0 ]; then
+        crashes=$((crashes + 1))
         printf '{"runtime":"%s","row":"_process","status":"crash","exit":%s}\n' "$2" "$rc" >> "$f"
         echo "round $1 $2 exited $rc (see $OUT/round$1/$2.log)" >&2
+    fi
+    if [ "$rc" -ge 128 ]; then
+        exit "$rc"
     fi
 }
 
 # 4. Rounds, alternating which runtime goes first.
+crashes=0
 for r in $(seq 1 "$ROUNDS"); do
     mkdir -p "$OUT/round$r"
     if [ $((r % 2)) -eq 1 ]; then
@@ -108,4 +144,8 @@ done
 status=0
 go run "$REPO/scripts/benchreport/main.go" aggregate "$OUT" > "$OUT/summary.md" || status=$?
 echo "summary: $OUT/summary.md" >&2
+if [ "$crashes" -gt 0 ]; then
+    echo "run_paired: $crashes lane run(s) crashed (see crash rows in round*/<lane>.jsonl)" >&2
+    if [ "$status" -eq 0 ]; then status=1; fi
+fi
 exit "$status"
