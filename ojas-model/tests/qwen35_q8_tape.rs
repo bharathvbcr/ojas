@@ -316,7 +316,9 @@ fn the_o1_control_dequantises_at_bind_and_never_again() {
 
 // ---- C4: no dense wrapped-shape weight in the tape's values ----------------------------------
 
-/// Every value on `tape` with the `[out, in]` of a wrapped part, in bf16 or f32.
+/// Every value on `tape` with the `[out, in]` of a wrapped part, in bf16 or f32. Shape only: the
+/// tiny fixture's wrapped shapes collide with no other value (checked by the control below), a
+/// fixture where they did would turn the control red.
 fn dense_weight_values(tape: &Tape, shapes: &[[usize; 2]]) -> usize {
     let mut found = 0;
     let mut i = 0;

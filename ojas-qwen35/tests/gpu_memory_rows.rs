@@ -189,6 +189,7 @@ fn gpu_memory_row() {
             row,
             StepVariant {
                 form: BaseForm::Q8Resident,
+                freeze_checked: true,
                 ..StepVariant::default()
             },
         ),
@@ -198,6 +199,7 @@ fn gpu_memory_row() {
             row,
             StepVariant {
                 form: BaseForm::Q8Dense,
+                freeze_checked: true,
                 ..StepVariant::default()
             },
         ),

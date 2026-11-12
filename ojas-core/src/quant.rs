@@ -451,16 +451,17 @@ impl PlacedAffine {
             .ok_or_else(|| overflow("PlacedAffine::dequantised_bytes", "rows * cols * 2 bytes"))
     }
 
-    /// The shape check every `linear_q` runs before any dispatch: `x` (the input's shape) has a
-    /// last extent and it is this weight's input width, `cols`. A refusal is
-    /// [`OjasError::Shape`] naming `op`.
+    /// The shape check every `linear_q` runs before any dispatch: `x` (the input's shape) is
+    /// rank 2 or more (a rank-1 input is refused, so the check never depends on what a backend's
+    /// linear does with one) and its last extent is this weight's input width, `cols`. A refusal
+    /// is [`OjasError::Shape`] naming `op`.
     pub fn check_input(&self, op: &'static str, x: &[usize]) -> Result<(), OjasError> {
         match x.last() {
-            Some(&last) if last == self.cols => Ok(()),
+            Some(&last) if x.len() >= 2 && last == self.cols => Ok(()),
             _ => Err(OjasError::Shape {
                 op,
                 detail: format!(
-                    "x {x:?} does not end in the quantised weight's {} input features \
+                    "x {x:?} is not rank 2 or more ending in the quantised weight's {} input features \
                      ([{}, {}])",
                     self.cols, self.rows, self.cols
                 ),

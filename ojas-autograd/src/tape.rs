@@ -750,7 +750,7 @@ impl<B: Backend> Tape<B> {
     ///
     /// Refused before any dispatch: a `q` placed on another backend than this tape's
     /// ([`OjasError::Placement`], so a weight is uploaded once at load, never per tape), an `x`
-    /// of rank 0, and an `x` whose last extent is not `q.cols()` ([`OjasError::Shape`]). A weight
+    /// of rank below 2, and an `x` whose last extent is not `q.cols()` ([`OjasError::Shape`]). A weight
     /// from another device of the same backend is refused by that backend's operand check at the
     /// first dequantisation. A record of this kind may sit inside a [`Tape::checkpoint`] body: it
     /// is not a leaf.

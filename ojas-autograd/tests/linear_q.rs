@@ -6,6 +6,9 @@
 //! quantisation, with and without `checkpoint` (a replay re-runs the record against moved
 //! indices), and the same gradient as the backward calls chained by hand
 //! (`dequant_affine_bf16`, then `linear_backward_input`, per layer).
+//!
+//! The dense reference uses the host dequantiser, so this is a composition check, not an oracle
+//! for the dequantiser itself (W2's mlx goldens are).
 
 mod common;
 
@@ -298,4 +301,23 @@ fn a_weight_placed_elsewhere_is_a_placement_refusal_both_ways() {
         other => panic!("{other:?}"),
     }
     assert!(host_tape.value(Var(1)).is_err());
+}
+
+/// A rank-1 input whose only extent equals the weight's width is refused before any dispatch, as
+/// the doc says, whatever a backend's linear would do with it.
+#[test]
+fn a_rank_one_input_is_a_shape_refusal_and_records_nothing() {
+    let w = weights(&Budget::new(1 << 28));
+    let be = cpu();
+    let p1 = w.q1.clone().place(&be).unwrap();
+    let mut tape = Tape::new(be);
+    let budget = tape.backend().budget().clone();
+    let flat = tape
+        .leaf(Tensor::from_f32(&[0.5f32; D0], &[D0], &budget).unwrap())
+        .unwrap();
+    match tape.linear_q(flat, &p1) {
+        Err(OjasError::Shape { op, .. }) => assert_eq!(op, "Tape::linear_q"),
+        other => panic!("{other:?}"),
+    }
+    assert!(tape.value(Var(1)).is_err());
 }

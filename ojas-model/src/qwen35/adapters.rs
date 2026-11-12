@@ -260,13 +260,19 @@ impl fmt::Display for AdapterError {
             ),
             Self::FakeQuantOnResidentBase { found } => write!(
                 f,
-                "adapter checkpoint: trained over a base with storage {found:?}, this run's base \
-                 is resident packed; a fake-quant checkpoint is not resumed on it"
+                "adapter checkpoint: trained over {}, this run's base is resident packed; a \
+                 non-resident checkpoint is not resumed on it",
+                found.map_or(
+                    "a dense base (no quantizer record)".to_string(),
+                    |f| format!("a base with storage {f:?}")
+                )
             ),
             Self::ResidentOnFakeQuantBase { expected } => write!(
                 f,
-                "adapter checkpoint: trained over a resident packed base, this run's base has \
-                 storage {expected:?}"
+                "adapter checkpoint: trained over a resident packed base, this run's base is {}",
+                expected.map_or("dense (no quantizer record)".to_string(), |e| format!(
+                    "not resident (storage {e:?})"
+                ))
             ),
             Self::NotResidentRecord { found } => write!(
                 f,
