@@ -20,85 +20,163 @@
 //! [`fuse_grads`] is the inverse, for comparing gradients with transformers
 //! and for writing them under Hugging Face names.
 
+use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::path::Path;
 
 use ojas_core::{
-    f32_to_bf16, shape_product, AffineGeometry, AffineQuantized, Backend, Budget, DType, OjasError,
-    Scratch, Tensor, LE_READ_CHUNK_BYTES,
+    f32_to_bf16, shape_product, AffineBits, AffineGeometry, AffineQuantized, AffineSpec, Backend,
+    Budget, DType, OjasError, PlacedAffine, Scratch, Tensor, LE_READ_CHUNK_BYTES,
 };
 use ojas_data::CounterRng;
-use ojas_io::{bf16_to_f32, f16_to_f32, SafeTensors, StDtype};
+use ojas_io::{
+    affine_spec_from_config, bf16_to_f32, f16_to_f32, read_affine_quantized, JsonValue,
+    SafeTensors, StDtype,
+};
 
 use crate::init::fnv1a;
 use crate::lora::{LoraConfig, LoraSite};
 
-use crate::qwen35::adapters::{verify_base_file, AdapterError, BaseIdentity};
+use crate::qwen35::adapters::{verify_base_file, AdapterError, BaseIdentity, QuantStorage};
 use crate::qwen35::spec::{Qwen35Mixer, Qwen35Spec};
 
-/// A gated delta net layer's mixer.
+/// A frozen linear weight of the base: held dense (`Dense`, a tensor or a graph value) or, for a
+/// resident quantised base, packed (`Quant`), where every use dequantises it to a transient
+/// ([`crate::Graph::linear_q`]) and the dense `[out, in]` weight is never held.
+///
+/// The 13 fields of [`Qwen35Params`] the ten LoRA kinds wrap are `FrozenWeight`s in a base of type
+/// `Qwen35Params<V, FrozenWeight<V>>` ([`Qwen35Params::frozen_view`] makes one from a dense base).
+/// `Quant` holds a [`PlacedAffine`], so it is already resident where one backend computes and a
+/// tape refuses it on any other. The type holds no gradient: a frozen weight takes none.
 #[derive(Clone, Debug)]
-pub struct GdnParams<V> {
+pub enum FrozenWeight<V> {
+    Dense(V),
+    Quant(PlacedAffine),
+}
+
+/// A gated delta net layer's mixer. `W` is the type of the weights the LoRA kinds wrap (`wq`,
+/// `wk`, `wv`, `wz`, `out`); it is `V` unless the base is quantised ([`FrozenWeight`]).
+#[derive(Clone, Debug)]
+pub struct GdnParams<V, W = V> {
     /// The `q`, `k` and `v` row blocks of `in_proj_qkv`.
-    pub wq: V,
-    pub wk: V,
-    pub wv: V,
+    pub wq: W,
+    pub wk: W,
+    pub wv: W,
     /// The matching channel blocks of `conv1d.weight`, each `[C, K]`.
     pub conv_q: V,
     pub conv_k: V,
     pub conv_v: V,
     /// `in_proj_z`, the gated norm's gate.
-    pub wz: V,
-    /// `in_proj_a`, the log decay's input.
+    pub wz: W,
+    /// `in_proj_a`, the log decay's input. Never wrapped: a quantised base keeps it dense.
     pub wa: V,
-    /// `in_proj_b`, `beta`'s logit.
+    /// `in_proj_b`, `beta`'s logit. Never wrapped: a quantised base keeps it dense.
     pub wb: V,
     pub a_log: V,
     pub dt_bias: V,
     /// The gated norm's weight `[Dv]`, a plain scale.
     pub norm: V,
-    pub out: V,
+    pub out: W,
 }
 
-/// A gated attention layer's mixer.
+/// A gated attention layer's mixer. `W` is as for [`GdnParams`].
 #[derive(Clone, Debug)]
-pub struct AttnParams<V> {
+pub struct AttnParams<V, W = V> {
     /// The query rows of `q_proj`, `[H D, hidden]`.
-    pub wq: V,
+    pub wq: W,
     /// The output gate rows of `q_proj`, `[H D, hidden]`.
-    pub wgate: V,
-    pub wk: V,
-    pub wv: V,
+    pub wgate: W,
+    pub wk: W,
+    pub wv: W,
     /// Per-head RMSNorm weights `[D]`, applied as `1 + w`.
     pub q_norm: V,
     pub k_norm: V,
-    pub wo: V,
+    pub wo: W,
 }
 
 #[derive(Clone, Debug)]
-pub enum MixerParams<V> {
-    GatedDeltaNet(GdnParams<V>),
-    Attention(AttnParams<V>),
+pub enum MixerParams<V, W = V> {
+    GatedDeltaNet(GdnParams<V, W>),
+    Attention(AttnParams<V, W>),
 }
 
 #[derive(Clone, Debug)]
-pub struct LayerParams<V> {
+pub struct LayerParams<V, W = V> {
     /// `input_layernorm`, applied as `1 + w`.
     pub input_norm: V,
-    pub mixer: MixerParams<V>,
+    pub mixer: MixerParams<V, W>,
     /// `post_attention_layernorm`, applied as `1 + w`.
     pub post_norm: V,
-    pub gate: V,
-    pub up: V,
-    pub down: V,
+    pub gate: W,
+    pub up: W,
+    pub down: W,
 }
 
-/// The tower: tied embedding, layers, final norm (applied as `1 + w`).
+/// The tower: tied embedding, layers, final norm (applied as `1 + w`). `V` is the type of every
+/// parameter, `W` of the 13 weights the ten LoRA kinds wrap; `W = V` is the dense tower every
+/// caller has always used, and `Qwen35Params<V, FrozenWeight<V>>` is a base that may hold those
+/// weights quantised and resident.
 #[derive(Clone, Debug)]
-pub struct Qwen35Params<V> {
+pub struct Qwen35Params<V, W = V> {
     pub embed: V,
-    pub layers: Vec<LayerParams<V>>,
+    pub layers: Vec<LayerParams<V, W>>,
     pub norm: V,
+}
+
+impl<V, W> Qwen35Params<V, W> {
+    /// The one traversal: `plain` of every parameter that is not wrapped and `wrapped` of every
+    /// wrapped weight, in the fixed order every `try_map` shares.
+    fn try_map_with<'a, V2, W2, E>(
+        &'a self,
+        plain: &mut impl FnMut(&'a V) -> Result<V2, E>,
+        wrapped: &mut impl FnMut(&'a W) -> Result<W2, E>,
+    ) -> Result<Qwen35Params<V2, W2>, E> {
+        let embed = plain(&self.embed)?;
+        let mut layers = Vec::with_capacity(self.layers.len());
+        for l in &self.layers {
+            let input_norm = plain(&l.input_norm)?;
+            let mixer = match &l.mixer {
+                MixerParams::GatedDeltaNet(m) => MixerParams::GatedDeltaNet(GdnParams {
+                    wq: wrapped(&m.wq)?,
+                    wk: wrapped(&m.wk)?,
+                    wv: wrapped(&m.wv)?,
+                    conv_q: plain(&m.conv_q)?,
+                    conv_k: plain(&m.conv_k)?,
+                    conv_v: plain(&m.conv_v)?,
+                    wz: wrapped(&m.wz)?,
+                    wa: plain(&m.wa)?,
+                    wb: plain(&m.wb)?,
+                    a_log: plain(&m.a_log)?,
+                    dt_bias: plain(&m.dt_bias)?,
+                    norm: plain(&m.norm)?,
+                    out: wrapped(&m.out)?,
+                }),
+                MixerParams::Attention(m) => MixerParams::Attention(AttnParams {
+                    wq: wrapped(&m.wq)?,
+                    wgate: wrapped(&m.wgate)?,
+                    wk: wrapped(&m.wk)?,
+                    wv: wrapped(&m.wv)?,
+                    q_norm: plain(&m.q_norm)?,
+                    k_norm: plain(&m.k_norm)?,
+                    wo: wrapped(&m.wo)?,
+                }),
+            };
+            layers.push(LayerParams {
+                input_norm,
+                mixer,
+                post_norm: plain(&l.post_norm)?,
+                gate: wrapped(&l.gate)?,
+                up: wrapped(&l.up)?,
+                down: wrapped(&l.down)?,
+            });
+        }
+        Ok(Qwen35Params {
+            embed,
+            layers,
+            norm: plain(&self.norm)?,
+        })
+    }
 }
 
 impl<V> Qwen35Params<V> {
@@ -108,50 +186,9 @@ impl<V> Qwen35Params<V> {
         &'a self,
         f: &mut impl FnMut(&'a V) -> Result<W, E>,
     ) -> Result<Qwen35Params<W>, E> {
-        let embed = f(&self.embed)?;
-        let mut layers = Vec::with_capacity(self.layers.len());
-        for l in &self.layers {
-            let input_norm = f(&l.input_norm)?;
-            let mixer = match &l.mixer {
-                MixerParams::GatedDeltaNet(m) => MixerParams::GatedDeltaNet(GdnParams {
-                    wq: f(&m.wq)?,
-                    wk: f(&m.wk)?,
-                    wv: f(&m.wv)?,
-                    conv_q: f(&m.conv_q)?,
-                    conv_k: f(&m.conv_k)?,
-                    conv_v: f(&m.conv_v)?,
-                    wz: f(&m.wz)?,
-                    wa: f(&m.wa)?,
-                    wb: f(&m.wb)?,
-                    a_log: f(&m.a_log)?,
-                    dt_bias: f(&m.dt_bias)?,
-                    norm: f(&m.norm)?,
-                    out: f(&m.out)?,
-                }),
-                MixerParams::Attention(m) => MixerParams::Attention(AttnParams {
-                    wq: f(&m.wq)?,
-                    wgate: f(&m.wgate)?,
-                    wk: f(&m.wk)?,
-                    wv: f(&m.wv)?,
-                    q_norm: f(&m.q_norm)?,
-                    k_norm: f(&m.k_norm)?,
-                    wo: f(&m.wo)?,
-                }),
-            };
-            layers.push(LayerParams {
-                input_norm,
-                mixer,
-                post_norm: f(&l.post_norm)?,
-                gate: f(&l.gate)?,
-                up: f(&l.up)?,
-                down: f(&l.down)?,
-            });
-        }
-        Ok(Qwen35Params {
-            embed,
-            layers,
-            norm: f(&self.norm)?,
-        })
+        // The two closures run one after the other, never nested.
+        let f = RefCell::new(f);
+        self.try_map_with(&mut |v| (*f.borrow_mut())(v), &mut |v| (*f.borrow_mut())(v))
     }
 
     /// Every parameter, in [`Qwen35Params::try_map`]'s order.
@@ -162,6 +199,52 @@ impl<V> Qwen35Params<V> {
             Ok::<(), Infallible>(())
         });
         out
+    }
+
+    /// A base mapped parameter by parameter into the form the base-generic forward
+    /// ([`crate::qwen35::forward_loss_lora_base`]) takes: `plain` of every parameter the ten LoRA
+    /// kinds do not wrap and `wrapped` of every wrapped weight, which says whether it is held
+    /// dense or packed. The one place a dense base becomes a quantised one (`wrapped` quantises
+    /// and places), in [`Qwen35Params::try_map`]'s order, so a tensor is quantised and its dense
+    /// source can be dropped one weight at a time by a caller that owns the source.
+    pub fn try_map_frozen<'a, X, E>(
+        &'a self,
+        plain: &mut impl FnMut(&'a V) -> Result<X, E>,
+        wrapped: &mut impl FnMut(&'a V) -> Result<FrozenWeight<X>, E>,
+    ) -> Result<Qwen35Params<X, FrozenWeight<X>>, E> {
+        self.try_map_with(plain, wrapped)
+    }
+
+    /// The same parameters as a base whose wrapped weights are all `FrozenWeight::Dense`: the
+    /// form the base-generic forward takes. A copy of handles only, since a graph value is
+    /// `Clone` and a [`Tensor`] shares its storage.
+    pub fn frozen_view(&self) -> Qwen35Params<V, FrozenWeight<V>>
+    where
+        V: Clone,
+    {
+        let Ok(view) = self.try_map_frozen(&mut |v| Ok::<_, Infallible>(v.clone()), &mut |w| {
+            Ok::<_, Infallible>(FrozenWeight::Dense(w.clone()))
+        });
+        view
+    }
+}
+
+impl<V> Qwen35Params<V, FrozenWeight<V>> {
+    /// A base mapped parameter by parameter: `dense` of every dense parameter (the unwrapped ones
+    /// and any `Dense` wrapped weight), `quant` of every `Quant` weight. The result keeps each
+    /// wrapped weight's form, so no caller can turn a `Quant` into a dense value by accident: to
+    /// bind a base to a graph, `dense` is `Graph::frozen` and `quant` checks the placement and
+    /// returns the weight as it is. Order as [`Qwen35Params::try_map`].
+    pub fn try_map_base<'a, X, E>(
+        &'a self,
+        dense: &mut impl FnMut(&'a V) -> Result<X, E>,
+        quant: &mut impl FnMut(&'a PlacedAffine) -> Result<PlacedAffine, E>,
+    ) -> Result<Qwen35Params<X, FrozenWeight<X>>, E> {
+        let dense = RefCell::new(dense);
+        self.try_map_with(&mut |v| (*dense.borrow_mut())(v), &mut |w| match w {
+            FrozenWeight::Dense(v) => (*dense.borrow_mut())(v).map(FrozenWeight::Dense),
+            FrozenWeight::Quant(q) => quant(q).map(FrozenWeight::Quant),
+        })
     }
 }
 
@@ -626,17 +709,85 @@ pub fn load_hf(
     table: DType,
     budget: &Budget,
 ) -> Result<Qwen35Params<Tensor>, OjasError> {
-    const OP: &str = "qwen35::load_hf";
+    check_storages(linears, table)?;
+    spec.validate()?;
+    load_tower(
+        spec,
+        file,
+        prefix,
+        linears,
+        table,
+        budget,
+        false,
+        &mut |r| load_runs(file, r.name, linears, &r.shape, r.runs, budget),
+    )
+}
+
+/// `linears` and `table` are `F32` or `Bf16`, as [`load_hf`] documents; any other is
+/// [`OjasError::Dtype`].
+fn check_storages(linears: DType, table: DType) -> Result<(), OjasError> {
     for storage in [linears, table] {
         if !matches!(storage, DType::F32 | DType::Bf16) {
             return Err(OjasError::Dtype {
-                op: OP,
+                op: "qwen35::load_hf",
                 expected: DType::Bf16,
                 got: storage,
             });
         }
     }
-    spec.validate()?;
+    Ok(())
+}
+
+/// A wrapped weight, as [`load_tower`] asks its reader for it: the part of a Hugging Face tensor
+/// the model holds as one linear.
+struct WrappedRead<'a> {
+    /// The Hugging Face tensor the part is cut from.
+    name: &'a str,
+    /// The part's own `[out, in]`.
+    shape: [usize; 2],
+    /// The part as runs of the stored dense tensor's elements.
+    runs: &'a [Run],
+    part: Part,
+}
+
+/// Which part of its Hugging Face tensor a wrapped weight is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Part {
+    /// The tensor itself.
+    Whole,
+    /// Row block `i` of `in_proj_qkv`'s `[q | k | v]`.
+    Block(usize),
+    /// The query rows of `q_proj`.
+    Query,
+    /// The output gate rows of `q_proj`.
+    Gate,
+}
+
+/// Whether the Hugging Face tensor `name` is one of the ten adapted kinds' `.weight`: the weights
+/// a quantised base holds packed. `in_proj_a`, `in_proj_b` and the tied table are not.
+fn is_wrapped_tensor(name: &str) -> bool {
+    LORA_KINDS
+        .iter()
+        .any(|k| name.ends_with(&format!(".{}.weight", k.suffix())))
+}
+
+/// The one implementation behind [`load_hf`] and [`load_hf_q8_pinned`]: every tensor of
+/// [`hf_tensors`] is checked from the header, then read as `load_hf` documents, except the wrapped
+/// weights, whose parts `wrapped` reads (a dense read for `load_hf`, a packed read for a quantised
+/// base). With `packed_wrapped` the wrapped tensors are left out of the header's dtype and shape
+/// check and of the charged total: they are stored `U32` and `wrapped` checks and charges them.
+#[allow(clippy::too_many_arguments)]
+fn load_tower<W, E: From<OjasError>>(
+    spec: &Qwen35Spec,
+    file: &SafeTensors<'_>,
+    prefix: &str,
+    linears: DType,
+    table: DType,
+    budget: &Budget,
+    packed_wrapped: bool,
+    wrapped: &mut impl FnMut(&WrappedRead<'_>) -> Result<W, E>,
+) -> Result<Qwen35Params<Tensor, W>, E> {
+    const OP: &str = "qwen35::load_hf";
     let names = hf_tensors(spec, prefix);
     let storage_of = |kind: HfKind| match kind {
         HfKind::Table => table,
@@ -645,6 +796,9 @@ pub fn load_hf(
     };
     let mut total = 0u64;
     for want in &names {
+        if packed_wrapped && is_wrapped_tensor(&want.name) {
+            continue;
+        }
         let info = file
             .info(&want.name)
             .map_err(|e| refuse(OP, format!("{}: {e}", want.name)))?;
@@ -653,7 +807,8 @@ pub fn load_hf(
             return Err(refuse(
                 OP,
                 format!("{}: shape {got:?}, expected {:?}", want.name, want.shape),
-            ));
+            )
+            .into());
         }
         if !matches!(info.dtype, StDtype::F32 | StDtype::BF16 | StDtype::F16) {
             return Err(refuse(
@@ -662,7 +817,8 @@ pub fn load_hf(
                     "{}: {:?} is not a floating-point tensor this crate decodes",
                     want.name, info.dtype
                 ),
-            ));
+            )
+            .into());
         }
         let bytes = u64::try_from(shape_product(&want.shape)?)
             .ok()
@@ -683,6 +839,16 @@ pub fn load_hf(
     let whole = |name: String, shape: &[usize]| -> Result<Tensor, OjasError> {
         run(&name, shape, &[(0, shape_product(shape)?)])
     };
+    let mut wr = |name: &str, shape: [usize; 2], runs: &[Run], part: Part| {
+        wrapped(&WrappedRead {
+            name,
+            shape,
+            runs,
+            part,
+        })
+    };
+    // The runs of a wrapped weight that is its whole tensor.
+    let all = |shape: [usize; 2]| [(0usize, shape[0] * shape[1])];
     let d = spec.hidden;
     let f = spec.intermediate;
     let embed = whole(names[0].name.clone(), &[spec.vocab, d])?;
@@ -702,20 +868,24 @@ pub fn load_hf(
                     let before: usize = chans[..i].iter().sum();
                     (before * cols, chans[i] * cols)
                 };
+                let (wz_name, out_name) = (
+                    format!("{m}in_proj_z.weight"),
+                    format!("{m}out_proj.weight"),
+                );
                 MixerParams::GatedDeltaNet(GdnParams {
-                    wq: run(&w, &[chans[0], d], &[block(d, 0)])?,
-                    wk: run(&w, &[chans[1], d], &[block(d, 1)])?,
-                    wv: run(&w, &[chans[2], d], &[block(d, 2)])?,
+                    wq: wr(&w, [chans[0], d], &[block(d, 0)], Part::Block(0))?,
+                    wk: wr(&w, [chans[1], d], &[block(d, 1)], Part::Block(1))?,
+                    wv: wr(&w, [chans[2], d], &[block(d, 2)], Part::Block(2))?,
                     conv_q: run(&c, &[chans[0], k], &[block(k, 0)])?,
                     conv_k: run(&c, &[chans[1], k], &[block(k, 1)])?,
                     conv_v: run(&c, &[chans[2], k], &[block(k, 2)])?,
-                    wz: whole(format!("{m}in_proj_z.weight"), &[h * dv, d])?,
+                    wz: wr(&wz_name, [h * dv, d], &all([h * dv, d]), Part::Whole)?,
                     wa: whole(format!("{m}in_proj_a.weight"), &[h, d])?,
                     wb: whole(format!("{m}in_proj_b.weight"), &[h, d])?,
                     a_log: whole(format!("{m}A_log"), &[h])?,
                     dt_bias: whole(format!("{m}dt_bias"), &[h])?,
                     norm: whole(format!("{m}norm.weight"), &[dv])?,
-                    out: whole(format!("{m}out_proj.weight"), &[d, h * dv])?,
+                    out: wr(&out_name, [d, h * dv], &all([d, h * dv]), Part::Whole)?,
                 })
             }
             Qwen35Mixer::Attention => {
@@ -727,24 +897,34 @@ pub fn load_hf(
                 let (query, gate): (Vec<Run>, Vec<Run>) = (0..hq)
                     .map(|h| ((h * 2 * rows, rows), (h * 2 * rows + rows, rows)))
                     .unzip();
+                let (k_name, v_name, o_name) = (
+                    format!("{m}k_proj.weight"),
+                    format!("{m}v_proj.weight"),
+                    format!("{m}o_proj.weight"),
+                );
                 MixerParams::Attention(AttnParams {
-                    wq: run(&q_proj, &[hq * hd, d], &query)?,
-                    wgate: run(&q_proj, &[hq * hd, d], &gate)?,
-                    wk: whole(format!("{m}k_proj.weight"), &[hkv * hd, d])?,
-                    wv: whole(format!("{m}v_proj.weight"), &[hkv * hd, d])?,
+                    wq: wr(&q_proj, [hq * hd, d], &query, Part::Query)?,
+                    wgate: wr(&q_proj, [hq * hd, d], &gate, Part::Gate)?,
+                    wk: wr(&k_name, [hkv * hd, d], &all([hkv * hd, d]), Part::Whole)?,
+                    wv: wr(&v_name, [hkv * hd, d], &all([hkv * hd, d]), Part::Whole)?,
                     q_norm: whole(format!("{m}q_norm.weight"), &[hd])?,
                     k_norm: whole(format!("{m}k_norm.weight"), &[hd])?,
-                    wo: whole(format!("{m}o_proj.weight"), &[d, hq * hd])?,
+                    wo: wr(&o_name, [d, hq * hd], &all([d, hq * hd]), Part::Whole)?,
                 })
             }
         };
+        let (gate_name, up_name, down_name) = (
+            format!("{l}mlp.gate_proj.weight"),
+            format!("{l}mlp.up_proj.weight"),
+            format!("{l}mlp.down_proj.weight"),
+        );
         layers.push(LayerParams {
             input_norm,
             mixer,
             post_norm: whole(format!("{l}post_attention_layernorm.weight"), &[d])?,
-            gate: whole(format!("{l}mlp.gate_proj.weight"), &[f, d])?,
-            up: whole(format!("{l}mlp.up_proj.weight"), &[f, d])?,
-            down: whole(format!("{l}mlp.down_proj.weight"), &[d, f])?,
+            gate: wr(&gate_name, [f, d], &all([f, d]), Part::Whole)?,
+            up: wr(&up_name, [f, d], &all([f, d]), Part::Whole)?,
+            down: wr(&down_name, [d, f], &all([d, f]), Part::Whole)?,
         });
     }
     let norm = whole(format!("{prefix}norm.weight"), &[d])?;
@@ -787,6 +967,236 @@ pub fn load_hf_pinned(
         detail: e.detail().to_string(),
     })?;
     Ok(load_hf(spec, &st, prefix, linears, table, budget)?)
+}
+
+/// A resident packed q8 base: the single-file MLX affine q8 checkpoint at `path`, only if it is
+/// `expected` ([`verify_base_file`]), read with its ten adapted linears left packed and placed on
+/// `backend` ([`ojas_core::AffineQuantized::place`]) and everything else loaded as [`load_hf`]
+/// does, with `linears` and `table` the storage of the dense tensors (`in_proj_a`, `in_proj_b`
+/// and the tied table) and the same `FrozenWeight::Dense` of them every dense arm holds.
+///
+/// Steps, each refusing before the next runs:
+///
+/// 1. the file's name and sha256 ([`AdapterError::BaseFileMismatch`], [`AdapterError::BaseMismatch`],
+///    [`AdapterError::ShardedBase`], ...), as [`load_hf_pinned`];
+/// 2. `expected.quantizer` must say [`QuantStorage::ResidentPacked`]
+///    ([`AdapterError::NotResidentRecord`]), `config` (the base's `config.json`) must name an
+///    affine quantisation ([`AdapterError::ResidentQuantizerDisagrees`] when it names none), q4
+///    is [`AdapterError::UnsupportedResidentBits`] (it has goldens but no resident path), and
+///    the record's `bits` and `group_size` must equal the config's
+///    ([`AdapterError::ResidentQuantizerDisagrees`]);
+/// 3. a quantised tensor outside the ten adapted kinds is
+///    [`AdapterError::UnexpectedQuantised`], named: `in_proj_a`, `in_proj_b`, the table and every
+///    norm, convolution, `A_log` and `dt_bias` stay dense;
+/// 4. the dense tensors are read as [`load_hf`] reads them, then each of the 13 wrapped weights
+///    with [`ojas_io::read_affine_quantized`] at the spec's `[out, in]`, cut into its parts
+///    ([`split_rows_affine`], [`deinterleave_affine`]) and placed. A missing `.scales` or
+///    `.biases`, a wrapped weight stored dense, and a wrong-shape triple are
+///    [`AdapterError::Affine`] with the typed [`ojas_io::AffineLoadError`].
+///
+/// Memory: every packed read is charged to `budget` and a part is placed as soon as it is cut, so
+/// off the CPU the host holds one fused weight at a time and none after it is placed. A budget
+/// that cannot hold the dense tensors is refused before they are read.
+#[allow(clippy::too_many_arguments)]
+pub fn load_hf_q8_pinned<B: Backend + ?Sized>(
+    spec: &Qwen35Spec,
+    path: &Path,
+    expected: &BaseIdentity,
+    config: &JsonValue,
+    prefix: &str,
+    linears: DType,
+    table: DType,
+    budget: &Budget,
+    backend: &B,
+) -> Result<Qwen35Params<Tensor, FrozenWeight<Tensor>>, AdapterError> {
+    let file = verify_base_file(path, expected)?;
+    let st = SafeTensors::from_file(file).map_err(|e| AdapterError::Unreadable {
+        file: expected.file_name.clone(),
+        detail: e.detail().to_string(),
+    })?;
+    check_storages(linears, table)?;
+    let record = match &expected.quantizer {
+        Some(q) if q.storage == QuantStorage::ResidentPacked => q,
+        other => {
+            return Err(AdapterError::NotResidentRecord {
+                found: other.as_ref().map(|q| q.storage),
+            })
+        }
+    };
+    let affine = affine_spec_from_config(config)?.ok_or_else(|| {
+        AdapterError::ResidentQuantizerDisagrees {
+            field: "quantization",
+            record: QuantStorage::RESIDENT_PACKED.to_string(),
+            config: "no quantization block".to_string(),
+        }
+    })?;
+    if affine.bits() != AffineBits::Q8 {
+        return Err(AdapterError::UnsupportedResidentBits {
+            bits: affine.bits().bits(),
+        });
+    }
+    if record.bits != Some(affine.bits().bits()) {
+        return Err(AdapterError::ResidentQuantizerDisagrees {
+            field: "bits",
+            record: format!("{:?}", record.bits),
+            config: affine.bits().bits().to_string(),
+        });
+    }
+    if record.group_size != affine.group_size().to_string() {
+        return Err(AdapterError::ResidentQuantizerDisagrees {
+            field: "group_size",
+            record: record.group_size.clone(),
+            config: affine.group_size().to_string(),
+        });
+    }
+    spec.validate()?;
+    refuse_unexpected_quantised(spec, &st, prefix)?;
+    let mut packed = PackedReader {
+        spec,
+        file: &st,
+        affine,
+        budget,
+        backend,
+        shapes: hf_tensors(spec, prefix)
+            .into_iter()
+            .map(|t| (t.name, t.shape))
+            .collect(),
+        cut: BTreeMap::new(),
+    };
+    load_tower(spec, &st, prefix, linears, table, budget, true, &mut |r| {
+        packed.read(r).map(FrozenWeight::Quant)
+    })
+}
+
+/// D8: a tensor the tower holds dense that the file stores quantised. A `<stem>.scales` or
+/// `<stem>.biases` whose `<stem>.weight` is not one of the ten adapted kinds' tensors, or a dense
+/// tower tensor stored `U32`, is [`AdapterError::UnexpectedQuantised`] naming the tensor. (Real
+/// `mlx_lm` output quantises `embed_tokens` and `in_proj_a`/`in_proj_b`; reading them as dense
+/// would be reading packed words as floats.)
+fn refuse_unexpected_quantised(
+    spec: &Qwen35Spec,
+    file: &SafeTensors<'_>,
+    prefix: &str,
+) -> Result<(), AdapterError> {
+    let table = hf_tensors(spec, prefix);
+    let is_adapted = |stem: &str| {
+        let weight = format!("{stem}.weight");
+        table
+            .iter()
+            .any(|t| t.name == weight && is_wrapped_tensor(&t.name))
+    };
+    for name in file.names() {
+        let stem = name
+            .strip_suffix(".scales")
+            .or_else(|| name.strip_suffix(".biases"));
+        if let Some(stem) = stem.filter(|s| !is_adapted(s)) {
+            return Err(AdapterError::UnexpectedQuantised {
+                name: format!("{stem}.weight"),
+            });
+        }
+    }
+    for t in table.iter().filter(|t| !is_wrapped_tensor(&t.name)) {
+        let stored = file.info(&t.name).map(|info| info.dtype);
+        if stored.is_ok_and(|d| d == StDtype::U32) {
+            return Err(AdapterError::UnexpectedQuantised {
+                name: t.name.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Reads the wrapped weights of a q8 base: each fused tensor once, cut into its parts, every part
+/// placed as soon as it exists. The parts a request did not ask for wait in `cut` for theirs.
+struct PackedReader<'a, 's, B: Backend + ?Sized> {
+    spec: &'a Qwen35Spec,
+    file: &'a SafeTensors<'s>,
+    affine: AffineSpec,
+    budget: &'a Budget,
+    backend: &'a B,
+    /// Stored `[out, in]` of every tensor of the tower, by Hugging Face name.
+    shapes: BTreeMap<String, Vec<usize>>,
+    /// Placed parts not yet asked for, by tensor name and part.
+    cut: BTreeMap<(String, u8), PlacedAffine>,
+}
+
+impl<B: Backend + ?Sized> PackedReader<'_, '_, B> {
+    fn read(&mut self, r: &WrappedRead<'_>) -> Result<PlacedAffine, AdapterError> {
+        const OP: &str = "qwen35::load_hf_q8_pinned";
+        let key = |part: Part| match part {
+            Part::Whole => 0u8,
+            Part::Block(i) => 1 + i as u8,
+            Part::Query => 4,
+            Part::Gate => 5,
+        };
+        if let Some(q) = self.cut.remove(&(r.name.to_string(), key(r.part))) {
+            return Ok(q);
+        }
+        let &[rows, cols] = self
+            .shapes
+            .get(r.name)
+            .map(Vec::as_slice)
+            .ok_or_else(|| refuse(OP, format!("{}: not a tensor of the tower", r.name)))?
+        else {
+            return Err(refuse(OP, format!("{}: stored shape is not [out, in]", r.name)).into());
+        };
+        let stem = r
+            .name
+            .strip_suffix(".weight")
+            .ok_or_else(|| refuse(OP, format!("{}: not a .weight", r.name)))?;
+        let fused = read_affine_quantized(self.file, stem, self.affine, rows, cols, self.budget)?;
+        // The parts of the fused tensor in order, with the key each is asked for by.
+        let parts: Vec<(Part, AffineQuantized)> = match r.part {
+            Part::Whole => vec![(Part::Whole, fused)],
+            Part::Block(_) => {
+                let counts = self.spec.gdn_qkv_channels();
+                split_rows_affine(&fused, &counts, self.budget)?
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, q)| (Part::Block(i), q))
+                    .collect()
+            }
+            Part::Query | Part::Gate => {
+                let (query, gate) = deinterleave_affine(
+                    &fused,
+                    self.spec.q_heads,
+                    self.spec.head_dim,
+                    self.budget,
+                )?;
+                vec![(Part::Query, query), (Part::Gate, gate)]
+            }
+        };
+        let mut wanted = None;
+        for (part, q) in parts {
+            if part == r.part && [q.rows(), q.cols()] != r.shape {
+                return Err(refuse(
+                    OP,
+                    format!(
+                        "{}: part {part:?} is [{}, {}], the tower holds [{}, {}]",
+                        r.name,
+                        q.rows(),
+                        q.cols(),
+                        r.shape[0],
+                        r.shape[1]
+                    ),
+                )
+                .into());
+            }
+            let placed = q.place(self.backend)?;
+            if part == r.part {
+                wanted = Some(placed);
+            } else {
+                self.cut.insert((r.name.to_string(), key(part)), placed);
+            }
+        }
+        wanted.ok_or_else(|| {
+            refuse(
+                OP,
+                format!("{}: part {:?} was not produced", r.name, r.part),
+            )
+            .into()
+        })
+    }
 }
 
 /// One tensor under its Hugging Face name, on the host.
@@ -1045,6 +1455,20 @@ impl LoraTarget {
         let info = file
             .info(&self.name)
             .map_err(|e| refuse(OP, format!("{}: {e}", self.name)))?;
+        // A packed q8 weight is not merged (W3-D4): the shape check below would refuse it for
+        // its `[out, in/4]` words, which names the wrong problem.
+        let scales = format!("{}.scales", self.module());
+        if info.dtype == StDtype::U32 || file.names().any(|n| n == scales) {
+            return Err(OjasError::Unsupported {
+                op: OP,
+                detail: format!(
+                    "{} is a resident packed q8 weight; the merged export is built over the \
+                     fake-quant bf16 file of the same quantisation, dequant(Q(W)) + (alpha/r) B A \
+                     (the qwen35_tiny_fq8 route), not over the packed one",
+                    self.name
+                ),
+            });
+        }
         let got: Vec<usize> = info.shape.iter().map(|&n| n as usize).collect();
         if got != [out, self.in_features] {
             return Err(refuse(

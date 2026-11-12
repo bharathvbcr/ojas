@@ -12,9 +12,9 @@ use ojas_io::{write_safetensors, SafeTensors, StDtype, TensorOut};
 use ojas_model::lora::LoraConfig;
 use ojas_model::qwen35::adapters::{
     lora_a_name, lora_b_name, read_adapter_checkpoint, write_adapter_checkpoint, AdapterCheckpoint,
-    AdapterEntry, AdapterError, BaseIdentity, DataState, Expected, ExpectedEntry, QuantizerRecord,
-    ADAPTERS_FILE, ADAPTER_LAYOUT_VERSION, HOST_ENTRY_NAMES, KEY_BASE, KEY_LAYOUT, KEY_PAYLOAD,
-    KEY_STEP, MOMENTS_FILE,
+    AdapterEntry, AdapterError, BaseIdentity, DataState, Expected, ExpectedEntry, QuantStorage,
+    QuantizerRecord, ADAPTERS_FILE, ADAPTER_LAYOUT_VERSION, HOST_ENTRY_NAMES, KEY_BASE, KEY_LAYOUT,
+    KEY_PAYLOAD, KEY_STEP, MOMENTS_FILE,
 };
 
 const MODULE: &str = "model.language_model.layers.3.self_attn.q_proj";
@@ -98,6 +98,8 @@ fn quant() -> QuantizerRecord {
         format: "mlx-affine".to_string(),
         group_size: "64".to_string(),
         mlx_version: "0.31.0".to_string(),
+        storage: QuantStorage::FakeQuantBf16,
+        bits: None,
     }
 }
 

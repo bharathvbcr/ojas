@@ -63,7 +63,9 @@
 //!   it from `floor(x + 0.5)`, which differs only at `x = 0.49999997` (and its negative): no group
 //!   in 335 million random bf16 weights produced that quotient. Unverified on the GPU.
 
-use crate::{bf16_to_f32, f32_to_bf16, Budget, DType, OjasError, Scratch, Tensor};
+use crate::{
+    bf16_to_f32, f32_to_bf16, Backend, BackendId, Budget, DType, OjasError, Scratch, Tensor,
+};
 
 /// The group size every [`AffineSpec`] carries: the size mlx's goldens cover.
 pub const AFFINE_GROUP_SIZE: usize = 64;
@@ -328,6 +330,160 @@ impl AffineQuantized {
     /// The three tensors, `(packed, scales, biases)`.
     pub fn into_parts(self) -> (Tensor, Tensor, Tensor) {
         (self.packed, self.scales, self.biases)
+    }
+
+    /// Make the weight resident where `backend` computes, once: the owner of the placement a
+    /// resident quantised base needs ([`PlacedAffine`]).
+    ///
+    /// On the CPU backend the host tensors are kept as they are. On any other backend each
+    /// part is uploaded and `self`'s host copies are dropped, so no host copy of a placed
+    /// weight survives. The room for all three parts is checked on `backend`'s budget
+    /// ([`Budget::check_room`]) before the first upload, so a refusal leaves nothing uploaded.
+    /// A part the backend returns that is not resident on it is [`OjasError::Placement`].
+    /// The parts were validated by [`AffineQuantized::from_parts`] on the host, so a placed
+    /// weight has the shapes, dtypes and finite scales and biases the dequantiser relies on.
+    pub fn place<B: Backend + ?Sized>(self, backend: &B) -> Result<PlacedAffine, OjasError> {
+        const OP: &str = "AffineQuantized::place";
+        let id = backend.id();
+        let (packed, scales, biases) = if id == BackendId::Cpu {
+            (self.packed, self.scales, self.biases)
+        } else {
+            let bytes = self.nbytes()?;
+            backend.budget().check_room(bytes as u64)?;
+            let up = |t: &Tensor| -> Result<Tensor, OjasError> {
+                let placed = backend.upload(t)?;
+                if placed.device() != Some(id) {
+                    return Err(OjasError::Placement {
+                        op: OP,
+                        expected: Some(id),
+                        found: placed.device(),
+                    });
+                }
+                Ok(placed)
+            };
+            (up(&self.packed)?, up(&self.scales)?, up(&self.biases)?)
+        };
+        Ok(PlacedAffine {
+            backend: id,
+            spec: self.spec,
+            rows: self.rows,
+            cols: self.cols,
+            packed,
+            scales,
+            biases,
+        })
+    }
+}
+
+/// An affine-quantised `[rows, cols]` weight resident where one backend computes: the packed
+/// codes and the bf16 scales and biases, each a tensor on that backend (host tensors for the
+/// CPU backend).
+///
+/// The only constructor is [`AffineQuantized::place`], so every value was validated on the host
+/// first and uploaded exactly once. [`AffineQuantized::from_parts`] refuses device tensors, so a
+/// placed weight needs a type of its own. Cloning is cheap: the tensors are shared. The weight is
+/// never held dequantised; a `linear_q` over it dequantises to a bf16 `[rows, cols]` transient
+/// each time it runs (`ojas_autograd::Tape::linear_q`).
+#[derive(Clone, Debug)]
+pub struct PlacedAffine {
+    backend: BackendId,
+    spec: AffineSpec,
+    rows: usize,
+    cols: usize,
+    packed: Tensor,
+    scales: Tensor,
+    biases: Tensor,
+}
+
+impl PlacedAffine {
+    /// The backend whose memory holds the parts.
+    pub fn backend(&self) -> BackendId {
+        self.backend
+    }
+
+    pub fn spec(&self) -> AffineSpec {
+        self.spec
+    }
+
+    /// Output features of a linear over this weight.
+    pub fn rows(&self) -> usize {
+        self.rows
+    }
+
+    /// Input features of a linear over this weight.
+    pub fn cols(&self) -> usize {
+        self.cols
+    }
+
+    /// `U32 [rows, cols * bits / 32]`.
+    pub fn packed(&self) -> &Tensor {
+        &self.packed
+    }
+
+    /// `Bf16 [rows, cols / group_size]`.
+    pub fn scales(&self) -> &Tensor {
+        &self.scales
+    }
+
+    /// `Bf16 [rows, cols / group_size]`.
+    pub fn biases(&self) -> &Tensor {
+        &self.biases
+    }
+
+    /// Bytes the three parts hold: what stays resident, never the dequantised weight.
+    pub fn nbytes(&self) -> Result<usize, OjasError> {
+        let mut total = 0usize;
+        for t in [&self.packed, &self.scales, &self.biases] {
+            total = t
+                .num_elements()?
+                .checked_mul(t.dtype().size())
+                .and_then(|bytes| total.checked_add(bytes))
+                .ok_or_else(|| overflow("PlacedAffine::nbytes", "byte count"))?;
+        }
+        Ok(total)
+    }
+
+    /// The bytes of the bf16 `[rows, cols]` transient a dequantisation of this weight makes.
+    pub fn dequantised_bytes(&self) -> Result<usize, OjasError> {
+        self.rows
+            .checked_mul(self.cols)
+            .and_then(|n| n.checked_mul(DType::Bf16.size()))
+            .ok_or_else(|| overflow("PlacedAffine::dequantised_bytes", "rows * cols * 2 bytes"))
+    }
+
+    /// The shape check every `linear_q` runs before any dispatch: `x` (the input's shape) has a
+    /// last extent and it is this weight's input width, `cols`. A refusal is
+    /// [`OjasError::Shape`] naming `op`.
+    pub fn check_input(&self, op: &'static str, x: &[usize]) -> Result<(), OjasError> {
+        match x.last() {
+            Some(&last) if last == self.cols => Ok(()),
+            _ => Err(OjasError::Shape {
+                op,
+                detail: format!(
+                    "x {x:?} does not end in the quantised weight's {} input features \
+                     ([{}, {}])",
+                    self.cols, self.rows, self.cols
+                ),
+            }),
+        }
+    }
+
+    /// Refuse a weight that was placed on another backend than `computes_on`, with
+    /// [`OjasError::Placement`] naming `op`. Nothing is copied implicitly: a host weight handed
+    /// to a GPU tape would otherwise be uploaded again for every tape (1.46 GB per sequence at
+    /// 2B), and a device weight handed to a CPU tape would be read back. A weight from another
+    /// device of the same backend is refused by that backend's own operand check at the first
+    /// dequantisation.
+    pub fn require_on(&self, op: &'static str, computes_on: BackendId) -> Result<(), OjasError> {
+        if self.backend == computes_on {
+            return Ok(());
+        }
+        Err(OjasError::Placement {
+            op,
+            // Host memory is `None` on both sides, as the CPU backend reports it.
+            expected: (computes_on != BackendId::Cpu).then_some(computes_on),
+            found: (self.backend != BackendId::Cpu).then_some(self.backend),
+        })
     }
 }
 

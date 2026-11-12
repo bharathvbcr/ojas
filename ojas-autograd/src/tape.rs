@@ -12,7 +12,7 @@
 use ojas_core::{
     checked_product, inverse_permutation, permute_output_shape, AffineGrad, AttentionOpts, Backend,
     BackendId, CeChunk, CeGrads, Conv2dParams, ConvGrad, ConvTranspose2dParams, GdnInputs,
-    OjasError, Tensor,
+    OjasError, PlacedAffine, Tensor,
 };
 use ojas_cpu::CpuBackend;
 
@@ -43,6 +43,15 @@ enum Rec {
     Linear {
         x: usize,
         w: usize,
+    },
+    /// `x @ dequant(q)^T` over a frozen, resident affine-quantised weight
+    /// ([`Tape::linear_q`]). The record holds `q` (three shared tensors, the
+    /// precedent being `Rope`'s tables); the dequantised `[out, in]` bf16
+    /// weight is a transient of the forward and of the backward, never a
+    /// value on the tape. There is no weight gradient: the weight is frozen.
+    LinearQ {
+        x: usize,
+        q: PlacedAffine,
     },
     Rms {
         x: usize,
@@ -328,6 +337,7 @@ impl Rec {
                 ids,
             },
             Rec::Linear { x, w } => Rec::Linear { x: m(x), w: m(w) },
+            Rec::LinearQ { x, q } => Rec::LinearQ { x: m(x), q },
             Rec::Rms { x, w, eps } => Rec::Rms {
                 x: m(x),
                 w: m(w),
@@ -725,6 +735,31 @@ impl<B: Backend> Tape<B> {
         let x = self.index(x, "Tape::linear")?;
         let w = self.index(w, "Tape::linear")?;
         self.record(Rec::Linear { x, w })
+    }
+
+    /// `x @ W^T` where `W` is the dequantisation of the frozen, resident affine-quantised
+    /// weight `q` (`[out, in]`, never held dequantised). Forward: `dequant_affine_bf16` of the
+    /// three parts to a bf16 `[out, in]` transient, then `linear_forward` over it, the product a
+    /// dense frozen [`Tape::linear`] makes; the transient is freed before this returns. Backward:
+    /// the transient is made again and `linear_backward_input` runs over it, the call a frozen
+    /// dense weight's backward makes, so with a base that is the dequantisation of the same `q`
+    /// the values and input gradients are bit-identical to the dense frozen path. There is no
+    /// weight gradient. A weight is therefore dequantised once per forward and once per backward
+    /// when nothing is checkpointed, and once more per replay of a [`Tape::checkpoint`] segment
+    /// that holds it.
+    ///
+    /// Refused before any dispatch: a `q` placed on another backend than this tape's
+    /// ([`OjasError::Placement`], so a weight is uploaded once at load, never per tape), an `x`
+    /// of rank 0, and an `x` whose last extent is not `q.cols()` ([`OjasError::Shape`]). A weight
+    /// from another device of the same backend is refused by that backend's operand check at the
+    /// first dequantisation. A record of this kind may sit inside a [`Tape::checkpoint`] body: it
+    /// is not a leaf.
+    pub fn linear_q(&mut self, x: Var, q: &PlacedAffine) -> Result<Var, OjasError> {
+        const OP: &str = "Tape::linear_q";
+        let x = self.index(x, OP)?;
+        q.require_on(OP, self.backend.id())?;
+        q.check_input(OP, self.values[x].shape())?;
+        self.record(Rec::LinearQ { x, q: q.clone() })
     }
 
     pub fn rms_norm(&mut self, x: Var, w: Var, eps: f32) -> Result<Var, OjasError> {
@@ -1476,6 +1511,11 @@ impl<B: Backend> Tape<B> {
                 (y, Rec::Embed { table, ids })
             }
             Rec::Linear { x, w } => (be.linear_forward(&v[x], &v[w])?, rec),
+            Rec::LinearQ { x, ref q } => {
+                // The dequantised weight lives for this arm only: it is never pushed.
+                let w = be.dequant_affine_bf16(q.packed(), q.scales(), q.biases(), q.spec())?;
+                (be.linear_forward(&v[x], &w)?, rec)
+            }
             Rec::Rms { x, w, eps } => (be.rms_norm_forward(&v[x], &v[w], eps)?, rec),
             Rec::Rope { x, cos, sin } => {
                 let y = be.rope_half_split_forward(&v[x], &cos, &sin)?;
@@ -1978,6 +2018,17 @@ impl<B: Backend> Tape<B> {
             Rec::Linear { x, w } if self.is_frozen(w) => {
                 let xv = self.values[x].clone();
                 let wv = self.values[w].clone();
+                let gx = self.backend.linear_backward_input(&xv, &wv, grad)?;
+                self.acc(x, gx)
+            }
+            Rec::LinearQ { x, q } => {
+                let xv = self.values[x].clone();
+                let wv = self.backend.dequant_affine_bf16(
+                    q.packed(),
+                    q.scales(),
+                    q.biases(),
+                    q.spec(),
+                )?;
                 let gx = self.backend.linear_backward_input(&xv, &wv, grad)?;
                 self.acc(x, gx)
             }

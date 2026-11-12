@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use ojas_core::{Budget, DType, Tensor};
 use ojas_io::sha256::file_sha256_hex;
 use ojas_io::SafeTensors;
-use ojas_model::qwen35::adapters::{AdapterError, BaseIdentity, QuantizerRecord};
+use ojas_model::qwen35::adapters::{AdapterError, BaseIdentity, QuantStorage, QuantizerRecord};
 use ojas_model::qwen35::{load_hf, load_hf_pinned, Qwen35Params};
 use qwen35_common::*;
 
@@ -155,6 +155,8 @@ fn a_malformed_pin_is_refused_before_the_file_is_read() {
         format: String::new(),
         group_size: "64".to_string(),
         mlx_version: "0.31.2".to_string(),
+        storage: QuantStorage::FakeQuantBf16,
+        bits: None,
     });
     assert!(matches!(
         pinned(&model_path(), &empty_quant, &b).map(|_| ()),
@@ -170,6 +172,8 @@ fn a_quantizer_record_rides_along_as_given() {
         format: "mlx-affine".to_string(),
         group_size: "64".to_string(),
         mlx_version: "0.31.2".to_string(),
+        storage: QuantStorage::FakeQuantBf16,
+        bits: None,
     });
     assert!(pinned(&model_path(), &expected, &budget()).is_ok());
 }

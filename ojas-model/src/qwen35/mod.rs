@@ -10,6 +10,10 @@
 //!   gradients (`params`'s docs say how each fused tensor splits).
 //!   [`load_hf_pinned`] is `load_hf` of a single file that must match an
 //!   adapter checkpoint's [`adapters::BaseIdentity`] (name and sha256).
+//! - [`FrozenWeight`] and [`load_hf_q8_pinned`]: a frozen base whose ten adapted linears stay
+//!   packed (MLX affine q8) and resident, each dequantised per use by [`forward_loss_lora_base`]
+//!   ([`bind_frozen_base`]); the dense entry points are the same code over
+//!   [`Qwen35Params::frozen_view`].
 //! - [`forward_loss`]: the tower to the fused tied-head cross-entropy, each
 //!   layer optionally an activation-checkpointed segment.
 //! - [`forward_hidden`]: the same tower to the final norm, for a host-side
@@ -33,13 +37,15 @@ mod spec;
 pub mod step_provider;
 
 pub use forward::{
-    bind, bind_frozen, forward_hidden, forward_hidden_lora, forward_loss, forward_loss_lora,
-    gather_rows, LoraForward, Qwen35Tables, RightPadded,
+    bind, bind_frozen, bind_frozen_base, forward_hidden, forward_hidden_lora,
+    forward_hidden_lora_base, forward_loss, forward_loss_lora, forward_loss_lora_base, gather_rows,
+    LoraForward, Qwen35Tables, RightPadded,
 };
 pub use params::{
-    deinterleave_affine, fuse_grads, hf_tensors, load_hf, load_hf_pinned, lora_targets,
-    split_rows_affine, AttnParams, GdnParams, HfKind, HfTensor, HfValues, LayerLora, LayerParams,
-    LoraKind, LoraTarget, MixerLora, MixerParams, Qwen35Lora, Qwen35Params, LORA_KINDS,
+    deinterleave_affine, fuse_grads, hf_tensors, load_hf, load_hf_pinned, load_hf_q8_pinned,
+    lora_targets, split_rows_affine, AttnParams, FrozenWeight, GdnParams, HfKind, HfTensor,
+    HfValues, LayerLora, LayerParams, LoraKind, LoraTarget, MixerLora, MixerParams, Qwen35Lora,
+    Qwen35Params, LORA_KINDS,
 };
 pub use spec::{Qwen35Mixer, Qwen35Spec};
 pub use step_provider::{DeviceHooks, LoraInit, OpenConfig, TapeStepProvider};

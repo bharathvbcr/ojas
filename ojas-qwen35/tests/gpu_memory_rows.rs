@@ -45,6 +45,23 @@
 //!   arm is a process: interleave the arms across processes and take the
 //!   minimum `min_step_ms` per arm (ft-2bbced18's A/B).
 //!
+//! - `tape-lora-q8` and `tape-lora-fq8` (card ft-5f743c19, qv2 W3; rows are **bench** rows
+//!   under Lappi's D3 gate: synthetic tokens, random-`A` zero-`B` adapters, no checkpoint, no
+//!   ledger row, no family id): `tape-lora` over a base whose ten adapted linears (13 fields
+//!   x 24 layers, 192 parts at 2B) are quantised **in this process** from the bf16 snapshot
+//!   (`quantize_affine`, MLX-exact q8 group 64, one weight at a time). `tape-lora-q8` keeps them
+//!   packed on the device (`FrozenWeight::Quant`, `bind_frozen_base`, every linear dequantises
+//!   to a transient per use); `tape-lora-fq8` is the like-for-like dense arm, each weight
+//!   `dequantize_affine_bf16` of the same quantisation held dense in bf16, so the two arms'
+//!   losses are bit-equal (`first_step_loss_bits`) when the packed path ran. Both rows add
+//!   `base_form`, `packed_parts`, `packed_bytes`, `largest_dequantised_bytes` and
+//!   `expected_dequants_per_step`; `QWEN35_MEM_DEQUANT_LOOP=on` on `tape-lora-q8` adds the
+//!   share rule's secondary measure, the `expected_dequants_per_step` dequantisations run back to
+//!   back with one sync (`dequant_loop_ms` per repetition, `dequant_loop_min_ms`). Every
+//!   `tape-lora*` row also carries, for the warmup and each timed step, the device `WaitCounts`
+//!   delta (`waits_*`, with `fault_ring_*` alone: the settles the dequantisation fault-word ring
+//!   forced, W2 ruling F2) and the dispatch delta (`dispatches_*`).
+//!
 //! - `tape-provider`: the fine-tune loop's step through `TapeStepProvider`
 //!   (`ojas-model/src/qwen35/step_provider.rs`) on `MetalBackend` under the same
 //!   28 GiB budget: the base loaded pinned to its sha256 (bf16 linears and
@@ -86,18 +103,20 @@ mod common;
 
 use std::time::Instant;
 
-use ojas_core::{AdamWConfig, OjasError};
+use ojas_core::{
+    dequantize_affine_bf16, quantize_affine, AdamWConfig, AffineSpec, OjasError, PlacedAffine,
+};
 use ojas_model::lora::{Entropy, LoraConfig, LoraSite};
 use ojas_model::qwen35::{
-    bind_frozen, forward_loss_lora, lora_targets, LoraForward, MixerLora, MixerParams, Qwen35Lora,
-    Qwen35Params, Qwen35Spec, LORA_KINDS,
+    bind_frozen, bind_frozen_base, forward_loss_lora_base, lora_targets, FrozenWeight, LoraForward,
+    MixerLora, MixerParams, Qwen35Lora, Qwen35Params, Qwen35Spec, LORA_KINDS,
 };
 
 use ojas_autograd::{Tape, Var};
 use ojas_core::{BackendCore, BackendModule, Budget, DType, Tensor};
 use ojas_io::sha256::open_sha256_hex;
 use ojas_io::SafeTensors;
-use ojas_metal::MetalBackend;
+use ojas_metal::{MetalBackend, WaitCounts};
 use ojas_model::preflight::{Calibration, Point};
 use ojas_model::qwen35::adapters::BaseIdentity;
 use ojas_model::qwen35::{
@@ -161,6 +180,24 @@ fn gpu_memory_row() {
             row,
             StepVariant {
                 freeze_checked: true,
+                ..StepVariant::default()
+            },
+        ),
+        "tape-lora-q8" => tape_lora(
+            &snap,
+            &ids,
+            row,
+            StepVariant {
+                form: BaseForm::Q8Resident,
+                ..StepVariant::default()
+            },
+        ),
+        "tape-lora-fq8" => tape_lora(
+            &snap,
+            &ids,
+            row,
+            StepVariant {
+                form: BaseForm::Q8Dense,
                 ..StepVariant::default()
             },
         ),
@@ -340,10 +377,98 @@ fn adapter_tensors(lora: &mut Qwen35Lora<LoraSite<Tensor>>) -> Vec<&mut Tensor> 
     out
 }
 
+/// How a LoRA arm holds the ten adapted linears of its base.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum BaseForm {
+    /// The snapshot's bf16 weights, as loaded.
+    #[default]
+    Bf16,
+    /// Quantised q8 in this process and kept packed on the device (`tape-lora-q8`).
+    Q8Resident,
+    /// The dequantisation of that same quantisation, held dense in bf16 (`tape-lora-fq8`).
+    Q8Dense,
+}
+
+impl BaseForm {
+    fn name(self) -> &'static str {
+        match self {
+            BaseForm::Bf16 => "bf16",
+            BaseForm::Q8Resident => "q8-resident",
+            BaseForm::Q8Dense => "q8-dense",
+        }
+    }
+}
+
+/// The base a LoRA trainer binds: dense as loaded, or in the base-generic form (some weights
+/// possibly packed).
+enum Base {
+    Dense(Qwen35Params<Tensor>),
+    Packed(Qwen35Params<Tensor, FrozenWeight<Tensor>>),
+}
+
+impl Base {
+    /// Every dense tensor of the base (the packed weights are not tensors a freeze scans).
+    fn dense_tensors(&self) -> Vec<&Tensor> {
+        match self {
+            Base::Dense(b) => b.values(),
+            Base::Packed(b) => {
+                let mut out = Vec::new();
+                let _ = b.try_map_base(
+                    &mut |t| {
+                        out.push(t);
+                        Ok::<_, ()>(())
+                    },
+                    &mut |q| Ok(q.clone()),
+                );
+                out
+            }
+        }
+    }
+
+    /// The packed weights, in the tower's order.
+    fn packed(&self) -> Vec<PlacedAffine> {
+        let mut out = Vec::new();
+        if let Base::Packed(b) = self {
+            let _ = b.try_map_base(&mut |_| Ok::<_, ()>(()), &mut |q| {
+                out.push(q.clone());
+                Ok(q.clone())
+            });
+        }
+        out
+    }
+}
+
+/// The device's `WaitCounts` growth between two readings, one `name=count` per category, and the
+/// settles the dequantisation fault-word ring forced on their own.
+fn wait_delta(before: WaitCounts, after: WaitCounts) -> (String, u64) {
+    let d = |a: u64, b: u64| b.saturating_sub(a);
+    let fields = [
+        ("upload", d(before.upload, after.upload)),
+        ("read", d(before.read, after.read)),
+        ("sync", d(before.sync, after.sync)),
+        ("clip_norm", d(before.clip_norm, after.clip_norm)),
+        ("mem_cap", d(before.mem_cap, after.mem_cap)),
+        ("working_set", d(before.working_set, after.working_set)),
+        ("slab_full", d(before.slab_full, after.slab_full)),
+        ("fault_ring", d(before.fault_ring, after.fault_ring)),
+        ("recycle", d(before.recycle, after.recycle)),
+        ("freed", d(before.freed, after.freed)),
+    ];
+    let text = fields
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    (text, d(before.fault_ring, after.fault_ring))
+}
+
 /// What a measured LoRA step does differently from the plain `tape-lora`
 /// arm, one knob per A/B of ft-2bbced18.
 #[derive(Clone, Copy, Debug, Default)]
 struct StepVariant {
+    /// How the base is held: dense bf16 as loaded (every older arm), or quantised in this
+    /// process from the same bf16 weights, packed and resident or dequantised once to dense bf16.
+    form: BaseForm,
     /// The base is declared frozen to the device once, at load
     /// (`MetalBackend::freeze_checked`), so no matmul rescans a weight.
     freeze_checked: bool,
@@ -413,7 +538,7 @@ fn linear_leaf_count(base: &Qwen35Params<Tensor>) -> usize {
 struct LoraTrainer {
     backend: MetalBackend,
     spec: Qwen35Spec,
-    base: Qwen35Params<Tensor>,
+    base: Base,
     tables: Qwen35Tables,
     adapters: Qwen35Lora<LoraSite<Tensor>>,
     moments: Vec<(Tensor, Tensor)>,
@@ -440,7 +565,7 @@ impl LoraTrainer {
     fn new(
         backend: MetalBackend,
         spec: Qwen35Spec,
-        base: Qwen35Params<Tensor>,
+        base: Base,
         tables: Qwen35Tables,
         mut adapters: Qwen35Lora<LoraSite<Tensor>>,
         config: LoraConfig,
@@ -496,12 +621,28 @@ impl LoraTrainer {
         {
             let forward_start = Instant::now();
             let mut tape = Tape::new(self.backend.clone());
-            let bound_base = if self.variant.full_dw {
-                bind_linear_dw(&mut tape, &self.base)
-            } else {
-                bind_frozen(&mut tape, &self.base)
+            let bound_base = match &self.base {
+                Base::Packed(base) => bind_frozen_base(&mut tape, base),
+                Base::Dense(base) if self.variant.full_dw => {
+                    bind_linear_dw(&mut tape, base).map(|p| p.frozen_view())
+                }
+                Base::Dense(base) => bind_frozen(&mut tape, base).map(|p| p.frozen_view()),
             };
             let params = bound_base.map_err(at("bind"))?;
+            // The dense parameters of the bound base: a packed weight is not a leaf.
+            let mut vars: Vec<Var> = Vec::new();
+            params
+                .try_map_base(
+                    &mut |v| {
+                        vars.push(*v);
+                        Ok::<_, ()>(())
+                    },
+                    &mut |q| Ok(q.clone()),
+                )
+                .map_err(|()| StepFault {
+                    phase: "bind",
+                    error: "listing the bound parameters failed".to_string(),
+                })?;
             let bound = self
                 .adapters
                 .try_map(&mut |site| site.try_map(&mut |t| tape.leaf(t.clone())))
@@ -517,7 +658,7 @@ impl LoraTrainer {
                 host_budget,
             )
             .map_err(at("lora forward"))?;
-            let l = forward_loss_lora(
+            let l = forward_loss_lora_base(
                 &mut tape,
                 &self.spec,
                 &params,
@@ -542,10 +683,9 @@ impl LoraTrainer {
             self.backward_ms = ms(backward_start.elapsed());
             // With the dW skip a base parameter holding a gradient is a
             // fault; the full-dW variant gives the linears one on purpose.
-            if let Some(i) = params
-                .values()
+            if let Some(i) = vars
                 .iter()
-                .position(|v| tape.grad(**v).is_some())
+                .position(|v| tape.grad(*v).is_some())
                 .filter(|_| !self.variant.full_dw)
             {
                 return Err(StepFault {
@@ -558,12 +698,16 @@ impl LoraTrainer {
             // silent fall back to the skipped backward would be the plain
             // `tape-lora` row under another name.
             if self.variant.full_dw {
-                let held = params
-                    .values()
-                    .iter()
-                    .filter(|v| tape.grad(***v).is_some())
-                    .count();
-                let want = linear_leaf_count(&self.base);
+                let held = vars.iter().filter(|v| tape.grad(**v).is_some()).count();
+                let want = match &self.base {
+                    Base::Dense(base) => linear_leaf_count(base),
+                    Base::Packed(_) => {
+                        return Err(StepFault {
+                            phase: "full dW",
+                            error: "a packed base has no dense linear leaves".to_string(),
+                        })
+                    }
+                };
                 if held != want {
                     return Err(StepFault {
                         phase: "full dW",
@@ -641,6 +785,18 @@ fn tape_lora(snap: &Snapshot, ids: &[u32], mut r: Row, variant: StepVariant) -> 
         },
     );
     r.text("phases", if phases { "on" } else { "off" });
+    r.text("base_form", variant.form.name());
+    if variant.form != BaseForm::Bf16 {
+        r.text(
+            "label",
+            "bench: synthetic tokens, random-A zero-B adapters, no checkpoint",
+        );
+    }
+    let dequant_loop = match std::env::var("QWEN35_MEM_DEQUANT_LOOP").as_deref() {
+        Ok("on") => true,
+        Ok("off") | Err(std::env::VarError::NotPresent) => false,
+        other => panic!("QWEN35_MEM_DEQUANT_LOOP is on or off, got {other:?}"),
+    };
     let spec = cfg.tape_spec();
     let n = ids.len() - 1;
     let checkpoint = match std::env::var("QWEN35_MEM_CKPT").as_deref() {
@@ -688,9 +844,31 @@ fn tape_lora(snap: &Snapshot, ids: &[u32], mut r: Row, variant: StepVariant) -> 
                 Err(e) => refused(r, "lora init", e),
             };
         r.num("adapter_sites", targets.len() as u64);
-        let base = match host.try_map(&mut |t| m.upload(t)) {
-            Ok(d) => d,
-            Err(e) => refused(r, "upload", e),
+        let base = match variant.form {
+            BaseForm::Bf16 => match host.try_map(&mut |t| m.upload(t)) {
+                Ok(d) => Base::Dense(d),
+                Err(e) => refused(r, "upload", e),
+            },
+            BaseForm::Q8Resident | BaseForm::Q8Dense => {
+                // Each wrapped weight is quantised from its bf16 source (MLX-exact q8, group
+                // 64) and then placed packed or dequantised once to dense bf16, one at a time:
+                // the host copy of the quantisation is gone when the next weight starts, and the
+                // bf16 snapshot copy is dropped with `host` at the end of this block.
+                let resident = variant.form == BaseForm::Q8Resident;
+                let mapped = host.try_map_frozen(&mut |t| m.upload(t), &mut |t| {
+                    let q = quantize_affine(t, AffineSpec::q8(), &host_budget)?;
+                    if resident {
+                        Ok(FrozenWeight::Quant(q.place(&m)?))
+                    } else {
+                        let dense = dequantize_affine_bf16(&q, &host_budget)?;
+                        Ok(FrozenWeight::Dense(m.upload(&dense)?))
+                    }
+                });
+                match mapped {
+                    Ok(b) => Base::Packed(b),
+                    Err(e) => refused(r, "quantise", e),
+                }
+            }
         };
         let adapters = match host_adapters.try_map(&mut |s| s.try_map(&mut |t| m.upload(t))) {
             Ok(d) => d,
@@ -705,7 +883,7 @@ fn tape_lora(snap: &Snapshot, ids: &[u32], mut r: Row, variant: StepVariant) -> 
         // The one scan of the frozen base, at load. A non-finite weight is
         // reported by the sync, as a refusal row.
         let t0 = Instant::now();
-        for t in base.values() {
+        for t in base.dense_tensors() {
             if let Err(e) = m.freeze_checked(t) {
                 refused(r, "freeze_checked", e);
             }
@@ -723,6 +901,44 @@ fn tape_lora(snap: &Snapshot, ids: &[u32], mut r: Row, variant: StepVariant) -> 
     r.num("resident_footprint_bytes", fp.now);
     r.num("resident_footprint_max_bytes", fp.lifetime_max);
     r.phase("resident");
+    let parts = base.packed();
+    if variant.form != BaseForm::Bf16 {
+        let bytes = |f: fn(&PlacedAffine) -> Result<usize, OjasError>| -> u64 {
+            parts.iter().map(|q| f(q).unwrap() as u64).sum()
+        };
+        // The packed arm holds the parts; the dense arm quantised the same weights and holds none.
+        r.num("packed_parts", parts.len() as u64);
+        r.num("packed_bytes", bytes(PlacedAffine::nbytes));
+        // What the same weights hold dense in bf16 (the quantity the packed form saves from).
+        r.num(
+            "wrapped_bf16_bytes",
+            parts
+                .iter()
+                .map(|q| q.dequantised_bytes().unwrap() as u64)
+                .sum(),
+        );
+        r.num(
+            "largest_dequantised_bytes",
+            parts
+                .iter()
+                .map(|q| q.dequantised_bytes().unwrap() as u64)
+                .max()
+                .unwrap_or(0),
+        );
+        let uses = if checkpoint == ActivationCheckpoint::Blocks {
+            3
+        } else {
+            2
+        };
+        r.num(
+            "expected_dequants_per_step",
+            if variant.form == BaseForm::Q8Resident {
+                (parts.len() * uses) as u64
+            } else {
+                0
+            },
+        );
+    }
     let tables = Qwen35Tables::new(&spec, n, &host_budget)
         .unwrap()
         .upload(&m)
@@ -755,11 +971,22 @@ fn tape_lora(snap: &Snapshot, ids: &[u32], mut r: Row, variant: StepVariant) -> 
     };
     // The warmup step is the first step: its wall includes shader compilation
     // and first-use allocation, which is what a run's first step costs.
+    let (waits0, dispatches0) = (m.wait_counts(), m.dispatches());
     let (first_loss, first_ms) = step(&mut trainer, &r);
     let first = m.memory().unwrap();
+    // The waits the warmup step forced, by trigger, and the settles the dequantisation fault-word
+    // ring forced on their own (W2 ruling F2).
+    let (first_waits, first_ring) = wait_delta(waits0, m.wait_counts());
+    r.text("waits_first", &first_waits);
+    r.num("fault_ring_first", first_ring);
+    r.num("dispatches_first", m.dispatches() - dispatches0);
     r.real("first_step_ms", first_ms);
     r.num("first_step_peak_bytes", first.peak_allocated);
     r.text("first_step_loss", &format!("{first_loss:.6}"));
+    r.text(
+        "first_step_loss_bits",
+        &format!("{:08x}", first_loss.to_bits()),
+    );
     let fp = footprint_or_refuse(&r);
     r.num("first_step_footprint_max_bytes", fp.lifetime_max);
     r.phase("first step");
@@ -767,8 +994,19 @@ fn tape_lora(snap: &Snapshot, ids: &[u32], mut r: Row, variant: StepVariant) -> 
     let mut forwards = Vec::with_capacity(TIMED_STEPS);
     let mut backwards = Vec::with_capacity(TIMED_STEPS);
     let mut last_loss = first_loss;
-    for _ in 0..TIMED_STEPS {
+    for i in 0..TIMED_STEPS {
+        let (before, dispatches) = (m.wait_counts(), m.dispatches());
         let (loss, wall) = step(&mut trainer, &r);
+        let (waits, ring) = wait_delta(before, m.wait_counts());
+        r.text(["waits_step1", "waits_step2", "waits_step3"][i], &waits);
+        r.num(
+            ["fault_ring_step1", "fault_ring_step2", "fault_ring_step3"][i],
+            ring,
+        );
+        r.num(
+            ["dispatches_step1", "dispatches_step2", "dispatches_step3"][i],
+            m.dispatches() - dispatches,
+        );
         walls.push(wall);
         forwards.push(trainer.forward_ms);
         backwards.push(trainer.backward_ms);
@@ -796,6 +1034,47 @@ fn tape_lora(snap: &Snapshot, ids: &[u32], mut r: Row, variant: StepVariant) -> 
     let fp = footprint_or_refuse(&r);
     r.num("end_footprint_bytes", fp.now);
     r.num("footprint_max_bytes", fp.lifetime_max);
+    if dequant_loop {
+        // The share rule's secondary measure: one step's dequantisations (every packed part,
+        // `uses` times) run back to back with one sync, five repetitions.
+        if variant.form != BaseForm::Q8Resident {
+            refused(
+                r.clone(),
+                "dequant loop",
+                "only the tape-lora-q8 arm has packed parts",
+            );
+        }
+        let uses = if checkpoint == ActivationCheckpoint::Blocks {
+            3
+        } else {
+            2
+        };
+        let mut walls = Vec::new();
+        for _ in 0..5 {
+            if let Err(e) = m.sync() {
+                refused(r.clone(), "dequant loop sync", e);
+            }
+            let t0 = Instant::now();
+            for _ in 0..uses {
+                for q in &parts {
+                    if let Err(e) =
+                        m.dequant_affine_bf16(q.packed(), q.scales(), q.biases(), q.spec())
+                    {
+                        refused(r.clone(), "dequant loop", e);
+                    }
+                }
+            }
+            if let Err(e) = m.sync() {
+                refused(r.clone(), "dequant loop sync", e);
+            }
+            walls.push(ms(t0.elapsed()));
+        }
+        r.reals("dequant_loop_ms", &walls);
+        r.real(
+            "dequant_loop_min_ms",
+            walls.iter().copied().fold(f64::INFINITY, f64::min),
+        );
+    }
     drop(trainer);
     r
 }
@@ -1147,7 +1426,7 @@ fn gpu_lora_step_trains_only_the_adapters() {
     let config = LoraConfig::new(LORA_RANK.min(4), LORA_ALPHA.min(4.0), 0.0).unwrap();
     let host_adapters =
         Qwen35Lora::init(&spec, &targets, &config, LORA_SEED, &host_budget).unwrap();
-    let base = host.try_map(&mut |t| m.upload(t)).unwrap();
+    let base = Base::Dense(host.try_map(&mut |t| m.upload(t)).unwrap());
     let adapters = host_adapters
         .try_map(&mut |s| s.try_map(&mut |t| m.upload(t)))
         .unwrap();
@@ -1178,7 +1457,12 @@ fn gpu_lora_step_trains_only_the_adapters() {
         m.download(&wide).unwrap().to_f32_vec().unwrap()
     };
     let snapshot_base = |trainer: &LoraTrainer| -> Vec<Vec<f32>> {
-        trainer.base.values().into_iter().map(&read).collect()
+        trainer
+            .base
+            .dense_tensors()
+            .into_iter()
+            .map(&read)
+            .collect()
     };
     let snapshot_adapters = |trainer: &mut LoraTrainer| -> Vec<Vec<f32>> {
         adapter_tensors(&mut trainer.adapters)

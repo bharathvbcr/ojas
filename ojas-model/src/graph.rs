@@ -7,7 +7,7 @@
 //! op, so under `Numerics::Exact` their forward values are equal bit for bit.
 
 use ojas_autograd::{Tape, Var};
-use ojas_core::{Backend, BackendId, CeChunk, CeGrads, GdnInputs, OjasError, Tensor};
+use ojas_core::{Backend, BackendId, CeChunk, CeGrads, GdnInputs, OjasError, PlacedAffine, Tensor};
 
 use crate::spec::ModelSpec;
 
@@ -44,6 +44,13 @@ pub trait Graph {
 
     fn embedding(&mut self, table: &Self::V, ids: &Tensor) -> Result<Self::V, OjasError>;
     fn linear(&mut self, x: &Self::V, w: &Self::V) -> Result<Self::V, OjasError>;
+    /// `x @ W^T` over the frozen, resident affine-quantised weight `q` (never held dense): the
+    /// dequantisation to a bf16 `[out, in]` transient and the same `linear_forward` a frozen
+    /// dense [`Graph::linear`] runs. On a tape it is [`Tape::linear_q`], which dequantises again
+    /// in the backward. `q` must be placed on this executor's backend
+    /// ([`OjasError::Placement`] otherwise) and `x` must end in `q.cols()`
+    /// ([`OjasError::Shape`]).
+    fn linear_q(&mut self, x: &Self::V, q: &PlacedAffine) -> Result<Self::V, OjasError>;
     fn rms_norm(&mut self, x: &Self::V, w: &Self::V, eps: f32) -> Result<Self::V, OjasError>;
     fn rope(&mut self, x: &Self::V, cos: &Tensor, sin: &Tensor) -> Result<Self::V, OjasError>;
     fn permute(&mut self, x: &Self::V, dims: &[usize]) -> Result<Self::V, OjasError>;
@@ -174,6 +181,10 @@ impl<B: Backend> Graph for Tape<B> {
 
     fn linear(&mut self, x: &Var, w: &Var) -> Result<Var, OjasError> {
         Tape::linear(self, *x, *w)
+    }
+
+    fn linear_q(&mut self, x: &Var, q: &PlacedAffine) -> Result<Var, OjasError> {
+        Tape::linear_q(self, *x, q)
     }
 
     fn rms_norm(&mut self, x: &Var, w: &Var, eps: f32) -> Result<Var, OjasError> {
@@ -344,6 +355,17 @@ impl<B: Backend> Graph for Eval<B> {
 
     fn linear(&mut self, x: &Tensor, w: &Tensor) -> Result<Tensor, OjasError> {
         self.backend.linear_forward(x, w)
+    }
+
+    fn linear_q(&mut self, x: &Tensor, q: &PlacedAffine) -> Result<Tensor, OjasError> {
+        const OP: &str = "Graph::linear_q";
+        q.require_on(OP, self.backend.id())?;
+        q.check_input(OP, x.shape())?;
+        // The transient dies at the end of this call, as on a tape.
+        let w = self
+            .backend
+            .dequant_affine_bf16(q.packed(), q.scales(), q.biases(), q.spec())?;
+        self.backend.linear_forward(x, &w)
     }
 
     fn rms_norm(&mut self, x: &Tensor, w: &Tensor, eps: f32) -> Result<Tensor, OjasError> {

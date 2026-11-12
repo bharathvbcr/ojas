@@ -66,7 +66,7 @@ pub use limits::{
 };
 pub use quant::{
     dequantize_affine_bf16, dequantize_affine_bf16_tensors, quantize_affine, AffineBits,
-    AffineGeometry, AffineQuantized, AffineSpec, AFFINE_GROUP_SIZE,
+    AffineGeometry, AffineQuantized, AffineSpec, PlacedAffine, AFFINE_GROUP_SIZE,
 };
 pub use rope::{mrope_tables, mrope_text_tables, MropeSection};
 pub use shapes::{
