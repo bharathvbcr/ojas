@@ -1,9 +1,16 @@
 //! Whole-file and whole-directory replacement.
 //!
 //! **Files** ([`replace_with`]). The bytes go to a sibling temp file, which is
-//! synced and then renamed over the target. A reader that already holds the
-//! target keeps the old bytes, and a failed or interrupted write never leaves
-//! a partial target behind. Replacing a symlink replaces the link itself.
+//! synced and then renamed over the target, and the parent directory is synced.
+//! A reader that already holds the target keeps the old bytes, and a failed or
+//! interrupted write never leaves a partial target behind. Replacing a symlink
+//! replaces the link itself.
+//!
+//! **Platforms.** On unix a replace is: file fsync (`F_FULLFSYNC` on Apple),
+//! rename, parent-directory fsync. On every other platform there is no
+//! directory fsync here, so a replace is refused before anything is written
+//! (no sweep, no temp file), with [`IoError::io_kind`] `Some(Unsupported)`,
+//! rather than reporting a save it cannot make durable.
 //!
 //! A crashed writer leaves `.{name}.{pid}.{seq}.tmp` beside the target. The
 //! next replace of that same name removes only those leftovers. Other names,
@@ -28,6 +35,7 @@ where
     F: FnOnce(&mut File) -> Result<(), IoError>,
 {
     let what = path.display();
+    refuse_off_unix(path, "replace_with")?;
     let (dir, name) = split(path)?;
     sweep_orphan_temps(dir, name)?;
     let tmp = dir.join(temp_name(name, SEQ.fetch_add(1, Ordering::Relaxed), "tmp"));
@@ -178,13 +186,46 @@ fn is_digits(bytes: &[u8]) -> bool {
     !bytes.is_empty() && bytes.iter().all(|b| b.is_ascii_digit())
 }
 
+/// fsync `dir`, so a rename or removal inside it survives a crash. Unix only:
+/// elsewhere it refuses with [`std::io::ErrorKind::Unsupported`], because
+/// claiming a flush that did not happen would let a caller report a durable
+/// write it cannot vouch for. No Windows flush is attempted.
 #[cfg(unix)]
 fn sync_dir(dir: &Path) -> std::io::Result<()> {
     fs::File::open(dir)?.sync_all()
 }
 
 #[cfg(not(unix))]
-fn sync_dir(_dir: &Path) -> std::io::Result<()> {
+fn sync_dir(dir: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        format!(
+            "{}: directory fsync is not implemented on this platform",
+            dir.display()
+        ),
+    ))
+}
+
+/// Off unix, refuse `op` on `target` before anything is written or touched,
+/// with the same typed error [`sync_dir`] gives ([`IoError::io_kind`] is
+/// `Some(Unsupported)`). A no-op on unix. `sync_dir` stays the one owner of
+/// the refusal.
+fn refuse_off_unix(target: &Path, op: &str) -> Result<(), IoError> {
+    if cfg!(not(unix)) {
+        let dir = match target.parent() {
+            Some(p) if !p.as_os_str().is_empty() => p,
+            _ => Path::new("."),
+        };
+        if let Err(e) = sync_dir(dir) {
+            return Err(IoError::io(
+                format!(
+                    "{}: {op} needs unix rename and directory fsync, refused before anything was written: {e}",
+                    target.display()
+                ),
+                e,
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -240,8 +281,9 @@ const STAGE_ATTEMPTS: usize = 8;
 /// symbolic link or anything but a regular file or directory is refused at
 /// sync time. On any error, or a panic in `fill`, the stage is removed and the
 /// old target is left as it was. Errors after the second rename say that the
-/// target was replaced. Other platforms get an error: the swap relies on unix
-/// rename and directory fsync.
+/// target was replaced. Other platforms are refused before anything is written,
+/// with [`IoError::io_kind`] `Some(Unsupported)`: the swap relies on unix rename
+/// and directory fsync.
 pub fn replace_dir_with<F>(target: &Path, fill: F) -> Result<(), IoError>
 where
     F: FnOnce(&Path) -> Result<(), IoError>,
@@ -274,12 +316,7 @@ where
     A: FnMut(&Path) -> Result<(), IoError>,
     F: FnOnce(&Path) -> Result<(), IoError>,
 {
-    if cfg!(not(unix)) {
-        return Err(IoError::new(format!(
-            "{}: replace_dir_with needs unix rename and directory fsync",
-            target.display()
-        )));
-    }
+    refuse_off_unix(target, "replace_dir_with")?;
     let what = target.display();
     let mut site = Site::lock(target)?;
     site.recover()?;
@@ -327,12 +364,7 @@ where
 /// backup with no target is refused, since nothing says which is newer. Takes
 /// the same lock as [`replace_dir_with`] and refuses the same symlinks.
 pub fn recover_replaced_dir(target: &Path) -> Result<bool, IoError> {
-    if cfg!(not(unix)) {
-        return Err(IoError::new(format!(
-            "{}: recover_replaced_dir needs unix",
-            target.display()
-        )));
-    }
+    refuse_off_unix(target, "recover_replaced_dir")?;
     let mut site = Site::lock(target)?;
     let restored = site.recover()?;
     site.sweep_stages()?;
@@ -700,6 +732,44 @@ mod tests {
         }
         let err = create_stage(&dir.0, OsStr::new("ckpt"), &full).unwrap_err();
         assert!(err.detail().contains("already exist"), "{err}");
+    }
+
+    /// Off unix every replace is refused before anything is written, with the
+    /// typed `Unsupported` kind. Compiled only off unix, so it is
+    /// compile-checked (`--target x86_64-pc-windows-msvc --tests`) but its
+    /// runtime is unverified: no Windows host ran it. Against the former
+    /// `Ok(())` stub, `replace_with` returned `Ok` and created the target.
+    #[cfg(not(unix))]
+    mod off_unix {
+        use super::*;
+        use std::io::ErrorKind;
+
+        #[test]
+        fn replacing_a_file_is_refused_and_writes_nothing() {
+            let dir = tmp_dir("off-unix-file");
+            let target = dir.0.join("out.bin");
+            let err = replace_with(&target, |f| {
+                use std::io::Write;
+                f.write_all(b"x").map_err(|e| IoError::io(e.to_string(), e))
+            })
+            .unwrap_err();
+            assert_eq!(err.io_kind(), Some(ErrorKind::Unsupported), "{err}");
+            assert!(!target.exists());
+            assert!(fs::read_dir(&dir.0).unwrap().next().is_none());
+        }
+
+        #[test]
+        fn replacing_or_recovering_a_directory_is_refused() {
+            let dir = tmp_dir("off-unix-dir");
+            let target = dir.0.join("ckpt");
+            let err = replace_dir_with(&target, |_| Ok(())).unwrap_err();
+            assert_eq!(err.io_kind(), Some(ErrorKind::Unsupported), "{err}");
+            assert!(err.detail().contains("ckpt"), "{err}");
+            let err = recover_replaced_dir(&target).unwrap_err();
+            assert_eq!(err.io_kind(), Some(ErrorKind::Unsupported), "{err}");
+            assert!(!target.exists());
+            assert!(fs::read_dir(&dir.0).unwrap().next().is_none());
+        }
     }
 
     #[test]
