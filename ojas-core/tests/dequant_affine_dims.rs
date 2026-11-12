@@ -304,6 +304,7 @@ fn finite_inputs_whose_output_overflows_are_non_finite_and_leave_nothing_charged
     let zero = Tensor::zeros(&[1, 16], DType::U32, &b).unwrap();
     let plain = Tensor::from_bf16_bits(&[0x3F80], &[1, 1], &b).unwrap();
     let none = Tensor::zeros(&[1, 1], DType::Bf16, &b).unwrap();
+    let live = b.live_bytes().unwrap();
     for bad in [0x7FC0u16, 0x7F80, 0xFF80] {
         let bad_t = Tensor::from_bf16_bits(&[bad], &[1, 1], &b).unwrap();
         for (s, z) in [(&bad_t, &none), (&plain, &bad_t)] {

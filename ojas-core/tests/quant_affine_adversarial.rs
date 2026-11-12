@@ -650,6 +650,7 @@ fn quantize_affine_and_from_parts_refuse_non_contiguous_and_device_parts() {
         "a refusal read the device back"
     );
     drop(device);
+    drop(strided);
     drop(w);
     assert_eq!(b.live_bytes().unwrap(), live);
 }

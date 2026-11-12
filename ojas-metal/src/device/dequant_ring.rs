@@ -102,7 +102,7 @@ fn free(w: &Worker) -> usize {
 #[track_caller]
 fn assert_ring_whole(w: &Worker, tag: &str) {
     let book = w.book.borrow();
-    let mut seen = vec![0u8; DEQUANT_FAULT_WORDS];
+    let mut seen = [0u8; DEQUANT_FAULT_WORDS];
     for &i in &book.free_words {
         seen[i] += 1;
         let word = w.fault_words[i].try_contents_u32().unwrap();
@@ -312,7 +312,8 @@ fn a_full_slab_settle_with_a_word_in_hand_keeps_the_ring_whole_and_the_new_entry
     let (ok, bad) = (good(&mut w), overflowing(&mut w));
     sync(&mut w).unwrap();
     dequant(&mut w, &ok).unwrap();
-    assert!(matches!(w.command(Cmd::FillSlab), Ok(Reply::Done)));
+    // Every status slot taken, as `Cmd::FillSlab` does (served outside `command`).
+    w.book.borrow_mut().used = SLAB_SLOTS;
     dequant(&mut w, &bad).unwrap();
     assert_eq!(
         held(&w).len(),
