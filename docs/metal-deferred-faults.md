@@ -86,16 +86,28 @@ wgpu writes NaN into `acc` and relies on "invalid" (`ojas-wgpu/src/backend.rs:21
 
 ### 3.1 `freeze_checked`: frozen parameters are scanned once
 
-`MetalBackend::freeze_checked` (`ojas-metal/src/backend.rs:245`, `Cmd::Freeze` at `device.rs:1486`, `Worker::freeze` at `:1180`) scans an F32 or Bf16 tensor once and marks its device buffer in `Book::clean`, keyed by buffer id with the checked byte windows. Ops skip their per-use scan of a marked window (`known_clean` `:1133`, `check_operand` `:1147`): `linear_forward`, `linear_backward_input`, `linear_backward`, `embedding_forward` and the `linear_cross_entropy_mean` weight. A bf16 widening of a marked window is marked too, as a derived copy.
+`MetalBackend::freeze_checked` (`ojas-metal/src/backend.rs:501`, `Cmd::Freeze` at `device.rs:2128`, `Worker::freeze` at `:1677`) scans an F32 or Bf16 tensor once and marks its device buffer in `Book::clean`, keyed by buffer id with the checked byte windows. Ops skip their per-use scan of a marked window (`known_clean` `:1604`, `check_operand` `:1618`): `linear_forward`, `linear_backward_input`, `linear_backward`, `embedding_forward` and the `linear_cross_entropy_mean` weight. A bf16 widening of a marked window is marked too, as a derived copy.
 
-- **Writers refuse.** `Worker::writable` (`:1164`) makes `adamw_step` (p, m, v), `muon_ns5_step` (p, m), in-place `accumulate_grad`, `scale_grad` and `kv_cache_write` return a typed `Backend` error before recording anything.
-- **A faulting freeze scan** is deferred like any other: `NonFinite { "freeze_checked" }` at the next sync. `scan` then removes the mark and every widened copy derived from it (`device.rs:800`), so later ops scan the buffer again.
-- **`free()` drops the mark** (`device.rs:688`); ids are never reused.
+- **Writers refuse.** `Worker::writable` (`:1641`) makes `adamw_step` (p, m, v), `muon_ns5_step` (p, m), in-place `accumulate_grad`, `scale_grad` and `kv_cache_write` return a typed `Backend` error before recording anything.
+- **A faulting freeze scan** is deferred like any other: `NonFinite { "freeze_checked" }` at the next sync. `scan` then removes the mark and every widened copy derived from it (`device.rs:1209`), so later ops scan the buffer again.
+- **`free()` drops the mark** (`device.rs:1055`); ids are never reused.
 - **Opt-in and Metal-only for now.** A generic `Backend` hook belongs to the phase-B StepProvider (ft-b5e64557); wrapper forwarding of new trait methods is the open bug class ft-fe7dcee6.
 
 ### 3.2 The freeze hook of `TapeStepProvider`
 
 The phase-B provider (`ojas-model/src/qwen35/step_provider.rs`) takes the generic seam as `DeviceHooks` closures, not a `Backend` method, so a wrapper backend cannot drop it (ft-fe7dcee6). A Metal caller passes `freeze: |m, t| m.freeze_checked(t)` and `rebind: |m, b| m.with_budget(b)`. `open_lora` applies `freeze` to every frozen base tensor after the pinned load and then calls `Backend::sync`, so a faulting freeze scan (`NonFinite { "freeze_checked" }`, §3.1) is the refusal `open_lora` returns (`StepError::Backend`), never a later step's. A backend with no `freeze` hook (the CPU) skips both. `ojas-qwen35/tests/gpu_tape_provider.rs` runs the provider with both hooks on Metal.
+
+### 3.3 `dequant_affine_bf16`: a fault word of its own
+
+The one op whose device fault cannot go to a slab slot. tessl's kernel takes its fault flag as a whole buffer bound at offset 0 (`tessl/src/dequant.rs`, `dequant_affine_bf16`), so a slot at an offset into the slab cannot be passed. The flag is one sticky `u32` the kernel sets to 1 when an output element is an infinity or a NaN; it never clears it. So the worker keeps a **ring** of `DEQUANT_FAULT_WORDS` = 64 one-word internal buffers (`ojas-metal/src/device.rs:124`, uncharged like the slab), against `SLAB_SLOTS` 4,096.
+
+- **A dequant takes one status entry and one ring word.** The entry is an ordinary pending entry (`Worker::status_entry`, `device.rs:1534`) with its op name `dequant_affine_bf16` and, in `Entry::fault_word` (`:545`), the ring index. Its two status-slot words stay zero: nothing writes them. The word is taken from `Book::free_words` (`:568`).
+- **Order matters** (`Worker::dequant_affine`, `device.rs:5049`): allocate the output, then take the ring word, then the status entry, then the one dispatch. A full ring settles with `Scan::All`, which drains every pending entry, the current command's included; so the word is taken before this command has an entry, or the entry would be scanned and dropped before its kernel was encoded and its fault lost. Test `the_dequant_that_forces_the_settle_can_itself_fault` pins this.
+- **The scan reads the ring only for entries it drains that carry a word** (`device.rs:1162`). With no dequant in flight no ring buffer is mapped and `scan` does no extra work. A mapping is an exclusive host lease on the runtime, so each word is mapped alone and before the slab; a mapping that fails leaves the pending list whole. A non-zero word is a fault in recording order, exactly like a non-zero `ST_IN` or `ST_OUT`: the first faulting entry names the fault, `NonFinite { op: "dequant_affine_bf16" }` at the next sync point, once. The drained words are then zeroed and freed. Words of kept entries (`Scan::BeforeCurrent`) stay reserved, so a word is never reused while its dequant is pending.
+- **Ring exhaustion is a named wait**: the 65th pending dequant makes one waited commit counted as `Wait::FaultRing` (`link.rs:58`, `WaitCounts::fault_ring`, `:162`). A step that dequantises many matrices between syncs pays one such wait per 64; the loader that runs the 2B step (qv2 W3) must count them. The ring retires when tessl takes an offset-taking fault binding.
+- **A word returns to the ring on every path that ends the dequant**: a scan (read, zero, free); a failed ring settle (no word was taken); a failed status entry (the word is pushed back in `dequant_affine`); and a failure after the entry was pushed, where `Worker::command` drops the unsealed entries of the failed command and returns their words (`device.rs:1007-1017`). That last return is sound if a failed dequant never encoded its kernel, which is inferred from `tessl/src/dequant.rs:200-222` (it validates, looks up the pipeline, then encodes one dispatch as its last step); the word is then still zero. Tests: `device/dequant_ring.rs`, one per path, each checking that every word is held exactly once and every free word reads zero.
+- **Operands.** The three parts are whole buffers at byte offset 0. The host method refuses a window at a non-zero byte offset as `Unsupported` (`ojas-metal/src/backend.rs:4496`) rather than copy it through `gpu_copy`, whose float kernels would carry `U32` code words through an f32 path that a flushing GPU can zero (inferred, not measured). An uploaded tensor has offset 0.
+- **What stays on the host.** Shape, dtype, placement, contiguity and the budget charge are refused immediately and in the shape-first order; the output bytes are reserved before the command (`MetalBackend::dequant_affine_bf16`, `ojas-metal/src/backend.rs:4480`). A non-finite result, including a NaN or infinite scale or bias and a finite pair whose affine map overflows bf16, is the deferred fault above.
 
 ## 4. Batching mechanics
 
@@ -157,6 +169,7 @@ Today each op allocates a 32-byte status buffer and dispatches `ojas_status_init
 
 - **`Cmd`.** Every op variant is unchanged.
   - New: `Cmd::Sync` (wait, scan, report).
+  - New with W2: `Cmd::DequantAffine` (`link.rs:1446`), `Wait::FaultRing` and `WaitCounts::fault_ring` (§3.3).
   - `Cmd::Read` waits and scans but does not report. `MetalBackend::download` sends `Cmd::Read`, then `Cmd::Sync` semantics, i.e. a report with no second wait.
   - `Cmd::ClipNorm` reports before reading the norm.
 - **`Link`.** Unchanged. `Link::call` still waits for the device thread to *encode* the op, so encode-time errors (capacity, unknown buffer, dispatch geometry) stay immediate and outputs get ids. Moving to fire-and-forget `post` would need host-assigned ids and is not part of this contract (I).

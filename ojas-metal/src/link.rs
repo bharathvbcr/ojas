@@ -652,15 +652,15 @@ impl fmt::Debug for RunBox {
 /// the device thread re-checks buffer ids and windows, and several ops add
 /// relations of their own. This list is not exhaustive (it names the checks
 /// read in `device.rs`, not every `metal_err` site); what it does not name
-/// rests on the host validators. `view()` (`device.rs:1166-1188`): the buffer id is known,
+/// rests on the host validators. `view()` (`device.rs:1241-1263`): the buffer id is known,
 /// the window offset is 4-byte aligned, and the window fits its buffer; it
 /// does not compare windows with each other or with the dimensions. The
-/// op-specific relations: attention planes (`sdpa_views`, `device.rs:3077`),
-/// the KV write (`tn <= cap`, `cap > 0` and window sizes, `device.rs:5695`),
-/// linear cross-entropy window sizes (`device.rs:5441`), the chunked-GDN
-/// backward workspace charge equal to tessl's bytes (`device.rs:4549`), and
+/// op-specific relations: attention planes (`sdpa_views`, `device.rs:3179`),
+/// the KV write (`tn <= cap`, `cap > 0` and window sizes, `device.rs:5925`),
+/// linear cross-entropy window sizes (`device.rs:5671`), the chunked-GDN
+/// backward workspace charge equal to tessl's bytes (`device.rs:4651`), and
 /// weight-gradient scratch charged equal to the scratch needed (`part()`,
-/// `device.rs:4628`).
+/// `device.rs:4730`), and the dequant operands (whole parts at offset 0, `device.rs:5049`).
 #[derive(Debug)]
 pub(crate) enum Cmd {
     /// A host tensor's contiguous window, encoded by the device thread

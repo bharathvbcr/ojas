@@ -86,7 +86,7 @@ flowchart TD
 
 Dtypes follow [`docs/dtype-policy.md`](dtype-policy.md). Every backend sums in `f32` by default; on Metal, `MetalBackend::with_bf16_accumulation(true)` / `set_bf16_accumulation(true)` opts into step-by-step IEEE-754 RNE `bf16` accumulation (`ojas_bf16`) across all GEMMs, convolutions, attention paths, norms, reductions, pooling/interpolation sums, and gradient accumulations (`ojas-metal/tests/bf16_accumulation.rs`).
 
-Each row below is an op family, not one trait method. `Backend` is the blanket aggregate (`ojas-core/src/backend.rs:2555-2559`) of four sub-traits: `BackendCore` (`:840`), `BackendFloat` (`:1065`), `BackendInt` (`:1464`) and `BackendModule` (`:1560`). The per-method table after this one has one row for each of their methods. The Metal column names what `MetalBackend` (`ojas-metal/src/device.rs`) runs, and `ojas_*` kernels live in `ojas-metal/kernels/{ojas_backend,encoder_bwd,gemma_ops,max_pool,per_head_gate}.metal`. wgpu kernels live in `ojas-kernels/src/wgsl/`. Read from source 2026-10-01 (updated 2026-11-02); each backend's parity suite against the CPU passed in the run recorded in `docs/status.md`.
+Each row below is an op family, not one trait method. `Backend` is the blanket aggregate (`ojas-core/src/backend.rs:2585-2589`) of four sub-traits: `BackendCore` (`:840`), `BackendFloat` (`:1065`), `BackendInt` (`:1464`) and `BackendModule` (`:1560`). The per-method table after this one has one row for each of their methods. The Metal column names what `MetalBackend` (`ojas-metal/src/device.rs`) runs, and `ojas_*` kernels live in `ojas-metal/kernels/{ojas_backend,encoder_bwd,gemma_ops,max_pool,per_head_gate}.metal`. wgpu kernels live in `ojas-kernels/src/wgsl/`. Read from source 2026-10-01 (updated 2026-11-02); each backend's parity suite against the CPU passed in the run recorded in `docs/status.md`.
 
 | Operation | CPU (`ojas-cpu`) | Metal (`ojas-metal`) | wgpu (`ojas-wgpu`) | DType | Specification |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -131,6 +131,7 @@ Each row below is an op family, not one trait method. `Backend` is the blanket a
 | **KV Cache Write** | Slice copy at timestep | Slice copy | WGSL `kv_cache` | `f32` | Write key/value token slices into time-major decode KV cache |
 | **AdamW** | Single-tensor torch order | `ojas_adamw_check` then `ojas_adamw_apply` (no copies) | WGSL `adam_check` then `adam_apply` (no copies) | `f32` | Decay first; f64 bias correction; $\varepsilon$ outside sqrt. A non-finite step writes nothing |
 | **Muon NS5** | 5-step Newton-Schulz | Newton-Schulz on tessl GEMM | WGSL GEMM | `f32`, or `bf16` on CPU, Metal and wgpu (nanolab: bf16) | $aX + b(XX^T)X + c(XX^T)^2X$ |
+| **Affine dequant (MLX q8/q4)** | host `expand` (f32 fma, FTZ) | tessl `dequant_affine_{q8,q4}_bf16`, fault word → `NonFinite` | refuses | codes `u32`, scales/biases `bf16` → `bf16` | $w=\mathrm{bf16}(\mathrm{fma}(s,q,b))$, group 64 |
 
 > [!NOTE]
 > **wgpu and CUDA for the SAM and encoder ops.** The 32 ops of `ojas_core::SAM_AUTOCAST_POLICY` (`attention_forward`, `attention_forward_saving`, `attention_backward`, `linear_bias_forward`, `linear_bias_backward`, `conv2d_forward`, `conv_transpose2d_forward`, `conv2d_backward`, `conv_transpose2d_backward`, `max_pool2d_forward`, `max_pool2d_backward`, `gelu_erf_forward`, `gelu_erf_backward`, `relu_forward`, `scale_forward`, `broadcast_add_forward`, `broadcast_add_backward`, `broadcast_mul_forward`, `broadcast_mul_backward`, `interpolate_bilinear_forward`, `rope_interleaved_forward`, `rope_interleaved_backward`, `layer_norm_forward`, `layer_norm_backward`, `channel_layer_norm_forward`, `channel_layer_norm_backward`, `group_norm_forward`, `softmax_forward`, `softmax_backward`, `concat`, `slice`, `fill`) are refused on both. `WgpuBackend` overrides none of them: each is the trait default and returns `OjasError::Unsupported` under the op's own name, which the wgpu cells above say; `ojas-wgpu/tests/sam_ops_refused.rs` pins it for all 32. The table has no CUDA column because `CudaBackend` (`ojas-cuda/src/backend.rs`) implements `Backend` for `upload`, `download`, `sync` and the budget only; every compute op, these 32 included, is `Unsupported` (explicit refusals for the nanolab ops, the trait default for the rest), and the CUDA kernels in `ojas-cuda` belong to the Qwen3.5 whole-step provider (`Qwen35Step`), which has no SAM op.
@@ -163,8 +164,8 @@ Each row below is an op family, not one trait method. `Backend` is the blanket a
 > path a model takes.
 >
 > **Update (2026-11-02, when this note was merged into `main`):** one half of this has moved.
-> `Worker::upload` (`ojas-metal/src/device.rs:1988-2010`) now adopts a tensor whose payload is a
-> tessl `SharedBuf` without copying (`SharedBuf::to_gpu_buffer`, then `adopt`, at `:2006`), and
+> `Worker::upload` (`ojas-metal/src/device.rs:2312-2330`) now adopts a tensor whose payload is a
+> tessl `SharedBuf` without copying (`SharedBuf::to_gpu_buffer`, then `adopt`, at `:2325`), and
 > refuses any other mapped buffer. `ojas-metal/tests/adversarial_m3_zero_copy.rs` exercises that
 > path (it asserts `mem_after == mem_before`); `ojas-core/tests/zero_copy_uma.rs` covers the
 > `Payload::Mapped` surface with a mock buffer and does not reach `Worker::upload`. The other half has not
@@ -177,7 +178,7 @@ Each row below is an op family, not one trait method. `Backend` is the blanket a
 
 ## Per-method status
 
-One row for each of the 106 `Backend` methods, in trait order, read at bfc24e5. The count is `awk 'NR>=840 && NR<=2555 && /^    fn [a-z_0-9]+/' ojas-core/src/backend.rs | wc -l`, which prints 106 (`BackendCore` `:840`, `BackendFloat` `:1065`, `BackendInt` `:1464`, `BackendModule` `:1560`). Overrides were counted inside each backend's `impl Backend*` blocks: CPU 96, Metal 100, wgpu 48, CUDA 34 (each backend's remaining methods are trait defaults). Cells:
+One row for each of the 107 `Backend` methods, in trait order, read at c1480fd. The count is `awk 'NR>=840 && NR<=2585 && /^    fn [a-z_0-9]+/' ojas-core/src/backend.rs | wc -l`, which prints 107 (`BackendCore` `:840`, `BackendFloat` `:1065`, `BackendInt` `:1464`, `BackendModule` `:1560`; `dequant_affine_bf16` is the last method of `BackendModule`, `:2537`). Overrides were counted inside each backend's `impl Backend*` blocks: CPU 97, Metal 101, wgpu 48, CUDA 34 (each backend's remaining methods are trait defaults). Cells:
 
 - **Implemented**: the backend overrides the method and the override computes. It does not mean every input is accepted. Method used: each backend's `Unsupported` and `UnsupportedHeadDim` returns were searched (`rg -n "Unsupported"` over `ojas-{cpu,metal,wgpu,cuda}/src/backend.rs` and `ojas-metal/src/backend/*.rs`) and traced to the op they guard; data-dependent refusals found that way are marked Partial. The CPU column has none: `ojas-cpu/src/backend.rs` has no `Unsupported`, and the only others under `ojas-cpu/src` are in `gemm.rs` (a SIMD fallback and test code). Kernel bodies were not read line by line, so a refusal inside a helper this search did not reach is not shown.
 - **Partial**: the override computes for some inputs and returns `Unsupported` (or `UnsupportedHeadDim`) for others; the cell names the refusal and cites its line.
@@ -297,6 +298,7 @@ Two limits are not repeated per row. Attention on Metal and wgpu refuses a head 
 | `linear_cross_entropy_mean` | `BackendModule` | Implemented | Partial: an ignore index with device-produced ids is `Unsupported` (`ojas-metal/src/backend.rs:1086-1092`) | Partial: a U32 tensor not created by `WgpuBackend::upload` is `Unsupported` (`ojas-wgpu/src/backend.rs:678`) | Default: refuses |
 | `cached_attention_forward` | `BackendModule` | Implemented | Implemented | Partial: head dim above `ATTENTION_MAX_HEAD_DIM` is `UnsupportedHeadDim` (`ojas-wgpu/src/backend.rs:3221`) | Default: refuses |
 | `kv_cache_write` | `BackendModule` | Implemented | Implemented | Implemented | Default: refuses |
+| `dequant_affine_bf16` | `BackendModule` | Implemented | Partial: an operand window at a non-zero byte offset is `Unsupported` (`ojas-metal/src/backend.rs:4496`) | Default: refuses | Default: refuses |
 
 ## Model coverage by backend
 
