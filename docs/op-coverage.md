@@ -164,7 +164,7 @@ Each row below is an op family, not one trait method. `Backend` is the blanket a
 > path a model takes.
 >
 > **Update (2026-11-02, when this note was merged into `main`):** one half of this has moved.
-> `Worker::upload` (`ojas-metal/src/device.rs:2312-2330`) now adopts a tensor whose payload is a
+> `Worker::upload` (`ojas-metal/src/device.rs:2341-2359`) now adopts a tensor whose payload is a
 > tessl `SharedBuf` without copying (`SharedBuf::to_gpu_buffer`, then `adopt`, at `:2325`), and
 > refuses any other mapped buffer. `ojas-metal/tests/adversarial_m3_zero_copy.rs` exercises that
 > path (it asserts `mem_after == mem_before`); `ojas-core/tests/zero_copy_uma.rs` covers the
@@ -178,7 +178,7 @@ Each row below is an op family, not one trait method. `Backend` is the blanket a
 
 ## Per-method status
 
-One row for each of the 107 `Backend` methods, in trait order, read at c1480fd. The count is `awk 'NR>=840 && NR<=2585 && /^    fn [a-z_0-9]+/' ojas-core/src/backend.rs | wc -l`, which prints 107 (`BackendCore` `:840`, `BackendFloat` `:1065`, `BackendInt` `:1464`, `BackendModule` `:1560`; `dequant_affine_bf16` is the last method of `BackendModule`, `:2537`). Overrides were counted inside each backend's `impl Backend*` blocks: CPU 97, Metal 101, wgpu 48, CUDA 34 (each backend's remaining methods are trait defaults). Cells:
+One row for each of the 107 `Backend` methods, in trait order, read at ff7a549. The count is `awk 'NR>=840 && NR<=2585 && /^    fn [a-z_0-9]+/' ojas-core/src/backend.rs | wc -l`, which prints 107 (`BackendCore` `:840`, `BackendFloat` `:1065`, `BackendInt` `:1464`, `BackendModule` `:1560`; `dequant_affine_bf16` is the last method of `BackendModule`, `:2537`). Overrides were counted inside each backend's `impl Backend*` blocks: CPU 97, Metal 101, wgpu 48, CUDA 34 (each backend's remaining methods are trait defaults). Cells:
 
 - **Implemented**: the backend overrides the method and the override computes. It does not mean every input is accepted. Method used: each backend's `Unsupported` and `UnsupportedHeadDim` returns were searched (`rg -n "Unsupported"` over `ojas-{cpu,metal,wgpu,cuda}/src/backend.rs` and `ojas-metal/src/backend/*.rs`) and traced to the op they guard; data-dependent refusals found that way are marked Partial. The CPU column has none: `ojas-cpu/src/backend.rs` has no `Unsupported`, and the only others under `ojas-cpu/src` are in `gemm.rs` (a SIMD fallback and test code). Kernel bodies were not read line by line, so a refusal inside a helper this search did not reach is not shown.
 - **Partial**: the override computes for some inputs and returns `Unsupported` (or `UnsupportedHeadDim`) for others; the cell names the refusal and cites its line.
