@@ -2007,6 +2007,19 @@ impl<B: Backend> BackendModule for Autocast<B> {
         self.wrote(cache);
         Ok(())
     }
+
+    /// Integer codes and bf16 parameters; the output is bf16 by construction: passed through,
+    /// nothing rounded.
+    fn dequant_affine_bf16(
+        &self,
+        packed: &Tensor,
+        scales: &Tensor,
+        biases: &Tensor,
+        spec: crate::AffineSpec,
+    ) -> Result<Tensor, OjasError> {
+        self.pass()?;
+        self.inner.dequant_affine_bf16(packed, scales, biases, spec)
+    }
 }
 
 #[cfg(test)]

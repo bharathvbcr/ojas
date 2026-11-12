@@ -4465,6 +4465,75 @@ impl BackendModule for MetalBackend {
         }
     }
 
+    /// Dequantised on the device by tessl's `dequant_affine_{q4,q8}_bf16`, into a new `Bf16`
+    /// `[rows, cols]` tensor. Order: [`ojas_core::dequant_affine_bf16_dims`] (shape first), then each
+    /// operand's placement, device, dtype and contiguity, then the offset refusal below, then the
+    /// output is charged, then one device command. A non-finite result is not seen here: the
+    /// kernel raises a fault word that the next sync point reports as
+    /// [`OjasError::NonFinite`] named `dequant_affine_bf16` (`docs/metal-deferred-faults.md`).
+    ///
+    /// An operand window at a non-zero byte offset (a `narrow`ed view) is
+    /// [`OjasError::Unsupported`]: tessl binds the three operands at offset 0, and the only
+    /// device copy here (`gpu_copy`) is a float kernel, which would carry `U32` code words
+    /// through an f32 path that a flushing GPU can zero. An uploaded tensor has offset 0, so the
+    /// loader's parts, uploaded once each, qualify.
+    fn dequant_affine_bf16(
+        &self,
+        packed: &Tensor,
+        scales: &Tensor,
+        biases: &Tensor,
+        spec: ojas_core::AffineSpec,
+    ) -> Result<Tensor, OjasError> {
+        const OP: &str = "dequant_affine_bf16";
+        let dims = ojas_core::dequant_affine_bf16_dims(packed, scales, biases, spec)?;
+        let operands = [
+            ("packed", self.arg(OP, packed, DType::U32)?),
+            ("scales", self.arg(OP, scales, DType::Bf16)?),
+            ("biases", self.arg(OP, biases, DType::Bf16)?),
+        ];
+        for (name, a) in operands {
+            if a.off != 0 {
+                return Err(OjasError::Unsupported {
+                    op: OP,
+                    detail: format!(
+                        "tessl binds dequant operands at offset 0; {name} window at byte {}",
+                        a.off
+                    ),
+                });
+            }
+        }
+        let [(_, packed), (_, scales), (_, biases)] = operands;
+        let elems = product(OP, &[dims.rows, dims.cols])?;
+        if elems > u32::MAX as usize {
+            return Err(OjasError::Unsupported {
+                op: OP,
+                detail: format!("{elems} output elements exceed the kernels' 32-bit indexing"),
+            });
+        }
+        let rows = u32_dim(OP, dims.rows)?;
+        let cols = u32_dim(OP, dims.cols)?;
+        let bytes = elems.checked_mul(2).ok_or_else(|| overflow(OP))?;
+        let reservation = self.budget.try_reserve(bytes as u64)?;
+        let nb = match self.link.call(Cmd::DequantAffine {
+            packed,
+            scales,
+            biases,
+            bits: spec.bits(),
+            rows,
+            cols,
+        })? {
+            Reply::Bufs(mut v) if v.len() == 1 => v.remove(0),
+            other => return Err(metal_err(format!("{OP}: device returned {other:?}"))),
+        };
+        let buf: Arc<dyn DeviceBuffer> = Arc::new(MetalBuffer {
+            id: nb.id,
+            len: nb.bytes,
+            link: Arc::clone(&self.link),
+            ids: None,
+        });
+        Tensor::from_device_reserved(buf, &[dims.rows, dims.cols], DType::Bf16, reservation)
+    }
+
     fn adamw_step(
         &self,
         param: &mut Tensor,

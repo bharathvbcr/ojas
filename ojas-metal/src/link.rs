@@ -23,6 +23,18 @@ use ojas_core::{
 
 pub(crate) type Res<T> = Result<T, OjasError>;
 
+/// Where [`Cmd::FailNextDequant`] fails the next dequant, in the order its steps run.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DequantFail {
+    /// The waited commit that frees ring words, with every word in use.
+    RingSettle,
+    /// The status entry, after a ring word was taken.
+    Status,
+    /// After the status entry holds the word, where tessl's refusal would come.
+    Dispatch,
+}
+
 /// Why the device thread made a waited commit: the trigger that called it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Wait {
@@ -41,6 +53,9 @@ pub(crate) enum Wait {
     WorkingSet,
     /// Every status slot was taken.
     SlabFull,
+    /// Every fault word of the dequant ring was held by a pending dequant
+    /// (`DEQUANT_FAULT_WORDS`, `device.rs`).
+    FaultRing,
     /// An allocation failed, and dropped buffers only recycle after a wait.
     Recycle,
     /// The bytes freed since the last wait passed the memory cap: their
@@ -49,7 +64,7 @@ pub(crate) enum Wait {
     Freed,
 }
 
-const WAIT_KINDS: usize = 9;
+const WAIT_KINDS: usize = 10;
 
 /// Waited commits by [`Wait`] trigger, and the compute dispatches encoded,
 /// shared by the device thread and every handle on it.
@@ -123,6 +138,7 @@ impl Waits {
             mem_cap: at(Wait::MemCap),
             working_set: at(Wait::WorkingSet),
             slab_full: at(Wait::SlabFull),
+            fault_ring: at(Wait::FaultRing),
             recycle: at(Wait::Recycle),
             freed: at(Wait::Freed),
         }
@@ -143,6 +159,7 @@ pub struct WaitCounts {
     pub mem_cap: u64,
     pub working_set: u64,
     pub slab_full: u64,
+    pub fault_ring: u64,
     pub recycle: u64,
     pub freed: u64,
 }
@@ -156,6 +173,7 @@ impl WaitCounts {
             + self.mem_cap
             + self.working_set
             + self.slab_full
+            + self.fault_ring
             + self.recycle
             + self.freed
     }
@@ -170,6 +188,7 @@ impl WaitCounts {
             mem_cap: self.mem_cap.saturating_sub(earlier.mem_cap),
             working_set: self.working_set.saturating_sub(earlier.working_set),
             slab_full: self.slab_full.saturating_sub(earlier.slab_full),
+            fault_ring: self.fault_ring.saturating_sub(earlier.fault_ring),
             recycle: self.recycle.saturating_sub(earlier.recycle),
             freed: self.freed.saturating_sub(earlier.freed),
         }
@@ -702,6 +721,12 @@ pub(crate) enum Cmd {
     /// would.
     #[cfg(test)]
     FailNextRead,
+    /// Test hook: the next dequant fails at `at`, as the failures that cannot be reached from
+    /// outside would (the ring's settle, a status entry, tessl's refusal).
+    #[cfg(test)]
+    FailNextDequant {
+        at: DequantFail,
+    },
     /// Test hook: set tessl's runtime poison through its own test door
     /// (`poison_as_shared_event_timeout_for_test`). It models a poisoned
     /// runtime, which is tessl's third consecutive event-wait timeout
@@ -1410,6 +1435,21 @@ pub(crate) enum Cmd {
         rows: u32,
         dim: u32,
         eps: f32,
+    },
+    /// `dequant_affine_bf16`: the packed codes, scales and biases (whole
+    /// buffers, byte offset 0: tessl binds them there) expanded into a new
+    /// `Bf16` buffer of `rows * cols` elements. `bits` is the **ojas**
+    /// width, because this file also builds without tessl; the device
+    /// thread maps it (`affine.rs`). The kernel's non-finite flag goes to
+    /// one word of the fault ring, which the next scan turns into
+    /// `NonFinite { op: "dequant_affine_bf16" }`.
+    DequantAffine {
+        packed: Arg,
+        scales: Arg,
+        biases: Arg,
+        bits: ojas_core::AffineBits,
+        rows: u32,
+        cols: u32,
     },
 }
 

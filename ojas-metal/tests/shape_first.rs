@@ -26,16 +26,16 @@ use std::sync::OnceLock;
 use ojas_core::{
     accumulate_grad_dims, adamw_step_dims, cached_attention_dims, causal_sdpa_backward_dims,
     causal_sdpa_forward_dims, clip_grad_norm_dims, cross_entropy_mean_backward_dims,
-    cross_entropy_mean_forward_dims, embedding_backward_dims, embedding_forward_dims,
-    kv_cache_write_dims, linear_backward_dims, linear_ce_dims, linear_forward_dims,
-    mul_backward_dims, mul_forward_dims, muon_ns5_step_dims, per_head_sigmoid_gate_backward_dims,
-    per_head_sigmoid_gate_forward_dims, permute_dims, residual_add_backward_dims,
-    residual_add_forward_dims, rms_norm_backward_dims, rms_norm_forward_dims,
-    rms_qk_norm_backward_dims, rms_qk_norm_forward_dims, rope_half_split_backward_dims,
-    rope_half_split_forward_dims, silu_backward_dims, silu_forward_dims,
-    value_residual_blend_backward_dims, value_residual_blend_forward_dims, AdamWConfig,
-    BackendCore, BackendFloat, BackendModule, Budget, CeChunk, CeGrads, DType, MuonNs5Config,
-    OjasError, Tensor, METAL_MAX_HEAD_DIM,
+    cross_entropy_mean_forward_dims, dequant_affine_bf16_dims, embedding_backward_dims,
+    embedding_forward_dims, kv_cache_write_dims, linear_backward_dims, linear_ce_dims,
+    linear_forward_dims, mul_backward_dims, mul_forward_dims, muon_ns5_step_dims,
+    per_head_sigmoid_gate_backward_dims, per_head_sigmoid_gate_forward_dims, permute_dims,
+    residual_add_backward_dims, residual_add_forward_dims, rms_norm_backward_dims,
+    rms_norm_forward_dims, rms_qk_norm_backward_dims, rms_qk_norm_forward_dims,
+    rope_half_split_backward_dims, rope_half_split_forward_dims, silu_backward_dims,
+    silu_forward_dims, value_residual_blend_backward_dims, value_residual_blend_forward_dims,
+    AdamWConfig, AffineSpec, BackendCore, BackendFloat, BackendModule, Budget, CeChunk, CeGrads,
+    DType, MuonNs5Config, OjasError, Tensor, METAL_MAX_HEAD_DIM,
 };
 use ojas_metal::MetalBackend;
 
@@ -74,9 +74,18 @@ fn u(shape: &[usize]) -> Tensor {
     uv(shape, 0)
 }
 
+/// A bf16 tensor of `shape` holding 1.0.
+fn bf(shape: &[usize]) -> Tensor {
+    let n: usize = shape.iter().product();
+    Tensor::from_bf16_bits(&vec![0x3F80; n], shape, host_budget()).unwrap()
+}
+
 fn nan_like(t: &Tensor) -> Tensor {
     let n: usize = t.shape().iter().product();
-    Tensor::from_f32(&vec![f32::NAN; n], t.shape(), host_budget()).unwrap()
+    match t.dtype() {
+        DType::Bf16 => Tensor::from_bf16_bits(&vec![0x7FC0; n], t.shape(), host_budget()).unwrap(),
+        _ => Tensor::from_f32(&vec![f32::NAN; n], t.shape(), host_budget()).unwrap(),
+    }
 }
 
 fn case<C, R>(name: &str, operands: Vec<Tensor>, nan_at: Option<usize>, check: C, run: R) -> Case
@@ -85,7 +94,10 @@ where
     R: Fn(&MetalBackend, &[Tensor]) -> Result<(), OjasError> + 'static,
 {
     if let Some(i) = nan_at {
-        assert_eq!(operands[i].dtype(), DType::F32, "{name}: NaN operand");
+        assert!(
+            matches!(operands[i].dtype(), DType::F32 | DType::Bf16),
+            "{name}: NaN operand"
+        );
     }
     Case {
         name: name.to_string(),
@@ -816,6 +828,98 @@ fn cases() -> Vec<Case> {
                 let mut cache = o[0].clone();
                 b.kv_cache_write(&mut cache, &o[1], at)
             },
+        ));
+    }
+
+    // ---- dequant_affine_bf16: dtypes, ranks, rows, the pair, the packed width ----
+    for (name, spec, packed, scales, biases, nan) in [
+        (
+            "f32 codes",
+            AffineSpec::q8(),
+            f(&[2, 32]),
+            bf(&[2, 2]),
+            bf(&[2, 2]),
+            1,
+        ),
+        (
+            "u32 scales",
+            AffineSpec::q8(),
+            u(&[2, 32]),
+            u(&[2, 2]),
+            bf(&[2, 2]),
+            2,
+        ),
+        (
+            "f32 biases",
+            AffineSpec::q8(),
+            u(&[2, 32]),
+            bf(&[2, 2]),
+            f(&[2, 2]),
+            1,
+        ),
+        (
+            "packed rank 1",
+            AffineSpec::q8(),
+            u(&[64]),
+            bf(&[2, 2]),
+            bf(&[2, 2]),
+            1,
+        ),
+        (
+            "scales rank 3",
+            AffineSpec::q8(),
+            u(&[2, 32]),
+            bf(&[2, 2, 1]),
+            bf(&[2, 2]),
+            2,
+        ),
+        (
+            "rows disagree",
+            AffineSpec::q8(),
+            u(&[2, 32]),
+            bf(&[3, 2]),
+            bf(&[3, 2]),
+            1,
+        ),
+        (
+            "scales and biases differ",
+            AffineSpec::q8(),
+            u(&[2, 32]),
+            bf(&[2, 2]),
+            bf(&[2, 3]),
+            1,
+        ),
+        (
+            "q4 words read as q8",
+            AffineSpec::q8(),
+            u(&[2, 16]),
+            bf(&[2, 2]),
+            bf(&[2, 2]),
+            1,
+        ),
+        (
+            "q8 words read as q4",
+            AffineSpec::q4(),
+            u(&[2, 32]),
+            bf(&[2, 2]),
+            bf(&[2, 2]),
+            2,
+        ),
+        (
+            "zero rows",
+            AffineSpec::q8(),
+            u(&[0, 32]),
+            bf(&[2, 2]),
+            bf(&[2, 2]),
+            1,
+        ),
+    ] {
+        v.push(case(
+            &format!("dequant_affine_bf16 {name}"),
+            vec![packed, scales, biases],
+            Some(nan),
+            move |o| dequant_affine_bf16_dims(&o[0], &o[1], &o[2], spec).map(drop),
+            move |b, o| b.dequant_affine_bf16(&o[0], &o[1], &o[2], spec).map(drop),
         ));
     }
 

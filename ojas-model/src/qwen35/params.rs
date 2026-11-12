@@ -24,7 +24,8 @@ use std::convert::Infallible;
 use std::path::Path;
 
 use ojas_core::{
-    f32_to_bf16, shape_product, Backend, Budget, DType, OjasError, Tensor, LE_READ_CHUNK_BYTES,
+    f32_to_bf16, shape_product, AffineGeometry, AffineQuantized, Backend, Budget, DType, OjasError,
+    Scratch, Tensor, LE_READ_CHUNK_BYTES,
 };
 use ojas_data::CounterRng;
 use ojas_io::{bf16_to_f32, f16_to_f32, SafeTensors, StDtype};
@@ -319,6 +320,190 @@ fn interleave(q: &[f32], g: &[f32], heads: usize, d: usize, cols: usize) -> Vec<
         out.extend_from_slice(&g[h * block..(h + 1) * block]);
     }
     out
+}
+
+/// A run of whole rows of a matrix: `(first_row, n_rows)`.
+type RowRun = (usize, usize);
+
+fn row_overflow(op: &'static str, what: &str) -> OjasError {
+    OjasError::OutOfRange {
+        op,
+        detail: format!("{what} overflows usize"),
+    }
+}
+
+/// The row blocks of a fused matrix cut into consecutive blocks of `counts` rows, one run per
+/// block. The one owner of this geometry for quantised matrices: a row slice never cuts a
+/// quantisation group, because groups run along a row.
+fn block_row_runs(
+    op: &'static str,
+    rows: usize,
+    counts: &[usize],
+) -> Result<Vec<RowRun>, OjasError> {
+    let mut at = 0usize;
+    let mut runs = Vec::with_capacity(counts.len());
+    for &n in counts {
+        if n == 0 {
+            return Err(refuse(op, format!("a zero row count in {counts:?}")));
+        }
+        runs.push((at, n));
+        at = at
+            .checked_add(n)
+            .ok_or_else(|| row_overflow(op, "the sum of the row counts"))?;
+    }
+    if at != rows {
+        return Err(refuse(
+            op,
+            format!("row counts {counts:?} sum to {at}, the matrix has {rows} rows"),
+        ));
+    }
+    Ok(runs)
+}
+
+/// `q_proj`'s query rows and gate rows of every head: per head, `d` query rows and then `d` gate
+/// rows, so `(query runs, gate runs)` of `d` rows each, `heads` of them.
+fn q_proj_row_runs(
+    op: &'static str,
+    rows: usize,
+    heads: usize,
+    d: usize,
+) -> Result<(Vec<RowRun>, Vec<RowRun>), OjasError> {
+    let per_head = d
+        .checked_mul(2)
+        .ok_or_else(|| row_overflow(op, "2 * head rows"))?;
+    let total = heads
+        .checked_mul(per_head)
+        .ok_or_else(|| row_overflow(op, "heads * 2 * head rows"))?;
+    if heads == 0 || d == 0 || total != rows {
+        return Err(refuse(
+            op,
+            format!("{heads} heads of 2 x {d} rows is {total} rows, the matrix has {rows}"),
+        ));
+    }
+    Ok((0..heads)
+        .map(|h| ((h * per_head, d), (h * per_head + d, d)))
+        .unzip())
+}
+
+/// Each element of `outputs` (a list of row runs of `q`) as an [`AffineQuantized`] of those rows
+/// in order. The three parts are copied run by run, `words` and `groups` values per row, into
+/// storage charged to `budget`; the room for every output is checked before the first is
+/// allocated, so a budget that cannot hold them all refuses with nothing charged. Dequantising
+/// the result equals taking the same rows of the dequantised `q`.
+fn take_row_runs(
+    op: &'static str,
+    q: &AffineQuantized,
+    outputs: &[Vec<RowRun>],
+    budget: &Budget,
+) -> Result<Vec<AffineQuantized>, OjasError> {
+    let spec = q.spec();
+    let AffineGeometry { groups, words } = spec.geometry(op, q.rows(), q.cols())?;
+    let mut sizes = Vec::with_capacity(outputs.len());
+    let mut total_rows = 0usize;
+    for runs in outputs {
+        let mut rows = 0usize;
+        for &(first, n) in runs {
+            if first.checked_add(n).is_none_or(|end| end > q.rows()) {
+                return Err(refuse(
+                    op,
+                    format!("rows {first}..+{n} are outside the {} rows", q.rows()),
+                ));
+            }
+            rows = rows
+                .checked_add(n)
+                .ok_or_else(|| row_overflow(op, "an output's rows"))?;
+        }
+        total_rows = total_rows
+            .checked_add(rows)
+            .ok_or_else(|| row_overflow(op, "the outputs' rows"))?;
+        sizes.push(rows);
+    }
+    // 4 bytes per packed word, and 2 + 2 per group (scale and bias).
+    let row_bytes = words
+        .checked_mul(DType::U32.size())
+        .and_then(|p| p.checked_add(groups.checked_mul(2 * DType::Bf16.size())?))
+        .ok_or_else(|| row_overflow(op, "bytes per row"))?;
+    let total_bytes = total_rows
+        .checked_mul(row_bytes)
+        .ok_or_else(|| row_overflow(op, "output bytes"))?;
+    budget.check_room(total_bytes as u64)?;
+
+    let (packed, scales, biases) = (
+        q.packed().u32_slice()?,
+        q.scales().bf16_slice()?,
+        q.biases().bf16_slice()?,
+    );
+    let mut parts = Vec::with_capacity(outputs.len());
+    for (runs, rows) in outputs.iter().zip(sizes) {
+        let mut out_packed = Scratch::<u32>::try_alloc(rows * words, budget)?;
+        let mut out_scales = Tensor::zeros(&[rows, groups], DType::Bf16, budget)?;
+        let mut out_biases = Tensor::zeros(&[rows, groups], DType::Bf16, budget)?;
+        {
+            let (dst_p, dst_s, dst_b) = (
+                out_packed.as_mut_slice(),
+                out_scales.bf16_slice_mut()?,
+                out_biases.bf16_slice_mut()?,
+            );
+            let mut at = 0usize;
+            for &(first, n) in runs {
+                dst_p[at * words..(at + n) * words]
+                    .copy_from_slice(&packed[first * words..(first + n) * words]);
+                dst_s[at * groups..(at + n) * groups]
+                    .copy_from_slice(&scales[first * groups..(first + n) * groups]);
+                dst_b[at * groups..(at + n) * groups]
+                    .copy_from_slice(&biases[first * groups..(first + n) * groups]);
+                at += n;
+            }
+        }
+        let out_packed = Tensor::from_scratch(out_packed, &[rows, words])?;
+        parts.push(AffineQuantized::from_parts(
+            spec,
+            rows,
+            q.cols(),
+            out_packed,
+            out_scales,
+            out_biases,
+        )?);
+    }
+    Ok(parts)
+}
+
+/// The consecutive row blocks of `counts` rows of a quantised matrix, each a quantised matrix of
+/// its own rows: `in_proj_qkv` `[q | k | v]` to `wq`, `wk`, `wv` without dequantising the whole.
+/// A refusal is [`OjasError::Shape`] for a zero count or counts that do not sum to the rows,
+/// [`OjasError::OutOfRange`] for an overflow, and [`OjasError::CapacityExceeded`] when `budget`
+/// cannot hold every block (nothing is charged). Dequantising a block equals the same rows of the
+/// dequantised matrix, bit for bit.
+pub fn split_rows_affine(
+    q: &AffineQuantized,
+    counts: &[usize],
+    budget: &Budget,
+) -> Result<Vec<AffineQuantized>, OjasError> {
+    const OP: &str = "split_rows_affine";
+    let runs = block_row_runs(OP, q.rows(), counts)?;
+    let outputs: Vec<Vec<RowRun>> = runs.into_iter().map(|r| vec![r]).collect();
+    take_row_runs(OP, q, &outputs, budget)
+}
+
+/// `q_proj`'s rows (per head: `d` query rows, then `d` gate rows) as `(query, gate)`, each a
+/// quantised `[heads d, cols]` matrix, without dequantising the whole. Refusals as for
+/// [`split_rows_affine`], with [`OjasError::Shape`] when `heads * 2 * d` is not the row count.
+pub fn deinterleave_affine(
+    q: &AffineQuantized,
+    heads: usize,
+    d: usize,
+    budget: &Budget,
+) -> Result<(AffineQuantized, AffineQuantized), OjasError> {
+    const OP: &str = "deinterleave_affine";
+    let (query, gate) = q_proj_row_runs(OP, q.rows(), heads, d)?;
+    let mut parts = take_row_runs(OP, q, &[query, gate], budget)?.into_iter();
+    match (parts.next(), parts.next()) {
+        (Some(query), Some(gate)) => Ok((query, gate)),
+        _ => Err(refuse(
+            OP,
+            "the row copy returned fewer than two parts".to_string(),
+        )),
+    }
 }
 
 /// Largest decode buffer [`load_hf`] reuses within one tensor's read. It is

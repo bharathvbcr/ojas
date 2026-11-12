@@ -1,6 +1,6 @@
 //! The Metal backend on tessl.
 //!
-//! [`MetalBackend`] runs 100 of the 106 `ojas_core::Backend` methods on
+//! [`MetalBackend`] runs 101 of the 107 `ojas_core::Backend` methods on
 //! device-resident tensors at any shape the kernels index, with head dimension
 //! at most `METAL_MAX_HEAD_DIM`. The trait defaults, which refuse, apply to
 //! `relu_backward`, `slice_backward`, `interpolate_bilinear_backward` and
@@ -22,6 +22,8 @@
 #[doc(hidden)]
 pub use ojas_core::BackendId;
 
+#[cfg(all(target_os = "macos", feature = "metal"))]
+mod affine;
 mod backend;
 mod encoder_bwd;
 #[cfg(all(test, target_os = "macos", feature = "metal"))]

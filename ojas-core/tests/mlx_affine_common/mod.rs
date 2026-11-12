@@ -53,7 +53,13 @@ pub fn fixture_dir() -> PathBuf {
 }
 
 pub fn load(case: &str) -> Golden {
-    let path = fixture_dir().join(format!("{case}.safetensors"));
+    load_from(&fixture_dir(), case)
+}
+
+/// `case` from the golden directory `dir`: the entry point for a test in another crate, which
+/// includes this file by `#[path]` and so resolves `fixture_dir` against its own manifest.
+pub fn load_from(dir: &std::path::Path, case: &str) -> Golden {
+    let path = dir.join(format!("{case}.safetensors"));
     let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let n = u64::from_le_bytes(bytes[..8].try_into().unwrap()) as usize;
     let header = std::str::from_utf8(&bytes[8..8 + n]).expect("header is UTF-8");

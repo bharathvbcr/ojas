@@ -50,6 +50,7 @@ const OUTSIDE_THE_SAM_SET: &[&str] = &[
     "clip_grad_norm",
     "cross_entropy_mean_backward",
     "cross_entropy_mean_forward",
+    "dequant_affine_bf16",
     "download",
     "embedding_backward",
     "embedding_forward",
