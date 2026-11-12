@@ -729,6 +729,13 @@ pub(crate) enum Cmd {
     FailNextDequant {
         at: DequantFail,
     },
+    /// Test hook: the next `settle` made for `why` fails as an event wait that ran out of its
+    /// budget (`OjasError::WaitTimeout`) before it waits, whatever the GPU is doing. A settle made
+    /// for any other reason is untouched, so a test pins the exact trigger.
+    #[cfg(test)]
+    FailNextSettle {
+        why: Wait,
+    },
     /// Test hook: set tessl's runtime poison through its own test door
     /// (`poison_as_shared_event_timeout_for_test`). It models a poisoned
     /// runtime, which is tessl's third consecutive event-wait timeout

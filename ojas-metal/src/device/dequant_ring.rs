@@ -369,54 +369,53 @@ fn a_quarantined_word_is_recovered_by_the_ring_settle() {
     assert_ring_whole(&w, "after the settle");
 }
 
-/// T6: a wait that runs out of its budget at the ring settle fails the dequant cleanly and the
-/// ring survives. 64 pending dequants of 12.6 MB each (800 MB, under the 1 GiB memory cap, so no
-/// other trigger settles first) keep the GPU busy past the 1 ms budget.
+/// T6: a ring settle that times out fails the dequant cleanly and the ring survives. Driven by
+/// `Cmd::FailNextSettle`, so it does not depend on how fast the GPU is, and pinned to the exact
+/// `Wait::FaultRing` trigger: a settle for another reason does not consume it.
 #[test]
 fn a_ring_settle_that_times_out_fails_the_dequant_and_keeps_the_ring_whole() {
     let mut w = worker();
-    let (rows, cols) = (3072usize, 2048usize);
-    let h = Budget::new(1 << 30);
-    let t = Triple {
-        packed: upload(
-            &mut w,
-            Tensor::from_u32(&vec![0; rows * cols / 4], &[rows * cols / 4], &h).unwrap(),
-            rows * cols / 4,
-        ),
-        scales: upload(
-            &mut w,
-            Tensor::from_bf16_bits(&vec![0x3F80; rows * cols / 64], &[rows * cols / 64], &h)
-                .unwrap(),
-            rows * cols / 64,
-        ),
-        biases: upload(
-            &mut w,
-            Tensor::from_bf16_bits(&vec![0; rows * cols / 64], &[rows * cols / 64], &h).unwrap(),
-            rows * cols / 64,
-        ),
-    };
-    let big = |w: &mut Worker| {
-        w.command(Cmd::DequantAffine {
-            packed: t.packed,
-            scales: t.scales,
-            biases: t.biases,
-            bits: AffineBits::Q8,
-            rows: rows as u32,
-            cols: cols as u32,
-        })
-    };
+    let t = good(&mut w);
     sync(&mut w).unwrap();
-    let mut outs = Vec::new();
     for _ in 0..DEQUANT_FAULT_WORDS {
-        outs.push(big(&mut w).unwrap());
+        dequant(&mut w, &t).unwrap();
     }
-    w.book.borrow_mut().force_at = Some((Wait::FaultRing, 1));
-    let err = big(&mut w).expect_err("the ring settle was forced to a 1 ms budget");
-    assert!(matches!(err, OjasError::WaitTimeout { .. }), "{err:?}");
+    assert!(matches!(
+        w.command(Cmd::FailNextSettle {
+            why: Wait::FaultRing
+        }),
+        Ok(Reply::Done)
+    ));
+    assert_eq!(held(&w).len(), DEQUANT_FAULT_WORDS);
+    let err = dequant(&mut w, &t).expect_err("the ring settle was armed to time out");
+    assert!(
+        matches!(&err, OjasError::WaitTimeout { detail, .. } if detail.contains("FaultRing")),
+        "{err:?}"
+    );
+    assert_eq!(fault_ring_waits(&w), 0, "it failed before it waited");
+    assert_eq!((free(&w), held(&w).len()), (0, DEQUANT_FAULT_WORDS));
     assert_ring_whole(&w, "after a timed-out ring settle");
-    w.rt.set_event_wait_ms(120_000).unwrap();
-    big(&mut w).expect("the retry settles and succeeds");
+    // The hook was spent by the FaultRing settle; the retry waits and succeeds.
+    dequant(&mut w, &t).expect("the retry settles and succeeds");
+    assert_eq!(fault_ring_waits(&w), 1);
+    assert_ring_whole(&w, "after the retry");
     sync(&mut w).unwrap();
     assert_eq!(free(&w), DEQUANT_FAULT_WORDS);
-    assert_ring_whole(&w, "after recovery");
+}
+
+/// The hook is per reason: a settle for another trigger leaves it armed for the ring.
+#[test]
+fn a_settle_timeout_armed_for_the_ring_is_not_consumed_by_a_sync() {
+    let mut w = worker();
+    let t = good(&mut w);
+    sync(&mut w).unwrap();
+    assert!(matches!(
+        w.command(Cmd::FailNextSettle {
+            why: Wait::FaultRing
+        }),
+        Ok(Reply::Done)
+    ));
+    dequant(&mut w, &t).unwrap();
+    sync(&mut w).expect("a Sync settle is not the ring's");
+    assert_eq!(w.book.borrow().fail_settle, Some(Wait::FaultRing));
 }

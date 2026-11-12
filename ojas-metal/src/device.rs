@@ -604,6 +604,9 @@ struct Book {
     /// Where the next dequant fails (`Cmd::FailNextDequant`).
     #[cfg(test)]
     fail_dequant: Option<DequantFail>,
+    /// The wait reason whose next settle times out (`Cmd::FailNextSettle`).
+    #[cfg(test)]
+    fail_settle: Option<Wait>,
     /// The budget the next trigger check waits under, whatever the triggers
     /// say (`Cmd::ForceWaitNext`).
     #[cfg(test)]
@@ -782,6 +785,8 @@ impl Worker {
             fail_next_read: false,
             #[cfg(test)]
             fail_dequant: None,
+            #[cfg(test)]
+            fail_settle: None,
             #[cfg(test)]
             force_wait: None,
             #[cfg(test)]
@@ -1122,6 +1127,22 @@ impl Worker {
     /// nothing is scanned and the pending list is kept. A wait is counted
     /// under `why`; with nothing recorded nothing waits and nothing counts.
     fn settle(&self, scan: Scan, why: Wait) -> Res<()> {
+        #[cfg(test)]
+        {
+            let hit = self
+                .book
+                .borrow_mut()
+                .fail_settle
+                .take_if(|w| *w == why)
+                .is_some();
+            if hit {
+                return Err(OjasError::wait_timeout(
+                    ojas_core::BackendId::Metal,
+                    1,
+                    format!("injected settle timeout for {why:?}"),
+                ));
+            }
+        }
         self.note_dispatches();
         if self.book.borrow().dirty {
             self.waits.count(why);
@@ -1866,6 +1887,12 @@ impl Worker {
             #[cfg(test)]
             Cmd::FailNextRead => {
                 self.book.borrow_mut().fail_next_read = true;
+                Ok(Reply::Done)
+            }
+            #[cfg(test)]
+            #[cfg(test)]
+            Cmd::FailNextSettle { why } => {
+                self.book.borrow_mut().fail_settle = Some(why);
                 Ok(Reply::Done)
             }
             #[cfg(test)]
