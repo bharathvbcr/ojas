@@ -919,6 +919,25 @@ fn a_step_of_only_ignored_micro_batches_is_non_finite() {
     assert_eq!(t.backend().count("embedding_forward"), 0);
 }
 
+/// An all-ignored step with an out-of-vocabulary id is the `OutOfRange` the
+/// embedding raised before the weights existed, not a `NonFinite` that
+/// `SkipBatch` would skip (and count) while advancing the cursor.
+#[test]
+fn an_all_ignored_step_with_an_out_of_vocab_id_is_out_of_range() {
+    let cfg = TrainConfig {
+        ignore_index: Some(7),
+        ..config(1)
+    };
+    let (_tmp, mut t) = trainer(Probe::new(exact(1 << 30)), cfg);
+    let before = snapshot(&t);
+    let mut ignored = batch(1);
+    ignored.y.fill(7);
+    ignored.x[3] = 256;
+    let err = t.step_tokens(&[ignored]).unwrap_err();
+    assert!(matches!(err, OjasError::OutOfRange { .. }), "{err:?}");
+    assert_untouched(&t, &before, &err);
+}
+
 // ------------------------------------------ ft-9c13f472: clip and schedule
 
 /// ft-9c13f472 D3b: `f32::MAX` clips nothing, also when the norm is below
@@ -926,14 +945,35 @@ fn a_step_of_only_ignored_micro_batches_is_non_finite() {
 /// with torch's meaning named.
 #[test]
 fn a_huge_grad_clip_clips_nothing_and_inf_is_refused_naming_torch() {
-    let cfg = TrainConfig {
-        grad_clip: f32::MAX,
-        ..config(1)
+    // The overflow needs `norm + 1e-6 < 1`. Larger batches average the
+    // gradient noise down, so take the smallest norm of a few batches (clip
+    // off) and require the precondition: otherwise this test would also pass
+    // on the code before the fix.
+    let step_on = |grad_clip: f32, b: &Batch| {
+        let cfg = TrainConfig {
+            grad_clip,
+            ..config(1)
+        };
+        let (_tmp, mut t) = trainer(exact(1 << 30), cfg);
+        let report = t.step_tokens(std::slice::from_ref(b)).unwrap();
+        (report, snapshot(&t))
     };
-    let (_tmp, mut t) = trainer(exact(1 << 30), cfg);
-    let report = t.step_tokens(&[batch(1)]).unwrap();
-    assert!(report.grad_norm.is_finite());
-    assert_eq!(t.step_count(), 1);
+    let (norm, small) = [(2usize, 1u32), (8, 1), (32, 1), (32, 2)]
+        .iter()
+        .map(|&(rows, salt)| rows_batch(rows, salt))
+        .map(|b| (step_on(1e30, &b).0.grad_norm, b))
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .unwrap();
+    assert!(
+        norm + 1e-6 < 1.0,
+        "smallest probed norm {norm} does not reach the f32::MAX / norm overflow"
+    );
+    // `f32::MAX / (norm + 1e-6)` overflows: coefficient 1, the same step as
+    // with the clip off.
+    let (report, state) = step_on(f32::MAX, &small);
+    let (clip_off, state_off) = step_on(1e30, &small);
+    assert_eq!(report.grad_norm.to_bits(), clip_off.grad_norm.to_bits());
+    assert_eq!(state, state_off);
     let inf = TrainConfig {
         grad_clip: f32::INFINITY,
         ..config(1)
@@ -959,11 +999,9 @@ fn warmup_zero_trains_at_the_peak_from_step_zero() {
     let first = t.step().unwrap();
     assert_eq!(first.lr_multiplier, 1.0);
     let second = t.step().unwrap();
-    assert_eq!(
-        second.lr_multiplier,
-        CosineSchedule::new(0, 40).unwrap().multiplier(1).unwrap()
-    );
-    assert!(second.lr_multiplier < 1.0);
+    // nanolab's own `CosineSchedule` (warmup_steps=0, total 40, lr 1.0) at
+    // step 1: 0.9986128001799076.
+    assert_eq!(second.lr_multiplier.to_bits(), 0x3feff4a2d4c4784f);
 }
 
 // ------------------------------------------ ft-9c13f472 D9: skip counting
@@ -1039,6 +1077,21 @@ fn a_committed_step_resets_the_skip_count() {
         t.step().unwrap();
     }
     assert_eq!(t.step_count(), 3);
+}
+
+/// A commit through `step_tokens` ends a run of skips too.
+#[test]
+fn a_step_tokens_commit_clears_the_skip_count() {
+    let (_tmp, mut t) = trainer(Probe::new(exact(1 << 30)), skip_config());
+    for _ in 0..MAX_SKIPS {
+        poison_next_step(&t);
+        assert!(matches!(t.step().unwrap_err(), OjasError::NonFinite { .. }));
+    }
+    t.backend().clear_fault();
+    t.step_tokens(&[batch(1)]).unwrap();
+    poison_next_step(&t);
+    let err = t.step().unwrap_err();
+    assert!(matches!(err, OjasError::NonFinite { .. }), "{err:?}");
 }
 
 /// Abort never counts: the cursor stays and the error stays `NonFinite`

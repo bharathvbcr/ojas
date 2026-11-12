@@ -1036,10 +1036,21 @@ fn adamw_matches_cpu_over_steps() {
 /// compared bit for bit with CPU Fast (Metal's own test,
 /// `ojas-metal/tests/adamw_lerp_weight.rs`, compares Metal with the same
 /// CPU path, which closes the three-way equality); `p` and `v` use the
-/// tolerance of `adamw_matches_cpu_over_steps`. If `m` differs here the
-/// WGSL has been fused or reordered by the backend compiler: report, do not
-/// loosen.
+/// tolerance of `adamw_matches_cpu_over_steps`.
+///
+/// RESULT (sem-batch 2026-11-12, Apple Metal adapter, release): not bit-equal.
+/// beta1 0.0 and 0.001 pass; beta1 0.3 step 0 differs in some elements
+/// (f32 bits, wgpu vs CPU Fast: 3183981881 vs 3183981880, 3138859503 vs
+/// 3138859520, 1004432713 vs 1004432712). The backend states
+/// that the Metal HAL may contract multiply-adds (`ojas-wgpu/src/backend.rs`
+/// header), which turns the high branch's `g - (g - m) * c` into one fused
+/// operation, so Metal (`-ffp-contract=off`) and CPU Fast (no contraction)
+/// agree and this adapter does not. Fable's D5 ruling is to stop here and
+/// not loosen to a tolerance: the test is kept, ignored, as the record.
+/// Its words and branch flag still follow the D5 form; the wgpu AdamW
+/// tolerance test (`adamw_matches_cpu_over_steps`) passes.
 #[test]
+#[ignore = "ft-9c13f472 D5 STOP: the wgpu Metal HAL contracts multiply-adds, so m is not bit-equal to CPU Fast for beta1 < 0.5; owner decision, no tolerance substituted"]
 fn adamw_first_moment_is_bit_equal_to_cpu_fast_for_every_beta1() {
     let tie = 2.0f64.powi(-30);
     let fast = CpuBackend::new(Budget::new(8 << 30)).with_numerics(Numerics::Fast);

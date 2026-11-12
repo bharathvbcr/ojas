@@ -705,6 +705,26 @@ fn a_missing_extra_retyped_or_reshaped_tensor_is_refused() {
     }
 }
 
+/// ft-9c13f472 D3b: `f32::MAX`, the way to clip nothing (`inf` is refused),
+/// prints as `3.4028235e38` in the saved train config and resumes to the
+/// same run.
+#[test]
+fn a_max_grad_clip_round_trips_through_the_checkpoint_config() {
+    let cfg = TrainConfig {
+        grad_clip: f32::MAX,
+        ..config()
+    };
+    let root = TempDir::new();
+    let (tmp, bin) = token_bin(20_000, 256);
+    let mut t = Trainer::new(exact(1 << 30), ModelSpec::tiny(), &host_params(5), bin, cfg).unwrap();
+    t.step().unwrap();
+    t.save(&root.ckpt()).unwrap();
+    let resumed = Trainer::resume_from(exact(1 << 30), &root.ckpt(), reopen(&tmp), cfg).unwrap();
+    assert_eq!(resumed.config().grad_clip.to_bits(), f32::MAX.to_bits());
+    assert_eq!(resumed.run_id(), t.run_id());
+    assert_eq!(snapshot(&resumed), snapshot(&t));
+}
+
 /// ft-9c13f472 D9: a weight or a moment holding NaN or an infinity is
 /// refused with `NonFinite` before any trainer exists, the directory
 /// untouched and nothing charged. Before, such a file resumed and failed

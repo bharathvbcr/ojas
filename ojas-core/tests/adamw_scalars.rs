@@ -403,6 +403,36 @@ fn the_f32_lerp_coefficient_is_one_minus_the_f32_weight() {
     assert!(above.lerp_low && !above.lerp_low_f32());
 }
 
+/// The f32 lerp words against bits that an independent reference computed
+/// (`backups/6a/sem-lane/lerp_oracle.py`, numpy float32: weight
+/// `f32(1 - beta1)`, high `1f - weight`, branch `weight < 0.5`), so a
+/// consistent but wrong production formula cannot pass.
+#[test]
+fn the_f32_lerp_words_equal_the_independent_oracle_bits() {
+    // (beta1, weight bits, high bits, low branch)
+    const ORACLE: [(f64, u32, u32, bool); 9] = [
+        (0.0, 0x3f800000, 0x00000000, false),
+        (0.001, 0x3f7fbe77, 0x3a831200, false),
+        (0.3, 0x3f333333, 0x3e99999a, false),
+        (0.499, 0x3f004189, 0x3eff7cee, false),
+        (0.5, 0x3f000000, 0x3f000000, false),
+        (0.5000000009313226, 0x3f000000, 0x3f000000, false),
+        (0.4999999990686774, 0x3f000000, 0x3f000000, false),
+        (0.9, 0x3dcccccd, 0x3f666666, true),
+        (0.999, 0x3a83126f, 0x3f7fbe77, true),
+    ];
+    for (beta1, weight, high, low) in ORACLE {
+        let config = AdamWConfig {
+            beta1,
+            ..AdamWConfig::nanolab(1e-3, 0.1)
+        };
+        let s = AdamWScalars::new(config, 0).unwrap();
+        assert_eq!(s.lerp_weight_f32().to_bits(), weight, "{beta1} weight");
+        assert_eq!(s.lerp_high_f32().to_bits(), high, "{beta1} high");
+        assert_eq!(s.lerp_low_f32(), low, "{beta1} branch");
+    }
+}
+
 #[test]
 fn a_word_that_overflows_f32_is_non_finite_for_the_callers_op() {
     // lr / bc1 = 3e38 / 0.1 overflows f32 but not f64.

@@ -266,8 +266,8 @@ pub fn pow_u64(base: f64, mut exp: u64) -> f64 {
 /// backend skips its scale pass for a coefficient of 1.
 ///
 /// A NaN or `-inf` `max_norm`, a non-finite `total_norm` and a NaN
-/// coefficient are [`OjasError::NonFinite`]; a negative `max_norm` is
-/// [`OjasError::OutOfRange`]. The caller scales only on `Ok`.
+/// coefficient are [`OjasError::NonFinite`]; a negative `max_norm` or
+/// `total_norm` is [`OjasError::OutOfRange`]. The caller scales only on `Ok`.
 ///
 /// A `max_norm` of 0 is accepted and gives 0, so the gradients are zeroed:
 /// torch's `clip_grad_norm_(max_norm=0)` does the same, and the oracle
@@ -283,6 +283,14 @@ pub fn clip_scale(max_norm: f32, total_norm: f32) -> Result<f32, OjasError> {
         return Err(OjasError::OutOfRange {
             op: OP,
             detail: format!("max_norm {max_norm} is negative"),
+        });
+    }
+    // A norm is a square root: a negative one is a caller bug, and
+    // `-1e-6 + eps == 0` would otherwise read as a coefficient overflow.
+    if total_norm < 0.0 {
+        return Err(OjasError::OutOfRange {
+            op: OP,
+            detail: format!("total_norm {total_norm} is negative"),
         });
     }
     let coef = max_norm / (total_norm + CLIP_GRAD_NORM_EPS);
@@ -3567,6 +3575,26 @@ pub(crate) mod tests {
             1.0f32.to_bits()
         );
         assert!(clip_scale(1.0, 4.0).unwrap() < 0.25);
+    }
+
+    #[test]
+    fn clip_scale_refuses_a_negative_total_norm() {
+        // `-1e-6 + CLIP_GRAD_NORM_EPS == 0` would give `+inf`, which the
+        // overflow rule reads as 1; a negative norm is refused instead.
+        for total in [-1.0e-6f32, -2.0, f32::MIN] {
+            assert!(
+                matches!(clip_scale(1.0, total), Err(OjasError::OutOfRange { .. })),
+                "{total}"
+            );
+            assert!(
+                matches!(
+                    clip_scale(f32::INFINITY, total),
+                    Err(OjasError::OutOfRange { .. })
+                ),
+                "{total}"
+            );
+        }
+        assert_eq!(clip_scale(1.0, -0.0).unwrap(), 1.0);
     }
 
     #[test]

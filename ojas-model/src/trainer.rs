@@ -660,8 +660,9 @@ impl<B: Backend> Trainer<B> {
     /// the error. Parameters, moments and the step counter do not change.
     /// After 8 such skips in a row (`MAX_CONSECUTIVE_SKIPS`), the next
     /// non-finite step returns [`OjasError::OutOfRange`] instead and keeps
-    /// the cursor; any committed step clears the count. Only this method
-    /// counts: [`Self::step_tokens`] has no cursor to skip.
+    /// the cursor; any committed step, including one through
+    /// [`Self::step_tokens`], clears the count. Only this method counts
+    /// skips: [`Self::step_tokens`] has no cursor to skip.
     ///
     /// Memory is checked before the work and again before the first update
     /// (a `CapacityExceeded` from either leaves the trainer Ready), so
@@ -680,7 +681,6 @@ impl<B: Backend> Trainer<B> {
         match self.run(&batches) {
             Ok(report) => {
                 self.cursor = after;
-                self.consecutive_skips = 0;
                 Ok(report)
             }
             Err(err) => {
@@ -795,6 +795,15 @@ impl<B: Backend> Trainer<B> {
             .iter()
             .map(|b| valid_targets(&b.y, self.cfg.ignore_index))
             .collect::<Vec<u64>>();
+        // A step with no valid target is refused below as `NonFinite`, which
+        // `SkipBatch` skips. Check the ids first, so a corrupt batch among
+        // them is the `OutOfRange` the embedding would have raised, never a
+        // skippable all-ignored step.
+        if counts.iter().all(|&n| n == 0) {
+            for b in batches {
+                check_ids(&b.x, self.spec.vocab)?;
+            }
+        }
         let weights = MicroWeights::new(&counts)?;
         let configs = self.optimizer_configs(mult)?;
         let budget = self.tape.backend().budget().clone();
@@ -831,6 +840,8 @@ impl<B: Backend> Trainer<B> {
         };
         // Step 7.
         self.step = next;
+        // Any committed step, from `step` or `step_tokens`, ends a run of skips.
+        self.consecutive_skips = 0;
         drop(grads);
         self.record_peak(rows, k, budget.peak_bytes().saturating_sub(live_before));
         Ok(StepReport {
