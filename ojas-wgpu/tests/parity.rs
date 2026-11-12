@@ -11,8 +11,8 @@ use std::sync::Arc;
 
 use common::*;
 use ojas_core::{
-    AdamWConfig, BackendCore, BackendFloat, BackendId, BackendModule, Budget, DType, DeviceBuffer,
-    MuonNs5Config, Numerics, OjasError, Tensor, RMS_NORM_EPS,
+    AdamWConfig, AdamWScalars, BackendCore, BackendFloat, BackendId, BackendModule, Budget, DType,
+    DeviceBuffer, MuonNs5Config, Numerics, OjasError, Tensor, RMS_NORM_EPS,
 };
 use ojas_cpu::CpuBackend;
 use ojas_wgpu::{WgpuBackend, WgpuContext};
@@ -1030,32 +1030,49 @@ fn adamw_matches_cpu_over_steps() {
     }
 }
 
-/// ft-9c13f472 D5: wgpu forms torch's `lerp` as the CPU `Numerics::Fast`
-/// path and Metal do: `g - (g - m) * (1f - f32(1 - beta1))` on the high
-/// branch, the branch taken on the f32 weight. The first moment `m` is
-/// compared bit for bit with CPU Fast (Metal's own test,
-/// `ojas-metal/tests/adamw_lerp_weight.rs`, compares Metal with the same
-/// CPU path, which closes the three-way equality); `p` and `v` use the
-/// tolerance of `adamw_matches_cpu_over_steps`.
+/// Distance in representable f32 values between `a` and `b` (the bits mapped
+/// to a monotone integer line).
+fn ulp_gap(a: f32, b: f32) -> u32 {
+    let key = |x: f32| {
+        let bits = x.to_bits();
+        if bits >> 31 == 1 {
+            !bits
+        } else {
+            bits | 0x8000_0000
+        }
+    };
+    key(a).abs_diff(key(b))
+}
+
+/// ft-9c13f472 D5: wgpu forms torch's `lerp` with the same words as CPU
+/// `Numerics::Fast` and Metal (word 4 is `1f - f32(1 - beta1)`, the branch
+/// is taken on the f32 weight), but its Metal HAL may contract the
+/// multiply-add of the high branch (`ojas-wgpu/src/backend.rs` header). So
+/// every element of `m` must be bit-equal to one of exactly two values:
 ///
-/// RESULT (sem-batch 2026-11-12, Apple Metal adapter, release): not bit-equal.
-/// beta1 0.0 and 0.001 pass; beta1 0.3 step 0 differs in some elements
-/// (f32 bits, wgpu vs CPU Fast: 3183981881 vs 3183981880, 3138859503 vs
-/// 3138859520, 1004432713 vs 1004432712). The backend states
-/// that the Metal HAL may contract multiply-adds (`ojas-wgpu/src/backend.rs`
-/// header), which turns the high branch's `g - (g - m) * c` into one fused
-/// operation, so Metal (`-ffp-contract=off`) and CPU Fast (no contraction)
-/// agree and this adapter does not. Fable's D5 ruling is to stop here and
-/// not loosen to a tolerance: the test is kept, ignored, as the record.
-/// Its words and branch flag still follow the D5 form; the wgpu AdamW
-/// tolerance test (`adamw_matches_cpu_over_steps`) passes.
+/// - CPU Fast's `g - (g - m) * c` (or `m + w * (g - m)` on the low branch),
+///   every operation rounded, or
+/// - the contracted form `(-(g - m)).mul_add(c, g)` (`w.mul_add(g - m, m)`
+///   on the low branch), one rounding.
+///
+/// That is set membership, not a tolerance: any other bit pattern fails with
+/// the element, beta1, step and the three values. Each step starts from the
+/// same fresh inputs on both sides, so a difference cannot carry over.
+///
+/// Discrimination: at beta1 0.3 `f32(beta1)` and `1f - f32(1 - beta1)` are
+/// the same bits (0x3e99999a), so that value cannot tell the old word from
+/// the new. At beta1 0.001 and 0.499 they differ, and there the test also
+/// computes what the old upload (word 4 = `f32(beta1)`) would give, in both
+/// the rounded and the contracted form, and requires wgpu's `m` to fall
+/// outside that set for some element: the test fails if the old word is
+/// still uploaded. The largest gap to CPU Fast is printed.
 #[test]
-#[ignore = "ft-9c13f472 D5 STOP: the wgpu Metal HAL contracts multiply-adds, so m is not bit-equal to CPU Fast for beta1 < 0.5; owner decision, no tolerance substituted"]
-fn adamw_first_moment_is_bit_equal_to_cpu_fast_for_every_beta1() {
+fn adamw_first_moment_is_cpu_fast_or_its_contracted_form_for_every_beta1() {
     let tie = 2.0f64.powi(-30);
     let fast = CpuBackend::new(Budget::new(8 << 30)).with_numerics(Numerics::Fast);
     assert_eq!(fast.numerics(), Numerics::Fast);
     let n = 513usize;
+    let (mut max_gap, mut contracted, mut exact_fast, mut old_word_misses) = (0u32, 0, 0, 0);
     for beta1 in [
         0.0,
         0.001,
@@ -1067,41 +1084,82 @@ fn adamw_first_moment_is_bit_equal_to_cpu_fast_for_every_beta1() {
         0.9,
         0.999,
     ] {
-        let cfg = AdamWConfig {
-            beta1,
-            ..AdamWConfig::nanolab(3e-3, 0.1)
-        };
-        let mut p = host(2000, &[n]);
-        let mut m = host(2001, &[n]);
-        let mut v = Tensor::from_f32(
-            &data(2002, n).iter().map(|x| x.abs()).collect::<Vec<_>>(),
-            &[n],
-            host_budget(),
-        )
-        .unwrap();
-        let (mut dp, mut dm, mut dv) = (up(&p), up(&m), up(&v));
         for step in 0..3u64 {
-            let grad = host(2100 + step, &[n]);
+            let cfg = AdamWConfig {
+                beta1,
+                ..AdamWConfig::nanolab(3e-3, 0.1)
+            };
+            let s = AdamWScalars::new(cfg, step).unwrap();
+            let (w, c) = (s.lerp_weight_f32(), s.lerp_high_f32());
+            let old_c = beta1 as f32;
+            let salt = 10 * step;
+            let mut p = host(2000 + salt, &[n]);
+            let mut m = host(2001 + salt, &[n]);
+            let mut v = Tensor::from_f32(
+                &data(2002 + salt, n)
+                    .iter()
+                    .map(|x| x.abs())
+                    .collect::<Vec<_>>(),
+                &[n],
+                host_budget(),
+            )
+            .unwrap();
+            let grad = host(2003 + salt, &[n]);
+            let (g0, m0) = (grad.to_f32_vec().unwrap(), m.to_f32_vec().unwrap());
+            let (mut dp, mut dm, mut dv) = (up(&p), up(&m), up(&v));
             gpu()
                 .adamw_step(&mut dp, &up(&grad), &mut dm, &mut dv, step, cfg)
                 .unwrap();
             fast.adamw_step(&mut p, &grad, &mut m, &mut v, step, cfg)
                 .unwrap();
-            let got: Vec<u32> = down(&dm).iter().map(|x| x.to_bits()).collect();
-            let want: Vec<u32> = m
-                .to_f32_vec()
-                .unwrap()
-                .iter()
-                .map(|x| x.to_bits())
-                .collect();
-            assert_eq!(
-                got, want,
-                "beta1 {beta1} step {step}: m is not bit-equal to CPU Fast"
-            );
+            let (got, want) = (down(&dm), m.to_f32_vec().unwrap());
+            for i in 0..n {
+                let (g, m_in) = (g0[i], m0[i]);
+                let contracted_form = if s.lerp_low_f32() {
+                    w.mul_add(g - m_in, m_in)
+                } else {
+                    (-(g - m_in)).mul_add(c, g)
+                };
+                let gpu_bits = got[i].to_bits();
+                assert!(
+                    gpu_bits == want[i].to_bits() || gpu_bits == contracted_form.to_bits(),
+                    "wgpu m is neither CPU Fast nor its contracted form: element {i}, beta1 {beta1}, \
+                     step {step}: g {g} ({:#010x}), m_in {m_in} ({:#010x}), wgpu {} ({gpu_bits}), \
+                     CPU Fast {} ({}), contracted {} ({})",
+                    g.to_bits(),
+                    m_in.to_bits(),
+                    got[i],
+                    want[i],
+                    want[i].to_bits(),
+                    contracted_form,
+                    contracted_form.to_bits()
+                );
+                max_gap = max_gap.max(ulp_gap(got[i], want[i]));
+                if gpu_bits == want[i].to_bits() {
+                    exact_fast += 1;
+                } else {
+                    contracted += 1;
+                }
+                if !s.lerp_low_f32() && old_c.to_bits() != c.to_bits() {
+                    let old_rounded = g - (g - m_in) * old_c;
+                    let old_contracted = (-(g - m_in)).mul_add(old_c, g);
+                    if gpu_bits != old_rounded.to_bits() && gpu_bits != old_contracted.to_bits() {
+                        old_word_misses += 1;
+                    }
+                }
+            }
+            close(&format!("beta1 {beta1} step {step} p"), &dp, &p);
+            close(&format!("beta1 {beta1} step {step} v"), &dv, &v);
         }
-        close(&format!("beta1 {beta1} p"), &dp, &p);
-        close(&format!("beta1 {beta1} v"), &dv, &v);
     }
+    assert!(
+        old_word_misses > 0,
+        "wgpu m never left the set the old word f32(beta1) gives: the test cannot tell the words apart"
+    );
+    eprintln!(
+        "WGPU-ADAMW-M max gap to CPU Fast: {max_gap} ulp; {exact_fast} elements equal CPU Fast, \
+         {contracted} equal only the contracted form; {old_word_misses} elements outside the old-word set"
+    );
 }
 
 #[test]
