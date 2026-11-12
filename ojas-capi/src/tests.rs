@@ -1899,7 +1899,8 @@ fn session_budget(session: &session::Session) -> Budget {
 /// `(calls, bytes)` of device readbacks charged to `budget`'s tree while `f`
 /// runs, from whichever thread made them. A step on `CpuBackend` reads
 /// nothing back from a device, so a device session that fell back to the CPU
-/// reports `(0, 0)` here.
+/// reports `(0, 0)` here. Reads are charged to the budget a tensor is read
+/// with, so a sibling session's budget does not see this session's reads.
 fn readbacks_during<T>(budget: &Budget, f: impl FnOnce() -> T) -> (T, (u64, u64)) {
     let (calls, bytes) = budget.device_readbacks();
     let out = f();
@@ -2000,15 +2001,28 @@ fn assert_device_steps_match_cpu(device: session::Session, dir: &Path) {
     // Trainer::new on a device session downloads each resident weight once.
     assert_eq!(reads.0, u64::from(device.tensors), "{reads:?}");
     for n in 0..3 {
-        let (on_cpu, cpu_reads) = readbacks_during(&cpu_budget, || {
-            call(crate::OP_TRAIN_STEP, &sampled_payload(cpu.id))
+        // The CPU step is counted on both budgets: a CPU session holds no
+        // device tensor, so its own budget can only show a read by construction;
+        // a device read made during the CPU step is charged to the device
+        // session's budget, which the outer counter watches.
+        let ((on_cpu, cpu_reads), dev_reads_in_cpu_step) = readbacks_during(&device_budget, || {
+            readbacks_during(&cpu_budget, || {
+                call(crate::OP_TRAIN_STEP, &sampled_payload(cpu.id))
+            })
         });
         let (on_dev, dev_reads) = readbacks_during(&device_budget, || {
             call(crate::OP_TRAIN_STEP, &sampled_payload(device.id))
         });
         let on_cpu = step_out(&on_cpu.unwrap());
         let on_dev = step_out(&on_dev.unwrap());
+        // Catches a CPU session that came to hold a device tensor.
         assert_eq!(cpu_reads, (0, 0), "step {n}: the CPU step read a device");
+        // Catches a device readback made during the CPU step.
+        assert_eq!(
+            dev_reads_in_cpu_step,
+            (0, 0),
+            "step {n}: the CPU step read back from the device session"
+        );
         assert_eq!(
             dev_reads,
             (1, 4),
