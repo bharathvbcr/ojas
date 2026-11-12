@@ -187,7 +187,7 @@ One row for each of the 106 `Backend` methods, in trait order, read at bfc24e5. 
 - **Default: constant**: `numerics` is `Exact`, `bf16_operands` is `false`, `optimizer_scratch_bytes` is `Ok(None)`, `sync` is `Ok(())`.
 - **Refuses: always `Unsupported`** (CUDA only): `CudaBackend` overrides the method with a body that returns `Unsupported`; the cell cites it. "Refuses (default via `<op>`)" is a trait default that composes ops CUDA refuses, so it refuses too. Only `id`, `budget`, `numerics`, `upload`, `download` and `sync` do work there.
 
-Two limits are not repeated per row. Attention on Metal and wgpu refuses a head dimension above 256 with `UnsupportedHeadDim` (`METAL_MAX_HEAD_DIM`, `ATTENTION_MAX_HEAD_DIM`). Metal also refuses a tensor past its kernels' 32-bit indexing as `Unsupported` (for example `ojas-metal/src/backend.rs:1014`, `:1768`, `:2155`), and wgpu refuses a kernel that needs more storage bindings than the device allows (`ojas-wgpu/src/context.rs:1613`).
+Two limits are not repeated per row. Attention on Metal and wgpu refuses a head dimension above 256 with `UnsupportedHeadDim` (`METAL_MAX_HEAD_DIM`, `ATTENTION_MAX_HEAD_DIM`). Metal also refuses a tensor past its kernels' 32-bit indexing as `Unsupported` (for example `ojas-metal/src/backend.rs:1014`, `:1768`, `:2155`, and `seq_mean_forward`/`_backward` at `ojas-metal/src/backend/gemma_host.rs:79`, `:115`), and wgpu refuses a kernel that needs more storage bindings than the device allows (`ojas-wgpu/src/context.rs:1613`).
 
 | Trait method | Sub-trait | CPU | Metal | wgpu | CUDA |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -229,8 +229,8 @@ Two limits are not repeated per row. Attention on Metal and wgpu refuses a head 
 | `scale_forward` | `BackendFloat` | Implemented | Implemented | Default: refuses | Default: refuses |
 | `softmax_forward` | `BackendFloat` | Implemented | Implemented | Default: refuses | Default: refuses |
 | `softmax_backward` | `BackendFloat` | Implemented | Implemented | Default: refuses | Default: refuses |
-| `seq_mean_forward` | `BackendFloat` | Implemented | Partial: row indices past 32 bits are `Unsupported` (`ojas-metal/src/backend/gemma_host.rs:79`) | Default: refuses | Default: refuses |
-| `seq_mean_backward` | `BackendFloat` | Implemented | Partial: element indices past 32 bits are `Unsupported` (`ojas-metal/src/backend/gemma_host.rs:115`) | Default: refuses | Default: refuses |
+| `seq_mean_forward` | `BackendFloat` | Implemented | Implemented | Default: refuses | Default: refuses |
+| `seq_mean_backward` | `BackendFloat` | Implemented | Implemented | Default: refuses | Default: refuses |
 | `l2_normalize_forward` | `BackendFloat` | Implemented | Partial: only `eps == 1e-12` (`ojas-metal/src/backend/gemma_host.rs:130`) | Default: refuses | Default: refuses |
 | `l2_normalize_backward` | `BackendFloat` | Implemented | Partial: only `eps == 1e-12` (`ojas-metal/src/backend/gemma_host.rs:160`) | Default: refuses | Default: refuses |
 | `clip_grad_norm` | `BackendFloat` | Implemented | Implemented | Implemented | Refuses: always `Unsupported` (`ojas-cuda/src/backend.rs:254`) |
@@ -305,8 +305,8 @@ A cell says "yes" only where a test in the repository constructs that backend an
 | Model | CPU | Metal | wgpu | CUDA |
 | :--- | :--- | :--- | :--- | :--- |
 | nanolab GPT | yes: `oracle_forward_loss_and_logits` (`ojas-model/tests/oracle_parity.rs:364`, on `cpu_model`) | yes: `metal_trainer_matches_torch_on_the_tiny_fixtures` (`oracle_parity.rs:705`) | yes: `wgpu_trainer_matches_torch_on_the_tiny_fixtures` (`oracle_parity.rs:720`) | no test |
-| Qwen3.5 | yes: `six_straight_steps_equal_three_then_a_checkpoint_a_fresh_provider_and_three_more` (`ojas-model/tests/qwen35_step_provider.rs:463`, a `TapeStepProvider<CpuBackend>`) | yes: `on_metal_the_norm_and_the_update_read_each_gradient_once` (`qwen35_step_provider.rs:1578`) and `the_metal_tape_matches_transformers_and_the_cpu_tape` (`ojas-model/tests/qwen35_metal_tape.rs:50`, which returns early and passes when no Metal device opens, `:51`) | no test; wgpu refuses the GDN, conv1d and gated-norm ops (trait defaults) | no test; `CudaBackend` refuses every compute op |
-| toy image MLP (`ImageMlpProvider`, `ojas-model/src/image_mlp.rs:1-7`) | yes: `the_job_contract_is_enforced_literally` (`ojas-model/tests/image_mlp_provider.rs:441`, on `fresh()`, a CPU provider) | yes: `gpu_resume_is_bit_identical_and_matches_the_cpu_within_the_fast_tolerance` (`image_mlp_provider.rs:812`, `#[ignore]`, needs a Metal device) | no test | no test |
+| Qwen3.5 | yes: `six_straight_steps_equal_three_then_a_checkpoint_a_fresh_provider_and_three_more` (`ojas-model/tests/qwen35_step_provider.rs:463`, a `TapeStepProvider<CpuBackend>`) | yes: `on_metal_the_norm_and_the_update_read_each_gradient_once` (`qwen35_step_provider.rs:1579`) and `the_metal_tape_matches_transformers_and_the_cpu_tape` (`ojas-model/tests/qwen35_metal_tape.rs:50`, which returns early and passes when no Metal device opens, `:51`) | no test; wgpu refuses the GDN, conv1d and gated-norm ops (trait defaults) | no test; `CudaBackend` refuses every compute op |
+| toy image MLP (`ImageMlpProvider`, `ojas-model/src/image_mlp.rs:1-7`) | yes: `the_job_contract_is_enforced_literally` (`ojas-model/tests/image_mlp_provider.rs:307`, on `fresh()`, a CPU provider) | yes: `gpu_resume_is_bit_identical_and_matches_the_cpu_within_the_fast_tolerance` (`image_mlp_provider.rs:812`, `#[ignore]`, needs a Metal device) | no test | no test |
 | CNN, ViT | not yet (vision cards ft-4f11ce5a, ft-96023b34, ft-7f4f2d87) | not yet | not yet | not yet |
 
 ---
