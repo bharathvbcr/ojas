@@ -52,7 +52,8 @@ use crate::qwen35::spec::{Qwen35Mixer, Qwen35Spec};
 #[derive(Clone, Debug)]
 pub enum FrozenWeight<V> {
     Dense(V),
-    Quant(PlacedAffine),
+    /// Boxed: a [`PlacedAffine`] is several hundred bytes of handles, a dense value is a handle.
+    Quant(Box<PlacedAffine>),
 }
 
 /// A gated delta net layer's mixer. `W` is the type of the weights the LoRA kinds wrap (`wq`,
@@ -243,7 +244,7 @@ impl<V> Qwen35Params<V, FrozenWeight<V>> {
         let dense = RefCell::new(dense);
         self.try_map_with(&mut |v| (*dense.borrow_mut())(v), &mut |w| match w {
             FrozenWeight::Dense(v) => (*dense.borrow_mut())(v).map(FrozenWeight::Dense),
-            FrozenWeight::Quant(q) => quant(q).map(FrozenWeight::Quant),
+            FrozenWeight::Quant(q) => quant(q).map(|q| FrozenWeight::Quant(Box::new(q))),
         })
     }
 }
@@ -1064,7 +1065,7 @@ pub fn load_hf_q8_pinned<B: Backend + ?Sized>(
         cut: BTreeMap::new(),
     };
     load_tower(spec, &st, prefix, linears, table, budget, true, &mut |r| {
-        packed.read(r).map(FrozenWeight::Quant)
+        packed.read(r).map(|q| FrozenWeight::Quant(Box::new(q)))
     })
 }
 

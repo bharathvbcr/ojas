@@ -15,8 +15,8 @@ mod common;
 use common::Resident;
 use ojas_autograd::{Tape, Var};
 use ojas_core::{
-    dequantize_affine_bf16, f32_to_bf16, quantize_affine, AffineSpec, Backend, BackendCore,
-    BackendId, BackendModule, Budget, OjasError, PlacedAffine, Tensor,
+    dequantize_affine_bf16, f32_to_bf16, quantize_affine, AffineSpec, Backend, BackendId,
+    BackendModule, Budget, OjasError, PlacedAffine, Tensor,
 };
 use ojas_cpu::CpuBackend;
 

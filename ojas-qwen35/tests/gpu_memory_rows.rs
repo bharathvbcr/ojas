@@ -860,7 +860,7 @@ fn tape_lora(snap: &Snapshot, ids: &[u32], mut r: Row, variant: StepVariant) -> 
                 let mapped = host.try_map_frozen(&mut |t| m.upload(t), &mut |t| {
                     let q = quantize_affine(t, AffineSpec::q8(), &host_budget)?;
                     if resident {
-                        Ok(FrozenWeight::Quant(q.place(&m)?))
+                        Ok(FrozenWeight::Quant(Box::new(q.place(&m)?)))
                     } else {
                         let dense = dequantize_affine_bf16(&q, &host_budget)?;
                         Ok(FrozenWeight::Dense(m.upload(&dense)?))
