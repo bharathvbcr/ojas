@@ -169,7 +169,7 @@
 <ol>
 <li><strong>Decoupled Compile Cycles &amp; Toolchain Isolation:</strong>
 <ul>
-<li><code>ojas</code> targets standard cross-platform Rust environments across x86_64, aarch64, Linux, macOS, and Windows.
+<li><code>ojas</code> targets standard cross-platform Rust environments across x86_64, aarch64, Linux and macOS; Windows has never been built in CI (<code>.github/workflows/test.yml</code> has no Windows job; a compile check is planned, ft-3902a4b3).
 </li>
 <li><code>tessl</code> requires Xcode 26, the macOS Metal Toolchain (<code>xcrun metal</code>, <code>metallib</code>), and Objective-C bindings (<code>objc2</code>, <code>objc2-metal</code>). Absorbing <code>tessl</code> directly into <code>ojas</code> would impose heavy macOS/Xcode build prerequisites on all core engine developers and Linux CI runners.
 </li>
@@ -183,7 +183,7 @@
 </li>
 <li><code>sparsl</code> targets sparse event-driven execution on generic CPUs with optional Apple Silicon Metal compute.
 </li>
-<li><code>ojas</code> provides portable cross-platform execution (CPU, wgpu, CUDA, HIP). Isolating platform-specific runtimes prevents dependency bloat and eliminates compile-time friction.
+<li><code>ojas</code> provides portable cross-platform execution (CPU, wgpu, and CUDA, whose <code>CudaBackend</code> refuses every compute op; HIP is a copy probe, not a <code>Backend</code>). Isolating platform-specific runtimes prevents dependency bloat and eliminates compile-time friction.
 </li>
 </ul>
 </li>
@@ -262,7 +262,7 @@
 <li><strong>No tessl or sparsl copy of ojas types.</strong> Neither tessl nor sparsl grows its own <code>Budget</code>, typed error, or <code>Tape</code>. Conversely ojas does not grow Metal runtime code.
 </li>
 </ul>
-<p>What stays separate on purpose: the CPU reference for every op, the wgpu, CUDA and HIP backends, tessl&#39;s inference engines, and sparsl&#39;s event-driven sparse kernels. On Metal, <code>Numerics::Exact</code> is opt-in and covers linear products and the grouped conv2d GEMM: <code>ojas-metal</code> calls tessl <code>gemm_fixed_order_{nn,nt,tn}</code> (one thread per output, ascending <code>k</code>, contraction off), so those products match the CPU fold bit for bit. Metal&#39;s fixed-order GEMMs flush every subnormal value to zero (operands, products, partial sums and results), so bit-identity with CPU Exact holds only when no operand, product, partial sum or result is subnormal; this is a property of the Apple GPU path (hardware or driver), not a build setting (tessl card ft-02eec315). The default stays <code>Numerics::Fast</code> (TensorOps, its own reduction order). The bf16-accumulation flag does not redirect the Exact path. Depthwise conv, attention, and the other reductions stay on their existing kernels.</p>
+<p>What stays separate on purpose: the CPU reference for every op, the wgpu and CUDA backends and the <code>ojas-hip</code> copy probe (HIP is not a <code>Backend</code>), tessl&#39;s inference engines, and sparsl&#39;s event-driven sparse kernels. On Metal, <code>Numerics::Exact</code> is opt-in and covers linear products and the grouped conv2d GEMM: <code>ojas-metal</code> calls tessl <code>gemm_fixed_order_{nn,nt,tn}</code> (one thread per output, ascending <code>k</code>, contraction off), so those products match the CPU fold bit for bit. Metal&#39;s fixed-order GEMMs flush every subnormal value to zero (operands, products, partial sums and results), so bit-identity with CPU Exact holds only when no operand, product, partial sum or result is subnormal; this is a property of the Apple GPU path (hardware or driver), not a build setting (tessl card ft-02eec315). The default stays <code>Numerics::Fast</code> (TensorOps, its own reduction order). The bf16-accumulation flag does not redirect the Exact path. Depthwise conv, attention, and the other reductions stay on their existing kernels.</p>
 <hr>
 <h2 id="1-system-philosophy-a-modern-dl-engine">1. System Philosophy: A Modern DL Engine <a class="anchor" href="#1-system-philosophy-a-modern-dl-engine" aria-label="Link to this section">#</a></h2>
 <p>ojas is architected from first principles to overcome fundamental design flaws common in legacy machine learning frameworks:</p>

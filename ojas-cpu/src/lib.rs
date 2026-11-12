@@ -1,15 +1,19 @@
 //! CPU reference for the nanolab-default ops.
 //!
 //! Reductions walk the reduction axis in increasing index order and accumulate
-//! in `f32`. The exceptions are the AdamW moments (the frozen contract forms
-//! those scalars in `f64`) and the clip total norm, whose sum of squares is
-//! `f64` so a finite norm is not refused. [`CpuBackend::new`] is one thread.
+//! in `f32`. The exceptions include the AdamW moments (the frozen contract forms
+//! those scalars in `f64`), the clip total norm, whose sum of squares is
+//! `f64` so a finite norm is not refused, and the sequence mean (`seq_mean`
+//! sums in `f64`, `gemma_ops.rs`). The list is not exhaustive: the encoder
+//! norms, the L2 normalize and a few other ops also keep `f64` statistics
+//! (`rg -n "0\.0f64" ojas-cpu/src` lists them), noted at each op. [`CpuBackend::new`] is one thread.
 //! [`CpuBackend::with_threads`] gives the backend a persistent worker pool.
 //! Linear, matmul and Newton-Schulz go through one packed GEMM that splits
 //! output tiles, never the reduction; attention splits heads and query rows;
 //! norms, RoPE, cross-entropy and the optimizers split rows or elements.
 //! Small ops stay on the calling thread. [`ojas_core::Numerics::Fast`] (the
-//! default) uses `mul_add`, larger GEMM blocks, blocked attention above 256
+//! default) uses `mul_add` where the target has FMA (aarch64, or
+//! `target_feature = "fma"`; otherwise `a * b + c`, see `gemm.rs`), larger GEMM blocks, blocked attention above 256
 //! positions, the vector exponential of `exp.rs` with fixed lane sums for
 //! SiLU backward and cross-entropy, Accelerate `vvexpf` for macOS Fast SiLU
 //! forward and the per-head gate sigmoid (`e^{-|x|}`, then the same sigmoid

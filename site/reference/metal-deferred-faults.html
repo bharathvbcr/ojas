@@ -833,13 +833,13 @@
 </li>
 <li><strong>Memory-cap commits are now counted per trigger</strong> (<code>WaitCounts::mem_cap</code>, <code>working_set</code>). The 124M split (about 41, inferred in §9.3) has not been re-measured with the counter. The cap trades waits for resident memory: at 1 GiB, the step&#39;s freed temporaries recycle every 1 GiB of allocation.
 </li>
-<li><strong>The capi early-return test runs on wgpu only</strong> (<code>an_early_return_never_leaks_a_deferred_fault_into_the_next_call</code>). A Metal twin would pin <code>settled</code> on Metal; that file belongs to the coordinator.
+<li><strong>Closed (verified at bfc24e5).</strong> The capi early-return test ran on wgpu only (<code>an_early_return_never_leaks_a_deferred_fault_into_the_next_call</code>). The Metal twin now exists: <code>an_early_return_never_leaks_a_deferred_metal_fault_into_the_next_call</code> (<code>ojas-capi/src/tests.rs:2371</code>). Not re-run here.
 </li>
 <li><strong>Stale text outside this lane:</strong>
 <ul>
-<li><code>bench/ojas_rows.rs:21-22</code> says Metal&#39;s <code>sync</code> is &#34;the trait default, a no-op&#34;. It is now an override that waits.
+<li>Closed (verified at bfc24e5): <code>bench/ojas_rows.rs:21-22</code> said Metal&#39;s <code>sync</code> is &#34;the trait default, a no-op&#34;. <code>bench/ojas_rows.rs:21-23</code> now says <code>sync</code> waits for the recorded work and reports any deferred fault on both Metal and wgpu.
 </li>
-<li>The <code>Backend::sync</code> doc in <code>ojas-core</code>, and §5&#39;s list.
+<li>Closed (verified at bfc24e5): the <code>Backend::sync</code> doc in <code>ojas-core</code> (<code>ojas-core/src/backend.rs:913-921</code>) now names Metal and wgpu as the backends that defer faults and must override it. §5&#39;s list was not re-checked.
 </li>
 </ul>
 </li>

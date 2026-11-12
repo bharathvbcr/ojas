@@ -629,8 +629,17 @@ impl fmt::Debug for RunBox {
     }
 }
 
-/// One op. Dimensions are validated by the caller; the device thread checks
-/// buffer ids and windows again before it binds anything.
+/// One op. Dimensions are validated by the caller. Before it binds anything
+/// the device thread re-checks only these, and anything else rests on the
+/// host validators. `view()` (`device.rs:1166-1188`): the buffer id is known,
+/// the window offset is 4-byte aligned, and the window fits its buffer; it
+/// does not compare windows with each other or with the dimensions. The
+/// op-specific relations: attention planes (`sdpa_views`, `device.rs:3077`),
+/// the KV write (`tn <= cap`, `cap > 0` and window sizes, `device.rs:5695`),
+/// linear cross-entropy window sizes (`device.rs:5441`), the chunked-GDN
+/// backward workspace charge equal to tessl's bytes (`device.rs:4549`), and
+/// weight-gradient scratch charged equal to the scratch needed (`part()`,
+/// `device.rs:4628`).
 #[derive(Debug)]
 pub(crate) enum Cmd {
     /// A host tensor's contiguous window, encoded by the device thread

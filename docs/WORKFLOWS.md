@@ -89,7 +89,7 @@ Never run Tier $N+1$ until Tier $N$ passes cleanly. When modifying a core trait 
 
 ## WF3: PyTorch Parity Verification Loop
 
-**Objective**: Verify bitwise numerical correctness of isolated ops against PyTorch reference fixtures without spinning up end-to-end models.
+**Objective**: Verify numerical parity, within the pinned tolerances below, of isolated ops against PyTorch reference fixtures without spinning up end-to-end models.
 
 ### Fixture Locations
 
@@ -101,10 +101,10 @@ Never run Tier $N+1$ until Tier $N$ passes cleanly. When modifying a core trait 
   - *Status*: Verified present on disk.
   - *Role*: Reference input/output activations for GroupNorm layer verification.
 
-#### 2. Model Weights Checkpoint (OPTIONAL for op parity; required for M3+ full-model inference)
+#### 2. Model Weights Checkpoint (needed by the weight-bearing op rows; required for M3+ full-model inference)
 - **SAM 3.1 Multiplex Weights**: `SpikeTrack/models/sam3.1/sam3.1_multiplex.safetensors` (~3.5 GB)
-  - *Status*: Optional for `parity_check.sh`.
-  - *Note*: `parity_check.sh` checks for this path optionally (`# Resolve Weights (optional)`). Its absence does not impede isolated op validation. Full model weights will be staged during Milestone 3 full-model integration.
+  - *Status*: `parity_check.sh` resolves this path optionally (`# Resolve Weights (optional)`, `scripts/parity_check.sh:181`), but a full run needs it.
+  - *Note*: The script runs the suites with `--ignored` (`scripts/parity_check.sh:285-289`, `:334-338`). `weights()` panics when `OJAS_SAM_WEIGHTS` is unset (`ojas-oracle/tests/sam_fixtures_cpu.rs:50-53`), so the four weight-bearing rows (`layer_norm` with the true affine, `linear_bias`, `conv2d` and `conv_transpose2d`, `sam_fixtures_cpu.rs:217-238`) fail a full run without the weights, and the GroupNorm test panics on its own env var (`OJAS_SAM_GROUPNORM_FIXTURES`, `:245-249`). `--op` is passed to cargo as a test-name filter (`scripts/parity_check.sh:286-289`), so without the weights only an `--op` value that matches some other parity test but none of those five can pass (an `--op` that matches no test is itself an error, `scripts/parity_check.sh:260-261`). Full model weights will be staged during Milestone 3 full-model integration.
 
 ### Execution Script
 Use `./scripts/parity_check.sh`:
@@ -124,7 +124,7 @@ Use `./scripts/parity_check.sh`:
 ```
 
 ### Strict Numerical Tolerances
-Tolerances are enforced bit-for-bit by `ojas-oracle/src/sam_fixtures.rs`:
+The bounds below are tolerances, not bit equality. They are pinned in `ojas-oracle/src/sam_fixtures.rs` (`TABLE_TOL`, `ROPE_TOL`, `GELU_TOL`, `LAYER_NORM_TOL`, `GROUP_NORM_TOL`, `ATTENTION_TOL`, `:73-120`):
 
 | Op Family | Max Abs Error ($\text{tol}_{\text{abs}}$) | Max Rel Error ($\text{tol}_{\text{rel}}$) | Min Cosine Similarity ($\text{tol}_{\text{cosine}}$) |
 |---|---|---|---|
@@ -134,11 +134,12 @@ Tolerances are enforced bit-for-bit by `ojas-oracle/src/sam_fixtures.rs`:
 | **LayerNorm (Affine / 2D)** | `1e-4` | `1e-3` | `1.0 - 1e-9` |
 | **GroupNorm** | `1e-4` | `1e-3` | `1.0 - 1e-9` |
 | **Attention (SDPA)** | `1e-4` | `1e-2` | `1.0 - 1e-8` |
+| **Linear / Conv (weight-bearing ops: `LINEAR_TOL`, `CONV_TOL`)** | `1e-3` | `1e-1` | `1.0 - 1e-9` |
 
 ### Verification Formula
 All three conditions must hold:
 1. $\max |y_{\text{got}} - y_{\text{want}}| \le \text{tol}_{\text{abs}}$
-2. $\frac{\max |y_{\text{got}} - y_{\text{want}}|}{\max(|y_{\text{want}}|, 10^{-3} \cdot \max |y_{\text{want}}|)} \le \text{tol}_{\text{rel}}$
+2. $\max_i \frac{|y_{\text{got},i} - y_{\text{want},i}|}{\max(|y_{\text{want},i}|, \text{floor})} \le \text{tol}_{\text{rel}}$, the maximum over elements, with $\text{floor} = \max(10^{-3} \cdot \max_j |y_{\text{want},j}|, \texttt{f64::MIN\_POSITIVE})$ (`ojas-oracle/src/sam_fixtures.rs:222-230`). It is not one ratio of global maxima.
 3. $\frac{y_{\text{got}} \cdot y_{\text{want}}}{\|y_{\text{got}}\| \|y_{\text{want}}\|} \ge \text{tol}_{\text{cosine}}$
 
 ---

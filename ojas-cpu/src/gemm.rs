@@ -12,9 +12,14 @@
 //! loads the `C` tile before each later one, adds
 //! `a * b` for `k` ascending without `mul_add`, and stores it back, so every
 //! output is `((0 + a0*b0) + a1*b1) + ...` in ascending `k`, whatever the
-//! tiling or thread count. The fast kernel uses `f32::mul_add` in the same
-//! ascending order with its own blocking; its bits also do not depend on the
-//! tiling or the thread count.
+//! tiling or thread count. The fast kernel calls `fma` in the same ascending
+//! order with its own blocking; its bits also do not depend on the tiling or
+//! the thread count. `fma` is `f32::mul_add` (one rounding per step) only on
+//! aarch64 or with `target_feature = "fma"`; on any other build it is
+//! `a * b + c` (two roundings). Above `FAST_WHOLE_CALL_MACS` the product
+//! goes to Accelerate (macOS) or to `ojas_simd::sgemm_tile`, which rounds once
+//! per step on every ojas-simd backend. So on an x86_64 baseline build a Fast
+//! product rounds twice per step below the cutoff and once above it.
 //!
 //! A one-row product below the whole-call cutoff whose `B` is contiguous
 //! along either axis (a decode step's `x·Wᵀ` and `g·W`) skips the packing
@@ -45,7 +50,8 @@ use crate::validate::{product, shape};
 /// Register tile rows (A panel width).
 pub(crate) const MR: usize = 6;
 /// Register tile columns (B panel width). 6 x 16 keeps 24 four-lane
-/// accumulators in registers on aarch64 and x86-64.
+/// accumulators in registers on aarch64 (not measured on x86-64, whose
+/// baseline has 16 vector registers).
 pub(crate) const NR: usize = 16;
 
 /// One register tile: `c_tile[i * ldc + j] += sum_{p < k} a_panel[p][i] * b_panel[p][j]`

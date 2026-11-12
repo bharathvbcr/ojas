@@ -108,7 +108,7 @@ queue, or wait until after item 10); ojas file ownership with the coordinator; t
   - RoPE is the half-split over the full head;
   - the per-head gate is `[n_head, d_model]`;
   - CE is `[rows × vocab]`;
-  - `METAL_MAX_HEAD_DIM = 128` (`:47-54`, `:353-379`).
+  - `METAL_MAX_HEAD_DIM = 128` (`:47-54`, `:353-379`). *Dated note (bfc24e5): the constant is 256, `ojas-core/src/backend.rs:141`.*
 - **`BackendId::Cuda` already exists** (`:13-19`) [V].
 - **Numerics contract** (`:21-34`, `:386-393`) [V]. `Exact` means ascending-index f32 reductions, no FMA, bits independent of thread count. `Fast` may fuse or reorder, but "the bits still must not depend on the thread count". A GPU backend that is not ascending-index-without-FMA "must override this to return `Numerics::Fast`".
   - A CUDA backend is `Fast` by this definition [I].
@@ -130,7 +130,7 @@ queue, or wait until after item 10); ojas file ownership with the coordinator; t
 The **only** CUDA-C text in ojas is `affine_cuda()` [V `ojas/ojas-kernels/src/source.rs:33-48`].
 Everything else is WGSL:
 - 11 modules, 1,263 lines [V `wc -l ojas-kernels/src/wgsl/*.wgsl`];
-- attention is capped at `ATTENTION_MAX_HEAD_DIM = 128` (`geometry.rs:146`);
+- attention is capped at `ATTENTION_MAX_HEAD_DIM = 128` (`geometry.rs:146`; *dated note (bfc24e5): the constant is 256, `ojas-kernels/src/geometry.rs:407`*);
 - `GEMM_TILE = 64` (`geometry.rs:127`).
 
 The crate is device-agnostic: geometry, source text and a parity harness (`max_abs`, `splitmix_f32`,

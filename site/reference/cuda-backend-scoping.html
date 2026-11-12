@@ -281,7 +281,7 @@
 </li>
 <li>CE is <code>[rows × vocab]</code>;
 </li>
-<li><code>METAL_MAX_HEAD_DIM = 128</code> (<code>:47-54</code>, <code>:353-379</code>).
+<li><code>METAL_MAX_HEAD_DIM = 128</code> (<code>:47-54</code>, <code>:353-379</code>). <em>Dated note (bfc24e5): the constant is 256, <code>ojas-core/src/backend.rs:141</code>.</em>
 </li>
 </ul>
 </li>
@@ -325,7 +325,7 @@
 <ul>
 <li>11 modules, 1,263 lines [V <code>wc -l ojas-kernels/src/wgsl/*.wgsl</code>];
 </li>
-<li>attention is capped at <code>ATTENTION_MAX_HEAD_DIM = 128</code> (<code>geometry.rs:146</code>);
+<li>attention is capped at <code>ATTENTION_MAX_HEAD_DIM = 128</code> (<code>geometry.rs:146</code>; <em>dated note (bfc24e5): the constant is 256, <code>ojas-kernels/src/geometry.rs:407</code></em>);
 </li>
 <li><code>GEMM_TILE = 64</code> (<code>geometry.rs:127</code>).
 </li>

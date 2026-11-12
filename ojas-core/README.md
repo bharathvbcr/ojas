@@ -56,13 +56,18 @@ classDiagram
 
     class OjasError {
         <<enumeration>>
-        CapacityExceeded
-        UnsupportedHeadDim
-        NonFinite
+        Shape
+        Dtype
         OutOfRange
-        ShapeMismatch
-        DeviceMismatch
-        TruncatedCheckpoint
+        NonFinite
+        UnsupportedHeadDim
+        CapacityExceeded
+        Poisoned
+        DeviceLost
+        WaitTimeout
+        Backend
+        Unsupported
+        Placement
     }
 
     Tensor --> DType

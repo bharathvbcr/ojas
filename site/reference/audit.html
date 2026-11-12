@@ -205,7 +205,7 @@
 <ul>
 <li><strong>Silent Head Dimension Truncation:</strong> Attention backward kernels clamp head dimension with <code>d_lim = min(D, 64u)</code> (in upstream metal-native&#39;s <code>flash_attn_bwd.metal:28</code>). Models with head dimensions greater than 64 silently drop high-index features.
 <ul>
-<li><em>ojas Defense:</em> <code>ojas_core::refuse_unsupported_metal_head_dim</code>, which <code>ojas_metal</code> calls, returns <code>OjasError::UnsupportedHeadDim</code> for any $d &gt; 64$. The CPU backend computes any positive head dimension.
+<li><em>ojas Defense:</em> <code>ojas_core::refuse_unsupported_metal_head_dim</code>, which <code>ojas_metal</code> calls, returns <code>OjasError::UnsupportedHeadDim</code> for any $d &gt; 64$ (a dated freeze record; the cap was raised to 256 since, <code>METAL_MAX_HEAD_DIM</code> at <code>ojas-core/src/backend.rs:141</code>, applied at <code>:210</code>). The CPU backend computes any positive head dimension.
 </li>
 </ul>
 </li>
@@ -268,7 +268,7 @@
 <h2 id="the-6-immutable-api-freezes-in-ojas">The 6 Immutable API Freezes in ojas <a class="anchor" href="#the-6-immutable-api-freezes-in-ojas" aria-label="Link to this section">#</a></h2>
 <figure class="diagram"><pre class="mermaid">flowchart LR
     F1[&#34;1. Tensor byte_offset is explicit and preserved by narrow()&#34;]
-    F2[&#34;2. Head dim &gt; 64 returns UnsupportedHeadDim (Never Clamped)&#34;]
+    F2[&#34;2. Head dim &gt; 256 returns UnsupportedHeadDim (Never Clamped; cap was 64 when written, METAL_MAX_HEAD_DIM)&#34;]
     F3[&#34;3. Budget::try_reserve returns CapacityExceeded (Never Shrinks)&#34;]
     F4[&#34;4. next_step refuses u64::MAX (Never Wraps)&#34;]
     F5[&#34;5. Non-finite values return NonFinite (Never Applied to Weights)&#34;]

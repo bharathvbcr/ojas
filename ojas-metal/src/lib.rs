@@ -1,8 +1,12 @@
 //! The Metal backend on tessl.
 //!
-//! [`MetalBackend`] runs every `ojas_core::Backend` op on device-resident
-//! tensors at any shape the kernels index, with head dimension at most
-//! `METAL_MAX_HEAD_DIM`. By default every op accumulates in `f32`; callers can
+//! [`MetalBackend`] runs 100 of the 106 `ojas_core::Backend` methods on
+//! device-resident tensors at any shape the kernels index, with head dimension
+//! at most `METAL_MAX_HEAD_DIM`. The trait defaults, which refuse, apply to
+//! `relu_backward`, `slice_backward`, `interpolate_bilinear_backward` and
+//! `group_norm_backward`; `autocast_region` and
+//! `causal_sdpa_backward_recompute` are defaults on every backend
+//! (`docs/op-coverage.md`, per-method table). By default every op accumulates in `f32`; callers can
 //! opt into step-by-step IEEE-754 RNE `bf16` accumulation across all GPU
 //! reductions and dot products via [`MetalBackend::with_bf16_accumulation`] or
 //! [`MetalBackend::set_bf16_accumulation`]. Its kernels live in

@@ -48,7 +48,7 @@ flowchart TD
 
 ### 2. `metal-native`
 * **Silent Head Dimension Truncation:** Attention backward kernels clamp head dimension with `d_lim = min(D, 64u)` (in upstream metal-native's `flash_attn_bwd.metal:28`). Models with head dimensions greater than 64 silently drop high-index features.
-  * *ojas Defense:* `ojas_core::refuse_unsupported_metal_head_dim`, which `ojas_metal` calls, returns `OjasError::UnsupportedHeadDim` for any $d > 64$. The CPU backend computes any positive head dimension.
+  * *ojas Defense:* `ojas_core::refuse_unsupported_metal_head_dim`, which `ojas_metal` calls, returns `OjasError::UnsupportedHeadDim` for any $d > 64$ (a dated freeze record; the cap was raised to 256 since, `METAL_MAX_HEAD_DIM` at `ojas-core/src/backend.rs:141`, applied at `:210`). The CPU backend computes any positive head dimension.
 * **Missing `catch_unwind` on C-ABI:** The 8 exported functions allow Rust panics to cross the FFI boundary, crashing the host program.
   * *ojas Defense:* `ojas-capi::engine::dispatch` wraps invocations in `catch_unwind`, clears the poisoned session, and returns an error payload.
 * **Unbounded Token Indexing:** Missing token bounds checks allow negative indices or values exceeding vocabulary size to read arbitrary host memory.
@@ -79,7 +79,7 @@ flowchart TD
 ```mermaid
 flowchart LR
     F1["1. Tensor byte_offset is explicit and preserved by narrow()"]
-    F2["2. Head dim > 64 returns UnsupportedHeadDim (Never Clamped)"]
+    F2["2. Head dim > 256 returns UnsupportedHeadDim (Never Clamped; cap was 64 when written, METAL_MAX_HEAD_DIM)"]
     F3["3. Budget::try_reserve returns CapacityExceeded (Never Shrinks)"]
     F4["4. next_step refuses u64::MAX (Never Wraps)"]
     F5["5. Non-finite values return NonFinite (Never Applied to Weights)"]

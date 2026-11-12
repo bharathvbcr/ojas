@@ -20,8 +20,8 @@ pub const GIBIBYTE: u64 = 1024 * MEBIBYTE;
 
 /// Fixed ceiling for CPU thread advice.
 ///
-/// `ResourcePlan` clamps a known CPU count to this. Refusing
-/// `CpuBackend::with_threads` above it is a later change; the constant
+/// `ResourcePlan` clamps a known CPU count to this. `CpuBackend::with_threads`
+/// refuses a count above it (`ojas-cpu/src/pool.rs:152-163`); the constant
 /// lives here so that ceiling and the advice share one number.
 pub const CPU_THREAD_CEILING: u32 = 1024;
 

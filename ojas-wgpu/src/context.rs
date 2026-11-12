@@ -225,7 +225,7 @@ pub const POOL_MAX_KEYS: usize = 64;
 pub const MAX_ELEMENTS: usize = (1 << 31) - 1;
 
 /// Set to exactly `1` to let [`WgpuContext::open`] take a CPU adapter
-/// (lavapipe, SwiftShader, WARP). For GPU-less CI only; unset, or any other
+/// (lavapipe, SwiftShader). For GPU-less CI only; unset, or any other
 /// value, refuses one.
 pub const ALLOW_CPU_ADAPTER_ENV: &str = "OJAS_WGPU_ALLOW_CPU_ADAPTER";
 

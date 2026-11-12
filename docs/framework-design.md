@@ -46,7 +46,7 @@ The dependency graph is `core ← cpu ← autograd ← model → {io, data}`, th
 5. Gate (it reads `h`), then o_proj and the residual.
 6. norm2, SwiGLU, residual.
 
-That is the same order as `ojas-autograd/tests/multihead.rs`. `CpuGpt` runs `DeviceDecoder`'s step on `CpuBackend` against a host `KvCache`, and a parity test binds it to `Eval<CpuBackend>`. Training v1 refuses GQA, because nanolab's default is MHA.
+That is the same order as `ojas-autograd/tests/multihead.rs`. `CpuGpt` runs `DeviceDecoder`'s step on `CpuBackend` against a host `KvCache`, and a parity test binds it to `Eval<CpuBackend>`. Training accepts grouped-query attention (`ojas-model/src/spec.rs:236`, test `training_accepts_grouped_query_attention` at `:458`); nanolab's default is MHA.
 
 Safetensors names are nanolab `state_dict` keys, so torch exports load unchanged.
 
@@ -159,7 +159,7 @@ That exceeds `MAX_CHECKPOINT_BYTES = 1 GiB`. `CheckpointV1` also holds every pay
 
 The Metal column is the total plus the uncharged pool cache, capped at 1 GiB once a session's budget reaches 4 GiB, plus tessl's rounding: under 16 KiB per buffer past 1 MiB, and under 512 KiB per buffer up to 1 MiB, plus dropped buffers still waiting for a commit to recycle them: under one memory cap (a quarter of the budget, at most 1 GiB) of frees and another of temporaries (`ojas-metal/src/backend.rs` module docs). The column does not count that last term. It was 2× when tessl rounded every buffer to a power of two and cached up to 2 GiB.
 
-v1 runs B=4 × K=16, the same 65,536 tokens per step as nanolab's 16×4, and needs no activation checkpointing. A single B=16 micro-batch needs per-block recompute, which is phase 2. The capi 1 GiB process step budget cannot hold the model state, so training sessions get a per-session `Budget` from the Load options.
+v1 runs B=4 × K=16, the same 65,536 tokens per step as nanolab's 16×4, and needs no activation checkpointing. A single B=16 micro-batch needs per-block recompute; activation checkpointing now exists (`ojas-model/src/trainer.rs:129` `pub activations: ActivationCheckpoint`, `ojas-model/src/block.rs:324`). The capi 1 GiB process step budget cannot hold the model state, so training sessions get a per-session `Budget` from the Load options.
 
 ## 6. Inference on GPU
 

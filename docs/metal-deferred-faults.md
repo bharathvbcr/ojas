@@ -419,7 +419,7 @@ The overlap path was verified, not assumed:
   - A `U32` upload of any size no longer waits (§9.1, U32 uploads). `tests/wait_triggers.rs` (`a_large_id_upload_while_work_is_recorded_does_not_wait`) checks this with 1 MiB of ids: no wait, identical readback, the off switch's one wait, and a capped backend's refusal (V).
   - tessl's only unwaited host write for a fresh buffer is `alloc_buffer_from_u32`, so an `F32` upload has no equivalent yet.
 - **Memory-cap commits are now counted per trigger** (`WaitCounts::mem_cap`, `working_set`). The 124M split (about 41, inferred in §9.3) has not been re-measured with the counter. The cap trades waits for resident memory: at 1 GiB, the step's freed temporaries recycle every 1 GiB of allocation.
-- **The capi early-return test runs on wgpu only** (`an_early_return_never_leaks_a_deferred_fault_into_the_next_call`). A Metal twin would pin `settled` on Metal; that file belongs to the coordinator.
+- **Closed (verified at bfc24e5).** The capi early-return test ran on wgpu only (`an_early_return_never_leaks_a_deferred_fault_into_the_next_call`). The Metal twin now exists: `an_early_return_never_leaks_a_deferred_metal_fault_into_the_next_call` (`ojas-capi/src/tests.rs:2371`). Not re-run here.
 - **Stale text outside this lane:**
-  - `bench/ojas_rows.rs:21-22` says Metal's `sync` is "the trait default, a no-op". It is now an override that waits.
-  - The `Backend::sync` doc in `ojas-core`, and §5's list.
+  - Closed (verified at bfc24e5): `bench/ojas_rows.rs:21-22` said Metal's `sync` is "the trait default, a no-op". `bench/ojas_rows.rs:21-23` now says `sync` waits for the recorded work and reports any deferred fault on both Metal and wgpu.
+  - Closed (verified at bfc24e5): the `Backend::sync` doc in `ojas-core` (`ojas-core/src/backend.rs:913-921`) now names Metal and wgpu as the backends that defer faults and must override it. §5's list was not re-checked.

@@ -19,9 +19,11 @@
 //! in [`FenceError::Refused`] where the method reports fence outcomes. A
 //! backend that cannot lend its memory (wgpu, CUDA, HIP keep counted copies)
 //! implements none of this, and a caller that needs a lease is told so; the
-//! bytes are never copied behind its back. Nothing in the crate calls these
-//! items yet: tensors do not carry a mapped payload, so this module changes
-//! no behaviour.
+//! bytes are never copied behind its back. Tensors can carry a mapped payload
+//! (`Payload::Mapped`, built by `Tensor::from_mapped` and
+//! `Tensor::from_mapped_reserved`), and Metal's `Worker::upload` adopts a tessl
+//! `SharedBuf` held that way. No production path constructs one: outside
+//! tests nothing calls either constructor, and product wiring is ft-ee2a3753.
 //!
 //! # Fence rules
 //!

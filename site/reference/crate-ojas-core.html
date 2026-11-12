@@ -201,13 +201,18 @@
 
     class OjasError {
         &lt;&lt;enumeration&gt;&gt;
-        CapacityExceeded
-        UnsupportedHeadDim
-        NonFinite
+        Shape
+        Dtype
         OutOfRange
-        ShapeMismatch
-        DeviceMismatch
-        TruncatedCheckpoint
+        NonFinite
+        UnsupportedHeadDim
+        CapacityExceeded
+        Poisoned
+        DeviceLost
+        WaitTimeout
+        Backend
+        Unsupported
+        Placement
     }
 
     Tensor --&gt; DType

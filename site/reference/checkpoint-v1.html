@@ -186,7 +186,7 @@
         Muon --&gt; AdamW1
         AdamW1 --&gt; AdamW2
     end</pre></figure>
-<aside class="alert alert-important"><p class="alert-title">Important</p><p><strong>Magic String &amp; Version Verification:</strong> Checkpoint v1 files begin strictly with the 8-byte ASCII string <code>OJAS0001</code> followed by little-endian <code>u32</code> value <code>1</code>. Any file with mismatched magic bytes returns <code>OjasError::InvalidCheckpoint</code> immediately—<strong>never attempting guessing or silent migration</strong>.</p>
+<aside class="alert alert-important"><p class="alert-title">Important</p><p><strong>Magic String &amp; Version Verification:</strong> Checkpoint v1 files begin strictly with the 8-byte ASCII string <code>OJAS0001</code> followed by little-endian <code>u32</code> value <code>1</code>. A mismatched magic, a short prefix or another version is <code>OjasError::OutOfRange { op: &#34;read_prefix&#34;, .. }</code> (<code>ojas-core/src/checkpoint.rs:31-50</code>), which <code>ojas-io</code> wraps into an <code>ojas_io::IoError</code> (<code>ojas-io/src/checkpoint.rs:194</code>); no <code>InvalidCheckpoint</code> variant exists. The refusal is immediate—<strong>never attempting guessing or silent migration</strong>.</p>
 </aside>
 <hr>
 <h2 id="namedblob-record-structure">NamedBlob Record Structure <a class="anchor" href="#namedblob-record-structure" aria-label="Link to this section">#</a></h2>
@@ -234,7 +234,7 @@
 </li>
 <li><strong><code>git_sha</code></strong>: Fixed 20 raw bytes storing the repository commit SHA at checkpoint creation.
 </li>
-<li><strong><code>step</code></strong>: <code>u64</code> little-endian integer. Refuses values that could cause overflow (<code>u64::MAX</code>).
+<li><strong><code>step</code></strong>: <code>u64</code> little-endian integer. The reader takes any <code>u64</code> (<code>ojas-io/src/checkpoint.rs:200</code>); <code>u64::MAX</code> is refused later by <code>next_step</code> (<code>ojas-core/src/backend.rs:220-224</code>, <code>OjasError::OutOfRange</code>), which <code>Trainer::step</code> calls (<code>ojas-model/src/trainer.rs:706</code>).
 </li>
 <li><strong><code>data_cursor.shard</code></strong>: <code>u64</code> epoch of the batch sampler (<code>ojas_data::BatchSampler</code>).
 </li>
@@ -278,7 +278,7 @@
 <hr>
 <h2 id="verification--safety-guarantees">Verification &amp; Safety Guarantees <a class="anchor" href="#verification--safety-guarantees" aria-label="Link to this section">#</a></h2>
 <aside class="alert alert-caution"><p class="alert-title">Caution</p><ol>
-<li><strong>Truncation Defense:</strong> Checkpoint files truncated before an expected field boundary return <code>Err(OjasError::TruncatedCheckpoint)</code> rather than filling missing bytes with zeros.
+<li><strong>Truncation Defense:</strong> Checkpoint files truncated before an expected field boundary return an <code>ojas_io::IoError</code> &#34;truncated checkpoint&#34; (<code>ojas-io/src/checkpoint.rs:323-334</code>; there is no <code>OjasError::TruncatedCheckpoint</code> variant) rather than filling missing bytes with zeros.
 </li>
 <li><strong>Integer Overflow Protection:</strong> Dimension shapes whose product overflows <code>u64</code> or <code>usize</code> are caught during header decoding and rejected before memory allocation.
 </li>
