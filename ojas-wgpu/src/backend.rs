@@ -87,7 +87,7 @@
 //!
 //! [`Numerics::Fast`]: reductions are tree- and chunk-ordered, GEMM tiles
 //! accumulate in registers, Adam runs in f32 (the CPU reference uses f64),
-//! and the Metal HAL may contract multiply-adds (AdamW's first moment: every element equals CPU Fast or the contracted form exactly; measured max gap 948 ulp, `tests/parity.rs`). Results match the CPU at a
+//! and the Metal HAL may contract multiply-adds (AdamW's first moment: every element equals CPU Fast or the contracted form exactly; max gap to CPU Fast 948 ulp, measured once on one adapter (this Mac's), `tests/parity.rs`). Results match the CPU at a
 //! tolerance and are bit-identical across runs on one device.
 
 use std::sync::Arc;

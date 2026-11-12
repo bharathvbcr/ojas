@@ -1061,7 +1061,8 @@ fn ulp_gap(a: f32, b: f32) -> u32 {
 ///
 /// Discrimination: at beta1 0.3 `f32(beta1)` and `1f - f32(1 - beta1)` are
 /// the same bits (0x3e99999a), so that value cannot tell the old word from
-/// the new. At beta1 0.001 and 0.499 they differ, and there the test also
+/// the new, and the same holds at 0.499 (`f32(0.499)` equals the new high
+/// word). Of the grid only beta1 0.001 differs, and there the test also
 /// computes what the old upload (word 4 = `f32(beta1)`) would give, in both
 /// the rounded and the contracted form, and requires wgpu's `m` to fall
 /// outside that set for some element: the test fails if the old word is
