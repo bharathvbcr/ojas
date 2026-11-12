@@ -2938,10 +2938,11 @@ pub fn dequant_affine_bf16_dims(
     if words != geometry.words {
         // Words per group are `bits * group_size / 32`, so the stored words imply
         // `words_per_group * 32 / group_size` bits when that is a whole number.
-        let implied_bits = (words % groups == 0)
+        let implied_bits = words
+            .is_multiple_of(groups)
             .then(|| (words / groups).checked_mul(32))
             .flatten()
-            .filter(|stored| stored % spec.group_size() == 0)
+            .filter(|stored| stored.is_multiple_of(spec.group_size()))
             .map(|stored| stored / spec.group_size());
         let implied_note = implied_bits.map_or_else(
             || "no supported code width".to_string(),

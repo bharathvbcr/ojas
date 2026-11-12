@@ -236,7 +236,7 @@ pub fn read_affine_quantized(
         let stored = match info.shape.as_slice() {
             [_, w] => w
                 .checked_mul(32)
-                .filter(|stored_bits| stored_bits % cols_u64 == 0)
+                .filter(|stored_bits| stored_bits.is_multiple_of(cols_u64))
                 .map(|stored_bits| format!("{}-bit codes", stored_bits / cols_u64)),
             _ => None,
         }
@@ -248,7 +248,9 @@ pub fn read_affine_quantized(
     };
     let params_note = |info: &TensorInfo| {
         let stored = match info.shape.as_slice() {
-            [_, g] if *g > 0 && cols_u64 % *g == 0 => Some(format!("group size {}", cols_u64 / g)),
+            [_, g] if *g > 0 && cols_u64.is_multiple_of(*g) => {
+                Some(format!("group size {}", cols_u64 / g))
+            }
             _ => None,
         }
         .unwrap_or_else(|| "no whole group size".to_string());
