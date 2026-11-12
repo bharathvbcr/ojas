@@ -19,7 +19,7 @@ This document specifies the technical architecture, memory model, execution grap
 Developing `ojas`, `tessl`, and `sparsl` as decoupled checkouts rather than a single monolithic repository is an intentional architectural decision driven by four core constraints:
 
 1. **Decoupled Compile Cycles & Toolchain Isolation:**
-   - `ojas` targets standard cross-platform Rust environments across x86_64, aarch64, Linux and macOS; Windows has never been built in CI (`.github/workflows/test.yml` has no Windows job; a compile check is planned, ft-3902a4b3).
+   - `ojas` targets standard cross-platform Rust environments across x86_64, aarch64, Linux and macOS; no CI job builds Windows (`.github/workflows/test.yml` has no Windows job); the only local check on record is an x86_64 Windows `cargo check` and clippy of `ojas-device` alone (`docs/adaptive-resources.md:50`, `:124`), and nothing was run there. A CI compile check is planned (ft-3902a4b3).
    - `tessl` requires Xcode 26, the macOS Metal Toolchain (`xcrun metal`, `metallib`), and Objective-C bindings (`objc2`, `objc2-metal`). Absorbing `tessl` directly into `ojas` would impose heavy macOS/Xcode build prerequisites on all core engine developers and Linux CI runners.
    - `sparsl` incorporates extensive property-based testing suites (`proptest`, mutation testing campaigns) that iterate independently of deep learning neural graph training.
 2. **Isolated Hardware Requirements:**
@@ -131,7 +131,7 @@ flowchart TD
     end
 
     subgraph Layer3["3. Models, Autograd & High-Level Primitives"]
-        Infer["ojas-infer (KV Cache, Greedy and Sampled Decode, Logit Guard; CPU)"]
+        Infer["ojas-infer (KV Cache, Greedy and Sampled Decode, Logit Guard; CpuGpt on the CPU, DeviceDecoder on any Backend)"]
         Model["ojas-model (nanolab GPT written once: spec, init, Graph block, Eval, Trainer, checkpoint dir)"]
         Qwen35["ojas-qwen35 (Qwen3.5 whole-step provider over tessl; macOS Metal only; not a Backend)"]
         Autograd["ojas-autograd (Reverse-Mode Tape; uploads on GPU)"]

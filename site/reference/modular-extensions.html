@@ -212,7 +212,7 @@
 </li>
 <li><strong>Sparse vs. Dense Execution:</strong> <code>sparsl</code> addresses event-driven sparse computation where matrices have 90–99% zero entries, requiring completely different memory layouts (CSR, CSC) and non-contiguous memory access patterns.
 </li>
-<li><strong>Portability:</strong> <code>ojas</code> provides portable universal execution (CPU reference, wgpu WGSL for Vulkan/Metal/DX12, CUDA/HIP probes). Keeping platform-specific and domain-specific code in modular extensions prevents runtime bloat.
+<li><strong>Portability:</strong> <code>ojas</code> provides portable universal execution (CPU reference, wgpu WGSL for Vulkan and Metal, a CUDA <code>Backend</code> whose compute ops refuse, and a HIP copy probe). Keeping platform-specific and domain-specific code in modular extensions prevents runtime bloat.
 </li>
 </ul>
 <h3 id="3-independent-profiling--micro-benchmarking">3. Independent Profiling &amp; Micro-Benchmarking <a class="anchor" href="#3-independent-profiling--micro-benchmarking" aria-label="Link to this section">#</a></h3>

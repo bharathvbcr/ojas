@@ -3444,7 +3444,7 @@ kernel void ojas_attn_fwd_bf16(
 // score bias and per-batch key lengths. One simdgroup per query row, after
 // `ojas_cached_attn`: lane `l` owns head dims l, l + 32, ... of the query and
 // of the output, the score is a `simd_sum`, and the softmax is online over the
-// keys the row sees (`forward_is_deterministic` pins repeatability).
+// keys the row sees (no test was found that pins this kernel's repeatability).
 // Scalar f32 on purpose: it takes any head dim up to 32 * AG_PER_LANE and
 // is the reference a tiled kernel is held to; it is not the fast path.
 //

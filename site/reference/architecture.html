@@ -169,7 +169,7 @@
 <ol>
 <li><strong>Decoupled Compile Cycles &amp; Toolchain Isolation:</strong>
 <ul>
-<li><code>ojas</code> targets standard cross-platform Rust environments across x86_64, aarch64, Linux and macOS; Windows has never been built in CI (<code>.github/workflows/test.yml</code> has no Windows job; a compile check is planned, ft-3902a4b3).
+<li><code>ojas</code> targets standard cross-platform Rust environments across x86_64, aarch64, Linux and macOS; no CI job builds Windows (<code>.github/workflows/test.yml</code> has no Windows job); the only local check on record is an x86_64 Windows <code>cargo check</code> and clippy of <code>ojas-device</code> alone (<code>docs/adaptive-resources.md:50</code>, <code>:124</code>), and nothing was run there. A CI compile check is planned (ft-3902a4b3).
 </li>
 <li><code>tessl</code> requires Xcode 26, the macOS Metal Toolchain (<code>xcrun metal</code>, <code>metallib</code>), and Objective-C bindings (<code>objc2</code>, <code>objc2-metal</code>). Absorbing <code>tessl</code> directly into <code>ojas</code> would impose heavy macOS/Xcode build prerequisites on all core engine developers and Linux CI runners.
 </li>
@@ -293,7 +293,7 @@
     end
 
     subgraph Layer3[&#34;3. Models, Autograd &amp; High-Level Primitives&#34;]
-        Infer[&#34;ojas-infer (KV Cache, Greedy and Sampled Decode, Logit Guard; CPU)&#34;]
+        Infer[&#34;ojas-infer (KV Cache, Greedy and Sampled Decode, Logit Guard; CpuGpt on the CPU, DeviceDecoder on any Backend)&#34;]
         Model[&#34;ojas-model (nanolab GPT written once: spec, init, Graph block, Eval, Trainer, checkpoint dir)&#34;]
         Qwen35[&#34;ojas-qwen35 (Qwen3.5 whole-step provider over tessl; macOS Metal only; not a Backend)&#34;]
         Autograd[&#34;ojas-autograd (Reverse-Mode Tape; uploads on GPU)&#34;]

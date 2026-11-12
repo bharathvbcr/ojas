@@ -1288,7 +1288,7 @@ cd go &amp;&amp; PKG_CONFIG_PATH="$PWD" go test -a -tags gusset_pkgconfig -count
                   <li><span class="font-mono text-brand-300">CPU</span>: 1 to 256 threads, Exact or Fast. NEON and AVX2+FMA kernels in <span class="font-mono">ojas-simd</span>.</li>
                   <li><span class="font-mono text-brand-300">Metal</span>: 100 of the 106 Backend methods, device-resident, through tessl, with tiled causal attention (relu, slice, bilinear and group-norm backward are refused trait defaults). Head dim at most 256.</li>
                   <li><span class="font-mono text-brand-300">wgpu</span>: WGSL compute, device-resident, within 1e-4 relative of CPU. Head dim at most 256.</li>
-                  <li><span class="font-mono text-slate-400">CUDA / HIP</span>: <span class="font-mono">CudaBackend</span> is a Backend whose compute ops all return Unsupported (plus an affine test kernel), and HIP is a copy probe that is not a backend; both sit behind features.</li>
+                  <li><span class="font-mono text-slate-400">CUDA / HIP</span>: <span class="font-mono">CudaBackend</span> is a Backend whose compute ops all return Unsupported, and HIP is a copy probe that is not a backend; both sit behind features.</li>
                 </ul>
               </div>
               <div class="glass-card rounded-2xl p-5">
@@ -1418,7 +1418,7 @@ cd go &amp;&amp; PKG_CONFIG_PATH="$PWD" go test -a -tags gusset_pkgconfig -count
                 <ul class="space-y-2 text-xs text-slate-300 leading-relaxed">
                   <li class="flex gap-2"><span class="text-amber-400 shrink-0" aria-hidden="true">–</span>A recorded full 124M nanolab training run. CI trains the tiny spec; <span class="font-mono">docs/status.md</span> records no larger run.</li>
                   <li class="flex gap-2"><span class="text-amber-400 shrink-0" aria-hidden="true">–</span>bf16 accumulation, backward for GELU and ReLU, and ReLU². Every backend accumulates in f32 (bf16 is an optional autocast region and <span class="font-mono">Bf16</span> operands); SiLU and sigmoid run forward and backward, and erf-GELU and ReLU run forward only.</li>
-                  <li class="flex gap-2"><span class="text-amber-400 shrink-0" aria-hidden="true">–</span>Running on NVIDIA or AMD hardware. CudaBackend refuses every compute op and HIP is a copy probe, not a backend. Windows has never been built (CI has no Windows job; a compile check is planned) and gusset refuses it.</li>
+                  <li class="flex gap-2"><span class="text-amber-400 shrink-0" aria-hidden="true">–</span>Running on NVIDIA or AMD hardware. CudaBackend refuses every compute op and HIP is a copy probe, not a backend. Nothing has been run on Windows: CI has no Windows job (a compile check is planned), the only local check is an x86_64 Windows cargo check and clippy of ojas-device alone, and gusset refuses it.</li>
                   <li class="flex gap-2"><span class="text-amber-400 shrink-0" aria-hidden="true">–</span>The Qwen3.5 step as a backend. <span class="font-mono">ojas-qwen35</span> is a Metal-only provider over tessl, empty off macOS. Its GPU parity tests are ignored by default; when a session ran seven of them, six passed and the real-model test (<span class="font-mono">gpu_real_2b</span>) faulted at its gradient read-back.</li>
                 </ul>
               </div>

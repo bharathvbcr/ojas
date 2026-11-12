@@ -151,7 +151,7 @@ flowchart TD
     DeviceEnum -->|DeviceCPUParallel| D1["DeviceCPUParallel\nMultithreaded CPU pool (1..=256 threads)"]
     DeviceEnum -->|DeviceCPUAuto| D4["DeviceCPUAuto\nAutomatic thread count from system thread ceiling"]
     DeviceEnum -->|DeviceMetal| D2["DeviceMetal\nApple Silicon Metal 4 (tessl + MSL)"]
-    DeviceEnum -->|DeviceWgpu| D3["DeviceWgpu\nPortable WebGPU / WGSL (Vulkan/Metal/DX12)"]
+    DeviceEnum -->|DeviceWgpu| D3["DeviceWgpu\nPortable WebGPU / WGSL (Metal on macOS, Vulkan elsewhere; DX12 is never requested)"]
     DeviceEnum -->|DeviceCUDA| D5["DeviceCUDA\nReserved: refused until gp-cuda-backend-provider lands"]
 ```
 
