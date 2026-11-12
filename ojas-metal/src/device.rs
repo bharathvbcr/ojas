@@ -566,6 +566,8 @@ struct Book {
     /// and returns to it only after its entry is scanned (read, then zeroed) or dropped before its
     /// kernel was encoded.
     free_words: Vec<usize>,
+    /// Drained ring words that could not be zeroed yet: held out of `free_words` and retried.
+    quarantine: Vec<usize>,
     /// The command being run.
     cmd: u64,
     /// The first fault found and not yet reported.
@@ -760,6 +762,7 @@ impl Worker {
             used: 0,
             pending: Vec::new(),
             free_words: (0..DEQUANT_FAULT_WORDS).rev().collect(),
+            quarantine: Vec::new(),
             cmd: 0,
             fault: None,
             dirty: false,
@@ -1151,10 +1154,18 @@ impl Worker {
 
     fn scan(&self, scan: Scan) -> Res<()> {
         let mut book = self.book.borrow_mut();
+        self.retry_quarantine(&mut book);
         if book.used == 0 {
             return Ok(());
         }
         let current = book.cmd;
+        #[cfg(test)]
+        let inject_unzero = book
+            .fail_dequant
+            .take_if(|at| *at == DequantFail::Unzero)
+            .is_some();
+        #[cfg(not(test))]
+        let inject_unzero = false;
         // Ring words of the entries this scan drains. A mapping is an exclusive host lease on the
         // runtime, so each word is mapped alone, and before the slab is: a mapping that fails
         // here leaves the pending list and every word as they were. With no dequant among the
@@ -1211,21 +1222,39 @@ impl Worker {
             });
         }
         // The drained words are zeroed, then free for the next dequant. A word that cannot be
-        // zeroed stays out of the ring (a stale flag would be a false fault) and the error is
-        // returned, after the rest of the bookkeeping above has landed.
-        let mut unzeroed = None;
-        for w in drained_words {
-            match self.fault_words[w].try_contents_u32() {
-                Ok(mut word) => {
-                    word[0] = 0;
-                    book.free_words.push(w);
-                }
-                Err(e) => {
-                    unzeroed.get_or_insert(e);
-                }
+        // zeroed (a stale flag would be a false fault) goes to `quarantine`, and every scan and
+        // `take_fault_word` retries it, so it is never lost and no error is returned after the
+        // bookkeeping above has landed.
+        for (i, w) in drained_words.into_iter().enumerate() {
+            if self.zero_word(w, inject_unzero && i == 0).is_ok() {
+                book.free_words.push(w);
+            } else {
+                book.quarantine.push(w);
             }
         }
-        unzeroed.map_or(Ok(()), |e| Err(metal_err(e)))
+        Ok(())
+    }
+
+    /// Zero ring word `w`. `inject` fails it, for `DequantFail::Unzero`.
+    fn zero_word(&self, w: usize, inject: bool) -> Res<()> {
+        if inject {
+            return Err(metal_err("injected dequant failure at Unzero"));
+        }
+        let mut word = self.fault_words[w].try_contents_u32().map_err(metal_err)?;
+        word[0] = 0;
+        Ok(())
+    }
+
+    /// Retry the zeroing of every quarantined word; the ones that now zero return to the ring.
+    fn retry_quarantine(&self, book: &mut Book) {
+        let words = std::mem::take(&mut book.quarantine);
+        for w in words {
+            if self.zero_word(w, false).is_ok() {
+                book.free_words.push(w);
+            } else {
+                book.quarantine.push(w);
+            }
+        }
     }
 
     /// Hand the pending fault to the caller, once.
@@ -5054,14 +5083,13 @@ impl Worker {
     ) -> Res<Reply> {
         const OP: &str = "dequant_affine_bf16";
         let tessl_bits = crate::affine::checked_tessl_bits(bits).map_err(metal_err)?;
-        if rows == 0 || cols == 0 || !(cols as usize).is_multiple_of(ojas_core::AFFINE_GROUP_SIZE) {
-            return Err(metal_err(format!(
-                "{OP}: [{rows}, {cols}] is not a non-empty matrix of whole groups"
-            )));
-        }
-        let groups_per_row = cols as usize / ojas_core::AFFINE_GROUP_SIZE;
-        let words_per_row = groups_per_row * (ojas_core::AFFINE_GROUP_SIZE / bits.codes_per_word());
         let (rows_n, cols_n) = (rows as usize, cols as usize);
+        // The size arithmetic has one owner: the host's `AffineSpec::geometry`.
+        let ojas_core::AffineGeometry {
+            groups: groups_per_row,
+            words: words_per_row,
+        } = ojas_core::AffineSpec::new(bits.bits(), ojas_core::AFFINE_GROUP_SIZE)?
+            .geometry(OP, rows_n, cols_n)?;
         let sizes = [
             (packed, 4, rows_n.checked_mul(words_per_row)),
             (scales, 2, rows_n.checked_mul(groups_per_row)),

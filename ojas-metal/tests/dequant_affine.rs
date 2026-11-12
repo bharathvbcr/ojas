@@ -563,3 +563,34 @@ fn cpu_and_metal_agree_on_every_refusal_of_the_validator() {
         .unwrap_err();
     assert_eq!(format!("{got:?}"), format!("{want:?}"));
 }
+
+/// The f32-finite result that rounds to a bf16 infinity (see the CPU twin in
+/// `ojas-cpu/tests/dequant_affine.rs`): the kernel flags a bf16 infinity in its output.
+#[test]
+fn f32_finite_result_that_rounds_to_a_bf16_infinity_faults_on_the_device() {
+    let m = metal();
+    let p = host_parts(
+        AffineSpec::q8(),
+        1,
+        1,
+        &[0x0101_0101; 16],
+        &[0x7F7F],
+        &[0x7B00],
+    );
+    p.up(&m)
+        .run(&m)
+        .expect("a device-detected fault does not fail its op");
+    assert_fault(&m, "midpoint rounds to bf16 inf", OP);
+    let p = host_parts(
+        AffineSpec::q8(),
+        1,
+        1,
+        &[0x0101_0101; 16],
+        &[0x7F7F],
+        &[0x7AFF],
+    );
+    let out = p.up(&m).run(&m).unwrap();
+    m.sync()
+        .expect("one step below the midpoint is bf16::MAX, finite");
+    assert!(bits_of(&out).iter().all(|&x| x == 0x7F7F));
+}

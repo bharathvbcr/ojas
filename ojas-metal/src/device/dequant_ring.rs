@@ -97,7 +97,8 @@ fn free(w: &Worker) -> usize {
     w.book.borrow().free_words.len()
 }
 
-/// Every word is free xor held once, and every free word is zero.
+/// Every word is free, held by one pending entry or quarantined, exactly once, and every free
+/// word is zero.
 #[track_caller]
 fn assert_ring_whole(w: &Worker, tag: &str) {
     let book = w.book.borrow();
@@ -111,6 +112,9 @@ fn assert_ring_whole(w: &Worker, tag: &str) {
         if let Some(i) = e.fault_word {
             seen[i] += 1;
         }
+    }
+    for &i in &book.quarantine {
+        seen[i] += 1;
     }
     for (i, &n) in seen.iter().enumerate() {
         assert_eq!(
@@ -297,4 +301,122 @@ fn a_refused_output_allocation_recycles_without_losing_a_word() {
     sync(&mut w).unwrap();
     assert_eq!(free(&w), DEQUANT_FAULT_WORDS);
     assert!(values_of(&mut w, out).iter().all(|&v| v == 0x3F00));
+}
+
+/// T2: `status_entry` settles `Scan::All` on a full slab while `dequant_affine` holds a word that
+/// is in neither `free_words` nor a pending entry. The new entry's own fault must survive that
+/// settle, the earlier clean dequant's word must come back, and the ring must stay whole.
+#[test]
+fn a_full_slab_settle_with_a_word_in_hand_keeps_the_ring_whole_and_the_new_entry_armed() {
+    let mut w = worker();
+    let (ok, bad) = (good(&mut w), overflowing(&mut w));
+    sync(&mut w).unwrap();
+    dequant(&mut w, &ok).unwrap();
+    assert!(matches!(w.command(Cmd::FillSlab), Ok(Reply::Done)));
+    dequant(&mut w, &bad).unwrap();
+    assert_eq!(
+        held(&w).len(),
+        1,
+        "only the new entry is pending; the first was drained"
+    );
+    assert_eq!(free(&w), DEQUANT_FAULT_WORDS - 1);
+    assert_ring_whole(&w, "after a slab settle with a word in hand");
+    assert_reports_once(&mut w, "the new entry's own fault survived the slab settle");
+    assert_eq!(free(&w), DEQUANT_FAULT_WORDS);
+}
+
+/// W1: a drained word that cannot be zeroed is quarantined and retried, never lost, and nothing
+/// is reported for it.
+#[test]
+fn a_word_that_could_not_be_zeroed_is_retried_not_lost() {
+    let mut w = worker();
+    let t = good(&mut w);
+    sync(&mut w).unwrap();
+    dequant(&mut w, &t).unwrap();
+    arm(&mut w, DequantFail::Unzero);
+    sync(&mut w).expect("a failed zeroing is not a fault of the op");
+    assert_eq!(
+        (free(&w), w.book.borrow().quarantine.len()),
+        (DEQUANT_FAULT_WORDS - 1, 1)
+    );
+    assert_ring_whole(&w, "while quarantined");
+    sync(&mut w).unwrap();
+    assert_eq!(
+        free(&w),
+        DEQUANT_FAULT_WORDS,
+        "a word was lost to a failed zeroing"
+    );
+    assert!(w.book.borrow().quarantine.is_empty());
+    assert_ring_whole(&w, "after the retry");
+}
+
+/// W1 under pressure: with every other word pending, the quarantined word comes back through the
+/// ring settle, so the ring never reports itself full while a word can be recovered.
+#[test]
+fn a_quarantined_word_is_recovered_by_the_ring_settle() {
+    let mut w = worker();
+    let t = good(&mut w);
+    sync(&mut w).unwrap();
+    dequant(&mut w, &t).unwrap();
+    arm(&mut w, DequantFail::Unzero);
+    sync(&mut w).unwrap();
+    for i in 0..DEQUANT_FAULT_WORDS - 1 {
+        dequant(&mut w, &t).unwrap_or_else(|e| panic!("dequant {i}: {e:?}"));
+    }
+    assert_eq!(fault_ring_waits(&w), 0);
+    // 63 pending, one quarantined: the next dequant must settle and then find the word.
+    dequant(&mut w, &t).expect("the ring is not lost");
+    assert_ring_whole(&w, "after the settle");
+}
+
+/// T6: a wait that runs out of its budget at the ring settle fails the dequant cleanly and the
+/// ring survives. 64 pending dequants of 12.6 MB each (800 MB, under the 1 GiB memory cap, so no
+/// other trigger settles first) keep the GPU busy past the 1 ms budget.
+#[test]
+fn a_ring_settle_that_times_out_fails_the_dequant_and_keeps_the_ring_whole() {
+    let mut w = worker();
+    let (rows, cols) = (3072usize, 2048usize);
+    let h = Budget::new(1 << 30);
+    let t = Triple {
+        packed: upload(
+            &mut w,
+            Tensor::from_u32(&vec![0; rows * cols / 4], &[rows * cols / 4], &h).unwrap(),
+            rows * cols / 4,
+        ),
+        scales: upload(
+            &mut w,
+            Tensor::from_bf16_bits(&vec![0x3F80; rows * cols / 64], &[rows * cols / 64], &h)
+                .unwrap(),
+            rows * cols / 64,
+        ),
+        biases: upload(
+            &mut w,
+            Tensor::from_bf16_bits(&vec![0; rows * cols / 64], &[rows * cols / 64], &h).unwrap(),
+            rows * cols / 64,
+        ),
+    };
+    let big = |w: &mut Worker| {
+        w.command(Cmd::DequantAffine {
+            packed: t.packed,
+            scales: t.scales,
+            biases: t.biases,
+            bits: AffineBits::Q8,
+            rows: rows as u32,
+            cols: cols as u32,
+        })
+    };
+    sync(&mut w).unwrap();
+    let mut outs = Vec::new();
+    for _ in 0..DEQUANT_FAULT_WORDS {
+        outs.push(big(&mut w).unwrap());
+    }
+    w.book.borrow_mut().force_at = Some((Wait::FaultRing, 1));
+    let err = big(&mut w).expect_err("the ring settle was forced to a 1 ms budget");
+    assert!(matches!(err, OjasError::WaitTimeout { .. }), "{err:?}");
+    assert_ring_whole(&w, "after a timed-out ring settle");
+    w.rt.set_event_wait_ms(120_000).unwrap();
+    big(&mut w).expect("the retry settles and succeeds");
+    sync(&mut w).unwrap();
+    assert_eq!(free(&w), DEQUANT_FAULT_WORDS);
+    assert_ring_whole(&w, "after recovery");
 }

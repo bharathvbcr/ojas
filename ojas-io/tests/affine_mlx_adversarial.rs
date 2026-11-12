@@ -531,3 +531,68 @@ fn io_errors_keep_their_source_and_display() {
     assert!(std::error::Error::source(&c).is_some());
     assert!(std::error::Error::source(&AffineLoadError::Config { detail: "d".into() }).is_none());
 }
+
+/// -0.0 and subnormal parameters are finite: `from_parts` accepts them, and the dequantiser treats
+/// the subnormal ones as zero (FINDINGS.md section 3: the GPU flushes). A negative-zero scale
+/// gives a signed zero, never a refusal.
+#[test]
+fn negative_zero_and_subnormal_parameters_load_and_dequantise_as_zero() {
+    for (scale, bias) in [(0x8000u16, 0x8000u16), (0x0001, 0x0001), (0x807F, 0x007F)] {
+        let b = big();
+        let tensors = replace(
+            replace(
+                q8_linear(),
+                t("m.scales", StDtype::BF16, &[2, 2], bf16_bytes(4, scale)),
+            ),
+            t("m.biases", StDtype::BF16, &[2, 2], bf16_bytes(4, bias)),
+        );
+        let q = read(&tensors, AffineSpec::q8(), 2, 128, &b)
+            .unwrap_or_else(|e| panic!("{scale:#06x}/{bias:#06x} is finite and must load: {e}"));
+        // The stored bits are exactly what the file holds: nothing is flushed at load.
+        assert!(q.scales().bf16_slice().unwrap().iter().all(|&s| s == scale));
+        assert!(q.biases().bf16_slice().unwrap().iter().all(|&s| s == bias));
+        let out = ojas_core::dequantize_affine_bf16(&q, &b).unwrap();
+        assert!(
+            out.bf16_slice().unwrap().iter().all(|&x| x & 0x7FFF == 0),
+            "{scale:#06x}/{bias:#06x}"
+        );
+    }
+}
+
+/// A read that fails after the header was accepted is `AffineLoadError::Io`, keeping its source:
+/// the file changes under the open reader, which `SafeTensors` detects on every read.
+#[test]
+fn a_read_that_fails_after_the_header_is_io_with_its_source() {
+    let tensors = q8_linear();
+    let items: Vec<TensorOut<'_>> = tensors
+        .iter()
+        .map(|x| TensorOut {
+            name: x.name,
+            dtype: x.dtype,
+            shape: &x.shape,
+            data: &x.data,
+        })
+        .collect();
+    let bytes = encode_safetensors(&items, &[]).unwrap();
+    let path =
+        std::env::temp_dir().join(format!("ojas-affine-io-{}.safetensors", std::process::id()));
+    std::fs::write(&path, &bytes).unwrap();
+    let st = SafeTensors::open(&path).unwrap();
+    // Shorten the file under the open reader.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_len(bytes.len() as u64 - 1)
+        .unwrap();
+    let b = big();
+    let r = read_affine_quantized(&st, P, AffineSpec::q8(), 2, 128, &b);
+    let _ = std::fs::remove_file(&path);
+    match r {
+        Err(e @ AffineLoadError::Io(_)) => {
+            assert!(std::error::Error::source(&e).is_some(), "{e}");
+        }
+        other => panic!("expected Io, got {other:?}"),
+    }
+    assert_eq!(b.live_bytes().unwrap(), 0, "the failed read left a charge");
+}

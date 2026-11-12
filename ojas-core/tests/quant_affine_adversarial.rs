@@ -603,7 +603,11 @@ fn quantize_affine_and_from_parts_refuse_non_contiguous_and_device_parts() {
     let w = bf16_matrix(&vec![1.0; 64 * 2], 2, 64, &b);
     // Same shape, permuted strides: not one run of bytes.
     let strided = w.view(&[2, 64], &[1, 2], 0).unwrap();
-    assert!(quantize_affine(&strided, q8(), &b).is_err());
+    let r = quantize_affine(&strided, q8(), &b);
+    assert!(
+        matches!(&r, Err(OjasError::Shape { op: "Tensor::bf16_slice", detail }) if detail == "view is not contiguous"),
+        "{r:?}"
+    );
     let device = Tensor::from_device(Arc::new(Resident(256)), &[2, 64], DType::Bf16, &b).unwrap();
     let live_with_device = b.live_bytes().unwrap();
     assert!(matches!(
@@ -625,7 +629,10 @@ fn quantize_affine_and_from_parts_refuse_non_contiguous_and_device_parts() {
         Tensor::from_bf16_bits(&[0x3F80; 2], &[2, 1], &b).unwrap(),
         Tensor::from_bf16_bits(&[0; 2], &[2, 1], &b).unwrap(),
     );
-    assert!(r.is_err(), "a permuted packed view was accepted");
+    assert!(
+        matches!(&r, Err(OjasError::Shape { op: "Tensor::u32_slice", detail }) if detail == "view is not contiguous"),
+        "a permuted packed view was accepted: {r:?}"
+    );
     let device_scales =
         Tensor::from_device(Arc::new(Resident(4)), &[2, 1], DType::Bf16, &b).unwrap();
     let r = AffineQuantized::from_parts(

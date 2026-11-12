@@ -33,6 +33,8 @@ pub(crate) enum DequantFail {
     Status,
     /// After the status entry holds the word, where tessl's refusal would come.
     Dispatch,
+    /// The zeroing of the first word a scan drains.
+    Unzero,
 }
 
 /// Why the device thread made a waited commit: the trigger that called it.

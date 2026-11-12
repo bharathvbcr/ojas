@@ -281,17 +281,15 @@ pub fn read_affine_quantized(
         &params_note,
     )?;
 
-    // Each count fits: `geometry` checked rows * words * 4 and rows * groups * 2.
-    let total = [
-        rows * words * DType::U32.size(),
-        2 * rows * groups * DType::Bf16.size(),
-    ]
-    .into_iter()
-    .try_fold(0u64, |acc, n| acc.checked_add(n as u64))
-    .ok_or_else(|| OjasError::OutOfRange {
-        op: OP,
-        detail: "byte total overflows".to_string(),
-    })?;
+    // `geometry` bounded each part's element and byte counts; the sum is checked here.
+    let part_bytes = |elems: Option<usize>, size: usize| elems?.checked_mul(size);
+    let total = part_bytes(rows.checked_mul(words), DType::U32.size())
+        .zip(part_bytes(rows.checked_mul(groups), 2 * DType::Bf16.size()))
+        .and_then(|(p, sb)| p.checked_add(sb))
+        .ok_or_else(|| OjasError::OutOfRange {
+            op: OP,
+            detail: "byte total overflows".to_string(),
+        })? as u64;
     budget.check_room(total)?;
 
     let mut packed = Scratch::<u32>::try_alloc(rows * words, budget)?;

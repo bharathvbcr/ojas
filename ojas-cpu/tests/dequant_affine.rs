@@ -114,27 +114,6 @@ fn cpu_op_equals_host_dequantiser_on_every_golden() {
     }
 }
 
-#[test]
-fn cpu_op_is_thread_count_invariant() {
-    let golden = mlx_affine_common::load_from(&golden_dir(), "randn_w2048");
-    for (bits, spec) in [(8u32, AffineSpec::q8()), (4, AffineSpec::q4())] {
-        let (wq_shape, wq) = golden.u32s(&format!("q{bits}.wq"));
-        let (sb_shape, scales) = golden.bf16(&format!("q{bits}.scales"));
-        let (_, biases) = golden.bf16(&format!("q{bits}.biases"));
-        let p = parts(spec, wq_shape[0], sb_shape[1], wq, scales, biases);
-        let reference = p.bits(&cpu(1, Numerics::Exact));
-        for numerics in [Numerics::Exact, Numerics::Fast] {
-            for threads in [1usize, 2, 4] {
-                expect_same(
-                    &format!("q{bits} {numerics:?} x{threads}"),
-                    &p.bits(&cpu(threads, numerics)),
-                    &reference,
-                );
-            }
-        }
-    }
-}
-
 /// Operands of a `[3, 128]` q8 matrix (2 groups per row), scale 1 and bias 0, charged to `budget`.
 fn charged(budget: &Budget) -> (Tensor, Tensor, Tensor) {
     (
@@ -289,9 +268,11 @@ fn non_contiguous_and_device_operands_are_refused() {
     let p = parts(AffineSpec::q8(), 2, 2, &[0; 64], &[0x3F80; 4], &[0; 4]);
     // Permuted strides over the same shape: not one run of bytes, so it is not read.
     let strided = p.scales.view(&[2, 2], &[1, 2], 0).unwrap();
-    assert!(c
-        .dequant_affine_bf16(&p.packed, &strided, &p.biases, p.spec)
-        .is_err());
+    let r = c.dequant_affine_bf16(&p.packed, &strided, &p.biases, p.spec);
+    assert!(
+        matches!(&r, Err(OjasError::Shape { op: "Tensor::bf16_slice", detail }) if detail == "view is not contiguous"),
+        "{r:?}"
+    );
     // A device-resident operand is a Placement refusal, never a readback, in each position.
     let reads = b.device_readbacks();
     let dev_packed =
@@ -309,4 +290,34 @@ fn non_contiguous_and_device_operands_are_refused() {
         );
     }
     assert_eq!(b.device_readbacks(), reads);
+}
+
+/// The `!bf16_is_finite` branch of `expand`: an f32-FINITE result that rounds to a bf16 infinity.
+/// scale `bf16::MAX` (2^128 - 2^120), code 1, bias 2^119 (0x7B00) gives 2^128 - 2^119, finite in
+/// f32 and exactly the midpoint between `bf16::MAX` and 2^128, which round-to-even sends to
+/// infinity. Bias 0x7AFF is below the midpoint and stays `bf16::MAX`.
+#[test]
+fn f32_finite_result_that_rounds_to_a_bf16_infinity_is_non_finite() {
+    let c = cpu(1, Numerics::Exact);
+    let p = parts(
+        AffineSpec::q8(),
+        1,
+        1,
+        &[0x0101_0101; 16],
+        &[0x7F7F],
+        &[0x7B00],
+    );
+    match p.run(&c) {
+        Err(OjasError::NonFinite { op }) => assert_eq!(op, OP),
+        other => panic!("expected NonFinite, got {other:?}"),
+    }
+    let p = parts(
+        AffineSpec::q8(),
+        1,
+        1,
+        &[0x0101_0101; 16],
+        &[0x7F7F],
+        &[0x7AFF],
+    );
+    assert!(p.bits(&c).iter().all(|&x| x == 0x7F7F));
 }

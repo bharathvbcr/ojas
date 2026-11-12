@@ -177,14 +177,14 @@ mod bench {
         ms: f64,
         waits: f64,
         dispatches: f64,
-        by: [f64; 9],
+        by: [f64; 10],
         /// `memory()` allocated after minus before the timed region (bytes, per sample).
         alloc: f64,
         /// `memory()` peak over the timed region minus allocated before it (bytes, per sample).
         peak: f64,
     }
 
-    const TRIGGERS: [&str; 9] = [
+    const TRIGGERS: [&str; 10] = [
         "upload",
         "read",
         "sync",
@@ -192,11 +192,12 @@ mod bench {
         "mem_cap",
         "working_set",
         "slab_full",
+        "fault_ring",
         "recycle",
         "freed",
     ];
 
-    fn by_trigger(c: &WaitCounts) -> [u64; 9] {
+    fn by_trigger(c: &WaitCounts) -> [u64; 10] {
         [
             c.upload,
             c.read,
@@ -205,6 +206,7 @@ mod bench {
             c.mem_cap,
             c.working_set,
             c.slab_full,
+            c.fault_ring,
             c.recycle,
             c.freed,
         ]
@@ -243,8 +245,8 @@ mod bench {
         let n = arm.reps as f64;
         (arm.post)();
         let (b0, b1) = (by_trigger(&c0), by_trigger(&c1));
-        let mut by = [0.0; 9];
-        for i in 0..9 {
+        let mut by = [0.0; 10];
+        for i in 0..10 {
             by[i] = (b1[i] - b0[i]) as f64 / n;
         }
         Sample {
@@ -325,7 +327,7 @@ mod bench {
                 let waits = mean(ss.iter().map(|s| s.waits));
                 let wmax = ss.iter().map(|s| s.waits).fold(0.0, f64::max);
                 let disp = mean(ss.iter().map(|s| s.dispatches));
-                let trig: Vec<String> = (0..9)
+                let trig: Vec<String> = (0..10)
                     .filter_map(|t| {
                         let m = mean(ss.iter().map(|s| s.by[t]));
                         (m > 0.0).then(|| format!("{}={:.2}", TRIGGERS[t], m))
@@ -349,7 +351,7 @@ mod bench {
         for (i, arm) in all.iter().enumerate() {
             for pass in 0..2 {
                 for (round, s) in samples[pass * count + i].iter().enumerate() {
-                    let trig: Vec<String> = (0..9)
+                    let trig: Vec<String> = (0..10)
                         .filter(|&t| s.by[t] > 0.0)
                         .map(|t| format!("{}={:.2}", TRIGGERS[t], s.by[t]))
                         .collect();

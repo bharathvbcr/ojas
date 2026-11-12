@@ -368,7 +368,10 @@ fn non_contiguous_and_device_operands_are_refused_before_anything_is_charged() {
     // Permuted strides over a bf16 `[2, 2]` allocation: same shape, not one run of bytes.
     let strided = s.view(&[2, 2], &[1, 2], 0).unwrap();
     let r = dequantize_affine_bf16_tensors(&p, &strided, &z, spec, &b);
-    assert!(r.is_err(), "a permuted view was read as contiguous");
+    assert!(
+        matches!(&r, Err(OjasError::Shape { op: "Tensor::bf16_slice", detail }) if detail == "view is not contiguous"),
+        "a permuted view was read as contiguous: {r:?}"
+    );
     // A device-resident operand is a Placement refusal, never a readback.
     let device = Tensor::from_device(Arc::new(Resident), &[2, 2], DType::Bf16, &b).unwrap();
     let live_with_device = b.live_bytes().unwrap();
