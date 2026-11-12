@@ -732,3 +732,325 @@ fn a_poisoned_autocast_leaves_the_trainer_ready() {
     assert_eq!(t.state(), TrainState::Ready);
     assert_eq!(host_state(&t), before);
 }
+
+// ------------------------------- ft-9c13f472: token-weighted accumulation
+
+/// A micro-batch of `rows` rows whose targets follow the corpus rule, with
+/// ids that depend on `salt` and the row.
+fn rows_batch(rows: usize, salt: u32) -> Batch {
+    let x: Vec<u32> = (0..rows * SEQ)
+        .map(|i| (i as u32 * 29 + salt * 13 + (i / SEQ) as u32 * 7 + 1) % 256)
+        .collect();
+    let y: Vec<u32> = x.iter().map(|v| (v * 5 + 3) % 256).collect();
+    Batch {
+        x,
+        y,
+        batch: rows,
+        seq_len: SEQ,
+    }
+}
+
+/// `a` and `b` as one batch of all their rows.
+fn joined(a: &Batch, b: &Batch) -> Batch {
+    Batch {
+        x: [a.x.as_slice(), b.x.as_slice()].concat(),
+        y: [a.y.as_slice(), b.y.as_slice()].concat(),
+        batch: a.batch + b.batch,
+        seq_len: SEQ,
+    }
+}
+
+/// One clip-free step on `batches`: the report, and the gradient of every
+/// trainable slot as the optimizer received it.
+fn recorded_step(cfg: TrainConfig, batches: &[Batch]) -> (ojas_model::StepReport, Vec<Vec<f32>>) {
+    let cfg = TrainConfig {
+        grad_clip: 1e30,
+        ..cfg
+    };
+    let (_tmp, mut t) = trainer(Probe::new(exact(1 << 30)).recording(), cfg);
+    let report = t.step_tokens(batches).unwrap();
+    let grads = t
+        .backend()
+        .take_calls()
+        .into_iter()
+        .map(|c| match c {
+            OptCall::Muon { grad, .. } | OptCall::AdamW { grad, .. } => grad,
+        })
+        .collect();
+    (report, grads)
+}
+
+/// Equal up to the rounding of two different reduction orders: every
+/// element within `1e-4` of its tensor's largest magnitude. A weighting
+/// error moves the gradient by order 1 of it.
+fn assert_grads_close(got: &[Vec<f32>], want: &[Vec<f32>]) {
+    assert_eq!(got.len(), want.len());
+    for (i, (g, w)) in got.iter().zip(want).enumerate() {
+        assert_eq!(g.len(), w.len());
+        let scale = w.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        for (a, b) in g.iter().zip(w) {
+            assert!(
+                (a - b).abs() <= 1e-4 * scale + 1e-12,
+                "gradient {i}: {a} vs {b} (scale {scale})"
+            );
+        }
+    }
+}
+
+fn assert_loss_close(got: f32, want: f32) {
+    assert!(
+        (got - want).abs() <= 1e-5 * want.abs() + 1e-6,
+        "loss {got} vs {want}"
+    );
+}
+
+/// ft-9c13f472 D2: micro-batches of 8 rows and 1 row weigh each token
+/// equally, so the step equals one batch of all 9 rows. Under the
+/// per-batch `1/K` weighting the lone row counted as much as the 8.
+#[test]
+fn uneven_micro_batches_weight_tokens_equally() {
+    let (a, b) = (rows_batch(8, 1), rows_batch(1, 2));
+    let whole = joined(&a, &b);
+    let (r, g) = recorded_step(config(1), &[a, b]);
+    let (r_whole, g_whole) = recorded_step(config(1), &[whole]);
+    assert_eq!(r.tokens, 9 * SEQ as u64);
+    assert_loss_close(r.loss, r_whole.loss);
+    assert_grads_close(&g, &g_whole);
+    // And not the per-batch mean the old seed formed.
+    let (r8, _) = recorded_step(config(1), &[rows_batch(8, 1)]);
+    let (r1, _) = recorded_step(config(1), &[rows_batch(1, 2)]);
+    let per_batch = (r8.loss + r1.loss) / 2.0;
+    assert!(
+        (r.loss - per_batch).abs() > 1e-6 || (r8.loss - r1.loss).abs() < 1e-6,
+        "the loss is the per-batch mean {per_batch}"
+    );
+}
+
+/// The same with `ignore_index`: equal rows, unequal valid counts (32 and
+/// 64 targets), weights 1/3 and 2/3.
+#[test]
+fn ignored_targets_weight_by_valid_share() {
+    let cfg = TrainConfig {
+        ignore_index: Some(7),
+        ..config(1)
+    };
+    let mut a = rows_batch(2, 1);
+    a.y[..SEQ].iter_mut().for_each(|v| *v = 7);
+    let mut b = rows_batch(2, 2);
+    // Targets of `b` that equal the ignored id by the corpus rule would
+    // make the counts differ from 32 and 64; the weights are whatever the
+    // counts are, and `whole` ignores the same targets.
+    b.y.iter_mut().filter(|v| **v == 7).for_each(|v| *v = 8);
+    a.y.iter_mut()
+        .skip(SEQ)
+        .filter(|v| **v == 7)
+        .for_each(|v| *v = 8);
+    let whole = joined(&a, &b);
+    let (r, g) = recorded_step(cfg, &[a, b]);
+    let (r_whole, g_whole) = recorded_step(cfg, &[whole]);
+    assert_loss_close(r.loss, r_whole.loss);
+    assert_grads_close(&g, &g_whole);
+}
+
+/// ft-9c13f472 D4: a micro-batch with no valid target has weight 0 and is
+/// not run, in any position, so the step is the other batch's bit for bit.
+/// Before, it failed the whole step with `NonFinite`.
+#[test]
+fn an_all_ignored_micro_batch_contributes_nothing() {
+    let cfg = TrainConfig {
+        ignore_index: Some(7),
+        ..config(1)
+    };
+    let mut ignored = batch(2);
+    ignored.y.iter_mut().for_each(|v| *v = 7);
+    let mut valid = batch(1);
+    valid.y.iter_mut().filter(|v| **v == 7).for_each(|v| *v = 8);
+    let (_t0, mut alone) = trainer(Probe::new(exact(1 << 30)), cfg);
+    let want = alone.step_tokens(std::slice::from_ref(&valid)).unwrap();
+    for order in [
+        vec![valid.clone(), ignored.clone()],
+        vec![ignored.clone(), valid.clone()],
+        vec![ignored.clone(), valid.clone(), ignored.clone()],
+    ] {
+        let (_t1, mut t) = trainer(Probe::new(exact(1 << 30)), cfg);
+        let report = t.step_tokens(&order).unwrap();
+        assert_eq!(report.loss.to_bits(), want.loss.to_bits());
+        assert_eq!(report.grad_norm.to_bits(), want.grad_norm.to_bits());
+        assert_eq!(report.step, 1);
+        assert_eq!(snapshot(&t), snapshot(&alone));
+        // The ignored batches ran no forward: one batch's worth of embeds.
+        assert_eq!(t.backend().count("embedding_forward"), 1);
+    }
+}
+
+/// A batch that is skipped for weight 0 still has its ids checked, as the
+/// embedding would have: the step fails with `OutOfRange` and changes nothing.
+#[test]
+fn a_skipped_batch_still_refuses_an_out_of_vocab_id() {
+    let cfg = TrainConfig {
+        ignore_index: Some(7),
+        ..config(1)
+    };
+    let (_tmp, mut t) = trainer(Probe::new(exact(1 << 30)), cfg);
+    let before = snapshot(&t);
+    let mut ignored = batch(2);
+    ignored.y.iter_mut().for_each(|v| *v = 7);
+    ignored.x[5] = 256;
+    let err = t.step_tokens(&[batch(1), ignored]).unwrap_err();
+    assert!(matches!(err, OjasError::OutOfRange { .. }), "{err:?}");
+    assert_untouched(&t, &before, &err);
+}
+
+/// A step whose every target is ignored stays `NonFinite`, however many
+/// micro-batches it has.
+#[test]
+fn a_step_of_only_ignored_micro_batches_is_non_finite() {
+    let cfg = TrainConfig {
+        ignore_index: Some(7),
+        ..config(1)
+    };
+    let (_tmp, mut t) = trainer(Probe::new(exact(1 << 30)), cfg);
+    let before = snapshot(&t);
+    let mut ignored = batch(1);
+    ignored.y.iter_mut().for_each(|v| *v = 7);
+    let err = t.step_tokens(&[ignored.clone(), ignored]).unwrap_err();
+    assert!(matches!(err, OjasError::NonFinite { .. }), "{err:?}");
+    assert_untouched(&t, &before, &err);
+    assert_eq!(t.backend().count("embedding_forward"), 0);
+}
+
+// ------------------------------------------ ft-9c13f472: clip and schedule
+
+/// ft-9c13f472 D3b: `f32::MAX` clips nothing, also when the norm is below
+/// 1 and `max_norm / norm` overflows `f32`; `inf` is refused by the config
+/// with torch's meaning named.
+#[test]
+fn a_huge_grad_clip_clips_nothing_and_inf_is_refused_naming_torch() {
+    let cfg = TrainConfig {
+        grad_clip: f32::MAX,
+        ..config(1)
+    };
+    let (_tmp, mut t) = trainer(exact(1 << 30), cfg);
+    let report = t.step_tokens(&[batch(1)]).unwrap();
+    assert!(report.grad_norm.is_finite());
+    assert_eq!(t.step_count(), 1);
+    let inf = TrainConfig {
+        grad_clip: f32::INFINITY,
+        ..config(1)
+    };
+    match inf.validate().unwrap_err() {
+        OjasError::OutOfRange { detail, .. } => {
+            assert!(
+                detail.contains("torch") && detail.contains("f32::MAX"),
+                "{detail}"
+            )
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// ft-9c13f472 D3a: warmup 0 trains, at multiplier 1.0 from step 0 as
+/// nanolab's `_warmup_mult` does.
+#[test]
+fn warmup_zero_trains_at_the_peak_from_step_zero() {
+    let schedule = LrSchedule::Cosine(CosineSchedule::new(0, 40).unwrap());
+    let cfg = TrainConfig::nanolab(BATCH, SEQ, 1, 1337, schedule);
+    let (_tmp, mut t) = trainer(exact(1 << 30), cfg);
+    let first = t.step().unwrap();
+    assert_eq!(first.lr_multiplier, 1.0);
+    let second = t.step().unwrap();
+    assert_eq!(
+        second.lr_multiplier,
+        CosineSchedule::new(0, 40).unwrap().multiplier(1).unwrap()
+    );
+    assert!(second.lr_multiplier < 1.0);
+}
+
+// ------------------------------------------ ft-9c13f472 D9: skip counting
+
+/// `MAX_CONSECUTIVE_SKIPS` (trainer.rs, not exported).
+const MAX_SKIPS: usize = 8;
+
+fn skip_config() -> TrainConfig {
+    TrainConfig {
+        on_nonfinite: NonFinitePolicy::SkipBatch,
+        ..config(1)
+    }
+}
+
+/// Fail the first `linear_forward` of the next step with a NaN.
+fn poison_next_step(t: &Trainer<Probe<CpuBackend>>) {
+    t.backend().fail("linear_forward", 0, Fault::NanOutput);
+}
+
+#[test]
+fn skip_batch_stops_skipping_after_eight_in_a_row() {
+    let (_tmp, mut t) = trainer(Probe::new(exact(1 << 30)), skip_config());
+    for n in 1..=MAX_SKIPS {
+        let before = t.cursor();
+        poison_next_step(&t);
+        let err = t.step().unwrap_err();
+        assert!(
+            matches!(err, OjasError::NonFinite { .. }),
+            "skip {n}: {err:?}"
+        );
+        assert_eq!(
+            t.cursor().token_index,
+            before.token_index + BATCH as u64,
+            "skip {n} advances the cursor"
+        );
+    }
+    // The ninth in a row is the distinct error, with the cursor kept.
+    let kept = t.cursor();
+    poison_next_step(&t);
+    let err = t.step().unwrap_err();
+    match &err {
+        OjasError::OutOfRange { op, detail } => {
+            assert_eq!(*op, "Trainer::step");
+            assert!(detail.contains("consecutive non-finite"), "{detail}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(t.cursor(), kept);
+    assert_eq!(t.step_count(), 0);
+    assert_eq!(t.state(), TrainState::Ready);
+    // A clean step runs (and clears the count: a later fault skips again).
+    t.backend().clear_fault();
+    t.step().unwrap();
+    assert_eq!(t.step_count(), 1);
+    poison_next_step(&t);
+    let err = t.step().unwrap_err();
+    assert!(matches!(err, OjasError::NonFinite { .. }), "{err:?}");
+}
+
+#[test]
+fn a_committed_step_resets_the_skip_count() {
+    let (_tmp, mut t) = trainer(Probe::new(exact(1 << 30)), skip_config());
+    for round in 0..3 {
+        for n in 0..MAX_SKIPS {
+            poison_next_step(&t);
+            let err = t.step().unwrap_err();
+            assert!(
+                matches!(err, OjasError::NonFinite { .. }),
+                "round {round} skip {n}: {err:?}"
+            );
+        }
+        t.backend().clear_fault();
+        t.step().unwrap();
+    }
+    assert_eq!(t.step_count(), 3);
+}
+
+/// Abort never counts: the cursor stays and the error stays `NonFinite`
+/// however often it repeats.
+#[test]
+fn abort_never_escalates() {
+    let (_tmp, mut t) = trainer(Probe::new(exact(1 << 30)), config(1));
+    let start = t.cursor();
+    for _ in 0..MAX_SKIPS + 3 {
+        poison_next_step(&t);
+        let err = t.step().unwrap_err();
+        assert!(matches!(err, OjasError::NonFinite { .. }), "{err:?}");
+        assert_eq!(t.cursor(), start);
+    }
+}

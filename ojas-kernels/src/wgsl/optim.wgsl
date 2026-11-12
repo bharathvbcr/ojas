@@ -17,9 +17,11 @@
 @group(0) @binding(8) var<storage, read_write> status: array<atomic<u32>>;
 @group(0) @binding(9) var<storage, read> status_in: array<u32>;
 
-// Words: 0 n, 1 step_size, 2 sqrt(bias_correction2), 3 eps, 4 beta1,
-// 5 1 - beta1, 6 beta2, 7 1 - beta2, 8 decay (1 - lr * wd), 9 flags
-// (bit 0 weight decay is non-zero, bit 1 lerp uses the low-weight form).
+// Words: 0 n, 1 step_size, 2 sqrt(bias_correction2), 3 eps, 4 the lerp
+// high-weight coefficient 1f - f32(1 - beta1) (torch's `1 - weight` in f32,
+// as Metal's `1.0f - lerp_w`; not f32(beta1)), 5 1 - beta1, 6 beta2,
+// 7 1 - beta2, 8 decay (1 - lr * wd), 9 flags (bit 0 weight decay is
+// non-zero, bit 1 lerp uses the low-weight form, chosen on the f32 word 5).
 // x0 = grad. y0, y1, y2 = param, moment1, moment2.
 struct AdamOut { p: f32, m: f32, v: f32, bad: bool, }
 

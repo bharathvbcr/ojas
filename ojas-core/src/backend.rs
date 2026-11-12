@@ -258,17 +258,25 @@ pub fn pow_u64(base: f64, mut exp: u64) -> f64 {
 
 /// Global-norm clip coefficient `min(1, max_norm / (total_norm + eps))`.
 ///
-/// A non-finite `max_norm`, `total_norm` or coefficient is
-/// [`OjasError::NonFinite`]; a negative `max_norm` is
+/// Torch's `clip_grad_norm_` forms `clip_coef = max_norm / (total_norm +
+/// 1e-6)` and then `clamp(max=1.0)` (`torch/nn/utils/clip_grad.py:164-168`),
+/// so a `max_norm` of `+inf`, which torch documents as "measure the norm
+/// only", and a coefficient that overflows `f32` both give 1 (ft-9c13f472
+/// D3b). Here a `+inf` `max_norm` needs a finite `total_norm`; every
+/// backend skips its scale pass for a coefficient of 1.
+///
+/// A NaN or `-inf` `max_norm`, a non-finite `total_norm` and a NaN
+/// coefficient are [`OjasError::NonFinite`]; a negative `max_norm` is
 /// [`OjasError::OutOfRange`]. The caller scales only on `Ok`.
 ///
 /// A `max_norm` of 0 is accepted and gives 0, so the gradients are zeroed:
 /// torch's `clip_grad_norm_(max_norm=0)` does the same, and the oracle
 /// compares this op to torch. It is not "no clipping". ojas-model's
-/// `TrainConfig::validate` refuses a `grad_clip` of 0 for that reason.
+/// `TrainConfig::validate` refuses a `grad_clip` of 0 for that reason, and
+/// also refuses `+inf` (its JSON form cannot carry it; use `f32::MAX`).
 pub fn clip_scale(max_norm: f32, total_norm: f32) -> Result<f32, OjasError> {
     const OP: &str = "clip_grad_norm";
-    if !max_norm.is_finite() || !total_norm.is_finite() {
+    if !total_norm.is_finite() || max_norm.is_nan() || max_norm == f32::NEG_INFINITY {
         return Err(OjasError::NonFinite { op: OP });
     }
     if max_norm < 0.0 {
@@ -278,9 +286,11 @@ pub fn clip_scale(max_norm: f32, total_norm: f32) -> Result<f32, OjasError> {
         });
     }
     let coef = max_norm / (total_norm + CLIP_GRAD_NORM_EPS);
-    if !coef.is_finite() {
+    if coef.is_nan() {
         return Err(OjasError::NonFinite { op: OP });
     }
+    // `+inf` here is torch's `clamp(max=1.0)` of an overflow, or of
+    // `max_norm = +inf`: no clipping.
     Ok(coef.min(1.0))
 }
 
@@ -404,6 +414,37 @@ impl AdamWScalars {
             decays: config.weight_decay != 0.0,
             lerp_low: one_minus_b1 < 0.5,
         }
+    }
+
+    /// The `lerp` weight `1 - beta1` as the f32 an f32 kernel holds: one
+    /// rounding of [`Self::one_minus_b1`]. Torch keeps the weight in the
+    /// opmath type (`Lerp.h:24-34`), f32 for an f32 tensor.
+    pub fn lerp_weight_f32(&self) -> f32 {
+        self.one_minus_b1 as f32
+    }
+
+    /// Whether an f32 kernel takes the low-weight form: torch's `lerp`
+    /// tests `abs(weight) < 0.5` on that f32 weight (`Lerp.h:12-13`), not
+    /// on the f64 [`Self::lerp_low`]. They differ only for a `beta1` within
+    /// f32 rounding of 0.5.
+    pub fn lerp_low_f32(&self) -> bool {
+        self.lerp_weight_f32() < 0.5
+    }
+
+    /// The high-weight form's coefficient of `g - m` in f32: torch's
+    /// `opmath_t(1) - weight` (`Lerp.h:24-34`), `1 - f32(1 - beta1)`. It is
+    /// not `f32(beta1)`: for `beta1 < 0.5` the f32 weight has already lost
+    /// the low bits of `1 - beta1`. Metal and CUDA K11 form it this way
+    /// (`1.0f - lerp_w` in tessl's `qwen35_adamw_math.h`).
+    pub fn lerp_high_f32(&self) -> f32 {
+        1.0f32 - self.lerp_weight_f32()
+    }
+
+    /// The same coefficient in f64, `1 - (1 - beta1)`, for
+    /// [`Numerics::Exact`]. It is `beta1` exactly whenever
+    /// `beta1 >= 0.5`, where `1 - beta1` is exact.
+    pub fn lerp_high(&self) -> f64 {
+        1.0 - self.one_minus_b1
     }
 
     /// The seven f32 scalars a device kernel reads, each rounded once from
@@ -3493,7 +3534,9 @@ pub(crate) mod tests {
         for (max_norm, norm) in [
             (f32::NAN, 1.0),
             (1.0, f32::NAN),
-            (f32::INFINITY, 1.0),
+            (f32::NEG_INFINITY, 1.0),
+            (f32::INFINITY, f32::NAN),
+            (f32::INFINITY, f32::INFINITY),
             (1.0, f32::INFINITY),
         ] {
             assert!(matches!(
@@ -3505,6 +3548,25 @@ pub(crate) mod tests {
             clip_scale(-1.0, 1.0),
             Err(OjasError::OutOfRange { .. })
         ));
+    }
+
+    /// ft-9c13f472 D3b: torch's `clamp(max=1.0)` turns `max_norm = +inf`
+    /// and an overflowing coefficient into 1 (no clipping) instead of an
+    /// error (`clip_grad.py:164-168`).
+    #[test]
+    fn clip_scale_matches_torch_for_infinite_max_norm_and_overflow() {
+        assert_eq!(clip_scale(f32::INFINITY, 1.0).unwrap(), 1.0);
+        assert_eq!(clip_scale(f32::INFINITY, 0.0).unwrap(), 1.0);
+        assert_eq!(clip_scale(f32::INFINITY, 1e30).unwrap(), 1.0);
+        // `f32::MAX / (0.5 + 1e-6)` and `f32::MAX / 1e-6` overflow to +inf.
+        assert_eq!(clip_scale(f32::MAX, 0.5).unwrap(), 1.0);
+        assert_eq!(clip_scale(f32::MAX, 0.0).unwrap(), 1.0);
+        // A finite coefficient above 1 still clamps, and one below stays.
+        assert_eq!(
+            clip_scale(f32::MAX, f32::MAX).unwrap().to_bits(),
+            1.0f32.to_bits()
+        );
+        assert!(clip_scale(1.0, 4.0).unwrap() < 0.25);
     }
 
     #[test]

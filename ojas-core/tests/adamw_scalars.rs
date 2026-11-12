@@ -198,15 +198,31 @@ fn the_checked_scalars_equal_the_cpu_metal_and_wgpu_formulas_bit_for_bit() {
                 (s.step_size as f32).to_bits(),
                 (s.bc2_sqrt as f32).to_bits(),
                 (s.eps as f32).to_bits(),
-                (s.beta1 as f32).to_bits(),
-                (s.one_minus_b1 as f32).to_bits(),
+                s.lerp_high_f32().to_bits(),
+                s.lerp_weight_f32().to_bits(),
                 (s.beta2 as f32).to_bits(),
                 (s.one_minus_b2 as f32).to_bits(),
                 (s.decay as f32).to_bits(),
             ];
-            let new_flags = u32::from(s.decays) | (u32::from(s.lerp_low) << 1);
-            assert_eq!(new_words, words, "{what}");
-            assert_eq!(new_flags, flags, "{what}");
+            let new_flags = u32::from(s.decays) | (u32::from(s.lerp_low_f32()) << 1);
+            // ft-9c13f472 D5: word 3 is now torch's `1f - f32(1 - beta1)`
+            // (what Metal's `1.0f - lerp_w` forms) instead of `f32(beta1)`,
+            // and the branch is taken on the f32 weight. Every other word is
+            // the old one.
+            let mut want_words = words;
+            want_words[3] = (1.0f32 - f32::from_bits(words[4])).to_bits();
+            assert_eq!(new_words, want_words, "{what}");
+            let want_low = ((1.0 - config.beta1) as f32) < 0.5;
+            assert_eq!(new_flags, u32::from(s.decays) | (u32::from(want_low) << 1));
+            // Word 3 is read only on the high branch (beta1 <= 0.5). Where
+            // the kernel takes the low branch, which is every beta1 above 0.5
+            // outside f32 rounding of the tie, the step is the old one:
+            // same branch, same word 4, so beta1 0.9 and every other
+            // low-branch config is bit-unchanged.
+            if config.beta1 > 0.5 + 1e-6 {
+                assert_eq!(new_flags, flags, "{what}");
+                assert!(s.lerp_low_f32() && s.lerp_low, "{what}");
+            }
         }
     }
 }
@@ -324,6 +340,67 @@ fn a_refused_config_is_refused_as_check_adamw_refuses_it() {
     let want = check_adamw(ok, u64::MAX).expect_err("the counter cannot wrap");
     let got = AdamWScalars::new(ok, u64::MAX).expect_err("the counter cannot wrap");
     assert_eq!(format!("{got:?}"), format!("{want:?}"));
+}
+
+/// ft-9c13f472 D5: the f32 high-branch coefficient is torch's
+/// `1f - f32(1 - beta1)` (`Lerp.h:24-34`), the form Metal's `1.0f - lerp_w`
+/// takes, and not `f32(beta1)`; the branch is tested on the f32 weight.
+#[test]
+fn the_f32_lerp_coefficient_is_one_minus_the_f32_weight() {
+    let tie = 2.0f64.powi(-30);
+    for beta1 in [
+        0.0,
+        0.001,
+        0.3,
+        0.499,
+        0.5,
+        0.5 + tie,
+        0.5 - tie,
+        0.9,
+        0.999,
+    ] {
+        let config = AdamWConfig {
+            beta1,
+            ..AdamWConfig::nanolab(1e-3, 0.1)
+        };
+        let s = AdamWScalars::new(config, 0).unwrap();
+        let weight = (1.0 - beta1) as f32;
+        assert_eq!(s.lerp_weight_f32().to_bits(), weight.to_bits(), "{beta1}");
+        assert_eq!(
+            s.lerp_high_f32().to_bits(),
+            (1.0f32 - weight).to_bits(),
+            "{beta1}"
+        );
+        assert_eq!(s.lerp_low_f32(), weight < 0.5, "{beta1}");
+        assert_eq!(s.lerp_high().to_bits(), (1.0 - (1.0 - beta1)).to_bits());
+        if beta1 >= 0.5 {
+            // `1 - beta1` is exact here, so the f64 form is beta1 itself.
+            assert_eq!(s.lerp_high().to_bits(), beta1.to_bits(), "{beta1}");
+        }
+    }
+    // The card's example: beta1 0.001 is 9.99987e-4 in torch's f32 form,
+    // not the 1.0e-3 the CPU and wgpu kernels multiplied by.
+    let s = AdamWScalars::new(
+        AdamWConfig {
+            beta1: 0.001,
+            ..AdamWConfig::nanolab(1e-3, 0.1)
+        },
+        0,
+    )
+    .unwrap();
+    assert!((f64::from(s.lerp_high_f32()) - 9.99987e-4).abs() < 1e-9);
+    assert_ne!(s.lerp_high_f32().to_bits(), 0.001f32.to_bits());
+    // Within f32 rounding of the tie the f64 and f32 branches disagree, and
+    // the f32 one is torch's.
+    let above = AdamWScalars::new(
+        AdamWConfig {
+            beta1: 0.5 + tie,
+            ..AdamWConfig::nanolab(1e-3, 0.1)
+        },
+        0,
+    )
+    .unwrap();
+    assert!(above.lerp_low && !above.lerp_low_f32());
 }
 
 #[test]

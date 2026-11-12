@@ -2799,14 +2799,17 @@ impl BackendModule for WgpuBackend {
         let s = AdamWScalars::new(config, step)?;
         let grid = self.lanes(n)?;
         // Bit 0: the decay multiply runs. Bit 1: torch's low-weight `lerp`.
-        let flags = u32::from(s.decays) | (u32::from(s.lerp_low) << 1);
+        // The branch is torch's, tested on the f32 weight the kernel holds
+        // (word 5), and word 4 is `1 - weight` in f32: Metal's form
+        // (ft-9c13f472 D5), not `f32(beta1)`.
+        let flags = u32::from(s.decays) | (u32::from(s.lerp_low_f32()) << 1);
         let words = [
             u(op, n)?,
             (s.step_size as f32).to_bits(),
             (s.bc2_sqrt as f32).to_bits(),
             (s.eps as f32).to_bits(),
-            (s.beta1 as f32).to_bits(),
-            (s.one_minus_b1 as f32).to_bits(),
+            s.lerp_high_f32().to_bits(),
+            s.lerp_weight_f32().to_bits(),
             (s.beta2 as f32).to_bits(),
             (s.one_minus_b2 as f32).to_bits(),
             (s.decay as f32).to_bits(),

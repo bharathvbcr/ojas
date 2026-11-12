@@ -14,6 +14,7 @@ use ojas_core::{
     AdamWConfig, BackendCore, BackendFloat, BackendId, BackendModule, Budget, DType, DeviceBuffer,
     MuonNs5Config, Numerics, OjasError, Tensor, RMS_NORM_EPS,
 };
+use ojas_cpu::CpuBackend;
 use ojas_wgpu::{WgpuBackend, WgpuContext};
 
 #[test]
@@ -1026,6 +1027,69 @@ fn adamw_matches_cpu_over_steps() {
         close(&format!("adam {n} p"), &dp, &hp);
         close(&format!("adam {n} m"), &dm, &hm);
         close(&format!("adam {n} v"), &dv, &hv);
+    }
+}
+
+/// ft-9c13f472 D5: wgpu forms torch's `lerp` as the CPU `Numerics::Fast`
+/// path and Metal do: `g - (g - m) * (1f - f32(1 - beta1))` on the high
+/// branch, the branch taken on the f32 weight. The first moment `m` is
+/// compared bit for bit with CPU Fast (Metal's own test,
+/// `ojas-metal/tests/adamw_lerp_weight.rs`, compares Metal with the same
+/// CPU path, which closes the three-way equality); `p` and `v` use the
+/// tolerance of `adamw_matches_cpu_over_steps`. If `m` differs here the
+/// WGSL has been fused or reordered by the backend compiler: report, do not
+/// loosen.
+#[test]
+fn adamw_first_moment_is_bit_equal_to_cpu_fast_for_every_beta1() {
+    let tie = 2.0f64.powi(-30);
+    let fast = CpuBackend::new(Budget::new(8 << 30)).with_numerics(Numerics::Fast);
+    assert_eq!(fast.numerics(), Numerics::Fast);
+    let n = 513usize;
+    for beta1 in [
+        0.0,
+        0.001,
+        0.3,
+        0.499,
+        0.5,
+        0.5 + tie,
+        0.5 - tie,
+        0.9,
+        0.999,
+    ] {
+        let cfg = AdamWConfig {
+            beta1,
+            ..AdamWConfig::nanolab(3e-3, 0.1)
+        };
+        let mut p = host(2000, &[n]);
+        let mut m = host(2001, &[n]);
+        let mut v = Tensor::from_f32(
+            &data(2002, n).iter().map(|x| x.abs()).collect::<Vec<_>>(),
+            &[n],
+            host_budget(),
+        )
+        .unwrap();
+        let (mut dp, mut dm, mut dv) = (up(&p), up(&m), up(&v));
+        for step in 0..3u64 {
+            let grad = host(2100 + step, &[n]);
+            gpu()
+                .adamw_step(&mut dp, &up(&grad), &mut dm, &mut dv, step, cfg)
+                .unwrap();
+            fast.adamw_step(&mut p, &grad, &mut m, &mut v, step, cfg)
+                .unwrap();
+            let got: Vec<u32> = down(&dm).iter().map(|x| x.to_bits()).collect();
+            let want: Vec<u32> = m
+                .to_f32_vec()
+                .unwrap()
+                .iter()
+                .map(|x| x.to_bits())
+                .collect();
+            assert_eq!(
+                got, want,
+                "beta1 {beta1} step {step}: m is not bit-equal to CPU Fast"
+            );
+        }
+        close(&format!("beta1 {beta1} p"), &dp, &p);
+        close(&format!("beta1 {beta1} v"), &dv, &v);
     }
 }
 

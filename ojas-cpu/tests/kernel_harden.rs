@@ -761,7 +761,12 @@ fn accumulation_count_and_warmup_edges() {
     assert_eq!(at_cap.count(), 1 << 24);
     assert_eq!(at_cap.mean().unwrap(), vec![1.0]);
 
-    assert_range(CosineSchedule::new(0, 1).map(|_| ()));
+    // ft-9c13f472 D3a: warmup 0 is no warmup (nanolab `schedules.py:53-56`),
+    // so a one-step run with it sits at the peak instead of being refused.
+    assert_eq!(
+        CosineSchedule::new(0, 1).unwrap().multiplier(0).unwrap(),
+        1.0
+    );
     let one = CosineSchedule::new(1, 1).unwrap();
     assert_eq!(one.multiplier(0).unwrap(), 1.0);
     assert!((one.multiplier(1).unwrap() - 1.0).abs() < 1e-12);

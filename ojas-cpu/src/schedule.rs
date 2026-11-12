@@ -15,8 +15,11 @@
 //! multiplier = 0.1 + 0.9 * 0.5 * (1 + cos(pi * t))
 //! ```
 //!
-//! Warmup 0 is refused. A step that does not fit in an exact `f64` integer,
-//! including `u64::MAX`, is refused.
+//! Warmup 0 is accepted and means no warmup, as nanolab's `_warmup_mult`
+//! (`schedules.py:53-56`, `if self.warmup <= 0: return 1.0`): `step < warmup`
+//! never holds, so the first step already runs on the decay branch, whose
+//! multiplier at `t = 0` is 1.0 (ft-9c13f472 D3a). A step that does not fit
+//! in an exact `f64` integer, including `u64::MAX`, is refused.
 
 use ojas_core::OjasError;
 
@@ -34,14 +37,9 @@ pub struct CosineSchedule {
 }
 
 impl CosineSchedule {
-    /// `warmup_steps` and `total_steps` must both be non-zero and exact in `f64`.
+    /// `total_steps` must be non-zero, and both counts exact in `f64`.
+    /// `warmup_steps` 0 means no warmup.
     pub fn new(warmup_steps: u64, total_steps: u64) -> Result<Self, OjasError> {
-        if warmup_steps == 0 {
-            return Err(OjasError::OutOfRange {
-                op: "cosine_schedule",
-                detail: "warmup 0".to_string(),
-            });
-        }
         if total_steps == 0 {
             return Err(OjasError::OutOfRange {
                 op: "cosine_schedule",
@@ -115,8 +113,9 @@ pub const WSD_DECAY_FRAC: f64 = 0.2;
 /// Nanolab does not clamp the decay: past `total` its multiplier falls below
 /// the floor and then below zero. Here a step past `total` is refused instead,
 /// so the schedule is defined on `0..=total` and never below the floor. Warmup
-/// 0, total 0, and a `decay_frac` outside `[0, 1]` are refused, as are steps
-/// that are not exact `f64` integers.
+/// 0 means no warmup, as nanolab's `_warmup_mult` (`schedules.py:53-56`;
+/// ft-9c13f472 D3a). Total 0 and a `decay_frac` outside `[0, 1]` are refused,
+/// as are steps that are not exact `f64` integers.
 #[derive(Clone, Copy, Debug)]
 pub struct WsdSchedule {
     warmup_steps: u64,
@@ -127,12 +126,6 @@ pub struct WsdSchedule {
 impl WsdSchedule {
     pub fn new(warmup_steps: u64, total_steps: u64, decay_frac: f64) -> Result<Self, OjasError> {
         const OP: &str = "wsd_schedule";
-        if warmup_steps == 0 {
-            return Err(OjasError::OutOfRange {
-                op: OP,
-                detail: "warmup 0".to_string(),
-            });
-        }
         if total_steps == 0 {
             return Err(OjasError::OutOfRange {
                 op: OP,

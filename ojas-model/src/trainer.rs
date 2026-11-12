@@ -4,16 +4,21 @@
 //! step counter, the schedule, the token bin with its sampler cursor, and a
 //! [`TrainState`]. One [`Trainer::step`]:
 //! 1. `mult = schedule.multiplier(step)` at the pre-increment step.
-//! 2. For each of K micro-batches: clear the tape, bind every parameter as a
+//! 2. Weight each micro-batch by its share of the step's valid targets,
+//!    `w_i = n_i / N` (`n_i` counts the targets that are not
+//!    `ignore_index`), which is `1/K` when every count is equal. For each
+//!    micro-batch with `w_i > 0`: clear the tape, bind every parameter as a
 //!    leaf, forward through every block and the fused head,
-//!    `backward_seeded(loss, 1/K)`, then `take_grad` and
+//!    `backward_seeded(loss, w_i)`, then `take_grad` and
 //!    [`ojas_core::BackendFloat::accumulate_grad`] into trainer-owned buffers. Losses are
-//!    summed on the device.
+//!    weighted and summed on the device. A micro-batch whose targets are all
+//!    ignored has `w_i = 0` and is not run (its ids are still checked); a
+//!    step whose targets are all ignored is [`OjasError::NonFinite`].
 //! 3. Clear the tape, so the in-place optimizer owns each parameter alone.
 //! 4. `clip_grad_norm(grads, grad_clip)`.
 //! 5. Muon NS5 or AdamW per parameter, with `ojas_cpu::optim_group`'s
 //!    constants, exactly as `ojas_cpu::HybridOptimizer::step` forms them.
-//! 6. `backend.sync()`, then the one readback of the step: the loss sum.
+//! 6. `backend.sync()`, then the one readback of the step: the weighted loss.
 //! 7. Commit: the step counter and the data cursor advance together.
 //!
 //! An error in steps 1-4 leaves parameters, moments, step and cursor as
@@ -64,9 +69,16 @@ pub const DEFAULT_CE_CHUNK: CeChunk = CeChunk {
     cols: 8192,
 };
 
-/// Largest accumulation count: `1 / K` must be an exact, normal `f32`
-/// scale of a power of two up to here, and the count exact in `f32`.
+/// Largest accumulation count: the count must be exact in `f32`, and `1 / K`
+/// a normal `f32` seed ([`ojas_autograd::Tape::backward_seeded`] refuses a
+/// subnormal one).
 const MAX_ACCUM: usize = 1 << 24;
+
+/// Consecutive [`OjasError::NonFinite`] steps [`Trainer::step`] skips under
+/// [`NonFinitePolicy::SkipBatch`] before it stops skipping and returns an
+/// [`OjasError::OutOfRange`] naming the run of failures (ft-9c13f472 D9).
+/// The count lives in memory; a resumed trainer starts it at 0.
+pub(crate) const MAX_CONSECUTIVE_SKIPS: u32 = 8;
 
 /// What a non-finite loss or gradient does to the data cursor (§3 step 4).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -229,6 +241,20 @@ impl TrainConfig {
         // `clip_grad_norm_(max_norm=0)`, which nanolab calls unconditionally
         // (`train.py:347`), multiplies every gradient by 0, and so does
         // `clip_scale`, so a 0 run would never learn.
+        //
+        // `+inf` is refused too, though `ojas_core::clip_scale` accepts it
+        // as torch does (measure only, coefficient 1; ft-9c13f472 D3b):
+        // [`Self::to_json`] prints floats with `{:?}`, which writes `inf`,
+        // not a JSON number, and the config is saved in every checkpoint.
+        // `f32::MAX` clips nothing either, and round-trips.
+        if self.grad_clip == f32::INFINITY {
+            return Err(range(
+                "grad_clip inf is refused: torch's clip_grad_norm_(max_norm=inf) measures the \
+                 norm without clipping, but this config is serialized to JSON, which cannot \
+                 carry inf; use f32::MAX to clip nothing"
+                    .to_string(),
+            ));
+        }
         if !(self.grad_clip.is_finite() && self.grad_clip > 0.0) {
             return Err(range(format!(
                 "grad_clip {} is not finite and positive (torch's clip_grad_norm_ with \
@@ -253,7 +279,12 @@ impl TrainConfig {
 /// What one step did.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StepReport {
-    /// Mean of the K micro-batch losses.
+    /// Token-weighted mean of the micro-batch losses: each is weighted by
+    /// its share of the step's valid targets, which is the plain mean of
+    /// the K losses when every micro-batch has the same count. nanolab
+    /// divides each micro-batch loss by `grad_accum` (`train.py:342`), so
+    /// the two differ only when `ignore_index` leaves unequal counts
+    /// (ft-9c13f472 D2).
     pub loss: f32,
     /// Global gradient norm before clipping.
     pub grad_norm: f32,
@@ -314,6 +345,9 @@ pub struct Trainer<B: Backend> {
     /// The budget a completed step took above its starting live bytes, and
     /// the micro-batch shape that took it.
     pub(crate) step_peak: Option<StepPeak>,
+    /// Steps in a row that [`Trainer::step`] skipped for a non-finite value;
+    /// see [`MAX_CONSECUTIVE_SKIPS`]. Cleared by a committed step.
+    pub(crate) consecutive_skips: u32,
 }
 
 /// What one completed step charged at its peak, above the live bytes it
@@ -556,6 +590,7 @@ impl<B: Backend> Trainer<B> {
             run,
             optimizer_scratch,
             step_peak: None,
+            consecutive_skips: 0,
         })
     }
 
@@ -623,6 +658,10 @@ impl<B: Backend> Trainer<B> {
     /// [`OjasError::NonFinite`] and the policy is
     /// [`NonFinitePolicy::SkipBatch`], which advances it and still returns
     /// the error. Parameters, moments and the step counter do not change.
+    /// After 8 such skips in a row (`MAX_CONSECUTIVE_SKIPS`), the next
+    /// non-finite step returns [`OjasError::OutOfRange`] instead and keeps
+    /// the cursor; any committed step clears the count. Only this method
+    /// counts: [`Self::step_tokens`] has no cursor to skip.
     ///
     /// Memory is checked before the work and again before the first update
     /// (a `CapacityExceeded` from either leaves the trainer Ready), so
@@ -641,15 +680,30 @@ impl<B: Backend> Trainer<B> {
         match self.run(&batches) {
             Ok(report) => {
                 self.cursor = after;
+                self.consecutive_skips = 0;
                 Ok(report)
             }
             Err(err) => {
-                let skip = self.state == TrainState::Ready
+                let skippable = self.state == TrainState::Ready
                     && self.cfg.on_nonfinite == NonFinitePolicy::SkipBatch
                     && matches!(err, OjasError::NonFinite { .. });
-                if skip {
-                    self.cursor = after;
+                if !skippable {
+                    return Err(err);
                 }
+                if self.consecutive_skips >= MAX_CONSECUTIVE_SKIPS {
+                    // Skipping forever would hide a run that no longer
+                    // trains: stop, keep the cursor, and say why.
+                    return Err(OjasError::OutOfRange {
+                        op: "Trainer::step",
+                        detail: format!(
+                            "{} consecutive non-finite steps under SkipBatch (last: {err}); \
+                             the run is not recovering",
+                            self.consecutive_skips + 1
+                        ),
+                    });
+                }
+                self.cursor = after;
+                self.consecutive_skips += 1;
                 Err(err)
             }
         }
@@ -734,6 +788,14 @@ impl<B: Backend> Trainer<B> {
             tokens = tokens.saturating_add(b.x.len() as u64);
         }
         let rows = batches.iter().map(|b| b.batch).max().unwrap_or(0);
+        // The weights need only the host targets: a step with no valid
+        // target is `NonFinite` before any work, as the all-ignored batch
+        // always was.
+        let counts = batches
+            .iter()
+            .map(|b| valid_targets(&b.y, self.cfg.ignore_index))
+            .collect::<Vec<u64>>();
+        let weights = MicroWeights::new(&counts)?;
         let configs = self.optimizer_configs(mult)?;
         let budget = self.tape.backend().budget().clone();
         // Before any work: room for the optimizer's scratch, and for the
@@ -743,7 +805,7 @@ impl<B: Backend> Trainer<B> {
         let live_before = budget.live_bytes()?;
         budget.reset_peak();
         // Steps 2-4: nothing the trainer owns changes.
-        let result = self.gradients(batches, 1.0 / k as f32);
+        let result = self.gradients(batches, &weights);
         // Step 3: the tape holds a clone of every parameter until cleared.
         self.tape.clear();
         let (mut grads, loss_sum) = result?;
@@ -772,7 +834,7 @@ impl<B: Backend> Trainer<B> {
         drop(grads);
         self.record_peak(rows, k, budget.peak_bytes().saturating_sub(live_before));
         Ok(StepReport {
-            loss: loss / k as f32,
+            loss: weights.report(loss),
             grad_norm,
             lr_multiplier: mult,
             step: next,
@@ -811,13 +873,27 @@ impl<B: Backend> Trainer<B> {
     }
 
     /// Steps 2: the summed gradient of every trainable slot, in slot order,
-    /// and the device-side sum of the K losses.
+    /// and the device-side sum of the micro-batch losses. Micro-batch `i`
+    /// seeds its backward with `weights.weights[i]`; a zero weight skips the
+    /// batch after its ids are checked. The losses are summed unscaled when
+    /// `weights.uniform` ([`MicroWeights::report`] divides), and each scaled
+    /// by its weight on the device otherwise.
     fn gradients(
         &mut self,
         batches: &[Batch],
-        seed: f32,
+        weights: &MicroWeights,
     ) -> Result<(Vec<Tensor>, Tensor), OjasError> {
         const OP: &str = "Trainer::step";
+        if weights.weights.len() != batches.len() {
+            return Err(OjasError::Shape {
+                op: OP,
+                detail: format!(
+                    "{} weights for {} micro-batches",
+                    weights.weights.len(),
+                    batches.len()
+                ),
+            });
+        }
         let Self {
             spec,
             cfg,
@@ -833,7 +909,14 @@ impl<B: Backend> Trainer<B> {
             .collect();
         let mut loss_sum: Option<Tensor> = None;
         let values: Vec<Tensor> = slots.iter().map(|s| s.value.clone()).collect();
-        for batch in batches {
+        for (batch, &weight) in batches.iter().zip(&weights.weights) {
+            if weight == 0.0 {
+                // No valid target: the batch contributes nothing and is not
+                // run, but the forward would have refused a bad id, so the
+                // ids are checked here. Every target is `ignore_index`.
+                check_ids(&batch.x, spec.vocab)?;
+                continue;
+            }
             tape.clear();
             let budget = tape.backend().budget().clone();
             let ids = Tensor::from_u32(&batch.x, &[batch.batch, batch.seq_len], &budget)?;
@@ -856,7 +939,7 @@ impl<B: Backend> Trainer<B> {
                     cfg.activations,
                 )?;
                 let loss_value = tape.value(loss)?.clone();
-                tape.backward_seeded(loss, seed)?;
+                tape.backward_seeded(loss, weight)?;
                 let mut taken = Vec::with_capacity(accs.len());
                 for (slot, var) in slots.iter().zip(params.into_flat()) {
                     if matches!(slot.moments, Moments::Frozen) {
@@ -881,6 +964,10 @@ impl<B: Backend> Trainer<B> {
                     Some(sum) => tape.backend().accumulate_grad(sum, &grad)?,
                     None => *acc = Some(grad),
                 }
+            }
+            let mut loss_value = loss_value;
+            if !weights.uniform && weight != 1.0 {
+                tape.backend().scale_grad(&mut loss_value, weight)?;
             }
             loss_sum = Some(match loss_sum {
                 None => loss_value,
@@ -948,6 +1035,88 @@ impl<B: Backend> Trainer<B> {
     }
 }
 
+/// Targets that count toward the loss: every one that is not `ignore`.
+/// An out-of-vocabulary target counts; the forward refuses it.
+fn valid_targets(targets: &[u32], ignore: Option<u32>) -> u64 {
+    targets.iter().filter(|&&t| ignore != Some(t)).count() as u64
+}
+
+/// Refuse a token id outside the vocabulary, as the embedding does.
+fn check_ids(ids: &[u32], vocab: usize) -> Result<(), OjasError> {
+    for (n, &id) in ids.iter().enumerate() {
+        if u64::from(id) >= vocab as u64 {
+            return Err(OjasError::OutOfRange {
+                op: "Trainer::step",
+                detail: format!("token id {id} at {n} is outside vocab {vocab}"),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// How a step weights its micro-batches (ft-9c13f472 D2, D4).
+///
+/// Micro-batch `i` has `n_i` valid targets, `N = sum n_i`, and weight
+/// `n_i / N`: its share of the step's tokens, so one step over uneven
+/// micro-batches equals one batch of all their rows (HF's
+/// `num_items_in_batch`). nanolab divides every micro-batch by `grad_accum`
+/// (`train.py:342`) and so weights by batch; the two agree when every count
+/// is equal, which is the only case the oracle fixtures reach.
+///
+/// When every non-empty micro-batch has the same count, the weight is
+/// `1.0 / run as f32` (`run` = non-empty micro-batches), the seed the
+/// trainer used for every step before, and `uniform` is set so the losses
+/// are summed unscaled and divided by `run` on the host, as before: equal
+/// counts keep their bits. A micro-batch with `n_i = 0` has weight 0.
+#[derive(Clone, Debug, PartialEq)]
+struct MicroWeights {
+    weights: Vec<f32>,
+    uniform: bool,
+    run: usize,
+}
+
+impl MicroWeights {
+    /// `counts[i]` is micro-batch `i`'s valid targets. `N = 0` is
+    /// [`OjasError::NonFinite`]: the mean has no denominator.
+    fn new(counts: &[u64]) -> Result<Self, OjasError> {
+        const OP: &str = "Trainer::step";
+        let mut total = 0u64;
+        for &n in counts {
+            total = total.checked_add(n).ok_or_else(|| OjasError::OutOfRange {
+                op: OP,
+                detail: "valid target count overflows u64".to_string(),
+            })?;
+        }
+        let Some(first) = counts.iter().copied().find(|&n| n > 0) else {
+            return Err(OjasError::NonFinite { op: OP });
+        };
+        let run = counts.iter().filter(|&&n| n > 0).count();
+        let uniform = counts.iter().all(|&n| n == 0 || n == first);
+        let weights = counts
+            .iter()
+            .map(|&n| match n {
+                0 => 0.0,
+                _ if uniform => 1.0 / run as f32,
+                _ => (n as f64 / total as f64) as f32,
+            })
+            .collect();
+        Ok(Self {
+            weights,
+            uniform,
+            run,
+        })
+    }
+
+    /// The step's loss from the device's loss sum.
+    fn report(&self, loss_sum: f32) -> f32 {
+        if self.uniform {
+            loss_sum / self.run as f32
+        } else {
+            loss_sum
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 enum StepConfig {
     Muon(MuonNs5Config),
@@ -979,6 +1148,65 @@ mod tests {
     use super::*;
     use ojas_core::{Budget, Numerics};
     use ojas_cpu::{CosineSchedule, CpuBackend};
+
+    /// Equal counts keep the pre-ft-9c13f472 seed bit for bit: the uniform
+    /// weight is `1.0 / k as f32`, and the general `n / N` formula agrees
+    /// with it for every `k` up to [`MAX_ACCUM`] (so a count that is equal
+    /// by accident cannot move bits between the two forms).
+    #[test]
+    fn equal_counts_keep_the_one_over_k_seed() {
+        for k in [1usize, 2, 3, 5, 6, 7, 10, 100, 1000, 4096] {
+            for n in [1u64, 3, 64, 4096] {
+                let w = MicroWeights::new(&vec![n; k]).unwrap();
+                assert!(w.uniform && w.run == k);
+                let seed = (1.0 / k as f32).to_bits();
+                assert!(w.weights.iter().all(|x| x.to_bits() == seed), "k {k} n {n}");
+            }
+        }
+        for k in 1..=MAX_ACCUM as u64 {
+            let general = (1.0f64 / k as f64) as f32;
+            let seed = 1.0f32 / k as f32;
+            assert_eq!(general.to_bits(), seed.to_bits(), "k {k}");
+            let by_share = (7.0f64 / (7 * k) as f64) as f32;
+            assert_eq!(by_share.to_bits(), seed.to_bits(), "k {k} share");
+        }
+    }
+
+    #[test]
+    fn uneven_counts_weigh_by_share_and_an_empty_batch_by_zero() {
+        let w = MicroWeights::new(&[8, 1]).unwrap();
+        assert!(!w.uniform);
+        assert_eq!(
+            w.weights,
+            vec![(8.0f64 / 9.0) as f32, (1.0f64 / 9.0) as f32]
+        );
+        let w = MicroWeights::new(&[0, 5, 0, 5]).unwrap();
+        assert!(w.uniform && w.run == 2);
+        assert_eq!(w.weights, vec![0.0, 0.5, 0.0, 0.5]);
+        assert_eq!(w.report(3.0), 1.5);
+        let w = MicroWeights::new(&[3, 0, 1]).unwrap();
+        assert_eq!(w.weights, vec![0.75, 0.0, 0.25]);
+        assert_eq!(w.report(3.0), 3.0);
+        assert!(matches!(
+            MicroWeights::new(&[0, 0]),
+            Err(OjasError::NonFinite { .. })
+        ));
+        assert!(matches!(
+            MicroWeights::new(&[u64::MAX, 1]),
+            Err(OjasError::OutOfRange { .. })
+        ));
+    }
+
+    #[test]
+    fn ids_outside_the_vocabulary_are_refused() {
+        assert!(check_ids(&[0, 255], 256).is_ok());
+        assert!(matches!(
+            check_ids(&[1, 256], 256),
+            Err(OjasError::OutOfRange { .. })
+        ));
+        assert_eq!(valid_targets(&[7, 1, 7, 2], Some(7)), 2);
+        assert_eq!(valid_targets(&[7, 1, 7, 2], None), 4);
+    }
 
     /// A trainable slot that the backward pass leaves without a gradient
     /// fails the step closed, before any optimizer call: nothing it holds

@@ -766,6 +766,17 @@ impl<B: Backend> Trainer<B> {
                 file.read_into(name, offset, chunk)
                     .map_err(|e| refuse(format!("{what}: {}", e.detail())))
             })?;
+            // A resumed run must not start from a value its own steps
+            // refuse (ft-9c13f472 D9): scan each weight and moment on the
+            // host, before the upload and before any trainer exists.
+            // `OjasError::NonFinite` carries only the op, so the error cannot
+            // name the tensor. The loader in `load.rs` does not scan,
+            // because its tests load such files on purpose.
+            if host.f32_slice()?.iter().any(|v| !v.is_finite()) {
+                return Err(OjasError::NonFinite {
+                    op: "Trainer::resume_from",
+                });
+            }
             backend.upload(&host)
         };
         let mut slots = Vec::with_capacity(table.len());
