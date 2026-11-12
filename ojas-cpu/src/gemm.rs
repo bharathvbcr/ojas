@@ -16,10 +16,11 @@
 //! order with its own blocking; its bits also do not depend on the tiling or
 //! the thread count. `fma` is `f32::mul_add` (one rounding per step) only on
 //! aarch64 or with `target_feature = "fma"`; on any other build it is
-//! `a * b + c` (two roundings). Above `FAST_WHOLE_CALL_MACS` the product
-//! goes to Accelerate (macOS) or to `ojas_simd::sgemm_tile`, which rounds once
-//! per step on every ojas-simd backend. So on an x86_64 baseline build a Fast
-//! product rounds twice per step below the cutoff and once above it.
+//! `a * b + c` (two roundings). At or above `FAST_WHOLE_CALL_MACS` the product
+//! goes to Accelerate (macOS; its own order, no rounding contract here) or to
+//! `ojas_simd::sgemm_tile`, which rounds once per step on every ojas-simd
+//! backend. So on an x86_64 baseline build off macOS a Fast product rounds
+//! twice per step below the cutoff and once per step at or above it.
 //!
 //! A one-row product below the whole-call cutoff whose `B` is contiguous
 //! along either axis (a decode step's `x·Wᵀ` and `g·W`) skips the packing

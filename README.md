@@ -57,9 +57,9 @@ Model coverage by backend. A cell says "yes" only where a test in the repository
 
 | Model | CPU | Metal | wgpu | CUDA |
 | :--- | :--- | :--- | :--- | :--- |
-| nanolab GPT | yes: `ojas-model/tests/oracle_parity.rs:363` (`cpu_model`, `CpuBackend`) | yes: `oracle_parity.rs:706` (`MetalBackend::new`) | yes: `oracle_parity.rs:721` (`WgpuBackend::open`) | no test |
-| Qwen3.5 | yes: `ojas-model/tests/qwen35_step_provider.rs:52` (`TapeStepProvider<CpuBackend>`) | yes: `qwen35_step_provider.rs:1556` and `ojas-model/tests/qwen35_metal_tape.rs:50` | no test; wgpu refuses the GDN, conv1d and gated-norm ops (trait defaults) | no test; `CudaBackend` refuses every compute op |
-| toy image MLP (`ImageMlpProvider`, `ojas-model/src/image_mlp.rs:1-7`) | yes: `ojas-model/tests/image_mlp_provider.rs:302` | yes: `image_mlp_provider.rs:813` (`#[ignore]`, needs a Metal device) | no test | no test |
+| nanolab GPT | yes: `oracle_forward_loss_and_logits` (`ojas-model/tests/oracle_parity.rs:364`, on `cpu_model`) | yes: `metal_trainer_matches_torch_on_the_tiny_fixtures` (`oracle_parity.rs:705`) | yes: `wgpu_trainer_matches_torch_on_the_tiny_fixtures` (`oracle_parity.rs:720`) | no test |
+| Qwen3.5 | yes: `six_straight_steps_equal_three_then_a_checkpoint_a_fresh_provider_and_three_more` (`ojas-model/tests/qwen35_step_provider.rs:463`, a `TapeStepProvider<CpuBackend>`) | yes: `on_metal_the_norm_and_the_update_read_each_gradient_once` (`qwen35_step_provider.rs:1579`) and `the_metal_tape_matches_transformers_and_the_cpu_tape` (`ojas-model/tests/qwen35_metal_tape.rs:50`) | no test; wgpu refuses the GDN, conv1d and gated-norm ops (trait defaults) | no test; `CudaBackend` refuses every compute op |
+| toy image MLP (`ImageMlpProvider`, `ojas-model/src/image_mlp.rs:1-7`) | yes: `the_job_contract_is_enforced_literally` (`ojas-model/tests/image_mlp_provider.rs:307`, on `fresh()`, a CPU provider) | yes: `gpu_resume_is_bit_identical_and_matches_the_cpu_within_the_fast_tolerance` (`image_mlp_provider.rs:812`, `#[ignore]`, needs a Metal device) | no test | no test |
 | CNN, ViT | not yet (vision cards ft-4f11ce5a, ft-96023b34, ft-7f4f2d87) | not yet | not yet | not yet |
 
 **What does not run yet:**
@@ -300,7 +300,7 @@ ojas delegates platform-specialized and domain-specialized execution to dedicate
   - **Deep Learning Interop:** Provides sparse gradient masks, dynamic sparse recompute maps, and event gating (`st-gate`) for sparse neural architectures.
 
 * **The Modularity Rationale:**
-  1. *Decoupled Compile Cycles:* Xcode Metal toolchain builds (`xcrun metal`, `metallib`) and intensive sparse property testing (`proptest`, mutation suites) do not block or slow down core universal framework builds on Linux/Windows.
+  1. *Decoupled Compile Cycles:* Xcode Metal toolchain builds (`xcrun metal`, `metallib`) and intensive sparse property testing (`proptest`, mutation suites) do not block or slow down core universal framework builds on Linux (CI-built; Windows is planned, not built).
   2. *Isolated Hardware Requirements:* Apple Silicon M-series specifics live in `tessl`; generic CPU and optional Metal sparse kernels live in `sparsl`; universal multi-platform training lives in `ojas`.
   3. *Independent Profiling:* GEMM tile sweeps (`tessl`) vs sparse crossover thresholds (`sparsl`) iterate on distinct benchmark suites.
   4. *Independent Release Cadence:* Lightweight downstream consumers depend only on the exact compute capabilities they require.
