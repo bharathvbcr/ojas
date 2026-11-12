@@ -32,7 +32,11 @@ lane='echo "lane $(basename "$0") $*" >>"$STUB_LOG"
 : >"$STUB_STARTED"
 [ "${STUB_SLEEP:-0}" != 0 ] && sleep "$STUB_SLEEP"
 echo "{\"stub\":1}" >>"$OJAS_BENCH_OUT"
-if [ "${STUB_CRASH:-}" = metal ]; then case "$0" in *metal_vs_torch) exit 3 ;; esac; fi
+case "$0:${STUB_CRASH:-}" in
+  *metal_vs_torch:metal) exit 3 ;;
+  *metal_vs_torch:segv) kill -SEGV $$; sleep 5 ;;
+  *metal_vs_torch:abort) kill -ABRT $$; sleep 5 ;;
+esac
 exit 0'
 for b in metal_vs_torch wgpu_vs_torch decode_vs_torch; do stub "$EXD/$b" "$lane"; done
 stub "$BIN/py" 'echo "py $*" >>"$STUB_LOG"
@@ -47,6 +51,29 @@ stub "$BIN/sysctl" 'echo stub'
 fails=0
 out=""
 rc=0
+CASE_TIMEOUT="${CASE_TIMEOUT:-60}"
+kill_tree() { # PID: stop it first so it cannot spawn more, then its children, then it
+  local c
+  kill -STOP "$1" 2>/dev/null
+  for c in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$c"; done
+  kill -KILL "$1" 2>/dev/null
+  return 0
+}
+bounded_wait() { # PID: sets rc (124 if the per-case watchdog fired)
+  local pid=$1 wd flag="$tmp/timedout.$1"
+  (
+    sleep "$CASE_TIMEOUT"
+    : >"$flag"
+    kill_tree "$pid"
+  ) &
+  wd=$!
+  rc=0
+  wait "$pid" 2>/dev/null || rc=$?
+  kill_tree "$wd"
+  wait "$wd" 2>/dev/null
+  if [[ -e "$flag" ]]; then rc=124; fi
+  return 0
+}
 # run ENV... -- ARGS...: the real script with the stubs first on PATH.
 run() {
   local envs=()
@@ -54,9 +81,11 @@ run() {
   shift
   : >"$LOG"
   rm -f "$tmp/started"
-  rc=0
-  out="$(env -u OUT_DIR PATH="$BIN:/usr/bin:/bin:/usr/sbin" PYTHON="$BIN/py" CARGO_TARGET_DIR="$TGT" \
-    STUB_LOG="$LOG" STUB_STARTED="$tmp/started" ${envs[@]+"${envs[@]}"} /bin/bash "$SCRIPT" "$@" 2>&1)" || rc=$?
+  env -u OUT_DIR PATH="$BIN:/usr/bin:/bin:/usr/sbin" PYTHON="$BIN/py" CARGO_TARGET_DIR="$TGT" \
+    STUB_LOG="$LOG" STUB_STARTED="$tmp/started" ${envs[@]+"${envs[@]}"} /bin/bash "$SCRIPT" "$@" >"$tmp/run.out" 2>&1 &
+  bounded_wait $!
+  out="$(cat "$tmp/run.out")"
+  if [[ "$rc" -eq 124 ]]; then out="$out"$'\n'"TIMED OUT after ${CASE_TIMEOUT}s"; fi
 }
 check() { # DESCRIPTION CONDITION-EXIT-CODE
   if [[ "$2" -ne 0 ]]; then
@@ -98,6 +127,16 @@ run OUT_DIR="$OUTS/crash" STUB_CRASH=metal STUB_AGG_RC=0 -- 1
 [[ "$rc" -eq 1 ]] && has "crashed"; check "4 metal crash, aggregate 0: rc 1 and stderr names the crash (got $rc)" $?
 grep -q '"status":"crash"' "$OUTS/crash/round1/ojas-metal.jsonl"; check "4 the crash row is recorded" $?
 
+# 4b. A lane killed by a signal (SEGV, abort: a real Metal crash) is a crash like any
+# other: recorded, the other lanes and rounds still run, the summary is written, rc 1.
+for mode in segv abort; do
+  run OUT_DIR="$OUTS/$mode" STUB_CRASH=$mode STUB_AGG_RC=0 -- 2
+  [[ "$rc" -eq 1 ]] && has "crashed"; check "4b $mode in the metal lane: rc 1 and the crash is named (got $rc)" $?
+  [[ -s "$OUTS/$mode/summary.md" ]]; check "4b $mode: the summary is still written" $?
+  [[ -e "$OUTS/$mode/round1/ojas-wgpu.jsonl" ]] && [[ -e "$OUTS/$mode/round2/torch-mps.jsonl" ]]; check "4b $mode: the other lanes and the next round still ran" $?
+  grep -q '"status":"crash","exit":1[0-9][0-9]' "$OUTS/$mode/round1/ojas-metal.jsonl"; check "4b $mode: the signal exit status is recorded in the crash row" $?
+done
+
 # 5. Aggregate failure with no crash.
 run OUT_DIR="$OUTS/agg" STUB_AGG_RC=1 -- 1
 [[ "$rc" -eq 1 ]] && lacks "crashed"; check "5 aggregate 1, no crash: rc 1 (got $rc)" $?
@@ -134,8 +173,7 @@ env -u OUT_DIR PATH="$BIN:/usr/bin:/bin:/usr/sbin" PYTHON="$BIN/py" CARGO_TARGET
 pid=$!
 for _ in $(seq 1 100); do [[ -e "$tmp/started" ]] && break; sleep 0.1; done
 kill -INT "$pid"
-rc=0
-wait "$pid" || rc=$?
+bounded_wait "$pid"
 out="$(cat "$outf")"
 [[ -e "$tmp/started" ]] && [[ "$rc" -eq 130 ]] && lacks "summary:"; check "8 SIGINT during a lane: exit 130, no summary line (got $rc)" $?
 set +m

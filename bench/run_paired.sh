@@ -22,10 +22,12 @@
 # macOS only (Metal, MPS): it uses BSD `tail -r`, `stat -f`, `sw_vers` and `ioreg`.
 #
 # Exit codes: 0 every row ok in every round; 1 the aggregate failed, or a lane
-# process crashed (even when the aggregate passed); 64 bad usage (ROUNDS not an
+# process crashed, was killed by a signal (SEGV, abort, OOM) or exited non-zero (it is recorded
+# and the other lanes and rounds still run; the summary is still written), even when
+# the aggregate passed; 64 bad usage (ROUNDS not an
 # integer 1-999 without a leading zero, or OUT_DIR a file or not empty: the row
 # writers append, so a second run into the same dir would mix the two);
-# 130/143 a signal. Any other non-zero is the aggregate's.
+# 130/143 the operator signalled this script itself (checked when the running lane ends). Any other non-zero is the aggregate's.
 set -euo pipefail
 
 REPO=$(dirname "$(dirname "$(realpath "$0")")")
@@ -118,9 +120,6 @@ run_lane() { # round lane
         crashes=$((crashes + 1))
         printf '{"runtime":"%s","row":"_process","status":"crash","exit":%s}\n' "$2" "$rc" >> "$f"
         echo "round $1 $2 exited $rc (see $OUT/round$1/$2.log)" >&2
-    fi
-    if [ "$rc" -ge 128 ]; then
-        exit "$rc"
     fi
 }
 

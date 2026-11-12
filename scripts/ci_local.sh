@@ -11,11 +11,19 @@
 #        toolchain is absent (gotip, the dated nightly, the MSRV toolchain).
 #        Last line `ci:local INCOMPLETE (...)`. This is not a pass.
 #   64   bad usage: an unknown name in OJAS_CI_LOCAL_ALLOW_NOT_RUN, or an
-#        OJAS_MAC_HEAVY that is not an executable file
+#        OJAS_MAC_HEAVY that is not an absolute path to an executable file
 #   >=128  a signal (130 INT, 143 TERM)
 #   else a failed gate's own exit code (1 for ci_local's own errors)
-# Only the explicit not-run branches exit 3; a gate command that happens to
-# return 3 is remapped to 1 so it can never read as "not run".
+# Only the verdict (and the not-run branches that feed it) exits 3. A hard gate
+# (fmt, clippy, test, ...) that returns 3 is a FAILED gate: the exit trap prints
+# `ci:local FAILED (...)` and exits 1, at that one place for every step.
+# A not-run reason is flattened to one line, so it cannot spoof another step.
+# When the lock wrapper returns 0 but the gates never started (they write a
+# sentinel file at start), the run is NOT RUN: INCOMPLETE, exit 3.
+# Signals: INT/TERM sent to this process are forwarded (as TERM) to the lock
+# wrapper's child and then exit 130/143; a signal sent only to a child of a
+# plain (unlocked or in-place) step takes effect when that step ends, while
+# Ctrl-C reaches the whole process group at once.
 #
 # OJAS_CI_LOCAL_ALLOW_NOT_RUN: comma- or space-separated, exact, case-sensitive
 # names from `gotip nightly msrv`. A waived gate still runs when it can; the
@@ -60,16 +68,56 @@ for name in $(printf '%s' "${OJAS_CI_LOCAL_ALLOW_NOT_RUN:-}" | tr ',' ' '); do
 done
 set +f
 
-trap 'exit 130' INT
-trap 'exit 143' TERM
+# Cleanup, and the one place that keeps 3 meaning "not run": an exit 3 that did
+# not come from the verdict below (a hard gate such as fmt, clippy or test that
+# returned 3) is a FAILED gate and is reported as 1, never as INCOMPLETE.
+REASON_FILE=""
+SENTINEL=""
+VERDICT_3=0
+# shellcheck disable=SC2329  # trap handler
+on_exit() {
+  local rc=$?
+  [ -z "$REASON_FILE" ] || rm -f "$REASON_FILE"
+  [ -z "$SENTINEL" ] || rm -f "$SENTINEL"
+  if [ "$rc" -eq 3 ] && [ "$VERDICT_3" -ne 1 ]; then
+    echo "ci:local FAILED (a gate exited 3, which ci_local reserves for NOT RUN; reporting 1)" >&2
+    exit 1
+  fi
+}
+trap on_exit EXIT
+
+# Signals: forward TERM to the lock wrapper child (if any), wait for it, then
+# exit 128+n. INT is forwarded as TERM because a background child ignores INT.
+child=""
+# shellcheck disable=SC2329  # trap handler
+on_signal() { # CODE
+  if [ -n "$child" ]; then
+    kill -TERM "$child" 2>/dev/null || true
+    wait "$child" 2>/dev/null || true
+  fi
+  exit "$1"
+}
+trap 'on_signal 130' INT
+trap 'on_signal 143' TERM
 
 # 2. Lock.
 if [ "$(uname -s)" = Darwin ]; then
   if [ -n "${MAC_HEAVY_LABEL:-}" ]; then
     echo "==> lock: already under mac_heavy ($MAC_HEAVY_LABEL)"
+    # Prove to the process that took the lock that the gates really started.
+    if [ -n "${OJAS_CI_LOCAL_SENTINEL:-}" ] && [ -f "$OJAS_CI_LOCAL_SENTINEL" ]; then
+      printf 'started\n' >"$OJAS_CI_LOCAL_SENTINEL"
+    fi
   else
     wrapper=""
     if [ -n "${OJAS_MAC_HEAVY:-}" ]; then
+      case "$OJAS_MAC_HEAVY" in
+        /*) ;;
+        *)
+          echo "ERROR: OJAS_MAC_HEAVY=$OJAS_MAC_HEAVY must be an absolute path (a relative one would resolve against the repo root, not your cwd)" >&2
+          exit 64
+          ;;
+      esac
       if [ ! -f "$OJAS_MAC_HEAVY" ] || [ ! -x "$OJAS_MAC_HEAVY" ]; then
         echo "ERROR: OJAS_MAC_HEAVY=$OJAS_MAC_HEAVY is not an executable file" >&2
         exit 64
@@ -90,7 +138,22 @@ if [ "$(uname -s)" = Darwin ]; then
       exit 1
     fi
     echo "==> lock: taking mac_heavy via $wrapper"
-    exec bash "$wrapper" ojas-ci-local "$ROOT/scripts/ci_local.sh" "$@"
+    SENTINEL="$(mktemp "${TMPDIR:-/tmp}/ojas-ci-local-ran.XXXXXX")"
+    export OJAS_CI_LOCAL_SENTINEL="$SENTINEL"
+    bash "$wrapper" ojas-ci-local "$ROOT/scripts/ci_local.sh" "$@" &
+    child=$!
+    wrapper_rc=0
+    wait "$child" || wrapper_rc=$?
+    child=""
+    if [ "$wrapper_rc" -eq 0 ] && [ ! -s "$SENTINEL" ]; then
+      VERDICT_3=1
+      echo "ci:local INCOMPLETE (not run: the lock wrapper $wrapper exited 0 without running the gates)" >&2
+      exit 3
+    fi
+    # The wrapped run already printed its own verdict (and mapped a stray 3 to 1);
+    # a 3 here is that verdict, so it passes through.
+    if [ "$wrapper_rc" -eq 3 ]; then VERDICT_3=1; fi
+    exit "$wrapper_rc"
   fi
 else
   echo "==> lock: not macOS; mac_heavy not used"
@@ -99,7 +162,6 @@ fi
 # 3. Not-run bookkeeping. A step that cannot run exits 3 and (for the scripts)
 # writes its reason to OJAS_NOT_RUN_REASON_FILE.
 REASON_FILE="$(mktemp "${TMPDIR:-/tmp}/ojas-ci-local.XXXXXX")"
-trap 'rm -f "$REASON_FILE"' EXIT
 export OJAS_NOT_RUN_REASON_FILE="$REASON_FILE"
 SKIPS="" # newline-joined "name: reason" (a string: an empty array breaks `set -u` on bash 3.2)
 
@@ -113,7 +175,8 @@ optional_step() {
   case "$rc" in
     0) ;;
     3)
-      reason="$(cat "$REASON_FILE")"
+      # One line: a multi-line reason would split into fake "name: ..." entries.
+      reason="$(tr '\r\n' '  ' <"$REASON_FILE")"
       SKIPS="$SKIPS$name: ${reason:-exited 3 without a reason}"$'\n'
       echo "==> NOT RUN ($name): ${reason:-exited 3 without a reason}" >&2
       ;;
@@ -298,4 +361,5 @@ if [ -z "$unwaived_list" ]; then
   exit 0
 fi
 echo "ci:local INCOMPLETE (every gate that ran passed; not run: $unwaived_list)"
+VERDICT_3=1
 exit 3
