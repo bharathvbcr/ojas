@@ -111,7 +111,7 @@ type DeviceReader<'a> =
 ///
 /// Non-contiguous layouts are legal metadata. Kernel crates may still refuse
 /// them with [`OjasError::Shape`] until they implement the strides.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Tensor {
     storage: Arc<Storage>,
     shape: Box<[usize]>,
@@ -119,6 +119,27 @@ pub struct Tensor {
     strides: Box<[usize]>,
     dtype: DType,
     byte_offset: usize,
+}
+
+/// Bounded `Debug`: dtype, shape, strides, byte offset, allocation size and
+/// placement, never the contents. It reads no device or mapped storage, so it
+/// causes no readback and no budget charge.
+impl fmt::Debug for Tensor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let placement = match &self.storage.payload {
+            Payload::Host(_) => "host".to_string(),
+            Payload::Device(buf) => format!("device({:?})", buf.backend()),
+            Payload::Mapped(buf) => format!("mapped({:?})", buf.backend()),
+        };
+        f.debug_struct("Tensor")
+            .field("dtype", &self.dtype)
+            .field("shape", &self.shape)
+            .field("strides", &self.strides)
+            .field("byte_offset", &self.byte_offset)
+            .field("storage_bytes", &self.storage.len())
+            .field("placement", &format_args!("{placement}"))
+            .finish_non_exhaustive()
+    }
 }
 
 /// `payload` is declared before `_reservation`. Fields drop in order, so the
