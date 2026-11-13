@@ -29,7 +29,8 @@ use crate::lora::{
     dropout_mask, lora_down, lora_up, scale_constant, scaled_b, Entropy, LoraConfig, LoraSite,
 };
 use crate::qwen35::params::{
-    AttnParams, GdnParams, LayerLora, LayerParams, MixerLora, MixerParams, Qwen35Lora, Qwen35Params,
+    AttnParams, FrozenWeight, GdnParams, LayerLora, LayerParams, MixerLora, MixerParams,
+    Qwen35Lora, Qwen35Params,
 };
 use crate::qwen35::spec::Qwen35Spec;
 
@@ -108,6 +109,23 @@ pub fn bind_frozen<G: Graph>(
     params: &Qwen35Params<Tensor>,
 ) -> Result<Qwen35Params<G::V>, OjasError> {
     params.try_map(&mut |t| g.frozen(t))
+}
+
+/// [`bind_frozen`] for a base that may hold its wrapped weights packed
+/// ([`FrozenWeight::Quant`]): every dense parameter is frozen on the graph
+/// ([`Graph::frozen`]) and every packed weight is carried as it is, after it is checked to be
+/// placed on this graph's backend ([`OjasError::Placement`] otherwise, so a weight is uploaded
+/// once at load and never per tape). Nothing is dequantised here: a packed weight is dequantised
+/// by each linear that reads it ([`Graph::linear_q`]).
+pub fn bind_frozen_base<G: Graph>(
+    g: &mut G,
+    params: &Qwen35Params<Tensor, FrozenWeight<Tensor>>,
+) -> Result<Qwen35Params<G::V, FrozenWeight<G::V>>, OjasError> {
+    let on = g.backend_id();
+    params.try_map_base(&mut |t| g.frozen(t), &mut |q| {
+        q.require_on("qwen35::bind_frozen_base", on)?;
+        Ok(q.clone())
+    })
 }
 
 /// What the forward needs to add the LoRA branches: the bound sites, the
@@ -222,6 +240,16 @@ fn add_lora<G: Graph>(
     g.add(&base, &delta)
 }
 
+/// `x @ w^T` for a frozen base weight: [`Graph::linear`] over a dense one, [`Graph::linear_q`]
+/// over a packed one. The one place the tower reads a wrapped weight, so no linear can skip the
+/// packed branch.
+fn base_linear<G: Graph>(g: &mut G, x: &G::V, w: &FrozenWeight<G::V>) -> Result<G::V, OjasError> {
+    match w {
+        FrozenWeight::Dense(w) => g.linear(x, w),
+        FrozenWeight::Quant(q) => g.linear_q(x, q),
+    }
+}
+
 fn shape(op: &'static str, detail: String) -> OjasError {
     OjasError::Shape { op, detail }
 }
@@ -276,6 +304,38 @@ pub fn forward_loss_lora<G: Graph>(
     g: &mut G,
     spec: &Qwen35Spec,
     params: &Qwen35Params<G::V>,
+    lora: Option<&LoraForward<G::V>>,
+    ids: &Tensor,
+    targets: &Tensor,
+    tables: &Qwen35Tables,
+    ignore: Option<u32>,
+    chunk: CeChunk,
+    activations: ActivationCheckpoint,
+) -> Result<G::V, OjasError> {
+    forward_loss_lora_base(
+        g,
+        spec,
+        &params.frozen_view(),
+        lora,
+        ids,
+        targets,
+        tables,
+        ignore,
+        chunk,
+        activations,
+    )
+}
+
+/// [`forward_loss_lora`] over a base that may hold its wrapped weights packed ([`bind_frozen_base`]):
+/// the one implementation, which [`forward_loss_lora`] calls over [`Qwen35Params::frozen_view`] of
+/// a dense base, so the two give the same bits wherever the dense base is the dequantisation of
+/// the packed one. A packed weight is dequantised by every linear that reads it, once in the
+/// forward, once in the backward and once more in a checkpointed layer's replay.
+#[allow(clippy::too_many_arguments)]
+pub fn forward_loss_lora_base<G: Graph>(
+    g: &mut G,
+    spec: &Qwen35Spec,
+    params: &Qwen35Params<G::V, FrozenWeight<G::V>>,
     lora: Option<&LoraForward<G::V>>,
     ids: &Tensor,
     targets: &Tensor,
@@ -344,6 +404,28 @@ pub fn forward_hidden_lora<G: Graph>(
     tables: &Qwen35Tables,
     activations: ActivationCheckpoint,
 ) -> Result<G::V, OjasError> {
+    forward_hidden_lora_base(
+        g,
+        spec,
+        &params.frozen_view(),
+        lora,
+        ids,
+        tables,
+        activations,
+    )
+}
+
+/// [`forward_hidden_lora`] over a base that may hold its wrapped weights packed, as
+/// [`forward_loss_lora_base`] does for the loss.
+pub fn forward_hidden_lora_base<G: Graph>(
+    g: &mut G,
+    spec: &Qwen35Spec,
+    params: &Qwen35Params<G::V, FrozenWeight<G::V>>,
+    lora: Option<&LoraForward<G::V>>,
+    ids: &Tensor,
+    tables: &Qwen35Tables,
+    activations: ActivationCheckpoint,
+) -> Result<G::V, OjasError> {
     tower(
         g,
         "qwen35::forward_hidden",
@@ -363,7 +445,7 @@ fn tower<G: Graph>(
     g: &mut G,
     op: &'static str,
     spec: &Qwen35Spec,
-    params: &Qwen35Params<G::V>,
+    params: &Qwen35Params<G::V, FrozenWeight<G::V>>,
     lora: Option<&LoraForward<G::V>>,
     ids: &Tensor,
     tables: &Qwen35Tables,
@@ -652,7 +734,7 @@ struct Dims<'a> {
 fn layer<G: Graph>(
     g: &mut G,
     spec: &Qwen35Spec,
-    l: &LayerParams<G::V>,
+    l: &LayerParams<G::V, FrozenWeight<G::V>>,
     n: &LayerNorms<G::V>,
     lc: Option<&LayerLoraCtx<'_, G::V>>,
     x: &G::V,
@@ -673,11 +755,11 @@ fn layer<G: Graph>(
     let h = g.rms_norm(&x, &n.post, spec.eps)?;
     let mlp = |g: &mut G,
                input: &G::V,
-               w: &G::V,
+               w: &FrozenWeight<G::V>,
                site: &Option<LoraSite<G::V>>,
                mask: Option<&G::V>|
      -> Result<G::V, OjasError> {
-        let base = g.linear(input, w)?;
+        let base = base_linear(g, input, w)?;
         let down = site_down(g, site.as_ref(), mask, input)?;
         add_lora(g, lc, site.as_ref(), down.as_ref(), 0, base)
     };
@@ -711,7 +793,7 @@ fn layer<G: Graph>(
 fn gated_delta_net<G: Graph>(
     g: &mut G,
     spec: &Qwen35Spec,
-    m: &GdnParams<G::V>,
+    m: &GdnParams<G::V, FrozenWeight<G::V>>,
     lc: Option<&LayerLoraCtx<'_, G::V>>,
     h: &G::V,
     d: &Dims<'_>,
@@ -730,16 +812,17 @@ fn gated_delta_net<G: Graph>(
     };
     // One `x A^T` for the three parts of `in_proj_qkv`.
     let qkv_down = site_down(g, qkv, qkv_mask, h)?;
-    let mut branch = |w: &G::V, part: usize, conv: &G::V, dim: usize| -> Result<G::V, OjasError> {
-        let y = g.linear(h, w)?;
-        let y = add_lora(g, lc, qkv, qkv_down.as_ref(), part, y)?;
-        let y = g.conv1d_silu(&y, conv)?;
-        g.reshape(&y, &[b, t, heads, dim])
-    };
+    let mut branch =
+        |w: &FrozenWeight<G::V>, part: usize, conv: &G::V, dim: usize| -> Result<G::V, OjasError> {
+            let y = base_linear(g, h, w)?;
+            let y = add_lora(g, lc, qkv, qkv_down.as_ref(), part, y)?;
+            let y = g.conv1d_silu(&y, conv)?;
+            g.reshape(&y, &[b, t, heads, dim])
+        };
     let q = branch(&m.wq, 0, &m.conv_q, dk)?;
     let k = branch(&m.wk, 1, &m.conv_k, dk)?;
     let v = branch(&m.wv, 2, &m.conv_v, dv)?;
-    let z = g.linear(h, &m.wz)?;
+    let z = base_linear(g, h, &m.wz)?;
     let z_down = site_down(g, z_site, z_mask, h)?;
     let z = add_lora(g, lc, z_site, z_down.as_ref(), 0, z)?;
     let z = g.reshape(&z, &[b, t, heads, dv])?;
@@ -750,7 +833,7 @@ fn gated_delta_net<G: Graph>(
     let o = g.gdn(&q, &k, &v, &decay, &beta)?;
     let o = g.gated_rms_norm(&o, &z, &m.norm, spec.eps)?;
     let o = g.reshape(&o, &[b, t, heads * dv])?;
-    let y = g.linear(&o, &m.out)?;
+    let y = base_linear(g, &o, &m.out)?;
     let out_down = site_down(g, out_site, out_mask, &o)?;
     add_lora(g, lc, out_site, out_down.as_ref(), 0, y)
 }
@@ -759,7 +842,7 @@ fn gated_delta_net<G: Graph>(
 fn attention<G: Graph>(
     g: &mut G,
     spec: &Qwen35Spec,
-    m: &AttnParams<G::V>,
+    m: &AttnParams<G::V, FrozenWeight<G::V>>,
     lc: Option<&LayerLoraCtx<'_, G::V>>,
     q_norm: &G::V,
     k_norm: &G::V,
@@ -784,14 +867,14 @@ fn attention<G: Graph>(
     let q_down = site_down(g, qs, qm, h)?;
     let k_down = site_down(g, ks, km, h)?;
     let v_down = site_down(g, vs, vm, h)?;
-    let mut head = |w: &G::V,
+    let mut head = |w: &FrozenWeight<G::V>,
                     site: Option<&LoraSite<G::V>>,
                     down: Option<&G::V>,
                     part: usize,
                     heads: usize,
                     norm: Option<&G::V>|
      -> Result<G::V, OjasError> {
-        let y = g.linear(h, w)?;
+        let y = base_linear(g, h, w)?;
         let y = add_lora(g, lc, site, down, part, y)?;
         let mut y = g.reshape(&y, &[b, t, heads, hd])?;
         if let Some(norm) = norm {
@@ -806,11 +889,11 @@ fn attention<G: Graph>(
     let a = g.sdpa(&q, &k, &v, None)?;
     let a = g.permute(&a, &SWAP_TIME_HEADS)?;
     let a = g.reshape(&a, &[b, t, spec.q_heads * hd])?;
-    let gate = g.linear(h, &m.wgate)?;
+    let gate = base_linear(g, h, &m.wgate)?;
     let gate = add_lora(g, lc, qs, q_down.as_ref(), 1, gate)?;
     let gate = g.sigmoid(&gate)?;
     let a = g.mul(&a, &gate)?;
-    let y = g.linear(&a, &m.wo)?;
+    let y = base_linear(g, &a, &m.wo)?;
     let o_down = site_down(g, os, om, &a)?;
     add_lora(g, lc, os, o_down.as_ref(), 0, y)
 }

@@ -17,6 +17,10 @@
 //! [`replace_dir_with`] swaps in a whole directory; its docs give what a
 //! reader sees if the writer dies at each step.
 //!
+//! [`read_affine_quantized`] reads one MLX affine-quantised linear (q8 or q4) into an
+//! `ojas_core::AffineQuantized`, and [`affine_spec_from_config`] reads the config block that names
+//! its width and group size; refusals are the typed [`AffineLoadError`].
+//!
 //! [`json`] reads strict JSON and, through [`JsonValue::render`] and
 //! [`JsonObj`], writes it compactly; [`npy`] reads `.npy` goldens.
 //!
@@ -25,6 +29,7 @@
 
 #![forbid(unsafe_code)]
 
+mod affine;
 mod checkpoint;
 mod error;
 pub mod half;
@@ -40,6 +45,7 @@ mod slab;
 #[cfg(test)]
 mod test_util;
 
+pub use affine::{affine_spec_from_config, read_affine_quantized, AffineLoadError};
 pub use checkpoint::{
     checkpoint_file_len, decode_checkpoint, encode_checkpoint, read_checkpoint,
     read_checkpoint_from, write_checkpoint, MAX_CHECKPOINT_BYTES,

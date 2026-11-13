@@ -19,13 +19,13 @@ This document specifies the technical architecture, memory model, execution grap
 Developing `ojas`, `tessl`, and `sparsl` as decoupled checkouts rather than a single monolithic repository is an intentional architectural decision driven by four core constraints:
 
 1. **Decoupled Compile Cycles & Toolchain Isolation:**
-   - `ojas` targets standard cross-platform Rust environments across x86_64, aarch64, Linux, macOS, and Windows.
+   - `ojas` targets standard cross-platform Rust environments across x86_64, aarch64, Linux and macOS; no CI job builds Windows (`.github/workflows/test.yml` has no Windows job); the only local check on record is an x86_64 Windows `cargo check` and clippy of `ojas-device` alone (`docs/adaptive-resources.md:50`, `:124`), and nothing was run there. A CI compile check is planned (ft-3902a4b3).
    - `tessl` requires Xcode 26, the macOS Metal Toolchain (`xcrun metal`, `metallib`), and Objective-C bindings (`objc2`, `objc2-metal`). Absorbing `tessl` directly into `ojas` would impose heavy macOS/Xcode build prerequisites on all core engine developers and Linux CI runners.
    - `sparsl` incorporates extensive property-based testing suites (`proptest`, mutation testing campaigns) that iterate independently of deep learning neural graph training.
 2. **Isolated Hardware Requirements:**
    - `tessl` targets Apple Silicon Neural Accelerators and Metal 4 (`MTL4*`).
    - `sparsl` targets sparse event-driven execution on generic CPUs with optional Apple Silicon Metal compute.
-   - `ojas` provides portable cross-platform execution (CPU, wgpu, CUDA, HIP). Isolating platform-specific runtimes prevents dependency bloat and eliminates compile-time friction.
+   - `ojas` provides portable cross-platform execution (CPU, wgpu, and CUDA, whose `CudaBackend` refuses every compute op; HIP is a copy probe, not a `Backend`). Isolating platform-specific runtimes prevents dependency bloat and eliminates compile-time friction.
 3. **Independent Profiling & Hardware Tuning:**
    - `tessl` development requires micro-benchmarking register occupancy, cooperative destination swizzling, tile geometry tuning (`bench_gemm_sweep`, `bench_gemm_tile_tune`), and ICB replay benchmarks.
    - `sparsl` development requires crossover benchmark suites (`scan_crossover`, `spike_crossover`, `narrow_crossover`) characterizing exact density thresholds where sparse formats beat dense GEMM.
@@ -87,7 +87,7 @@ On Apple Silicon, one authoritative root ledger (`ojas_core::Budget`) manages un
 - **No sparse primitives duplicated in ojas.** Sparse representations (CSR/CSC), deterministic SpMV, and affine scans live strictly in `sparsl`.
 - **No tessl or sparsl copy of ojas types.** Neither tessl nor sparsl grows its own `Budget`, typed error, or `Tape`. Conversely ojas does not grow Metal runtime code.
 
-What stays separate on purpose: the CPU reference for every op, the wgpu, CUDA and HIP backends, tessl's inference engines, and sparsl's event-driven sparse kernels. On Metal, `Numerics::Exact` is opt-in and covers linear products and the grouped conv2d GEMM: `ojas-metal` calls tessl `gemm_fixed_order_{nn,nt,tn}` (one thread per output, ascending `k`, contraction off), so those products match the CPU fold bit for bit. Metal's fixed-order GEMMs flush every subnormal value to zero (operands, products, partial sums and results), so bit-identity with CPU Exact holds only when no operand, product, partial sum or result is subnormal; this is a property of the Apple GPU path (hardware or driver), not a build setting (tessl card ft-02eec315). The default stays `Numerics::Fast` (TensorOps, its own reduction order). The bf16-accumulation flag does not redirect the Exact path. Depthwise conv, attention, and the other reductions stay on their existing kernels.
+What stays separate on purpose: the CPU reference for every op, the wgpu and CUDA backends and the `ojas-hip` copy probe (HIP is not a `Backend`), tessl's inference engines, and sparsl's event-driven sparse kernels. On Metal, `Numerics::Exact` is opt-in and covers linear products and the grouped conv2d GEMM: `ojas-metal` calls tessl `gemm_fixed_order_{nn,nt,tn}` (one thread per output, ascending `k`, contraction off), so those products match the CPU fold bit for bit. Metal's fixed-order GEMMs flush every subnormal value to zero (operands, products, partial sums and results), so bit-identity with CPU Exact holds only when no operand, product, partial sum or result is subnormal; this is a property of the Apple GPU path (hardware or driver), not a build setting (tessl card ft-02eec315). The default stays `Numerics::Fast` (TensorOps, its own reduction order). The bf16-accumulation flag does not redirect the Exact path. Depthwise conv, attention, and the other reductions stay on their existing kernels.
 
 ---
 
@@ -131,7 +131,7 @@ flowchart TD
     end
 
     subgraph Layer3["3. Models, Autograd & High-Level Primitives"]
-        Infer["ojas-infer (KV Cache, Greedy and Sampled Decode, Logit Guard; CPU)"]
+        Infer["ojas-infer (KV Cache, Greedy and Sampled Decode, Logit Guard; CpuGpt on the CPU, DeviceDecoder on any Backend)"]
         Model["ojas-model (nanolab GPT written once: spec, init, Graph block, Eval, Trainer, checkpoint dir)"]
         Qwen35["ojas-qwen35 (Qwen3.5 whole-step provider over tessl; macOS Metal only; not a Backend)"]
         Autograd["ojas-autograd (Reverse-Mode Tape; uploads on GPU)"]

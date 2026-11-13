@@ -3,7 +3,7 @@
 //! The shader is ours. wgpu only compiles WGSL and submits the dispatch.
 //! On Apple the HAL is Metal. The device kind stays [`Device::Vulkan`]
 //! so this path does not stand in for tessl. A CPU adapter (lavapipe,
-//! SwiftShader, WARP) is refused unless the process sets
+//! SwiftShader) is refused unless the process sets
 //! [`ALLOW_CPU_ADAPTER_ENV`] to `1`; that opt-in exists for GPU-less CI and
 //! is never the default. A failed adapter request is
 //! [`DeviceError::NoDevice`], never a CPU result.

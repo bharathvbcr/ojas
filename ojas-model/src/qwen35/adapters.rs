@@ -41,7 +41,8 @@
 //! Read refuses, in this order, each with its own [`AdapterError`]: an
 //! unreadable or truncated file, a layout version that is not
 //! [`ADAPTER_LAYOUT_VERSION`], missing or malformed metadata, a different
-//! frozen base (sha256 or quantizer record), a different LoRA rank or alpha,
+//! frozen base (a resident packed base against a fake-quant or dense one, in either direction,
+//! before the sha256; then sha256 or quantizer record), a different LoRA rank or alpha,
 //! moments that disagree with the adapters' step, a missing or extra entry
 //! in either file, a dtype or shape that is not the expected one, any
 //! non-finite value, a payload whose FNV-1a does not match the one recorded,
@@ -58,8 +59,8 @@ use std::path::Path;
 use ojas_core::{Budget, OjasError, Tensor};
 use ojas_io::sha256::open_sha256_hex;
 use ojas_io::{
-    recover_replaced_dir, replace_dir_with_if, IoError, SafeTensors, SafeTensorsWriter, StDtype,
-    TensorSpec,
+    recover_replaced_dir, replace_dir_with_if, AffineLoadError, IoError, SafeTensors,
+    SafeTensorsWriter, StDtype, TensorSpec,
 };
 
 use crate::checkpoint::check_target_dir;
@@ -99,6 +100,15 @@ pub const KEY_ALPHA: &str = "ojas.adapter.lora_alpha";
 pub const KEY_QUANT_FORMAT: &str = "ojas.adapter.quant.format";
 pub const KEY_QUANT_GROUP: &str = "ojas.adapter.quant.group_size";
 pub const KEY_QUANT_MLX: &str = "ojas.adapter.quant.mlx_version";
+/// How the quantised base is held: written only for [`QuantStorage::ResidentPacked`], value
+/// [`QuantStorage::RESIDENT_PACKED`]. Absent means a fake-quant bf16 base (every checkpoint
+/// written before the resident base existed). Present with or without [`KEY_QUANT_BITS`] and the
+/// three keys above is the layout's first optional extension. Provisional key and value names:
+/// the owner or Lappi confirms them at merge.
+pub const KEY_QUANT_STORAGE: &str = "ojas.adapter.quant.storage";
+/// Code width of a resident packed base, decimal (`8`). Written and read with
+/// [`KEY_QUANT_STORAGE`], never alone.
+pub const KEY_QUANT_BITS: &str = "ojas.adapter.quant.bits";
 
 const M_PREFIX: &str = "adam_m.";
 const V_PREFIX: &str = "adam_v.";
@@ -168,6 +178,33 @@ pub enum AdapterError {
         expected: Option<Box<QuantizerRecord>>,
         found: Option<Box<QuantizerRecord>>,
     },
+    /// The run's base is held resident and packed, and the checkpoint was trained over a base
+    /// that is not: a fake-quant bf16 base (`Some(FakeQuantBf16)`) or a dense one, which has no
+    /// quantizer record (`None`). Its adapters were trained against `dequant(Q)` held dense, and
+    /// no opt-in accepts them here. Checked before the base's sha256, which would otherwise
+    /// refuse them on the file difference alone.
+    FakeQuantOnResidentBase { found: Option<QuantStorage> },
+    /// The reverse: the checkpoint was trained over a resident packed base and the run's base is
+    /// not (`expected` is its storage, or `None` for a dense base).
+    ResidentOnFakeQuantBase { expected: Option<QuantStorage> },
+    /// A resident base was asked for with a quantizer record that is absent
+    /// (`None`) or does not say [`QuantStorage::ResidentPacked`].
+    NotResidentRecord { found: Option<QuantStorage> },
+    /// The quantizer record and the base's own `config.json` disagree on `field` (`bits`,
+    /// `group_size`, or `quantization` when the config names no quantisation).
+    ResidentQuantizerDisagrees {
+        field: &'static str,
+        record: String,
+        config: String,
+    },
+    /// A resident base of this width is not supported (only 8 bits: 4 bits has goldens but no
+    /// resident path).
+    UnsupportedResidentBits { bits: u32 },
+    /// A quantised tensor the tower does not wrap (`in_proj_a`, `in_proj_b`, the tied table or
+    /// any other). Only the ten adapted kinds are packed; `name` is the tensor.
+    UnexpectedQuantised { name: String },
+    /// A packed linear of the base could not be read. Boxed to keep the error small.
+    Affine(Box<AffineLoadError>),
     /// The LoRA rank or alpha differs.
     LoraMismatch { detail: String },
     /// An expected entry the checkpoint does not hold.
@@ -221,6 +258,44 @@ impl fmt::Display for AdapterError {
                 f,
                 "adapter checkpoint: quantizer record {found:?}, the run's is {expected:?}"
             ),
+            Self::FakeQuantOnResidentBase { found } => write!(
+                f,
+                "adapter checkpoint: trained over {}, this run's base is resident packed; a \
+                 non-resident checkpoint is not resumed on it",
+                found.map_or(
+                    "a dense base (no quantizer record)".to_string(),
+                    |f| format!("a base with storage {f:?}")
+                )
+            ),
+            Self::ResidentOnFakeQuantBase { expected } => write!(
+                f,
+                "adapter checkpoint: trained over a resident packed base, this run's base is {}",
+                expected.map_or("dense (no quantizer record)".to_string(), |e| format!(
+                    "not resident (storage {e:?})"
+                ))
+            ),
+            Self::NotResidentRecord { found } => write!(
+                f,
+                "resident base: the quantizer record's storage is {found:?}, not resident packed"
+            ),
+            Self::ResidentQuantizerDisagrees {
+                field,
+                record,
+                config,
+            } => write!(
+                f,
+                "resident base: quantizer record {field} is {record:?}, the base's config says \
+                 {config:?}"
+            ),
+            Self::UnsupportedResidentBits { bits } => write!(
+                f,
+                "resident base: {bits}-bit weights are not supported (8 only)"
+            ),
+            Self::UnexpectedQuantised { name } => write!(
+                f,
+                "resident base: {name:?} is quantised, but only the ten adapted linears are packed"
+            ),
+            Self::Affine(e) => write!(f, "resident base: {e}"),
             Self::LoraMismatch { detail } => write!(f, "adapter checkpoint: LoRA {detail}"),
             Self::MissingEntry(n) => write!(f, "adapter checkpoint: entry {n:?} is missing"),
             Self::ExtraEntry(n) => write!(f, "adapter checkpoint: unexpected entry {n:?}"),
@@ -267,13 +342,44 @@ impl From<OjasError> for AdapterError {
     }
 }
 
-/// The quantizer that produced a fake-quant base file, copied by the
+impl From<AffineLoadError> for AdapterError {
+    fn from(e: AffineLoadError) -> Self {
+        Self::Affine(Box::new(e))
+    }
+}
+
+/// How a quantised base is held. The record's [`QuantizerRecord::storage`]: a checkpoint trained
+/// over one is not resumed over the other.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QuantStorage {
+    /// `dequant(Q(W))` held dense in bf16 (the fake-quant arm): the default, and what every
+    /// checkpoint without a storage key is.
+    FakeQuantBf16,
+    /// The packed codes, scales and biases held resident and dequantised per use
+    /// ([`crate::qwen35::FrozenWeight::Quant`]).
+    ResidentPacked,
+}
+
+impl QuantStorage {
+    /// The value of [`KEY_QUANT_STORAGE`] for [`QuantStorage::ResidentPacked`].
+    pub const RESIDENT_PACKED: &'static str = "resident_packed";
+}
+
+/// The quantizer that produced a quantised base file, copied by the
 /// caller from the arm's pre-registration. Strings, compared exactly.
+///
+/// `storage` and `bits` are the optional extension of the layout: they are written only for
+/// [`QuantStorage::ResidentPacked`] (with `bits` set), and a checkpoint without them reads as
+/// [`QuantStorage::FakeQuantBf16`] with no `bits`, so every checkpoint written before they
+/// existed is byte-identical to what this writer produces for the same fake-quant record.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QuantizerRecord {
     pub format: String,
     pub group_size: String,
     pub mlx_version: String,
+    pub storage: QuantStorage,
+    /// Code width of a resident packed base; `None` for [`QuantStorage::FakeQuantBf16`].
+    pub bits: Option<u32>,
 }
 
 /// The frozen base the adapters were trained against: sha256 of the base
@@ -494,6 +600,22 @@ fn check_base(base: &BaseIdentity) -> Result<(), AdapterError> {
         check_string("quantizer format", &q.format)?;
         check_string("quantizer group_size", &q.group_size)?;
         check_string("quantizer mlx_version", &q.mlx_version)?;
+        // Only a resident record writes its storage and bits, so a fake-quant record with
+        // bits would not read back as itself.
+        match (q.storage, q.bits) {
+            (QuantStorage::FakeQuantBf16, None) => {}
+            (QuantStorage::FakeQuantBf16, Some(_)) => return Err(invalid_field(
+                "quantizer bits",
+                "a fake-quant record carries no bits: they are written for a resident base only",
+            )),
+            (QuantStorage::ResidentPacked, Some(4 | 8)) => {}
+            (QuantStorage::ResidentPacked, other) => {
+                return Err(invalid_field(
+                    "quantizer bits",
+                    format!("a resident base needs 4 or 8 bits, got {other:?}"),
+                ))
+            }
+        }
     }
     Ok(())
 }
@@ -744,6 +866,12 @@ pub fn write_adapter_checkpoint(dir: &Path, ckpt: &AdapterCheckpoint) -> Result<
         adapter_meta.push((KEY_QUANT_FORMAT, q.format.clone()));
         adapter_meta.push((KEY_QUANT_GROUP, q.group_size.clone()));
         adapter_meta.push((KEY_QUANT_MLX, q.mlx_version.clone()));
+        // Only a resident base adds keys; a fake-quant record writes the three above and
+        // nothing else, byte for byte what the layout always wrote.
+        if let (QuantStorage::ResidentPacked, Some(bits)) = (q.storage, q.bits) {
+            adapter_meta.push((KEY_QUANT_STORAGE, QuantStorage::RESIDENT_PACKED.to_string()));
+            adapter_meta.push((KEY_QUANT_BITS, bits.to_string()));
+        }
     }
     let mut adapter_meta = common(&adapter_meta);
     let mut moment_meta = common(&[]);
@@ -946,19 +1074,70 @@ pub fn read_adapter_checkpoint(
 
     let sha256 = adapters.meta(KEY_BASE)?.to_string();
     let base_file = adapters.meta(KEY_BASE_FILE)?.to_string();
+    let (storage, bits) = match (
+        adapters.optional(KEY_QUANT_STORAGE),
+        adapters.optional(KEY_QUANT_BITS),
+    ) {
+        // Absent is a fake-quant base: every checkpoint written before the keys existed.
+        (None, None) => (QuantStorage::FakeQuantBf16, None),
+        (Some(QuantStorage::RESIDENT_PACKED), Some(bits)) => {
+            let bits = bits
+                .parse::<u32>()
+                .ok()
+                .filter(|b| matches!(*b, 4 | 8) && b.to_string() == bits)
+                .ok_or_else(|| adapters.corrupt(format!("{KEY_QUANT_BITS} is not 4 or 8")))?;
+            (QuantStorage::ResidentPacked, Some(bits))
+        }
+        (Some(other), Some(_)) => {
+            return Err(adapters.corrupt(format!(
+                "{KEY_QUANT_STORAGE} is {other:?}, not {:?}",
+                QuantStorage::RESIDENT_PACKED
+            )))
+        }
+        _ => {
+            return Err(adapters.corrupt(format!(
+                "{KEY_QUANT_STORAGE} and {KEY_QUANT_BITS} are partly present"
+            )))
+        }
+    };
     let quantizer = match (
         adapters.optional(KEY_QUANT_FORMAT),
         adapters.optional(KEY_QUANT_GROUP),
         adapters.optional(KEY_QUANT_MLX),
     ) {
-        (None, None, None) => None,
+        (None, None, None) => {
+            if storage == QuantStorage::ResidentPacked {
+                return Err(adapters.corrupt("a resident storage key without a quantizer record"));
+            }
+            None
+        }
         (Some(format), Some(group_size), Some(mlx_version)) => Some(QuantizerRecord {
             format: format.to_string(),
             group_size: group_size.to_string(),
             mlx_version: mlx_version.to_string(),
+            storage,
+            bits,
         }),
         _ => return Err(adapters.corrupt("the quantizer record is partly present")),
     };
+    // Resident against not resident is refused as that, before the sha256: the two bases are
+    // different files, so the hash would refuse a mixed resume on the file difference alone.
+    let held = |q: &Option<QuantizerRecord>| q.as_ref().map(|r| r.storage);
+    match (held(&expected.base.quantizer), held(&quantizer)) {
+        (
+            Some(QuantStorage::ResidentPacked),
+            found @ (None | Some(QuantStorage::FakeQuantBf16)),
+        ) => return Err(AdapterError::FakeQuantOnResidentBase { found }),
+        (
+            held_here @ (None | Some(QuantStorage::FakeQuantBf16)),
+            Some(QuantStorage::ResidentPacked),
+        ) => {
+            return Err(AdapterError::ResidentOnFakeQuantBase {
+                expected: held_here,
+            })
+        }
+        _ => {}
+    }
     if sha256 != expected.base.sha256 {
         return Err(AdapterError::BaseMismatch {
             expected: expected.base.sha256.clone(),

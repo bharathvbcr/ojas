@@ -1,5 +1,7 @@
 # Phase 2 audit
 
+> **Historical (superseded).** Recorded 2026-10-01; the body below is unchanged and its file and line references are from the tree as read then. At bfc24e5, `ojas-metal/src/gpu.rs` is gone (`ls` finds no such file), and `ModelSpec::nanolab_124m` (`ojas-model/src/spec.rs:76`) supersedes the tiny step the body describes. Read it as a dated record, not as the current state.
+
 Recorded 2026-10-01. Read-only. No `devmap build`, no cargo tests. Dead-code rows are listed only when confidence is high (about 0.9) and a second `devmap search` plus a source read agree. Rust call resolution is about a quarter of sites, and every `devmap dead` answer sets `walk_incomplete`, so an empty high-confidence list is a lower bound.
 
 ## 1. Index freshness

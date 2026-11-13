@@ -28,10 +28,9 @@
 //! same bits because IEEE addition is commutative), then lane 0 of each of
 //! the four warps to shared memory, then `(w0 + w1) + (w2 + w3)`: the
 //! crate's one copy, `qd_colsum_4warps` in [`crate::small_common`]'s prelude,
-//! mirrored by [`crate::small_common::colsum_4warps`]. Metal's
-//! `simd_sum` has no specified order, so the CUDA bits are not Metal's; the
-//! comparison with Metal is a bound, not bit equality
-//! (`cuda-backend-scoping.md` §5.1).
+//! mirrored by [`crate::small_common::colsum_4warps`]. The Metal comparison
+//! is a bound, not bit equality: this crate does not assume that Metal's
+//! `simd_sum` adds in the order above (`cuda-backend-scoping.md` §5.1).
 //!
 //! **Every float operation in the scan is an explicitly rounded intrinsic**
 //! (`__fadd_rn`, `__fsub_rn`, `__fmul_rn`, `__fdiv_rn`, `__fsqrt_rn`), which

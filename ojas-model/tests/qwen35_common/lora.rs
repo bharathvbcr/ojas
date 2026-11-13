@@ -13,8 +13,9 @@ use ojas_data::CounterRng;
 use ojas_io::SafeTensors;
 use ojas_model::lora::{LoraConfig, LoraSite};
 use ojas_model::qwen35::{
-    bind, bind_frozen, forward_loss, forward_loss_lora, load_hf, lora_targets, LoraForward,
-    LoraTarget, MixerLora, Qwen35Lora, Qwen35Params, Qwen35Spec, Qwen35Tables, LORA_KINDS,
+    bind, bind_frozen, bind_frozen_base, forward_loss, forward_loss_lora, forward_loss_lora_base,
+    load_hf, lora_targets, FrozenWeight, LoraForward, LoraTarget, MixerLora, Qwen35Lora,
+    Qwen35Params, Qwen35Spec, Qwen35Tables, LORA_KINDS,
 };
 use ojas_model::{ActivationCheckpoint, DEFAULT_CE_CHUNK};
 
@@ -231,6 +232,19 @@ pub fn lora_step<B: Backend>(
     d: &Data,
     o: &Opts,
 ) -> LoraRun {
+    lora_step_base(backend, &host.frozen_view(), sites, d, o)
+}
+
+/// [`lora_step`] over a base that may hold its wrapped weights packed (`FrozenWeight::Quant`,
+/// already placed on `backend`): the one implementation, which the dense form calls over
+/// `frozen_view`.
+pub fn lora_step_base<B: Backend>(
+    backend: B,
+    host: &Qwen35Params<Tensor, FrozenWeight<Tensor>>,
+    sites: &Qwen35Lora<LoraSite<Tensor>>,
+    d: &Data,
+    o: &Opts,
+) -> LoraRun {
     let s = spec();
     let bud = budget();
     let mut tape = Tape::new(backend);
@@ -239,14 +253,14 @@ pub fn lora_step<B: Backend>(
             .autocast_region(ojas_core::AutocastMode::Bf16)
             .unwrap()
     });
-    let params = bind_frozen(&mut tape, host).unwrap();
+    let params = bind_frozen_base(&mut tape, host).unwrap();
     let bound = sites
         .try_map(&mut |site| site.try_map(&mut |t| tape.leaf(t.clone())))
         .unwrap();
     let mut rng = CounterRng::new(o.dropout_seed);
     let [b, t] = [d.ids.shape()[0], d.ids.shape()[1]];
     let fwd = LoraForward::new(&mut tape, bound, &o.config, b, t, &mut rng, &bud).unwrap();
-    let loss = forward_loss_lora(
+    let loss = forward_loss_lora_base(
         &mut tape,
         &s,
         &params,
@@ -262,9 +276,15 @@ pub fn lora_step<B: Backend>(
     tape.backward(loss).unwrap();
     let loss = to_vec(tape.value(loss).unwrap())[0];
     // Frozen leaves have no gradient: absent, not zero.
-    for v in params.values() {
-        assert!(tape.grad(*v).is_none(), "a frozen leaf has a gradient");
-    }
+    params
+        .try_map_base(
+            &mut |v| {
+                assert!(tape.grad(*v).is_none(), "a frozen leaf has a gradient");
+                Ok::<_, ()>(())
+            },
+            &mut |q| Ok(q.clone()),
+        )
+        .unwrap();
     let tg = targets();
     let grads = tg
         .iter()

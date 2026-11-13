@@ -591,7 +591,7 @@ kernel void ojas_ns_denom_bf16(
 
 // One simdgroup per row (eight rows per 256-thread threadgroup), so a 64-wide
 // QK-norm row keeps every lane busy; each lane strides the row by 32 and the
-// row reduction is `simd_sum`, whose order is fixed, so results repeat.
+// row reduction is `simd_sum`; `norms_are_deterministic` pins repeatability.
 
 #define RMS_ROWS_PER_TG 8u
 
@@ -1927,9 +1927,9 @@ kernel void ojas_kv_write(
 /// keys [max(origin + s * chunk, lo), min(origin + (s + 1) * chunk, pos + 1)). Each of
 /// its 32 simdgroups walks keys j0 + sg, j0 + sg + 32, ... with an online
 /// softmax; a lane holds dims lane, lane + 32, ... of its partial output,
-/// and the score is a `simd_sum`, whose order is fixed. The simdgroups'
-/// (max, sum, output) are merged in index order, so results repeat bit for
-/// bit. With splits = 1 (chunk >= kv_len) the threadgroup writes the
+/// and the score is a `simd_sum`. The simdgroups' (max, sum, output) are merged
+/// in index order (`cached_attention_is_deterministic` pins repeatability). With
+/// splits = 1 (chunk >= kv_len) the threadgroup writes the
 /// output; otherwise it writes (max, sum, unnormalized output) to `part` at
 /// ((row * splits + s) * (d + 2)), row = (b * Tq + i) * H + h, and
 /// `ojas_cached_attn_merge` combines the splits in index order. A split
@@ -3443,9 +3443,9 @@ kernel void ojas_attn_fwd_bf16(
 // attention, a query length that differs from the key length, an additive
 // score bias and per-batch key lengths. One simdgroup per query row, after
 // `ojas_cached_attn`: lane `l` owns head dims l, l + 32, ... of the query and
-// of the output, the score is a `simd_sum` (whose order is fixed), and the
-// softmax is online over the keys the row sees, so results repeat bit for
-// bit. Scalar f32 on purpose: it takes any head dim up to 32 * AG_PER_LANE and
+// of the output, the score is a `simd_sum`, and the softmax is online over the
+// keys the row sees (no test was found that pins this kernel's repeatability).
+// Scalar f32 on purpose: it takes any head dim up to 32 * AG_PER_LANE and
 // is the reference a tiled kernel is held to; it is not the fast path.
 //
 //   S   = scale * Q Kᵀ + bias,   O = softmax(S) V,   lse = log sum_j exp(S_ij)

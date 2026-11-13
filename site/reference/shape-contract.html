@@ -158,7 +158,7 @@
 </li>
 <li><strong>Backend adoption:</strong>
 <ul>
-<li><strong>CPU (reported by the ojas-cpu session):</strong> adopted for every op except seven that its heavy-ops lane is still rewriting: embedding forward and backward, CE forward and backward, clip, AdamW and Muon.
+<li><strong>CPU (reported by the ojas-cpu session):</strong> adopted for every op. At the time of this report seven ops (embedding forward and backward, CE forward and backward, clip, AdamW and Muon) were still being rewritten by its heavy-ops lane; at bfc24e5 <code>CpuBackend</code> calls the validator for all seven (<code>ojas-cpu/src/backend.rs:772</code>, <code>:880</code>, <code>:902</code>, <code>:1840</code>, <code>:1858</code>, <code>:1880</code>, <code>:1900</code>).
 <ul>
 <li>Gate: <code>ojas-cpu/tests/shape_first.rs</code>, 103 malformed cases across three conditions (Budget 0, a cap that fits the inputs only, NaN present), 244 runs in all. Each must match the validator&#39;s Debug text with 0 bytes charged. It failed 165 of 244 before adoption and passes after.
 </li>

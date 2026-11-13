@@ -63,7 +63,9 @@
 //!   it from `floor(x + 0.5)`, which differs only at `x = 0.49999997` (and its negative): no group
 //!   in 335 million random bf16 weights produced that quotient. Unverified on the GPU.
 
-use crate::{bf16_to_f32, f32_to_bf16, Budget, DType, OjasError, Scratch, Tensor};
+use crate::{
+    bf16_to_f32, f32_to_bf16, Backend, BackendId, Budget, DType, OjasError, Scratch, Tensor,
+};
 
 /// The group size every [`AffineSpec`] carries: the size mlx's goldens cover.
 pub const AFFINE_GROUP_SIZE: usize = 64;
@@ -159,46 +161,69 @@ impl AffineSpec {
         self.group_size
     }
 
-    /// `u32` words holding one group's codes.
-    fn words_per_group(&self) -> usize {
+    /// `u32` words holding one group's codes: 8 for q4, 16 for q8 at group size 64.
+    pub fn words_per_group(&self) -> usize {
         self.group_size / self.bits.codes_per_word()
+    }
+
+    /// Checked `[rows, cols]` geometry of a quantised matrix: groups per row and packed words per
+    /// row. The one owner of the size arithmetic: [`quantize_affine`],
+    /// [`AffineQuantized::from_parts`], [`dequant_affine_bf16_dims`](crate::dequant_affine_bf16_dims)
+    /// and the loaders and row helpers in other crates all call it, so no copy can drift.
+    ///
+    /// `rows` and `cols` must be non-zero ([`OjasError::Shape`]) and `cols` a multiple of the group
+    /// size ([`OjasError::Shape`]). Every count the three parts and the bf16 result need must fit
+    /// `usize`, in elements and in bytes ([`OjasError::OutOfRange`], named by `op`): `rows * cols`
+    /// and its bf16 byte count, `rows * words` and its byte count, `rows * groups` and its byte
+    /// count. Nothing is allocated.
+    pub fn geometry(
+        &self,
+        op: &'static str,
+        rows: usize,
+        cols: usize,
+    ) -> Result<AffineGeometry, OjasError> {
+        if rows == 0 || cols == 0 {
+            return Err(OjasError::Shape {
+                op,
+                detail: format!("an empty matrix [{rows}, {cols}] cannot be quantised"),
+            });
+        }
+        if !cols.is_multiple_of(self.group_size) {
+            return Err(OjasError::Shape {
+                op,
+                detail: format!(
+                    "cols {cols} is not a multiple of the group size {}",
+                    self.group_size
+                ),
+            });
+        }
+        let groups = cols / self.group_size;
+        let words = groups
+            .checked_mul(self.words_per_group())
+            .ok_or_else(|| overflow(op, "packed words per row"))?;
+        let elems = rows
+            .checked_mul(cols)
+            .ok_or_else(|| overflow(op, "rows * cols"))?;
+        elems
+            .checked_mul(DType::Bf16.size())
+            .ok_or_else(|| overflow(op, "rows * cols * 2 bytes"))?;
+        rows.checked_mul(words)
+            .and_then(|n| n.checked_mul(DType::U32.size()))
+            .ok_or_else(|| overflow(op, "rows * packed words * 4 bytes"))?;
+        rows.checked_mul(groups)
+            .and_then(|n| n.checked_mul(DType::Bf16.size()))
+            .ok_or_else(|| overflow(op, "rows * groups * 2 bytes"))?;
+        Ok(AffineGeometry { groups, words })
     }
 }
 
-/// Checked `[rows, cols]` geometry of a quantised matrix: `(groups per row, packed words per row)`.
-/// `rows` and `cols` must be non-zero and `cols` a multiple of the group size.
-fn geometry(
-    op: &'static str,
-    spec: &AffineSpec,
-    rows: usize,
-    cols: usize,
-) -> Result<(usize, usize), OjasError> {
-    if rows == 0 || cols == 0 {
-        return Err(OjasError::Shape {
-            op,
-            detail: format!("an empty matrix [{rows}, {cols}] cannot be quantised"),
-        });
-    }
-    if !cols.is_multiple_of(spec.group_size) {
-        return Err(OjasError::Shape {
-            op,
-            detail: format!(
-                "cols {cols} is not a multiple of the group size {}",
-                spec.group_size
-            ),
-        });
-    }
-    let groups = cols / spec.group_size;
-    let words = groups
-        .checked_mul(spec.words_per_group())
-        .ok_or_else(|| overflow(op, "packed words per row"))?;
-    rows.checked_mul(cols)
-        .ok_or_else(|| overflow(op, "rows * cols"))?;
-    rows.checked_mul(words)
-        .ok_or_else(|| overflow(op, "rows * packed words"))?;
-    rows.checked_mul(groups)
-        .ok_or_else(|| overflow(op, "rows * groups"))?;
-    Ok((groups, words))
+/// Per-row counts of a checked quantised matrix, from [`AffineSpec::geometry`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AffineGeometry {
+    /// Groups per row, `cols / group_size`: the width of `scales` and `biases`.
+    pub groups: usize,
+    /// Packed `u32` words per row: the width of `packed`.
+    pub words: usize,
 }
 
 fn overflow(op: &'static str, what: &str) -> OjasError {
@@ -242,7 +267,7 @@ impl AffineQuantized {
         biases: Tensor,
     ) -> Result<Self, OjasError> {
         const OP: &str = "AffineQuantized::from_parts";
-        let (groups, words) = geometry(OP, &spec, rows, cols)?;
+        let AffineGeometry { groups, words } = spec.geometry(OP, rows, cols)?;
         check_part(OP, "packed", &packed, DType::U32, &[rows, words])?;
         check_part(OP, "scales", &scales, DType::Bf16, &[rows, groups])?;
         check_part(OP, "biases", &biases, DType::Bf16, &[rows, groups])?;
@@ -305,6 +330,161 @@ impl AffineQuantized {
     /// The three tensors, `(packed, scales, biases)`.
     pub fn into_parts(self) -> (Tensor, Tensor, Tensor) {
         (self.packed, self.scales, self.biases)
+    }
+
+    /// Make the weight resident where `backend` computes, once: the owner of the placement a
+    /// resident quantised base needs ([`PlacedAffine`]).
+    ///
+    /// On the CPU backend the host tensors are kept as they are. On any other backend each
+    /// part is uploaded and `self`'s host copies are dropped, so no host copy of a placed
+    /// weight survives. The room for all three parts is checked on `backend`'s budget
+    /// ([`Budget::check_room`]) before the first upload, so a refusal leaves nothing uploaded.
+    /// A part the backend returns that is not resident on it is [`OjasError::Placement`].
+    /// The parts were validated by [`AffineQuantized::from_parts`] on the host, so a placed
+    /// weight has the shapes, dtypes and finite scales and biases the dequantiser relies on.
+    pub fn place<B: Backend + ?Sized>(self, backend: &B) -> Result<PlacedAffine, OjasError> {
+        const OP: &str = "AffineQuantized::place";
+        let id = backend.id();
+        let (packed, scales, biases) = if id == BackendId::Cpu {
+            (self.packed, self.scales, self.biases)
+        } else {
+            let bytes = self.nbytes()?;
+            backend.budget().check_room(bytes as u64)?;
+            let up = |t: &Tensor| -> Result<Tensor, OjasError> {
+                let placed = backend.upload(t)?;
+                if placed.device() != Some(id) {
+                    return Err(OjasError::Placement {
+                        op: OP,
+                        expected: Some(id),
+                        found: placed.device(),
+                    });
+                }
+                Ok(placed)
+            };
+            (up(&self.packed)?, up(&self.scales)?, up(&self.biases)?)
+        };
+        Ok(PlacedAffine {
+            backend: id,
+            spec: self.spec,
+            rows: self.rows,
+            cols: self.cols,
+            packed,
+            scales,
+            biases,
+        })
+    }
+}
+
+/// An affine-quantised `[rows, cols]` weight resident where one backend computes: the packed
+/// codes and the bf16 scales and biases, each a tensor on that backend (host tensors for the
+/// CPU backend).
+///
+/// The only constructor is [`AffineQuantized::place`], so every value was validated on the host
+/// first and uploaded exactly once. [`AffineQuantized::from_parts`] refuses device tensors, so a
+/// placed weight needs a type of its own. Cloning is cheap: the tensors are shared. The weight is
+/// never held dequantised; a `linear_q` over it dequantises to a bf16 `[rows, cols]` transient
+/// each time it runs (`ojas_autograd::Tape::linear_q`).
+#[derive(Clone, Debug)]
+pub struct PlacedAffine {
+    backend: BackendId,
+    spec: AffineSpec,
+    rows: usize,
+    cols: usize,
+    packed: Tensor,
+    scales: Tensor,
+    biases: Tensor,
+}
+
+impl PlacedAffine {
+    /// The backend whose memory holds the parts.
+    pub fn backend(&self) -> BackendId {
+        self.backend
+    }
+
+    pub fn spec(&self) -> AffineSpec {
+        self.spec
+    }
+
+    /// Output features of a linear over this weight.
+    pub fn rows(&self) -> usize {
+        self.rows
+    }
+
+    /// Input features of a linear over this weight.
+    pub fn cols(&self) -> usize {
+        self.cols
+    }
+
+    /// `U32 [rows, cols * bits / 32]`.
+    pub fn packed(&self) -> &Tensor {
+        &self.packed
+    }
+
+    /// `Bf16 [rows, cols / group_size]`.
+    pub fn scales(&self) -> &Tensor {
+        &self.scales
+    }
+
+    /// `Bf16 [rows, cols / group_size]`.
+    pub fn biases(&self) -> &Tensor {
+        &self.biases
+    }
+
+    /// Bytes the three parts hold: what stays resident, never the dequantised weight.
+    pub fn nbytes(&self) -> Result<usize, OjasError> {
+        let mut total = 0usize;
+        for t in [&self.packed, &self.scales, &self.biases] {
+            total = t
+                .num_elements()?
+                .checked_mul(t.dtype().size())
+                .and_then(|bytes| total.checked_add(bytes))
+                .ok_or_else(|| overflow("PlacedAffine::nbytes", "byte count"))?;
+        }
+        Ok(total)
+    }
+
+    /// The bytes of the bf16 `[rows, cols]` transient a dequantisation of this weight makes.
+    pub fn dequantised_bytes(&self) -> Result<usize, OjasError> {
+        self.rows
+            .checked_mul(self.cols)
+            .and_then(|n| n.checked_mul(DType::Bf16.size()))
+            .ok_or_else(|| overflow("PlacedAffine::dequantised_bytes", "rows * cols * 2 bytes"))
+    }
+
+    /// The shape check every `linear_q` runs before any dispatch: `x` (the input's shape) is
+    /// rank 2 or more (a rank-1 input is refused, so the check never depends on what a backend's
+    /// linear does with one) and its last extent is this weight's input width, `cols`. A refusal
+    /// is [`OjasError::Shape`] naming `op`.
+    pub fn check_input(&self, op: &'static str, x: &[usize]) -> Result<(), OjasError> {
+        match x.last() {
+            Some(&last) if x.len() >= 2 && last == self.cols => Ok(()),
+            _ => Err(OjasError::Shape {
+                op,
+                detail: format!(
+                    "x {x:?} is not rank 2 or more ending in the quantised weight's {} input features \
+                     ([{}, {}])",
+                    self.cols, self.rows, self.cols
+                ),
+            }),
+        }
+    }
+
+    /// Refuse a weight that was placed on another backend than `computes_on`, with
+    /// [`OjasError::Placement`] naming `op`. Nothing is copied implicitly: a host weight handed
+    /// to a GPU tape would otherwise be uploaded again for every tape (1.46 GB per sequence at
+    /// 2B), and a device weight handed to a CPU tape would be read back. A weight from another
+    /// device of the same backend is refused by that backend's own operand check at the first
+    /// dequantisation.
+    pub fn require_on(&self, op: &'static str, computes_on: BackendId) -> Result<(), OjasError> {
+        if self.backend == computes_on {
+            return Ok(());
+        }
+        Err(OjasError::Placement {
+            op,
+            // Host memory is `None` on both sides, as the CPU backend reports it.
+            expected: (computes_on != BackendId::Cpu).then_some(computes_on),
+            found: (self.backend != BackendId::Cpu).then_some(self.backend),
+        })
     }
 }
 
@@ -434,7 +614,7 @@ pub fn quantize_affine(
             })
         }
     };
-    let (groups, words) = geometry(OP, &spec, rows, cols)?;
+    let AffineGeometry { groups, words } = spec.geometry(OP, rows, cols)?;
     src.validate()?;
 
     let packed_len = rows * words;
@@ -561,12 +741,55 @@ pub fn dequantize_affine_bf16(q: &AffineQuantized, budget: &Budget) -> Result<Te
     let scales = q.scales.bf16_slice()?;
     let biases = q.biases.bf16_slice()?;
     let mut out = Tensor::zeros(&[q.rows, q.cols], DType::Bf16, budget)?;
-    let spec = q.spec;
+    expand(OP, q.spec, packed, scales, biases, out.bf16_slice_mut()?)?;
+    Ok(out)
+}
+
+/// [`dequantize_affine_bf16`] on three loose tensors: the host implementation of
+/// [`BackendModule::dequant_affine_bf16`](crate::BackendModule::dequant_affine_bf16), under the
+/// op name `"dequant_affine_bf16"` every backend reports.
+///
+/// The operands are checked by [`dequant_affine_bf16_dims`](crate::dequant_affine_bf16_dims)
+/// first, then read through the host slice accessors (a device-resident or non-contiguous operand
+/// is refused by them, before anything is charged). The `[rows, cols]` bf16 output is charged to
+/// `budget` before it is written. The inputs are not scanned: a non-finite scale or bias makes
+/// every output of its group non-finite, and so does a finite pair whose affine map overflows, so
+/// the check stays on the output, as the device's fault word does.
+pub fn dequantize_affine_bf16_tensors(
+    packed: &Tensor,
+    scales: &Tensor,
+    biases: &Tensor,
+    spec: AffineSpec,
+    budget: &Budget,
+) -> Result<Tensor, OjasError> {
+    const OP: &str = "dequant_affine_bf16";
+    let dims = crate::dequant_affine_bf16_dims(packed, scales, biases, spec)?;
+    let (packed, scales, biases) = (
+        packed.u32_slice()?,
+        scales.bf16_slice()?,
+        biases.bf16_slice()?,
+    );
+    let mut out = Tensor::zeros(&[dims.rows, dims.cols], DType::Bf16, budget)?;
+    expand(OP, spec, packed, scales, biases, out.bf16_slice_mut()?)?;
+    Ok(out)
+}
+
+/// The one dequantisation loop. `packed` is `rows * words` words, `scales` and `biases` are
+/// `rows * groups` values, and `dst` is `rows * cols` values; the callers validated the geometry,
+/// so a group of `words_per_group` words always pairs with a whole group of `dst`. Any output that
+/// is not a finite bf16 is [`OjasError::NonFinite`] under `op`.
+fn expand(
+    op: &'static str,
+    spec: AffineSpec,
+    packed: &[u32],
+    scales: &[u16],
+    biases: &[u16],
+    dst: &mut [u16],
+) -> Result<(), OjasError> {
     let per_word = spec.bits.codes_per_word();
     let lane_bits = spec.bits.bits();
     let mask = spec.bits.max_code();
     let wpg = spec.words_per_group();
-    let dst = out.bf16_slice_mut()?;
     for (g, (words, values)) in packed
         .chunks_exact(wpg)
         .zip(dst.as_chunks_mut::<AFFINE_GROUP_SIZE>().0)
@@ -579,17 +802,17 @@ pub fn dequantize_affine_bf16(q: &AffineQuantized, budget: &Budget) -> Result<Te
                 let code = ((word >> (lane_bits * i as u32)) & mask) as f32;
                 let r = flush(scale.mul_add(code, bias));
                 if !r.is_finite() {
-                    return Err(OjasError::NonFinite { op: OP });
+                    return Err(OjasError::NonFinite { op });
                 }
                 let bits = f32_to_bf16(r);
                 if !bf16_is_finite(bits) {
-                    return Err(OjasError::NonFinite { op: OP });
+                    return Err(OjasError::NonFinite { op });
                 }
                 *v = bits;
             }
         }
     }
-    Ok(out)
+    Ok(())
 }
 
 #[cfg(test)]

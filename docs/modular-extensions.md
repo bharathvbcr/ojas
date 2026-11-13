@@ -65,7 +65,7 @@ Why are `ojas`, `tessl`, and `sparsl` maintained as distinct repositories and cr
 ### 2. Isolated Hardware Requirements
 - **Hardware Targeting:** `tessl` targets the neural accelerators on Apple M-series chips through Metal Performance Primitives (MPP) `matmul2d` and cooperative destination registers.
 - **Sparse vs. Dense Execution:** `sparsl` addresses event-driven sparse computation where matrices have 90–99% zero entries, requiring completely different memory layouts (CSR, CSC) and non-contiguous memory access patterns.
-- **Portability:** `ojas` provides portable universal execution (CPU reference, wgpu WGSL for Vulkan/Metal/DX12, CUDA/HIP probes). Keeping platform-specific and domain-specific code in modular extensions prevents runtime bloat.
+- **Portability:** `ojas` provides portable universal execution (CPU reference, wgpu WGSL for Vulkan and Metal, a CUDA `Backend` whose compute ops refuse, and a HIP copy probe). Keeping platform-specific and domain-specific code in modular extensions prevents runtime bloat.
 
 ### 3. Independent Profiling & Micro-Benchmarking
 - **Metal Tuning:** `tessl` demands register-occupancy sweeps, cooperative tile geometry tuning (`bench_gemm_sweep`, `bench_gemm_tile_tune`), and ICB command-stream replay optimization.

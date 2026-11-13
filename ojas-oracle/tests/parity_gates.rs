@@ -3,7 +3,8 @@
 //!
 //! `Replay` is not a model: it returns the fixtures' own numbers, optionally
 //! perturbed, so these tests exercise the gates and nothing else. The model
-//! tests run once ojas-model implements `ParityModel` (README).
+//! tests are in `ojas-model/tests/oracle_parity.rs`, where ojas-model
+//! implements `ParityModel` (README).
 
 use ojas_core::OjasError;
 use ojas_oracle::golden::{

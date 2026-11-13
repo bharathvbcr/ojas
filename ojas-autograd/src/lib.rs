@@ -3,6 +3,9 @@
 //! On [`BackendId::Cpu`](ojas_core::BackendId::Cpu) the tape keeps the tensors it
 //! is given. On any other backend, inputs and the backward seed are uploaded
 //! and reshape is a view, so backward does not read device memory back.
+//! [`Tape::linear_q`] runs a linear over a frozen, resident affine-quantised weight
+//! ([`PlacedAffine`](ojas_core::PlacedAffine)), dequantising it to a transient in the forward and
+//! again in the backward, so the base is never held dense on the tape.
 //! Gradcheck compares the f32 gradients to a central difference of an f64 forward.
 
 #![forbid(unsafe_code)]

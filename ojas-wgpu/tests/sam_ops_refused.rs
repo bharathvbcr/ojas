@@ -283,3 +283,19 @@ fn the_per_head_qkv_rms_norm_is_the_refusing_default_on_wgpu() {
         );
     }
 }
+
+/// `dequant_affine_bf16` is not a wgpu op: well-formed operands get the trait's refusing default
+/// under the method's own name, and `docs/op-coverage.md` says so in the wgpu column.
+#[test]
+fn dequant_affine_bf16_is_the_refusing_default_on_wgpu() {
+    let g = gpu();
+    let b = ojas_core::Budget::new(1 << 20);
+    let packed = Tensor::from_u32(&[0; 16], &[1, 16], &b).unwrap();
+    let params = Tensor::from_bf16_bits(&[0x3F80], &[1, 1], &b).unwrap();
+    let (op, detail) = refusal(
+        "dequant_affine_bf16",
+        g.dequant_affine_bf16(&packed, &params, &params, ojas_core::AffineSpec::q8()),
+    );
+    assert_eq!(op, "dequant_affine_bf16");
+    assert!(detail.contains("Wgpu"), "{detail}");
+}

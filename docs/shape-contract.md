@@ -7,7 +7,7 @@
 **Status (2026-10-01):**
 - **Written and tested in core.** `cargo test -p ojas-core` passes (75 unit tests), and clippy `-D warnings` is clean.
 - **Backend adoption:**
-  - **CPU (reported by the ojas-cpu session):** adopted for every op except seven that its heavy-ops lane is still rewriting: embedding forward and backward, CE forward and backward, clip, AdamW and Muon.
+  - **CPU (reported by the ojas-cpu session):** adopted for every op. At the time of this report seven ops (embedding forward and backward, CE forward and backward, clip, AdamW and Muon) were still being rewritten by its heavy-ops lane; at bfc24e5 `CpuBackend` calls the validator for all seven (`ojas-cpu/src/backend.rs:772`, `:880`, `:902`, `:1840`, `:1858`, `:1880`, `:1900`).
     - Gate: `ojas-cpu/tests/shape_first.rs`, 103 malformed cases across three conditions (Budget 0, a cap that fits the inputs only, NaN present), 244 runs in all. Each must match the validator's Debug text with 0 bytes charged. It failed 165 of 244 before adoption and passes after.
     - The local checks were deleted.
   - **wgpu (wgpu round 5, lane-reported; the tests were re-run by the lane after its final edit):** every op adopted.

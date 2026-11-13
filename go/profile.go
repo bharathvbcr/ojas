@@ -96,8 +96,8 @@ type Profile struct {
 	DeviceMemoryBytes Reading
 	// DeviceResidentBytes is what this process already holds on the
 	// device: Metal's allocated size (every backend and pool in the
-	// process), or wgpu's allocator report where its HAL keeps one (Vulkan,
-	// DX12; not Metal).
+	// process), or wgpu's allocator report where its HAL keeps one (Vulkan;
+	// ojas never requests DX12, and Metal keeps none).
 	DeviceResidentBytes Reading
 	// DevicePoolCacheBytes is the most memory the runtime may hold on the
 	// device outside the session budget, on a session opened with this

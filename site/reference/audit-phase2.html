@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Phase 2 audit · ojas reference</title>
-  <meta name="description" content="Recorded 2026-10-01. Read-only. No devmap build, no cargo tests. Dead-code rows are listed only when confidence is high (about 0.9) and a second devmap search plus a source read agree. Rust call reso…">
+  <meta name="description" content="Historical (superseded). Recorded 2026-10-01; the body below is unchanged and its file and line references are from the tree as read then. At bfc24e5, ojas-metal/src/gpu.rs is gone (ls finds no such…">
   <meta name="keywords" content="ojas, phase 2 audit, rust deep learning, machine learning, pytorch alternative, neural network, autograd, tensors, metal, wgpu">
   <meta name="author" content="Bharath Chandra Vaddaram">
   <meta name="robots" content="index, follow">
@@ -14,7 +14,7 @@
   <meta property="og:site_name" content="ojas">
   <meta property="og:url" content="https://ojas.vbcr.dev/reference/audit-phase2.html">
   <meta property="og:title" content="Phase 2 audit · ojas reference">
-  <meta property="og:description" content="Recorded 2026-10-01. Read-only. No devmap build, no cargo tests. Dead-code rows are listed only when confidence is high (about 0.9) and a second devmap search plus a source read agree. Rust call reso…">
+  <meta property="og:description" content="Historical (superseded). Recorded 2026-10-01; the body below is unchanged and its file and line references are from the tree as read then. At bfc24e5, ojas-metal/src/gpu.rs is gone (ls finds no such…">
   <meta property="og:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
@@ -22,7 +22,7 @@
   <meta property="og:locale" content="en_US">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Phase 2 audit · ojas reference">
-  <meta name="twitter:description" content="Recorded 2026-10-01. Read-only. No devmap build, no cargo tests. Dead-code rows are listed only when confidence is high (about 0.9) and a second devmap search plus a source read agree. Rust call reso…">
+  <meta name="twitter:description" content="Historical (superseded). Recorded 2026-10-01; the body below is unchanged and its file and line references are from the tree as read then. At bfc24e5, ojas-metal/src/gpu.rs is gone (ls finds no such…">
   <meta name="twitter:image" content="https://ojas.vbcr.dev/assets/ojas-og.png">
   <meta name="twitter:image:alt" content="Phase 2 audit · ojas reference">
   <link rel="icon" href="../assets/favicon-32.png" type="image/png" sizes="32x32">
@@ -40,7 +40,7 @@
     "@context": "https://schema.org",
     "@type": "TechArticle",
     "headline": "Phase 2 audit · ojas reference",
-    "description": "Recorded 2026-10-01. Read-only. No devmap build, no cargo tests. Dead-code rows are listed only when confidence is high (about 0.9) and a second devmap search plus a source read agree. Rust call reso…",
+    "description": "Historical (superseded). Recorded 2026-10-01; the body below is unchanged and its file and line references are from the tree as read then. At bfc24e5, ojas-metal/src/gpu.rs is gone (ls finds no such…",
     "url": "https://ojas.vbcr.dev/reference/audit-phase2.html",
     "image": "https://ojas.vbcr.dev/assets/ojas-og.png",
     "author": {
@@ -150,6 +150,8 @@
       <p class="ref-crumb"><a href="./">Reference</a> / Audits</p>
       <article class="prose-ojas">
 <h1 id="phase-2-audit">Phase 2 audit <a class="anchor" href="#phase-2-audit" aria-label="Link to this section">#</a></h1>
+<blockquote><p><strong>Historical (superseded).</strong> Recorded 2026-10-01; the body below is unchanged and its file and line references are from the tree as read then. At bfc24e5, <code>ojas-metal/src/gpu.rs</code> is gone (<code>ls</code> finds no such file), and <code>ModelSpec::nanolab_124m</code> (<code>ojas-model/src/spec.rs:76</code>) supersedes the tiny step the body describes. Read it as a dated record, not as the current state.</p>
+</blockquote>
 <p>Recorded 2026-10-01. Read-only. No <code>devmap build</code>, no cargo tests. Dead-code rows are listed only when confidence is high (about 0.9) and a second <code>devmap search</code> plus a source read agree. Rust call resolution is about a quarter of sites, and every <code>devmap dead</code> answer sets <code>walk_incomplete</code>, so an empty high-confidence list is a lower bound.</p>
 <h2 id="1-index-freshness">1. Index freshness <a class="anchor" href="#1-index-freshness" aria-label="Link to this section">#</a></h2>
 <div class="table-wrap"><table>

@@ -75,10 +75,12 @@ fn the_call_table_covers_every_op() {
     // file, so they fall to the default polled path, and the `refused` count
     // below rising by exactly two is what checks that rather than assumes it.
     // (That commit's message also claims an `rms_qkv_norm` backward; no such
-    // method is on the Backend surface, so only two ops arrived.)
+    // method is on the Backend surface, so only two ops arrived.) 102 since
+    // `dequant_affine_bf16` (qv2 W2): a compute op named nowhere in this file,
+    // so it is polled, and `refused` below rises by one.
     assert_eq!(
         ops.len(),
-        101,
+        102,
         "op count changed: pin the new op's admission"
     );
 }
@@ -177,8 +179,9 @@ fn a_tripped_gate_refuses_polling_ops_without_repolling_and_keeps_commit_ops_ope
     // 97 since seq_mean_backward and l2_normalize_backward (101 ops less the
     // same four commit ops in OLD_NEVER_POLLED). Both new ops being refused is
     // the assertion that they are gated as compute ops: a commit op would have
-    // left this at 95.
-    assert_eq!(refused, 97);
+    // left this at 95. 98 since dequant_affine_bf16 (102 ops less the same four):
+    // it is generated through `Gated::admit` and is not in NEVER_POLL.
+    assert_eq!(refused, 98);
     assert_eq!(
         polls.load(Ordering::SeqCst),
         1,

@@ -2878,6 +2878,105 @@ pub fn kv_cache_write_dims(cache: &Tensor, src: &Tensor, at: usize) -> Result<Kv
     })
 }
 
+/// Dimensions of a checked [`crate::BackendModule::dequant_affine_bf16`] call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AffineDims {
+    pub rows: usize,
+    /// Columns of the dequantised weight: `groups * group_size`.
+    pub cols: usize,
+    /// Groups per row: the width of `scales` and `biases`.
+    pub groups: usize,
+    /// Packed `u32` words per row: the width of `packed`.
+    pub words: usize,
+}
+
+/// Check the operands of [`crate::BackendModule::dequant_affine_bf16`]: `packed` is `U32`,
+/// `scales` and `biases` are `Bf16`, all three rank 2 with the same non-zero `rows`, `scales` and
+/// `biases` the same shape `[rows, groups]`, and `packed` `[rows, groups * words_per_group]` for
+/// `spec`. The caller supplies the width and group size, so a q4 triple presented as q8 is refused
+/// here and named by the bits its words imply. Order: each operand's dtype and extents in argument
+/// order, then ranks, rows, the scales/biases pair, the geometry's size checks
+/// ([`crate::AffineSpec::geometry`]: overflow is [`OjasError::OutOfRange`]), then the packed width.
+pub fn dequant_affine_bf16_dims(
+    packed: &Tensor,
+    scales: &Tensor,
+    biases: &Tensor,
+    spec: crate::AffineSpec,
+) -> Result<AffineDims, OjasError> {
+    const OP: &str = "dequant_affine_bf16";
+    operand(OP, packed, DType::U32)?;
+    operand(OP, scales, DType::Bf16)?;
+    operand(OP, biases, DType::Bf16)?;
+    let (rows, words) = rank2(OP, "packed", packed)?;
+    let (srows, groups) = rank2(OP, "scales", scales)?;
+    let (brows, bgroups) = rank2(OP, "biases", biases)?;
+    if srows != rows || brows != rows {
+        return Err(refuse(
+            OP,
+            format!(
+                "rows disagree: packed {:?}, scales {:?}, biases {:?}",
+                packed.shape(),
+                scales.shape(),
+                biases.shape()
+            ),
+        ));
+    }
+    if bgroups != groups {
+        return Err(refuse(
+            OP,
+            format!(
+                "scales {:?} and biases {:?} differ",
+                scales.shape(),
+                biases.shape()
+            ),
+        ));
+    }
+    let cols = groups
+        .checked_mul(spec.group_size())
+        .ok_or_else(|| too_large(OP, format!("{groups} groups * group size overflows")))?;
+    let geometry = spec.geometry(OP, rows, cols)?;
+    if words != geometry.words {
+        // Words per group are `bits * group_size / 32`, so the stored words imply
+        // `words_per_group * 32 / group_size` bits when that is a whole number.
+        let implied_bits = words
+            .is_multiple_of(groups)
+            .then(|| (words / groups).checked_mul(32))
+            .flatten()
+            .filter(|stored| stored.is_multiple_of(spec.group_size()))
+            .map(|stored| stored / spec.group_size());
+        let implied_note = implied_bits.map_or_else(
+            || "no supported code width".to_string(),
+            |bits| format!("{bits}-bit codes"),
+        );
+        return Err(refuse(
+            OP,
+            format!(
+                "packed has {words} words per row for {groups} groups, which implies {implied_note}; \
+                 {}-bit codes at group size {} need {}",
+                spec.bits().bits(),
+                spec.group_size(),
+                geometry.words
+            ),
+        ));
+    }
+    Ok(AffineDims {
+        rows,
+        cols,
+        groups,
+        words,
+    })
+}
+
+fn rank2(op: &'static str, what: &str, tensor: &Tensor) -> Result<(usize, usize), OjasError> {
+    match *tensor.shape() {
+        [a, b] => Ok((a, b)),
+        ref other => Err(refuse(
+            op,
+            format!("{what} rank {} != 2, shape {other:?}", other.len()),
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

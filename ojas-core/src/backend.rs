@@ -2514,6 +2514,36 @@ pub trait BackendModule: BackendCore {
         let _ = (cache, src, at);
         Err(unsupported_op(self.id(), "kv_cache_write"))
     }
+
+    /// Dequantise an MLX affine-quantised weight to a new bf16 `[rows, cols]` tensor.
+    ///
+    /// `packed` is `U32 [rows, groups * words_per_group]`, `scales` and `biases` are
+    /// `Bf16 [rows, groups]`, `cols = groups * spec.group_size()`; the caller supplies `spec`
+    /// (width and group size), because a q4/g128 triple has the same words-to-groups ratio as a
+    /// q8/g64 one and cannot be told apart from its shapes. Code `i` of a word sits at bits
+    /// `[bits * i, bits * (i + 1))`. Each value is `bf16(fma(f32 scale, f32 code, f32 bias))`: one
+    /// rounding, the fused multiply-add, subnormal scales, biases and results flushed to zero, as
+    /// `mx.dequantize(..., stream=mx.gpu)` does. Elementwise, so no thread count changes a bit.
+    ///
+    /// Refusals: [`OjasError::Dtype`] for operands that are not `U32`/`Bf16`/`Bf16`;
+    /// [`OjasError::Shape`] for a rank other than 2, a zero extent, rows that disagree, differing
+    /// `scales` and `biases`, or a packed width that is not `groups * words_per_group` (naming the
+    /// bits it implies); [`OjasError::OutOfRange`] for a size that overflows `usize`;
+    /// [`OjasError::NonFinite`] when any result is not a finite bf16, which includes a NaN or
+    /// infinite scale or bias and a finite pair whose affine map overflows. The output is charged
+    /// to the budget before it is written, and a refusal leaves nothing charged. All validated by
+    /// [`dequant_affine_bf16_dims`](crate::dequant_affine_bf16_dims). No gradient: codes are
+    /// integers.
+    fn dequant_affine_bf16(
+        &self,
+        packed: &Tensor,
+        scales: &Tensor,
+        biases: &Tensor,
+        spec: crate::AffineSpec,
+    ) -> Result<Tensor, OjasError> {
+        let _ = (packed, scales, biases, spec);
+        Err(unsupported_op(self.id(), "dequant_affine_bf16"))
+    }
 }
 
 /// Nanolab-default training ops.
@@ -2675,6 +2705,7 @@ macro_rules! with_backend_methods {
             op fn linear_cross_entropy_mean(&self, input: &$crate::Tensor, weight: &$crate::Tensor, targets: &$crate::Tensor, ignore_index: Option<u32>, chunk: $crate::CeChunk, grads: $crate::CeGrads) -> Result<$crate::LinearCe, $crate::OjasError>;
             op fn cached_attention_forward(&self, q: &$crate::Tensor, k_cache: &$crate::Tensor, v_cache: &$crate::Tensor, kv_len: usize, window: Option<usize>) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn kv_cache_write(&self, cache: &mut $crate::Tensor, src: &$crate::Tensor, at: usize) -> Result<(), $crate::OjasError>;
+            op fn dequant_affine_bf16(&self, packed: &$crate::Tensor, scales: &$crate::Tensor, biases: &$crate::Tensor, spec: $crate::AffineSpec) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn argmax_rows(&self, x: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
             op fn topk_rows(&self, x: &$crate::Tensor, k: usize) -> Result<($crate::Tensor, $crate::Tensor), $crate::OjasError>;
             op fn cast_bf16(&self, tensor: &$crate::Tensor) -> Result<$crate::Tensor, $crate::OjasError>;
@@ -2831,6 +2862,7 @@ macro_rules! emit_in_group {
     (module, linear_cross_entropy_mean, $($then:tt)*) => { $($then)* };
     (module, cached_attention_forward, $($then:tt)*) => { $($then)* };
     (module, kv_cache_write, $($then:tt)*) => { $($then)* };
+    (module, dequant_affine_bf16, $($then:tt)*) => { $($then)* };
     // A method of another group emits nothing. One arm per known group, so
     // a misspelled target group falls through to the `compile_error!` below
     // instead of silently emitting nothing for every method.
@@ -3771,6 +3803,7 @@ pub(crate) mod tests {
             op(backend.linear_cross_entropy_mean(&t, &t, &t, None, chunk, CeGrads::BOTH)),
             op(backend.cached_attention_forward(&t, &t, &t, 1, None)),
             op(backend.kv_cache_write(&mut m, &t, 0)),
+            op(backend.dequant_affine_bf16(&t, &t, &t, crate::AffineSpec::q8())),
             op(backend.argmax_rows(&t)),
             op(backend.topk_rows(&t, 1)),
             op(backend.cast_bf16(&t)),
@@ -3875,6 +3908,7 @@ pub(crate) mod tests {
             "linear_cross_entropy_mean",
             "cached_attention_forward",
             "kv_cache_write",
+            "dequant_affine_bf16",
             "argmax_rows",
             "topk_rows",
             "cast_bf16",
@@ -4038,6 +4072,7 @@ pub(crate) mod tests {
                     "linear_cross_entropy_mean",
                     "cached_attention_forward",
                     "kv_cache_write",
+                    "dequant_affine_bf16",
                 ],
             ),
         ];
@@ -4212,6 +4247,14 @@ pub(crate) mod tests {
         );
         let mut cache = Tensor::from_f32(&[7.0; 8], &[1, 2, 1, 4], &budget).unwrap();
         refused(backend.kv_cache_write(&mut cache, &q, 0), "kv_cache_write");
+        let codes = Tensor::from_u32(&[0; 16], &[1, 16], &budget).unwrap();
+        let params = Tensor::from_bf16_bits(&[0x3f80], &[1, 1], &budget).unwrap();
+        refused(
+            backend
+                .dequant_affine_bf16(&codes, &params, &params, crate::AffineSpec::q8())
+                .map(drop),
+            "dequant_affine_bf16",
+        );
         assert_eq!(
             cache.to_f32_vec().unwrap(),
             [7.0; 8],

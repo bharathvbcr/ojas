@@ -44,7 +44,7 @@ flowchart TD
 ```
 
 > [!IMPORTANT]
-> **Magic String & Version Verification:** Checkpoint v1 files begin strictly with the 8-byte ASCII string `OJAS0001` followed by little-endian `u32` value `1`. Any file with mismatched magic bytes returns `OjasError::InvalidCheckpoint` immediately—**never attempting guessing or silent migration**.
+> **Magic String & Version Verification:** Checkpoint v1 files begin strictly with the 8-byte ASCII string `OJAS0001` followed by little-endian `u32` value `1`. A mismatched magic, a short prefix or another version is `OjasError::OutOfRange { op: "read_prefix", .. }` (`ojas-core/src/checkpoint.rs:31-50`), which `ojas-io` wraps into an `ojas_io::IoError` (`ojas-io/src/checkpoint.rs:194`); no `InvalidCheckpoint` variant exists. The refusal is immediate—**never attempting guessing or silent migration**.
 
 ---
 
@@ -98,7 +98,7 @@ flowchart LR
 1. **`config`**: Length-prefixed arbitrary bytes storing training hyperparameters and model specification.
 2. **`tokenizer_hash`**: Fixed 32 raw bytes (BLAKE3 or SHA-256 hash of the tokenizer vocabulary).
 3. **`git_sha`**: Fixed 20 raw bytes storing the repository commit SHA at checkpoint creation.
-4. **`step`**: `u64` little-endian integer. Refuses values that could cause overflow (`u64::MAX`).
+4. **`step`**: `u64` little-endian integer. The reader takes any `u64` (`ojas-io/src/checkpoint.rs:200`); `u64::MAX` is refused later by `next_step` (`ojas-core/src/backend.rs:220-224`, `OjasError::OutOfRange`), which `Trainer::step` calls (`ojas-model/src/trainer.rs:706`).
 5. **`data_cursor.shard`**: `u64` epoch of the batch sampler (`ojas_data::BatchSampler`).
 6. **`data_cursor.token_index`**: `u64` ordinal of the next window within that epoch (not a token offset). `ojas_model::Trainer::cursor` documents the same meaning.
 7. **`rng_state`**: Length-prefixed state buffer for deterministic resumption. The trainer writes the sampler's layout below; the container itself treats it as opaque bytes.
@@ -143,5 +143,5 @@ Revisit this when one parameter tensor no longer fits in host memory beside the 
 ## Verification & Safety Guarantees
 
 > [!CAUTION]
-> 1. **Truncation Defense:** Checkpoint files truncated before an expected field boundary return `Err(OjasError::TruncatedCheckpoint)` rather than filling missing bytes with zeros.
+> 1. **Truncation Defense:** Checkpoint files truncated before an expected field boundary return an `ojas_io::IoError` "truncated checkpoint" (`ojas-io/src/checkpoint.rs:323-334`; there is no `OjasError::TruncatedCheckpoint` variant) rather than filling missing bytes with zeros.
 > 2. **Integer Overflow Protection:** Dimension shapes whose product overflows `u64` or `usize` are caught during header decoding and rejected before memory allocation.

@@ -12,7 +12,8 @@ nanolab's default shapes. Results and their reading are in
 bash /Users/bharath/Code/research/ojas/bench/run_paired.sh 5
 
 # A subset (row-name prefixes), more iterations, a chosen output directory.
-BENCH_ROWS=sdpa,block BENCH_ITERS=30 OUT_DIR=/tmp/gpu-bench \
+# Use a new OUT_DIR per run, e.g. a timestamped one.
+BENCH_ROWS=sdpa,block BENCH_ITERS=30 OUT_DIR=/tmp/gpu-bench-$(date +%Y%m%d-%H%M%S) \
     bash /Users/bharath/Code/research/ojas/bench/run_paired.sh 7
 ```
 

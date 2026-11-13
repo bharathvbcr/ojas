@@ -39,6 +39,8 @@ use tessl::DType;
 
 use crate::layout::{CONV1D_BWD_ROWS, GATED_RMS_BWD_ROWS};
 use crate::link::Conv2dTensorOps;
+#[cfg(test)]
+use crate::link::DequantFail;
 use crate::link::{
     cached_attn_origin, cached_attn_part, cached_attn_splits, copied_at, device_lost, metal_err,
     norm_chunks, reduce_groups, rms_w_chunks, Arg, AttnExtra, AttnGeom, BilinearGeom, Cmd,
@@ -111,6 +113,15 @@ const NORM_SLOTS: usize = 24;
 
 /// Status slots in the slab. A full slab forces a waited commit.
 const SLAB_SLOTS: usize = 4096;
+/// Fault words in the dequant ring: one 4-byte internal buffer each, because tessl binds its fault
+/// operand at offset 0 and so cannot be handed a slot of the slab. A pending dequant holds its
+/// word until a scan reads it, so the 65th dequant between two waited commits forces one
+/// ([`Wait::FaultRing`]). The ring is 64 against `SLAB_SLOTS` 4096: a step that dequantises more
+/// than 64 matrices between syncs pays one extra waited commit per 64. A caller that runs a whole
+/// step on the dequant (the W3 loader) must count those waits (`WaitCounts::fault_ring`) over the
+/// 2B step. The ring retires when tessl takes an offset-taking fault binding, which would let a
+/// slab slot be passed.
+const DEQUANT_FAULT_WORDS: usize = 64;
 /// Dispatches between unwaited commits.
 const OVERLAP_DISPATCHES: usize = 256;
 /// Largest upload carried inline (in tessl's constant arena) while work is
@@ -529,6 +540,9 @@ struct Entry {
     /// The buffer whose [`Book::clean`] mark this slot's check earned
     /// (`Worker::freeze`). A fault in the slot withdraws the mark.
     clean_of: Option<u64>,
+    /// The dequant ring word (`Worker::fault_words`) this entry's kernel raises, held until a scan
+    /// of the entry reads and zeroes it, or until the command that took it fails.
+    fault_word: Option<usize>,
 }
 
 /// A buffer known finite and never written: a frozen parameter after
@@ -548,6 +562,12 @@ struct Book {
     /// Slots taken since the slab was last cleared.
     used: usize,
     pending: Vec<Entry>,
+    /// Ring words no pending entry holds, all zero. A word leaves this list when a dequant takes it
+    /// and returns to it only after its entry is scanned (read, then zeroed) or dropped before its
+    /// kernel was encoded.
+    free_words: Vec<usize>,
+    /// Drained ring words that could not be zeroed yet: held out of `free_words` and retried.
+    quarantine: Vec<usize>,
     /// The command being run.
     cmd: u64,
     /// The first fault found and not yet reported.
@@ -581,6 +601,12 @@ struct Book {
     fail_allocs: (u32, u32),
     #[cfg(test)]
     fail_next_read: bool,
+    /// Where the next dequant fails (`Cmd::FailNextDequant`).
+    #[cfg(test)]
+    fail_dequant: Option<DequantFail>,
+    /// The wait reason whose next settle times out (`Cmd::FailNextSettle`).
+    #[cfg(test)]
+    fail_settle: Option<Wait>,
     /// The budget the next trigger check waits under, whatever the triggers
     /// say (`Cmd::ForceWaitNext`).
     #[cfg(test)]
@@ -658,6 +684,8 @@ struct Worker {
     /// Waited commits, shared with every handle (`MetalBackend::waits`).
     waits: Arc<Waits>,
     slab: GpuBuffer,
+    /// The dequant ring, `DEQUANT_FAULT_WORDS` one-word buffers.
+    fault_words: Vec<GpuBuffer>,
     /// One word per `ojas_scale_multi` slot, at offset `4 * slot`, bound in
     /// the slots a short last group leaves unused. The kernel never touches
     /// them; binding these, not a repeat of a gradient, keeps every
@@ -723,6 +751,12 @@ impl Worker {
             .alloc_internal_buffer(SLAB_SLOTS * ST_BYTES)
             .map_err(metal_err)?;
         slab.try_contents_u32().map_err(metal_err)?.fill(0);
+        let mut fault_words = Vec::with_capacity(DEQUANT_FAULT_WORDS);
+        for _ in 0..DEQUANT_FAULT_WORDS {
+            let word = rt.alloc_internal_buffer(4).map_err(metal_err)?;
+            word.try_contents_u32().map_err(metal_err)?.fill(0);
+            fault_words.push(word);
+        }
         let spare = rt
             .alloc_internal_buffer(NORM_SLOTS * 4)
             .map_err(metal_err)?;
@@ -730,6 +764,8 @@ impl Worker {
         let book = Book {
             used: 0,
             pending: Vec::new(),
+            free_words: (0..DEQUANT_FAULT_WORDS).rev().collect(),
+            quarantine: Vec::new(),
             cmd: 0,
             fault: None,
             dirty: false,
@@ -748,6 +784,10 @@ impl Worker {
             #[cfg(test)]
             fail_next_read: false,
             #[cfg(test)]
+            fail_dequant: None,
+            #[cfg(test)]
+            fail_settle: None,
+            #[cfg(test)]
             force_wait: None,
             #[cfg(test)]
             force_at: None,
@@ -760,6 +800,7 @@ impl Worker {
             poisoned: false,
             waits,
             slab,
+            fault_words,
             spare,
             book: RefCell::new(book),
             #[cfg(test)]
@@ -970,10 +1011,18 @@ impl Worker {
         let out = self.run(cmd);
         self.note_dispatches();
         if out.is_err() {
-            self.book
-                .borrow_mut()
-                .pending
-                .retain(|e| e.cmd != id || e.sealed);
+            let mut book = self.book.borrow_mut();
+            let mut dropped = Vec::new();
+            book.pending.retain(|e| {
+                let keep = e.cmd != id || e.sealed;
+                if !keep {
+                    dropped.extend(e.fault_word);
+                }
+                keep
+            });
+            // A dequant that failed never encoded its kernel (tessl validates before it encodes,
+            // and the dispatch is the last step), so its word is still zero and free again.
+            book.free_words.extend(dropped);
             return out;
         }
         if let Err(err) = self.after_command() {
@@ -1078,6 +1127,22 @@ impl Worker {
     /// nothing is scanned and the pending list is kept. A wait is counted
     /// under `why`; with nothing recorded nothing waits and nothing counts.
     fn settle(&self, scan: Scan, why: Wait) -> Res<()> {
+        #[cfg(test)]
+        {
+            let hit = self
+                .book
+                .borrow_mut()
+                .fail_settle
+                .take_if(|w| *w == why)
+                .is_some();
+            if hit {
+                return Err(OjasError::wait_timeout(
+                    ojas_core::BackendId::Metal,
+                    1,
+                    format!("injected settle timeout for {why:?}"),
+                ));
+            }
+        }
         self.note_dispatches();
         if self.book.borrow().dirty {
             self.waits.count(why);
@@ -1110,10 +1175,34 @@ impl Worker {
 
     fn scan(&self, scan: Scan) -> Res<()> {
         let mut book = self.book.borrow_mut();
+        self.retry_quarantine(&mut book);
         if book.used == 0 {
             return Ok(());
         }
         let current = book.cmd;
+        #[cfg(test)]
+        let inject_unzero = book
+            .fail_dequant
+            .take_if(|at| *at == DequantFail::Unzero)
+            .is_some();
+        #[cfg(not(test))]
+        let inject_unzero = false;
+        // Ring words of the entries this scan drains. A mapping is an exclusive host lease on the
+        // runtime, so each word is mapped alone, and before the slab is: a mapping that fails
+        // here leaves the pending list and every word as they were. With no dequant among the
+        // drained entries nothing in the ring is touched.
+        let drained_words: Vec<usize> = book
+            .pending
+            .iter()
+            .filter(|e| scan == Scan::All || e.cmd != current)
+            .filter_map(|e| e.fault_word)
+            .collect();
+        let mut raised = HashSet::new();
+        for &w in &drained_words {
+            if self.fault_words[w].try_contents_u32().map_err(metal_err)?[0] != 0 {
+                raised.insert(w);
+            }
+        }
         let mut words = self.slab.try_contents_u32().map_err(metal_err)?;
         let mut kept = Vec::new();
         let mut fault = book.fault;
@@ -1124,7 +1213,10 @@ impl Worker {
                 continue;
             }
             let w = &words[e.slot * ST_WORDS..(e.slot + 1) * ST_WORDS];
-            if w[ST_IN as usize] != 0 || w[ST_OUT as usize] != 0 {
+            if w[ST_IN as usize] != 0
+                || w[ST_OUT as usize] != 0
+                || e.fault_word.is_some_and(|w| raised.contains(&w))
+            {
                 withdrawn.extend(e.clean_of);
                 if fault.is_none() {
                     fault = Some(e.op);
@@ -1150,7 +1242,40 @@ impl Worker {
                 !withdrawn.contains(id) && !c.from.is_some_and(|from| withdrawn.contains(&from))
             });
         }
+        // The drained words are zeroed, then free for the next dequant. A word that cannot be
+        // zeroed (a stale flag would be a false fault) goes to `quarantine`, and every scan and
+        // `take_fault_word` retries it, so it is never lost and no error is returned after the
+        // bookkeeping above has landed.
+        for (i, w) in drained_words.into_iter().enumerate() {
+            if self.zero_word(w, inject_unzero && i == 0).is_ok() {
+                book.free_words.push(w);
+            } else {
+                book.quarantine.push(w);
+            }
+        }
         Ok(())
+    }
+
+    /// Zero ring word `w`. `inject` fails it, for `DequantFail::Unzero`.
+    fn zero_word(&self, w: usize, inject: bool) -> Res<()> {
+        if inject {
+            return Err(metal_err("injected dequant failure at Unzero"));
+        }
+        let mut word = self.fault_words[w].try_contents_u32().map_err(metal_err)?;
+        word[0] = 0;
+        Ok(())
+    }
+
+    /// Retry the zeroing of every quarantined word; the ones that now zero return to the ring.
+    fn retry_quarantine(&self, book: &mut Book) {
+        let words = std::mem::take(&mut book.quarantine);
+        for w in words {
+            if self.zero_word(w, false).is_ok() {
+                book.free_words.push(w);
+            } else {
+                book.quarantine.push(w);
+            }
+        }
     }
 
     /// Hand the pending fault to the caller, once.
@@ -1450,6 +1575,19 @@ impl Worker {
     /// forces a waited commit first; at this point every slot already taken
     /// belongs to fully encoded work.
     fn status(&self, op: &'static str) -> Res<St> {
+        self.status_entry(op, None)
+    }
+
+    /// [`Self::status`] for an entry that also holds ring word `fault_word`: the scan that drains
+    /// the entry reads and frees the word. The word is held by the caller across this call, which
+    /// may settle, and so is in neither the free list nor a pending entry while it does.
+    fn status_entry(&self, op: &'static str, fault_word: Option<usize>) -> Res<St> {
+        #[cfg(test)]
+        {
+            if fault_word.is_some() {
+                self.injected_dequant_failure(DequantFail::Status)?;
+            }
+        }
         if self.book.borrow().used == SLAB_SLOTS {
             self.note_dispatches();
             self.settle(Scan::All, Wait::SlabFull)?;
@@ -1467,6 +1605,7 @@ impl Worker {
             cmd,
             sealed: false,
             clean_of: None,
+            fault_word,
         });
         Ok(St {
             buf: self.slab.clone(),
@@ -1748,6 +1887,17 @@ impl Worker {
             #[cfg(test)]
             Cmd::FailNextRead => {
                 self.book.borrow_mut().fail_next_read = true;
+                Ok(Reply::Done)
+            }
+            #[cfg(test)]
+            #[cfg(test)]
+            Cmd::FailNextSettle { why } => {
+                self.book.borrow_mut().fail_settle = Some(why);
+                Ok(Reply::Done)
+            }
+            #[cfg(test)]
+            Cmd::FailNextDequant { at } => {
+                self.book.borrow_mut().fail_dequant = Some(at);
                 Ok(Reply::Done)
             }
             #[cfg(test)]
@@ -2033,6 +2183,14 @@ impl Worker {
             Cmd::ToF32 { x } => self.widen_bf16(x),
             Cmd::Freeze { x, half } => self.freeze(x, half),
             Cmd::ToBf16 { x } => self.narrow_bf16(x),
+            Cmd::DequantAffine {
+                packed,
+                scales,
+                biases,
+                bits,
+                rows,
+                cols,
+            } => self.dequant_affine([packed, scales, biases], bits, [rows, cols]),
             Cmd::Silu { x } => self.silu(x, None),
             Cmd::SiluBwd { x, gy } => self.silu(x, Some(gy)),
             Cmd::Sigmoid { x } => self.sigmoid(x, None),
@@ -4905,6 +5063,133 @@ impl Worker {
         Ok(Reply::Bufs(vec![NewBuf { id, bytes }]))
     }
 
+    /// [`Cmd::FailNextDequant`]'s failure, once, at the step it named.
+    #[cfg(test)]
+    fn injected_dequant_failure(&self, at: DequantFail) -> Res<()> {
+        let mut book = self.book.borrow_mut();
+        if book.fail_dequant == Some(at) {
+            book.fail_dequant = None;
+            return Err(metal_err(format!("injected dequant failure at {at:?}")));
+        }
+        Ok(())
+    }
+
+    /// A free ring word, for a dequant about to take its status slot. With none free, the pending
+    /// dequants are settled first (`Scan::All` reads and frees every word whose entry it drains,
+    /// the current command's included, which has taken no entry yet), counted as
+    /// [`Wait::FaultRing`]. A failed settle leaves the ring as it was.
+    fn take_fault_word(&self) -> Res<usize> {
+        if self.book.borrow().free_words.is_empty() {
+            #[cfg(test)]
+            {
+                self.injected_dequant_failure(DequantFail::RingSettle)?;
+            }
+            self.note_dispatches();
+            self.settle(Scan::All, Wait::FaultRing)?;
+        }
+        self.book
+            .borrow_mut()
+            .free_words
+            .pop()
+            .ok_or_else(|| metal_err("the dequant fault ring is still full after a waited commit"))
+    }
+
+    /// `dequant_affine_bf16`: tessl's kernel over whole buffers at offset 0, into a new bf16
+    /// buffer, its kernel's non-finite flag going to a ring word instead of a status slot.
+    ///
+    /// Order, which matters: the output is allocated (its retries settle only before the current
+    /// command), then a ring word is taken (a full ring settles `Scan::All`, so no entry of this
+    /// command may exist yet or its word would be scanned before its kernel was encoded), then the
+    /// status entry that holds the word, then the one dispatch. A refusal after the word is taken
+    /// returns it: here, or by `command` for an entry already pushed.
+    fn dequant_affine(
+        &mut self,
+        [packed, scales, biases]: [Arg; 3],
+        bits: ojas_core::AffineBits,
+        [rows, cols]: [u32; 2],
+    ) -> Res<Reply> {
+        const OP: &str = "dequant_affine_bf16";
+        let tessl_bits = crate::affine::checked_tessl_bits(bits).map_err(metal_err)?;
+        let (rows_n, cols_n) = (rows as usize, cols as usize);
+        // The size arithmetic has one owner: the host's `AffineSpec::geometry`.
+        let ojas_core::AffineGeometry {
+            groups: groups_per_row,
+            words: words_per_row,
+        } = ojas_core::AffineSpec::new(bits.bits(), ojas_core::AFFINE_GROUP_SIZE)?
+            .geometry(OP, rows_n, cols_n)?;
+        let sizes = [
+            (packed, 4, rows_n.checked_mul(words_per_row)),
+            (scales, 2, rows_n.checked_mul(groups_per_row)),
+            (biases, 2, rows_n.checked_mul(groups_per_row)),
+        ];
+        let mut bufs = Vec::with_capacity(3);
+        for (a, elem, want) in sizes {
+            let want = want.ok_or_else(|| metal_err(format!("{OP}: size overflows")))?;
+            if a.off != 0 || a.n != want {
+                return Err(metal_err(format!(
+                    "{OP}: operand window ({} elements at byte {}) is not the whole \
+                     {want}-element matrix part at offset 0",
+                    a.n, a.off
+                )));
+            }
+            let buf = self
+                .bufs
+                .get(&a.id)
+                .ok_or_else(|| metal_err(format!("unknown device buffer {}", a.id)))?;
+            if want
+                .checked_mul(elem)
+                .is_none_or(|bytes| bytes > buf.nbytes())
+            {
+                return Err(metal_err(format!(
+                    "{OP}: device buffer {} of {} bytes is shorter than its {want} elements",
+                    a.id,
+                    buf.nbytes()
+                )));
+            }
+            bufs.push(buf.clone());
+        }
+        let elems = rows_n
+            .checked_mul(cols_n)
+            .ok_or_else(|| metal_err(format!("{OP}: size overflows")))?;
+        let out_bytes = elems
+            .checked_mul(2)
+            .ok_or_else(|| metal_err(format!("{OP}: size overflows")))?;
+        let out = self.alloc(out_bytes.next_multiple_of(4))?;
+        let word = self.take_fault_word()?;
+        if let Err(e) = self.status_entry(OP, Some(word)) {
+            self.book.borrow_mut().free_words.push(word);
+            return Err(e);
+        }
+        #[cfg(test)]
+        {
+            self.injected_dequant_failure(DequantFail::Dispatch)?;
+        }
+        tessl::dequant::dequant_affine_bf16(
+            &self.rt,
+            tessl_bits,
+            tessl::dequant::DequantAffineBank {
+                packed: &bufs[0],
+                scales: &bufs[1],
+                biases: &bufs[2],
+            },
+            &out,
+            &self.fault_words[word],
+            tessl::nn::QuantShape {
+                rows,
+                cols,
+                group_size: ojas_core::AFFINE_GROUP_SIZE as u32,
+            },
+        )
+        .map_err(metal_err)?;
+        let id = self.next_id;
+        self.next_id += 1;
+        self.bufs.insert(id, out);
+        Ok(Reply::Bufs(vec![NewBuf {
+            id,
+            bytes: out_bytes,
+        }]))
+    }
+
     fn silu(&mut self, x: Arg, gy: Option<Arg>) -> Res<Reply> {
         let op = if gy.is_some() {
             "silu_backward"
@@ -5929,6 +6214,8 @@ impl Worker {
     }
 }
 
+#[cfg(test)]
+mod dequant_ring;
 mod enc_bwd_dev;
 mod gemma_dev;
 #[cfg(test)]

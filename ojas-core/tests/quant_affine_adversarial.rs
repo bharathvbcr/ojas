@@ -3,8 +3,10 @@
 
 use ojas_core::{
     bf16_to_f32, dequantize_affine_bf16, f32_to_bf16, quantize_affine, AffineBits, AffineQuantized,
-    AffineSpec, Budget, DType, OjasError, Tensor,
+    AffineSpec, BackendId, Budget, DType, DeviceBuffer, OjasError, Tensor,
 };
+use std::any::Any;
+use std::sync::Arc;
 use std::time::Instant;
 
 struct SplitMix64(u64);
@@ -571,6 +573,86 @@ fn dequantise_refuses_parts_whose_result_overflows_bf16() {
     let err = dequantize_affine_bf16(&q, &b).unwrap_err();
     assert!(is_non_finite(&err), "{err}");
     assert_eq!(b.live_bytes().unwrap(), before);
+}
+
+#[derive(Debug)]
+struct Resident(usize);
+
+impl DeviceBuffer for Resident {
+    fn backend(&self) -> BackendId {
+        BackendId::Metal
+    }
+    fn byte_len(&self) -> usize {
+        self.0
+    }
+    fn read_bytes(&self, _offset: usize, len: usize) -> Result<Vec<u8>, OjasError> {
+        Ok(vec![0; len])
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+/// BUILD_REPORT-qv2 reviewer minor: a non-contiguous or device-resident weight or part is a
+/// refusal, never a silent read of the wrong bytes or a readback, and nothing stays charged.
+#[test]
+fn quantize_affine_and_from_parts_refuse_non_contiguous_and_device_parts() {
+    let b = big();
+    let live = b.live_bytes().unwrap();
+    let reads = b.device_readbacks();
+    let w = bf16_matrix(&vec![1.0; 64 * 2], 2, 64, &b);
+    // Same shape, permuted strides: not one run of bytes.
+    let strided = w.view(&[2, 64], &[1, 2], 0).unwrap();
+    let r = quantize_affine(&strided, q8(), &b);
+    assert!(
+        matches!(&r, Err(OjasError::Shape { op: "Tensor::bf16_slice", detail }) if detail == "view is not contiguous"),
+        "{r:?}"
+    );
+    let device = Tensor::from_device(Arc::new(Resident(256)), &[2, 64], DType::Bf16, &b).unwrap();
+    let live_with_device = b.live_bytes().unwrap();
+    assert!(matches!(
+        quantize_affine(&device, q8(), &b),
+        Err(OjasError::Placement { .. })
+    ));
+    assert_eq!(b.live_bytes().unwrap(), live_with_device);
+
+    // from_parts: a permuted packed view, then a device-resident scale.
+    let packed_strided = Tensor::zeros(&[2, 16], DType::U32, &b)
+        .unwrap()
+        .view(&[2, 16], &[1, 2], 0)
+        .unwrap();
+    let r = AffineQuantized::from_parts(
+        q8(),
+        2,
+        64,
+        packed_strided,
+        Tensor::from_bf16_bits(&[0x3F80; 2], &[2, 1], &b).unwrap(),
+        Tensor::from_bf16_bits(&[0; 2], &[2, 1], &b).unwrap(),
+    );
+    assert!(
+        matches!(&r, Err(OjasError::Shape { op: "Tensor::u32_slice", detail }) if detail == "view is not contiguous"),
+        "a permuted packed view was accepted: {r:?}"
+    );
+    let device_scales =
+        Tensor::from_device(Arc::new(Resident(4)), &[2, 1], DType::Bf16, &b).unwrap();
+    let r = AffineQuantized::from_parts(
+        q8(),
+        2,
+        64,
+        Tensor::zeros(&[2, 16], DType::U32, &b).unwrap(),
+        device_scales,
+        Tensor::from_bf16_bits(&[0; 2], &[2, 1], &b).unwrap(),
+    );
+    assert!(matches!(r, Err(OjasError::Placement { .. })), "{r:?}");
+    assert_eq!(
+        b.device_readbacks(),
+        reads,
+        "a refusal read the device back"
+    );
+    drop(device);
+    drop(strided);
+    drop(w);
+    assert_eq!(b.live_bytes().unwrap(), live);
 }
 
 // --- throughput (a measurement, not a gate) -------------------------------------------------------

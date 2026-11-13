@@ -2,7 +2,7 @@
 
 `ojas-wgpu` provides a **portable GPU compute backend** for `ojas`, executing deep learning workloads across diverse operating systems and graphics hardware using **WebGPU (WGSL)** via the `wgpu` runtime.
 
-It implements full device-resident tensor operations (`WgpuBackend`), running natively on Vulkan (Linux/Windows), Metal (macOS), and DirectX 12.
+It implements full device-resident tensor operations (`WgpuBackend`), running through the Metal HAL on macOS and iOS and the Vulkan HAL on every other host (`hal_backends`, `ojas-wgpu/src/lib.rs:64-75`). DirectX 12 is never requested, and Windows is untested (CI has no Windows job).
 
 ---
 
@@ -47,8 +47,7 @@ flowchart LR
 
     subgraph HAL["Native Hardware Abstraction Layers"]
         MetalHAL["Apple Metal HAL (macOS)"]
-        VulkanHAL["Vulkan HAL (Linux / Windows)"]
-        DX12HAL["DirectX 12 HAL (Windows)"]
+        VulkanHAL["Vulkan HAL (Linux and other non-Apple hosts; Windows untested)"]
     end
 
     subgraph Shaders["Compiled WGSL Shaders (ojas-kernels)"]
@@ -58,10 +57,8 @@ flowchart LR
 
     Adapter --> MetalHAL
     Adapter --> VulkanHAL
-    Adapter --> DX12HAL
     MetalHAL --> Shaders
     VulkanHAL --> Shaders
-    DX12HAL --> Shaders
 ```
 
 ---
@@ -83,7 +80,7 @@ flowchart LR
 > * **Training and decode ops (T2-T5):** `accumulate_grad` adds in the accumulator's own buffer when it is the sole owner (a shared one gets a new buffer); `linear_cross_entropy_mean` keeps at most `chunk.rows x chunk.cols` logits alive, folds vocabulary tiles into an online softmax, and accumulates both gradients through the GEMM (`tests/linear_ce.rs`); `cached_attention_forward` splits the keys of a time-major cache so one decode query still fills the GPU, with grouped-query heads and rows that never read past their own position; `kv_cache_write` refuses before recording anything and copies only if the source is finite, so the cache is unchanged on every error (`tests/kv_cache.rs`). Non-finite values in these ops are reported at the next sync point, as for every op.
 > * **Softmax collapse defense:** On rows where the target gradient $p_t - 1$ rounds to 0, `ce_fwd`, `ce_bwd`, and `lce_*` take the target-excluded cross-entropy form with $\ln(1+S)$ (`log1p_exact`). Standard rows pay only a single uniform branch load rather than a second reduction tree.
 > * **SAM and encoder ops refusal:** All 32 ops of `ojas_core::SAM_AUTOCAST_POLICY` (spatial ops, LayerNorm, erf GELU, linear bias, broadcast add/mul, softmax backwards, etc.) return `OjasError::Unsupported` under their exact op names as trait defaults (`tests/sam_ops_refused.rs`).
-> * **CPU adapters** (lavapipe, SwiftShader, WARP) are refused unless `OJAS_WGPU_ALLOW_CPU_ADAPTER=1`; Linux CI sets it to run the tests on lavapipe.
+> * **CPU adapters** (lavapipe, SwiftShader) are refused unless `OJAS_WGPU_ALLOW_CPU_ADAPTER=1`; Linux CI sets it to run the tests on lavapipe.
 
 ---
 

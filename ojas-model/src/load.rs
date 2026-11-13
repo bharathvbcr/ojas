@@ -126,7 +126,7 @@ pub fn load_params(
     }
     budget.check_room(total)?;
     // Each tensor is decoded straight into charged storage in bounded
-    // chunks, then checked finite.
+    // chunks. Values are not scanned for finiteness here (see the module doc).
     let mut values = Vec::with_capacity(table.len());
     for (info, raw) in table.iter().zip(raws) {
         let tensor = Tensor::from_le_reader(&info.shape, DType::F32, budget, |offset, chunk| {

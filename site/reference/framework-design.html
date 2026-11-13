@@ -203,7 +203,7 @@
 <li>norm2, SwiGLU, residual.
 </li>
 </ol>
-<p>That is the same order as <code>ojas-autograd/tests/multihead.rs</code>. <code>CpuGpt</code> runs <code>DeviceDecoder</code>&#39;s step on <code>CpuBackend</code> against a host <code>KvCache</code>, and a parity test binds it to <code>Eval&lt;CpuBackend&gt;</code>. Training v1 refuses GQA, because nanolab&#39;s default is MHA.</p>
+<p>That is the same order as <code>ojas-autograd/tests/multihead.rs</code>. <code>CpuGpt</code> runs <code>DeviceDecoder</code>&#39;s step on <code>CpuBackend</code> against a host <code>KvCache</code>, and a parity test binds it to <code>Eval&lt;CpuBackend&gt;</code>. Training accepts grouped-query attention (<code>ojas-model/src/spec.rs:236</code>, test <code>training_accepts_grouped_query_attention</code> at <code>:458</code>); nanolab&#39;s default is MHA.</p>
 <p>Safetensors names are nanolab <code>state_dict</code> keys, so torch exports load unchanged.</p>
 <div class="table-wrap"><table>
 <thead><tr><th>Name (layer i)</th><th>Shape</th><th>Init (nanolab)</th><th>Group</th></tr></thead>
@@ -358,7 +358,7 @@
 <tr><td>B=16</td><td style="text-align:right">18.5 GB</td><td style="text-align:right">about 20.3 GB</td><td style="text-align:right">about 21.4 GB</td></tr>
 </tbody></table></div>
 <p>The Metal column is the total plus the uncharged pool cache, capped at 1 GiB once a session&#39;s budget reaches 4 GiB, plus tessl&#39;s rounding: under 16 KiB per buffer past 1 MiB, and under 512 KiB per buffer up to 1 MiB, plus dropped buffers still waiting for a commit to recycle them: under one memory cap (a quarter of the budget, at most 1 GiB) of frees and another of temporaries (<code>ojas-metal/src/backend.rs</code> module docs). The column does not count that last term. It was 2× when tessl rounded every buffer to a power of two and cached up to 2 GiB.</p>
-<p>v1 runs B=4 × K=16, the same 65,536 tokens per step as nanolab&#39;s 16×4, and needs no activation checkpointing. A single B=16 micro-batch needs per-block recompute, which is phase 2. The capi 1 GiB process step budget cannot hold the model state, so training sessions get a per-session <code>Budget</code> from the Load options.</p>
+<p>v1 runs B=4 × K=16, the same 65,536 tokens per step as nanolab&#39;s 16×4, and needs no activation checkpointing. A single B=16 micro-batch needs per-block recompute; activation checkpointing now exists (<code>ojas-model/src/trainer.rs:129</code> <code>pub activations: ActivationCheckpoint</code>, <code>ojas-model/src/block.rs:324</code>). The capi 1 GiB process step budget cannot hold the model state, so training sessions get a per-session <code>Budget</code> from the Load options.</p>
 <h2 id="6-inference-on-gpu">6. Inference on GPU <a class="anchor" href="#6-inference-on-gpu" aria-label="Link to this section">#</a></h2>
 <p><code>DeviceDecoder&lt;B&gt;</code> keeps a device K and V cache per layer, time-major <code>[B, Tcap, Hkv, D]</code>. That is the same order as the host <code>KvCache</code>, so a write needs no permute.</p>
 <div class="table-wrap"><table>

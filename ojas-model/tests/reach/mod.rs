@@ -9,10 +9,10 @@
 use std::sync::Mutex;
 
 use ojas_core::{
-    with_backend_methods, AdamWConfig, AttentionOpts, AutocastMode, Backend, BackendCore,
-    BackendFloat, BackendId, BackendInt, BackendModule, Budget, CeChunk, CeGrads, Conv2dParams,
-    ConvTranspose2dParams, DType, GdnInputs, MuonNs5Config, Numerics, OjasError, OptimizerKind,
-    Tensor,
+    with_backend_methods, AdamWConfig, AffineSpec, AttentionOpts, AutocastMode, Backend,
+    BackendCore, BackendFloat, BackendId, BackendInt, BackendModule, Budget, CeChunk, CeGrads,
+    Conv2dParams, ConvTranspose2dParams, DType, GdnInputs, MuonNs5Config, Numerics, OjasError,
+    OptimizerKind, Tensor,
 };
 
 /// Every `Backend` op, answered with its own name.
@@ -280,6 +280,9 @@ pub fn call<B: Backend + ?Sized>(b: &B, name: &str) -> Option<Result<(), OjasErr
             .map(|_| ()),
         "cached_attention_forward" => b.cached_attention_forward(&t, &t, &t, 1, None).map(|_| ()),
         "kv_cache_write" => b.kv_cache_write(&mut m, &t, 1).map(|_| ()),
+        "dequant_affine_bf16" => b
+            .dequant_affine_bf16(&t, &t, &t, AffineSpec::q8())
+            .map(|_| ()),
         "argmax_rows" => b.argmax_rows(&t).map(|_| ()),
         "topk_rows" => b.topk_rows(&t, 1).map(|_| ()),
         "cast_bf16" => b.cast_bf16(&t).map(|_| ()),

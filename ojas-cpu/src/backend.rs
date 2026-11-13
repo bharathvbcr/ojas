@@ -1970,4 +1970,17 @@ impl BackendModule for CpuBackend {
     fn kv_cache_write(&self, cache: &mut Tensor, src: &Tensor, at: usize) -> Result<(), OjasError> {
         crate::kv::kv_cache_write("kv_cache_write", cache, src, at)
     }
+
+    /// The arithmetic lives in `ojas_core::quant` (one owner, shared with the host oracle). The
+    /// loop is elementwise with no reduction, so `Exact` and `Fast` and every thread count give
+    /// the same bits.
+    fn dequant_affine_bf16(
+        &self,
+        packed: &Tensor,
+        scales: &Tensor,
+        biases: &Tensor,
+        spec: ojas_core::AffineSpec,
+    ) -> Result<Tensor, OjasError> {
+        ojas_core::dequantize_affine_bf16_tensors(packed, scales, biases, spec, &self.budget)
+    }
 }

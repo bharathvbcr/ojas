@@ -151,7 +151,7 @@
       <article class="prose-ojas">
 <h1 id="ojas-wgpu">ojas-wgpu <a class="anchor" href="#ojas-wgpu" aria-label="Link to this section">#</a></h1>
 <p><code>ojas-wgpu</code> provides a <strong>portable GPU compute backend</strong> for <code>ojas</code>, executing deep learning workloads across diverse operating systems and graphics hardware using <strong>WebGPU (WGSL)</strong> via the <code>wgpu</code> runtime.</p>
-<p>It implements full device-resident tensor operations (<code>WgpuBackend</code>), running natively on Vulkan (Linux/Windows), Metal (macOS), and DirectX 12.</p>
+<p>It implements full device-resident tensor operations (<code>WgpuBackend</code>), running through the Metal HAL on macOS and iOS and the Vulkan HAL on every other host (<code>hal_backends</code>, <code>ojas-wgpu/src/lib.rs:64-75</code>). DirectX 12 is never requested, and Windows is untested (CI has no Windows job).</p>
 <hr>
 <h2 id="compute-pipeline--device-residency">Compute Pipeline &amp; Device Residency <a class="anchor" href="#compute-pipeline--device-residency" aria-label="Link to this section">#</a></h2>
 <figure class="diagram"><pre class="mermaid">flowchart TD
@@ -187,8 +187,7 @@
 
     subgraph HAL[&#34;Native Hardware Abstraction Layers&#34;]
         MetalHAL[&#34;Apple Metal HAL (macOS)&#34;]
-        VulkanHAL[&#34;Vulkan HAL (Linux / Windows)&#34;]
-        DX12HAL[&#34;DirectX 12 HAL (Windows)&#34;]
+        VulkanHAL[&#34;Vulkan HAL (Linux and other non-Apple hosts; Windows untested)&#34;]
     end
 
     subgraph Shaders[&#34;Compiled WGSL Shaders (ojas-kernels)&#34;]
@@ -198,10 +197,8 @@
 
     Adapter --&gt; MetalHAL
     Adapter --&gt; VulkanHAL
-    Adapter --&gt; DX12HAL
     MetalHAL --&gt; Shaders
-    VulkanHAL --&gt; Shaders
-    DX12HAL --&gt; Shaders</pre></figure>
+    VulkanHAL --&gt; Shaders</pre></figure>
 <hr>
 <h2 id="numerical-tolerance--backend-contract">Numerical Tolerance &amp; Backend Contract <a class="anchor" href="#numerical-tolerance--backend-contract" aria-label="Link to this section">#</a></h2>
 <aside class="alert alert-note"><p class="alert-title">Note</p><ul>
@@ -238,7 +235,7 @@
 </li>
 <li><strong>SAM and encoder ops refusal:</strong> All 32 ops of <code>ojas_core::SAM_AUTOCAST_POLICY</code> (spatial ops, LayerNorm, erf GELU, linear bias, broadcast add/mul, softmax backwards, etc.) return <code>OjasError::Unsupported</code> under their exact op names as trait defaults (<code>tests/sam_ops_refused.rs</code>).
 </li>
-<li><strong>CPU adapters</strong> (lavapipe, SwiftShader, WARP) are refused unless <code>OJAS_WGPU_ALLOW_CPU_ADAPTER=1</code>; Linux CI sets it to run the tests on lavapipe.
+<li><strong>CPU adapters</strong> (lavapipe, SwiftShader) are refused unless <code>OJAS_WGPU_ALLOW_CPU_ADAPTER=1</code>; Linux CI sets it to run the tests on lavapipe.
 </li>
 </ul>
 </blockquote>
