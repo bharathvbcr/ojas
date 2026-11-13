@@ -76,8 +76,9 @@ fn from_json_refuses_wrong_case_spelled_out_cosine_and_unknown_kinds() {
     }
 }
 
-/// Expected: Err for every non-object / mis-typed `decay` (S:`d.field_opt(key)` errors on a
-/// non-object, mapped to "decay has no kind").
+/// Expected: Err for every non-object / mis-typed `decay` (S: `from_json` refuses it as
+/// "decay is not an object"; the exact text is pinned by
+/// `from_json_reports_decay_is_not_an_object_for_every_non_object`).
 #[test]
 fn from_json_refuses_a_decay_that_is_not_an_object() {
     for d in [
