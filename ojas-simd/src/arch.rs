@@ -5,8 +5,14 @@
 //! sized itself, so those assertions never fire, but no caller is trusted for
 //! memory safety.
 //!
-//! The intrinsic blocks also wrap value-only intrinsics. Before Rust 1.87
-//! those were `unsafe fn`, and the workspace MSRV is 1.100.
+//! Since Rust 1.87, value-only intrinsics are safe to call inside a fn with
+//! the matching `#[target_feature]`, and the workspace MSRV is 1.100 (the
+//! `rust-version` in the root `Cargo.toml`, which CI's msrv job reads). So
+//! only the pointer loads and stores, and the asm, need `unsafe`.
+//! `kernel_8x12`, `kernel_6x16` and `write_neg_abs_signs` still keep value
+//! intrinsics inside the blocks that hold their loads and stores; narrowing
+//! those blocks is not done here. The test `arch_msrv_comment_matches_rust_version`
+//! pins the version named above to `rust-version`.
 
 use crate::gemm::MicroKernel;
 use crate::layout::Problem;

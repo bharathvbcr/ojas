@@ -28,14 +28,14 @@
 //! This differs from `ojas-cpu`: an FMA chain rounds once per step, and the
 //! Exact tier rounds the product and the sum separately.
 //!
-//! [`sgemm_accelerate`] and [`ssyrk_accelerate`] do not follow this
+//! `sgemm_accelerate` and `ssyrk_accelerate` do not follow this
 //! contract. See their docs.
 //!
-//! With the `accelerate` feature on macOS, [`vdsp_vmul`], [`vdsp_vadd`],
+//! With the `accelerate` feature on macOS, `vdsp_vmul`, `vdsp_vadd`,
 //! and their append forms call the stride-1 vDSP kernels. Each output is
-//! one rounding of `a * b` or `a + b`. [`vdsp_mmov`] and
-//! [`vdsp_mmov_append`] copy rows of a matrix; that copy is a move, so
-//! every bit is preserved, including −0. [`vvexpf`] and [`vvexpf_inplace`]
+//! one rounding of `a * b` or `a + b`. `vdsp_mmov` and
+//! `vdsp_mmov_append` copy rows of a matrix; that copy is a move, so
+//! every bit is preserved, including −0. `vvexpf` and `vvexpf_inplace`
 //! call vForce `vvexpf` (`y[i] = exp(x[i])`). Those functions are not
 //! compiled on any other target. [`store_neg_abs_signs`] loads each chunk
 //! of `z` once, refuses a non-finite lane, records `z < 0`, and stores
@@ -46,6 +46,25 @@
 //! Every length and stride is validated with checked arithmetic before any
 //! `unsafe` code runs. A bad shape returns [`SimdError`]. It never panics and
 //! never reads out of bounds. All `unsafe` code is in the private `arch` module.
+//!
+//! # Testing
+//!
+//! `-p ojas-simd` alone compiles none of the Accelerate surface (the
+//! `accelerate` feature is off by default), and the feature is a
+//! `compile_error!` off macOS. On macOS run all of these:
+//!
+//! ```text
+//! cargo test -p ojas-simd --features accelerate
+//! cargo clippy -p ojas-simd --features accelerate --all-targets -- -D warnings
+//! RUSTDOCFLAGS="-D warnings" cargo doc -p ojas-simd --no-deps --features accelerate
+//! ```
+//!
+//! The docs must also build without warnings with and without the feature, so
+//! the plain `RUSTDOCFLAGS="-D warnings" cargo doc -p ojas-simd --no-deps` runs
+//! too. A doc link to an Accelerate-only item therefore has to be a plain code
+//! span, not an intra-doc link: it would not resolve in the plain build.
+//!
+//! `scripts/ci_local.sh` runs these and the plain `cargo test -p ojas-simd`.
 
 #![deny(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -115,14 +134,14 @@ pub enum SimdError {
         /// The backend that was requested.
         backend: Backend,
     },
-    /// [`sgemm_accelerate`] and [`ssyrk_accelerate`] only: BLAS needs a unit
+    /// `sgemm_accelerate` and `ssyrk_accelerate` only: BLAS needs a unit
     /// stride on one axis and a
     /// leading dimension at least the length of the other axis.
     UnsupportedLayout {
         /// The operand BLAS cannot address.
         operand: Operand,
     },
-    /// [`sgemm_accelerate`] and [`ssyrk_accelerate`] only: a dimension or
+    /// `sgemm_accelerate` and `ssyrk_accelerate` only: a dimension or
     /// leading dimension exceeds
     /// `i32::MAX`, the largest value CBLAS `int` can hold.
     DimensionTooLarge {
@@ -136,7 +155,7 @@ pub enum SimdError {
         /// Length of the second input.
         b: usize,
     },
-    /// vDSP or [`vvexpf`]: the output is not the input length. For the
+    /// vDSP or `vvexpf`: the output is not the input length. For the
     /// append forms, `output` is spare capacity and `expected` is the input
     /// length.
     OutputLength {
@@ -145,9 +164,9 @@ pub enum SimdError {
         /// Length the output must have.
         expected: usize,
     },
-    /// vDSP or [`vvexpf`]: the output overlaps an input.
+    /// vDSP or `vvexpf`: the output overlaps an input.
     OverlappingOutput,
-    /// [`vvexpf`]: the length does not fit in a C `int`.
+    /// `vvexpf`: the length does not fit in a C `int`.
     LengthTooLarge {
         /// The length that does not fit.
         len: usize,
@@ -298,7 +317,7 @@ impl Backend {
 /// Name of the backend [`sgemm_tile`] dispatches to in this process:
 /// `"neon"`, `"avx2-fma"` or `"portable-fma"`.
 ///
-/// [`sgemm_accelerate`] is never chosen implicitly, so its name
+/// `sgemm_accelerate` is never chosen implicitly, so its name
 /// (`"accelerate"`) is not returned here.
 pub fn backend_name() -> &'static str {
     Backend::detect().name()

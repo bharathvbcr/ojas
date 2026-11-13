@@ -13,6 +13,17 @@
 #   ./scripts/parity_check.sh --op gelu_erf       # Checks single op
 #   ./scripts/parity_check.sh --release           # Runs in release profile (fast)
 #   ./scripts/parity_check.sh --op attention --backend metal
+#
+# Lock: on macOS the Metal suite runs under mac_heavy (OJAS_MAC_HEAVY, else
+# ../Lappi-decision/tools/mac_heavy.sh, else
+# ~/Code/research/Lappi-decision/tools/mac_heavy.sh), the same lookup ci_local.sh
+# uses. It is resolved BEFORE any suite runs when --backend is metal or all, and the
+# script fails closed when none exists: exit 1 (exit 64 when OJAS_MAC_HEAVY is not an
+# absolute path to an executable file). There is no unlock flag. mac_heavy's own exit
+# codes (75, 76, ...) pass through with no banner. When MAC_HEAVY_LABEL is already
+# set the run is already under mac_heavy and goes in place, so the lock is never
+# taken twice. Known trade-off: a stale MAC_HEAVY_LABEL inherited from an unrelated
+# shell also skips the lock (ci_local.sh and tessl do the same).
 
 set -euo pipefail
 
@@ -52,15 +63,20 @@ Options:
   --fixtures PATH          Explicit path to SAM 3.1 activation fixtures safetensors
   --weights PATH           Explicit path to SAM 3.1 weights safetensors
   --groupnorm PATH         Explicit path to GroupNorm pixel decoder safetensors
-  --no-gpu-lock            Do not require or attempt mac_heavy GPU lock for Metal
   -h, --help               Show this help message
 
+The Metal suite on macOS runs under mac_heavy and fails closed (exit 1) without it.
+There is no unlock flag.
+
 Environment Variables:
+  OJAS_MAC_HEAVY              Absolute path to mac_heavy.sh (else ../Lappi-decision/tools/,
+                              else ~/Code/research/Lappi-decision/tools/); not
+                              absolute or not an executable file: exit 64
   OJAS_SAM_FIXTURES           Path to visem_22_f0.safetensors
   OJAS_SAM_GROUPNORM_FIXTURES Path to pixel_decoder.safetensors
   OJAS_SAM_WEIGHTS            Path to sam3.1_multiplex.safetensors
   OJAS_ALLOW_NO_GPU           1 allows clean skip on hosts lacking Metal GPU
-  MAC_HEAVY_LABEL             Indicates active exclusive GPU lock under mac_heavy.sh
+  MAC_HEAVY_LABEL             Set: already under mac_heavy.sh, run in place (no second lock)
 EOF
 }
 
@@ -70,7 +86,6 @@ PROFILE="release"
 CUSTOM_FIXTURES=""
 CUSTOM_WEIGHTS=""
 CUSTOM_GROUPNORM=""
-NO_GPU_LOCK=0
 
 # Which backend suites actually executed and which were skipped. The closing
 # banner is derived from these, so a skipped suite can never print the line a
@@ -112,10 +127,6 @@ while [[ $# -gt 0 ]]; do
       CUSTOM_GROUPNORM="${2:-}"
       shift 2
       ;;
-    --no-gpu-lock)
-      NO_GPU_LOCK=1
-      shift
-      ;;
     *)
       echo "Unknown option: $1" >&2
       show_help >&2
@@ -132,6 +143,42 @@ case "$BACKEND" in
     exit 1
     ;;
 esac
+
+# Resolve the machine lock before any suite runs, so `--backend all` cannot run the
+# CPU suite and only then refuse. macOS only: off Darwin the Metal suite is an error
+# or a documented skip in run_metal_parity and no lock is looked up.
+LOCK_WRAPPER=""
+if [[ "$BACKEND" != "cpu" && "$(uname -s)" == "Darwin" ]]; then
+  if [[ -n "${MAC_HEAVY_LABEL:-}" ]]; then
+    :
+  elif [[ -n "${OJAS_MAC_HEAVY:-}" ]]; then
+    case "$OJAS_MAC_HEAVY" in
+      /*) ;;
+      *)
+        echo "ERROR: OJAS_MAC_HEAVY=$OJAS_MAC_HEAVY must be an absolute path (a relative one would resolve against the repo root, not your cwd)" >&2
+        exit 64
+        ;;
+    esac
+    if [[ ! -f "$OJAS_MAC_HEAVY" || ! -x "$OJAS_MAC_HEAVY" ]]; then
+      echo "ERROR: OJAS_MAC_HEAVY=$OJAS_MAC_HEAVY is not an executable file" >&2
+      exit 64
+    fi
+    LOCK_WRAPPER="$OJAS_MAC_HEAVY"
+  else
+    for candidate in \
+      "$ROOT/../Lappi-decision/tools/mac_heavy.sh" \
+      "${HOME:-/nonexistent}/Code/research/Lappi-decision/tools/mac_heavy.sh"; do
+      if [[ -f "$candidate" && -x "$candidate" ]]; then
+        LOCK_WRAPPER="$candidate"
+        break
+      fi
+    done
+  fi
+  if [[ -z "$LOCK_WRAPPER" && -z "${MAC_HEAVY_LABEL:-}" ]]; then
+    echo "ERROR: mac_heavy.sh not found; the Metal suite takes the machine lock on macOS and will not run without it. Set OJAS_MAC_HEAVY to its path." >&2
+    exit 1
+  fi
+fi
 
 # Resolve Fixtures path
 if [[ -n "$CUSTOM_FIXTURES" ]]; then
@@ -306,29 +353,13 @@ run_metal_parity() {
     fi
   fi
 
-  # Check GPU lock
+  # The lock was resolved (or refused) before any suite ran; see LOCK_WRAPPER.
   local lock_wrapper=()
-  if [[ -n "${MAC_HEAVY_LABEL:-}" ]]; then
-    echo "    GPU Lock: Active under MAC_HEAVY_LABEL='$MAC_HEAVY_LABEL'"
-  elif [[ "$NO_GPU_LOCK" -eq 1 ]]; then
-    echo "    GPU Lock: Bypassed (--no-gpu-lock)"
+  if [[ -n "$LOCK_WRAPPER" ]]; then
+    lock_wrapper=(bash "$LOCK_WRAPPER" ojas-parity-check)
+    echo "    GPU Lock: Wrapping with $LOCK_WRAPPER"
   else
-    # Check for mac_heavy.sh in candidate paths
-    local LOCK_SCRIPTS=(
-      "$ROOT/../Lappi-decision/tools/mac_heavy.sh"
-      "$ROOT/../tessl/tools/mac_heavy.sh"
-      "${HOME}/Code/research/Lappi-decision/tools/mac_heavy.sh"
-    )
-    for s in "${LOCK_SCRIPTS[@]}"; do
-      if [[ -x "$s" ]]; then
-        lock_wrapper=("$s" "ojas-parity-check")
-        echo "    GPU Lock: Wrapping with $s"
-        break
-      fi
-    done
-    if [[ "${#lock_wrapper[@]}" -eq 0 ]]; then
-      echo "    Notice: mac_heavy.sh not found. Running with --test-threads=1 serialization."
-    fi
+    echo "    GPU Lock: Active under MAC_HEAVY_LABEL='${MAC_HEAVY_LABEL:-}'"
   fi
 
   local base_cmd=(cargo test $PROFILE_FLAG -p ojas-metal --test sam_fixtures_metal)
