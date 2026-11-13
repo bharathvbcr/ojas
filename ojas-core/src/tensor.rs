@@ -122,8 +122,9 @@ pub struct Tensor {
 }
 
 /// Bounded `Debug`: dtype, shape, strides, byte offset, allocation size and
-/// placement, never the contents. It reads no device or mapped storage, so it
-/// causes no readback and no budget charge.
+/// placement, never the contents. Its length grows with the rank, never with the
+/// element count. It reads no device or mapped storage, so it causes no readback
+/// and no budget charge.
 impl fmt::Debug for Tensor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let placement = match &self.storage.payload {
