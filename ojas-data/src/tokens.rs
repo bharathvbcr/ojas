@@ -229,58 +229,13 @@ impl TokenBin {
     /// any token value exceeding `u16::MAX` (`65,535`) returns a [`DataError`]
     /// indicating the value and index, preventing silent truncation.
     pub fn read_into(&self, index: u64, dst: &mut [u16]) -> Result<(), DataError> {
-        let n =
-            u64::try_from(dst.len()).map_err(|_| DataError::new("window length exceeds u64"))?;
-        let end = index
-            .checked_add(n)
-            .ok_or_else(|| DataError::new("token index overflows"))?;
-        if end > self.len_tokens {
-            return Err(DataError::new(format!(
-                "token window [{index}, {end}) past length {}",
-                self.len_tokens
-            )));
-        }
-        if dst.is_empty() {
-            return Ok(());
-        }
-        let bpt = self.width.bytes_per_token() as u64;
-        let byte_off = index
-            .checked_mul(bpt)
-            .and_then(|b| b.checked_add(self.data_offset))
-            .ok_or_else(|| DataError::new("token byte offset overflows"))?;
-        let nbytes = dst
-            .len()
-            .checked_mul(self.width.bytes_per_token())
-            .ok_or_else(|| DataError::new("window byte length overflows"))?;
-        let mut raw = Vec::new();
-        raw.try_reserve_exact(nbytes)
-            .map_err(|_| DataError::new(format!("allocation of {nbytes} bytes refused")))?;
-        raw.resize(nbytes, 0);
-        read_exact_at(&self.file, &mut raw, byte_off)
-            .map_err(|e| DataError::new(format!("token read: {e}")))?;
-
-        match self.width {
-            TokenWidth::U16 => {
-                for (i, slot) in dst.iter_mut().enumerate() {
-                    let o = i * 2;
-                    *slot = u16::from_le_bytes([raw[o], raw[o + 1]]);
-                }
-            }
-            TokenWidth::U32 => {
-                for (i, slot) in dst.iter_mut().enumerate() {
-                    let o = i * 4;
-                    let val = u32::from_le_bytes([raw[o], raw[o + 1], raw[o + 2], raw[o + 3]]);
-                    let narrowed = u16::try_from(val).map_err(|_| {
-                        DataError::new(format!(
-                            "token {val} at index {} exceeds u16::MAX (65535)",
-                            index + i as u64
-                        ))
-                    })?;
-                    *slot = narrowed;
-                }
-            }
-        }
-        Ok(())
+        self.read_window(index, dst, &mut Vec::new(), |val, at| {
+            u16::try_from(val).map_err(|_| {
+                DataError::new(format!(
+                    "token {val} at index {at} exceeds u16::MAX (65535)"
+                ))
+            })
+        })
     }
 
     /// Tokens starting at `index`, into `dst`.
@@ -288,6 +243,32 @@ impl TokenBin {
     /// Reads tokens directly from `u32` streams, or losslessly converts
     /// from `u16` streams without truncation or overflow.
     pub fn read_into_u32(&self, index: u64, dst: &mut [u32]) -> Result<(), DataError> {
+        self.read_into_u32_with(index, dst, &mut Vec::new())
+    }
+
+    /// [`TokenBin::read_into_u32`] reading through the caller's `raw` scratch, which is
+    /// cleared and grown to the window's byte length and keeps its capacity for the next
+    /// call, so a loop of reads allocates once.
+    pub(crate) fn read_into_u32_with(
+        &self,
+        index: u64,
+        dst: &mut [u32],
+        raw: &mut Vec<u8>,
+    ) -> Result<(), DataError> {
+        self.read_window(index, dst, raw, |val, _| Ok(val))
+    }
+
+    /// The one body of both reads, generic over the destination width `T`. Every token is
+    /// widened to `u32` from the file's own width, then `decode` turns it into a `T`
+    /// (given the token's index, for its error), so the bounds checks, the allocation
+    /// refusal and the read are shared and only the narrowing differs.
+    fn read_window<T>(
+        &self,
+        index: u64,
+        dst: &mut [T],
+        raw: &mut Vec<u8>,
+        decode: impl Fn(u32, u64) -> Result<T, DataError>,
+    ) -> Result<(), DataError> {
         let n =
             u64::try_from(dst.len()).map_err(|_| DataError::new("window length exceeds u64"))?;
         let end = index
@@ -302,35 +283,28 @@ impl TokenBin {
         if dst.is_empty() {
             return Ok(());
         }
-        let bpt = self.width.bytes_per_token() as u64;
+        let bpt = self.width.bytes_per_token();
         let byte_off = index
-            .checked_mul(bpt)
+            .checked_mul(bpt as u64)
             .and_then(|b| b.checked_add(self.data_offset))
             .ok_or_else(|| DataError::new("token byte offset overflows"))?;
         let nbytes = dst
             .len()
-            .checked_mul(self.width.bytes_per_token())
+            .checked_mul(bpt)
             .ok_or_else(|| DataError::new("window byte length overflows"))?;
-        let mut raw = Vec::new();
+        raw.clear();
         raw.try_reserve_exact(nbytes)
             .map_err(|_| DataError::new(format!("allocation of {nbytes} bytes refused")))?;
         raw.resize(nbytes, 0);
-        read_exact_at(&self.file, &mut raw, byte_off)
+        read_exact_at(&self.file, raw, byte_off)
             .map_err(|e| DataError::new(format!("token read: {e}")))?;
 
-        match self.width {
-            TokenWidth::U16 => {
-                for (i, slot) in dst.iter_mut().enumerate() {
-                    let o = i * 2;
-                    *slot = u32::from(u16::from_le_bytes([raw[o], raw[o + 1]]));
-                }
-            }
-            TokenWidth::U32 => {
-                for (i, slot) in dst.iter_mut().enumerate() {
-                    let o = i * 4;
-                    *slot = u32::from_le_bytes([raw[o], raw[o + 1], raw[o + 2], raw[o + 3]]);
-                }
-            }
+        for (i, (word, slot)) in raw.chunks_exact(bpt).zip(dst.iter_mut()).enumerate() {
+            let val = match self.width {
+                TokenWidth::U16 => u32::from(u16::from_le_bytes([word[0], word[1]])),
+                TokenWidth::U32 => u32::from_le_bytes([word[0], word[1], word[2], word[3]]),
+            };
+            *slot = decode(val, index + i as u64)?;
         }
         Ok(())
     }

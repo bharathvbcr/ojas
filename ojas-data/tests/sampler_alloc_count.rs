@@ -1,0 +1,94 @@
+//! `BatchSampler::next_batch` reuses its scratch buffers: after a warm-up call, the number of
+//! allocations one call makes does not grow with the batch size `B`. The returned `x` and `y`
+//! (and the window-start list) are the only per-call allocations, so the count is the same
+//! at `B = 1` and `B = 64`. Before the scratch was reused, every row allocated a raw byte
+//! buffer inside the read, so the count grew with `B`.
+
+use ojas_data::{BatchSampler, SamplerConfig, TokenBin};
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
+use std::path::PathBuf;
+
+thread_local! {
+    static ALLOCS: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Counts allocations per thread.
+struct Counting;
+
+// SAFETY: every method forwards to `System` unchanged and only bumps a
+// thread-local counter.
+unsafe impl GlobalAlloc for Counting {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
+        unsafe { System.alloc(layout) }
+    }
+
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
+        unsafe { System.alloc_zeroed(layout) }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe { System.dealloc(ptr, layout) }
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
+        unsafe { System.realloc(ptr, layout, new_size) }
+    }
+}
+
+#[global_allocator]
+static ALLOC: Counting = Counting;
+
+fn allocs() -> usize {
+    ALLOCS.with(Cell::get)
+}
+
+struct Tmp(PathBuf);
+
+impl Drop for Tmp {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+const SEQ_LEN: usize = 16;
+
+/// Allocations made by one `next_batch` call at batch size `batch`, after one warm-up call.
+fn allocs_per_batch(bin: &TokenBin, batch: usize) -> usize {
+    let cfg = SamplerConfig {
+        seq_len: SEQ_LEN,
+        batch,
+        seed: 7,
+    };
+    let mut sampler = BatchSampler::new(bin, cfg).expect("sampler");
+    sampler.next_batch().expect("warm-up batch");
+    let before = allocs();
+    let batch_out = sampler.next_batch().expect("measured batch");
+    let used = allocs() - before;
+    assert_eq!(batch_out.x.len(), batch * SEQ_LEN, "batch shape");
+    used
+}
+
+#[test]
+fn next_batch_allocation_count_does_not_grow_with_batch_size() {
+    let file =
+        Tmp(std::env::temp_dir().join(format!("ojas-sampler-alloc-{}.bin", std::process::id())));
+    // 8192 u32 tokens = 512 windows of 16, so B = 64 fits in one epoch without wrapping.
+    let mut bytes = Vec::with_capacity(8192 * 4);
+    for t in 0..8192u32 {
+        bytes.extend_from_slice(&(t.wrapping_mul(2_654_435_761) | 0x1_0000).to_le_bytes());
+    }
+    std::fs::write(&file.0, &bytes).expect("write token bin");
+    let bin = TokenBin::open_headerless_u32(&file.0).expect("open token bin");
+
+    let one = allocs_per_batch(&bin, 1);
+    let many = allocs_per_batch(&bin, 64);
+    assert_eq!(
+        one, many,
+        "next_batch allocated {one} times at B=1 but {many} times at B=64: \
+         a per-row buffer is allocated again"
+    );
+}
