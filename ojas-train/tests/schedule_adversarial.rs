@@ -76,8 +76,9 @@ fn from_json_refuses_wrong_case_spelled_out_cosine_and_unknown_kinds() {
     }
 }
 
-/// Expected: Err for every non-object / mis-typed `decay` (S:`d.field_opt(key)` errors on a
-/// non-object, mapped to "decay has no kind").
+/// Expected: Err for every non-object / mis-typed `decay` (S: `from_json` refuses it as
+/// "decay is not an object"; the exact text is pinned by
+/// `from_json_reports_decay_is_not_an_object_for_every_non_object`).
 #[test]
 fn from_json_refuses_a_decay_that_is_not_an_object() {
     for d in [
@@ -1034,4 +1035,63 @@ fn a_four_key_checkpoint_is_cosine_and_only_cosine() {
         }
     }
     std::fs::remove_dir_all(&root).ok();
+}
+
+// ------------------------------------------------- exact from_json messages (ft-30727, criterion 2)
+
+fn from_json_message(text: &str) -> String {
+    match read_schedule_decay(text) {
+        Err(e) => e.to_string(),
+        Ok(d) => panic!("{text} must be refused, got {d:?}"),
+    }
+}
+
+/// A `decay` that is not an object reports that, not a missing `"kind"`.
+#[test]
+fn from_json_reports_decay_is_not_an_object_for_every_non_object() {
+    for d in [
+        "[]",
+        "null",
+        "0",
+        "1.5",
+        "true",
+        r#""linear""#,
+        r#"[{"kind":"linear"}]"#,
+    ] {
+        let got = from_json_message(&format!(r#"{{"decay": {d}}}"#));
+        assert_eq!(
+            got, "decay is not an object",
+            "decay {d}: wrong message (the misleading one is 'decay has no \"kind\"')"
+        );
+    }
+}
+
+/// An object that lacks a member still reports the member by name.
+#[test]
+fn from_json_still_reports_the_missing_member_of_an_object() {
+    assert_eq!(
+        from_json_message(r#"{"decay": {}}"#),
+        r#"decay has no "kind""#,
+        "empty decay object: wrong message"
+    );
+    assert_eq!(
+        from_json_message(r#"{"decay": {"kind":"step","gamma":0.5}}"#),
+        r#"decay has no "every""#,
+        "step decay without every: wrong message"
+    );
+    assert_eq!(
+        from_json_message(r#"{"decay": {"kind":"step","every":2}}"#),
+        r#"decay has no "gamma""#,
+        "step decay without gamma: wrong message"
+    );
+}
+
+/// The explicit cosine kind stays refused (cosine is the absent member), with this exact text.
+#[test]
+fn from_json_refuses_explicit_cosine_with_the_unknown_kind_message() {
+    assert_eq!(
+        from_json_message(r#"{"decay": {"kind":"cosine"}}"#),
+        r#"decay kind "cosine" is not constant, linear or step"#,
+        "explicit cosine: wrong message"
+    );
 }

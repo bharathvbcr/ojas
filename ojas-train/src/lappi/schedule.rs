@@ -66,7 +66,12 @@ impl Decay {
     /// The decay a schedule object records: the inverse of [`LrSchedule::to_json`]'s `"decay"`
     /// member. Absent is cosine (what Python's four-key form means); an unknown kind, a
     /// missing or ill-typed field, a member the kind does not have, or a step decay that
-    /// [`Decay::validate`] refuses is an error.
+    /// [`Decay::validate`] refuses is an error. A `"decay"` that is not an object (a string, a
+    /// number, an array, `null`) reports "decay is not an object", not a missing member.
+    ///
+    /// The explicit `{"kind": "cosine"}` is refused as an unknown kind, on purpose: cosine is
+    /// the absence of the member (`Decay::to_json` never writes it), and accepting a second
+    /// spelling would widen a format shared with Lappi.
     pub fn from_json(schedule: &Value) -> Result<Self, ScheduleError> {
         let bad = |m: String| ScheduleError::Invalid(m);
         let d = match schedule.field_opt("decay") {
@@ -74,6 +79,9 @@ impl Decay {
             Ok(Some(d)) => d,
             Err(e) => return Err(bad(format!("schedule is not an object: {e}"))),
         };
+        if d.as_object().is_err() {
+            return Err(bad("decay is not an object".into()));
+        }
         let member = |key: &str| match d.field_opt(key) {
             Ok(Some(v)) => Ok(v),
             _ => Err(bad(format!("decay has no {key:?}"))),

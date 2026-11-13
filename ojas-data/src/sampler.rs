@@ -141,6 +141,10 @@ pub struct BatchSampler<'a> {
     half_bits: u32,
     epoch: u64,
     ordinal: u64,
+    /// One window of `seq_len + 1` ids, and the raw file bytes behind it, reused by every
+    /// row of every batch so `next_batch` allocates the same number of times at any `B`.
+    row: Vec<u32>,
+    raw: Vec<u8>,
 }
 
 impl<'a> BatchSampler<'a> {
@@ -188,6 +192,14 @@ impl<'a> BatchSampler<'a> {
         }
         let bits = u64::BITS - (windows - 1).leading_zeros();
         let half_bits = bits.div_ceil(2).max(1);
+        let row_len = cfg
+            .seq_len
+            .checked_add(1)
+            .ok_or_else(|| DataError::new("sampler: seq_len + 1 overflows"))?;
+        let mut row = Vec::new();
+        row.try_reserve_exact(row_len)
+            .map_err(|_| DataError::new("sampler: allocation of the row buffer refused"))?;
+        row.resize(row_len, 0);
         Ok(Self {
             bin,
             cfg,
@@ -195,6 +207,8 @@ impl<'a> BatchSampler<'a> {
             half_bits,
             epoch: cursor.shard,
             ordinal: cursor.token_index,
+            row,
+            raw: Vec::new(),
         })
     }
 
@@ -248,11 +262,11 @@ impl<'a> BatchSampler<'a> {
         x.try_reserve_exact(n)
             .and_then(|_| y.try_reserve_exact(n))
             .map_err(|_| DataError::new(format!("sampler: allocation of 2 x {n} ids refused")))?;
-        let mut row = vec![0u32; t + 1];
         for start in starts {
-            self.bin.read_into_u32(start, &mut row)?;
-            x.extend_from_slice(&row[..t]);
-            y.extend_from_slice(&row[1..]);
+            self.bin
+                .read_into_u32_with(start, &mut self.row, &mut self.raw)?;
+            x.extend_from_slice(&self.row[..t]);
+            y.extend_from_slice(&self.row[1..]);
         }
         self.epoch = epoch;
         self.ordinal = ordinal;
