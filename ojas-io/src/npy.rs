@@ -59,7 +59,8 @@ pub fn read_npy_with_limit(path: &Path, limit: Option<u64>) -> Result<NpyArray, 
     use std::io::{BufReader, Read};
 
     let what = path.display();
-    let (f, file_len) = crate::open::open_regular_file(path).map_err(|e| format!("{what}: {e}"))?;
+    // `IoError`'s Display is already `"<path>: <detail>"`; prefixing it again names the path twice.
+    let (f, file_len) = crate::open::open_regular_file(path).map_err(String::from)?;
     let mut f = BufReader::new(f);
 
     let mut magic_ver = [0u8; 8];
