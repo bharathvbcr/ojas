@@ -129,6 +129,107 @@ func TestAggregateFailsLoudly(t *testing.T) {
 	}
 }
 
+// Retry policy (card ft-500a9c66, criterion 2): when one key has an ok record
+// and an error record, the ok record is the measurement, whichever came
+// first, and stderr names both sources as file:line.
+const (
+	retryOjas  = `{"runtime":"ojas-metal","row":"add","status":"ok","min_ms":1,"median_ms":1}` + "\n"
+	retryTorch = `{"runtime":"torch-mps","row":"add","status":"ok","min_ms":2,"median_ms":2}` + "\n"
+	retryErr   = `{"runtime":"torch-mps","row":"add","status":"error","detail":"OSError(28, 'No space left on device')"}` + "\n"
+)
+
+func TestRetryOkThenErrorResolvesToOk(t *testing.T) {
+	dir := writeRun(t, map[string]string{"round1/torch-mps.jsonl": retryOjas + retryTorch + retryErr})
+	var out, errb bytes.Buffer
+	code := runAggregate([]string{dir}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr %q; want 0 (the ok row stands)", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "| add | 1.000 / 1.000 | 2.000 / 2.000 | 2.00x [2.00-2.00] |") || strings.Contains(out.String(), "No space left") {
+		t.Errorf("ok row did not win:\n%s", out.String())
+	}
+}
+
+func TestRetryErrorThenOkResolvesToOk(t *testing.T) {
+	dir := writeRun(t, map[string]string{"round1/torch-mps.jsonl": retryOjas + retryErr + retryTorch})
+	var out, errb bytes.Buffer
+	code := runAggregate([]string{dir}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr %q; want 0 (the ok row stands)", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "| add | 1.000 / 1.000 | 2.000 / 2.000 | 2.00x [2.00-2.00] |") || strings.Contains(out.String(), "No space left") {
+		t.Errorf("ok row did not win:\n%s", out.String())
+	}
+}
+
+func TestRetryNoteNamesBothSources(t *testing.T) {
+	for name, body := range map[string]string{
+		"ok then error": retryOjas + retryTorch + retryErr,
+		"error then ok": retryOjas + retryErr + retryTorch,
+	} {
+		dir := writeRun(t, map[string]string{"round1/torch-mps.jsonl": body})
+		var out, errb bytes.Buffer
+		runAggregate([]string{dir}, &out, &errb)
+		src := filepath.Join(dir, "round1", "torch-mps.jsonl")
+		lines := strings.Split(strings.TrimSpace(errb.String()), "\n")
+		if len(lines) != 1 {
+			t.Errorf("%s: stderr has %d lines, want one note:\n%s", name, len(lines), errb.String())
+			continue
+		}
+		for _, want := range []string{src + ":2", src + ":3", "retried"} {
+			if !strings.Contains(lines[0], want) {
+				t.Errorf("%s: note %q lacks %q", name, lines[0], want)
+			}
+		}
+	}
+}
+
+// The shape of bench/results/2026-10-01-r3/round2/torch-mps.jsonl lines
+// 107-109: an info row for the row, the ok measurement, then an error row
+// for the same key (the disk filled up).
+func TestRetryR3Round2TorchMpsShape(t *testing.T) {
+	const row = "linear_ce_c4096x50304"
+	dir := writeRun(t, map[string]string{
+		"round1/ojas-metal.jsonl": `{"runtime":"ojas-metal","row":"` + row + `","status":"ok","min_ms":100.0,"median_ms":110.0}` + "\n",
+		"round1/torch-mps.jsonl":  `{"runtime":"torch-mps","row":"` + row + `","status":"ok","min_ms":202.62350000848528,"median_ms":205.3510624973569,"iters":20,"warmup":5}` + "\n",
+		"round2/ojas-metal.jsonl": `{"runtime":"ojas-metal","row":"` + row + `","status":"ok","min_ms":100.0,"median_ms":110.0}` + "\n",
+		"round2/torch-mps.jsonl": `{"runtime":"torch-mps","row":"_load","status":"info","for":"` + row + `","when":"before","load":"18.77 20.30 21.43","gpu_util_pct":100}` + "\n" +
+			`{"runtime":"torch-mps","row":"` + row + `","status":"ok","min_ms":212.8803339874139,"median_ms":232.62883350253105,"iters":20,"warmup":5}` + "\n" +
+			`{"runtime":"torch-mps","row":"` + row + `","status":"error","detail":"OSError(28, 'No space left on device')"}` + "\n",
+	})
+	var out, errb bytes.Buffer
+	code := runAggregate([]string{dir}, &out, &errb)
+	if code != 0 || strings.Contains(out.String(), "No space left") || strings.Contains(out.String(), "partial") {
+		t.Errorf("exit %d; the r3 round2 error row replaced the ok row\nstdout:\n%s\nstderr:\n%s", code, out.String(), errb.String())
+	}
+	if !strings.Contains(errb.String(), filepath.Join(dir, "round2", "torch-mps.jsonl")+":2") ||
+		!strings.Contains(errb.String(), filepath.Join(dir, "round2", "torch-mps.jsonl")+":3") {
+		t.Errorf("stderr does not name round2/torch-mps.jsonl lines 2 and 3:\n%s", errb.String())
+	}
+}
+
+// Error then error and ok then ok are not retries: the later record still
+// replaces the earlier one, and no retry note is written.
+func TestRetryDoesNotChangeSameStatusDuplicates(t *testing.T) {
+	errA := `{"runtime":"torch-mps","row":"add","status":"error","detail":"err-one"}` + "\n"
+	errB := `{"runtime":"torch-mps","row":"add","status":"error","detail":"err-two"}` + "\n"
+	dir := writeRun(t, map[string]string{"round1/torch-mps.jsonl": retryOjas + errA + errB})
+	var out, errb bytes.Buffer
+	code := runAggregate([]string{dir}, &out, &errb)
+	if code != 1 || !strings.Contains(out.String(), "err-two") || strings.Contains(out.String(), "err-one") || strings.Contains(errb.String(), "retried") {
+		t.Errorf("error then error: exit %d\nstdout:\n%s\nstderr:\n%s", code, out.String(), errb.String())
+	}
+
+	okB := `{"runtime":"torch-mps","row":"add","status":"ok","min_ms":4,"median_ms":4}` + "\n"
+	dir = writeRun(t, map[string]string{"round1/torch-mps.jsonl": retryOjas + retryTorch + okB})
+	out.Reset()
+	errb.Reset()
+	code = runAggregate([]string{dir}, &out, &errb)
+	if code != 0 || !strings.Contains(out.String(), "| add | 1.000 / 1.000 | 4.000 / 4.000 | 4.00x [4.00-4.00] |") || errb.Len() != 0 {
+		t.Errorf("ok then ok: exit %d\nstdout:\n%s\nstderr:\n%s", code, out.String(), errb.String())
+	}
+}
+
 func TestChartsMatchPythonOracle(t *testing.T) {
 	u := func(f float64) *float64 { return &f }
 	rows := []ratioRow{
