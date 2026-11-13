@@ -26,19 +26,13 @@ members = [
 [workspace.package]
 edition = "2021"
 license = "MIT OR Apache-2.0"
-# MSRV is 1.97 because the gusset path dependency declares rust-version = "1.97"
-# (verified in the sibling gusset workspace Cargo.toml). wgpu 30.0.1 declares
-# rust-version = "1.87.0", which this floor also covers. Do not lower this
+# MSRV is 1.100 (owner override, 2026-11-12). It was 1.97, gusset's floor; gusset
+# itself and tessl moved to 1.100 in the same change, and tessl's own floor must not
+# sit below this one because it path-depends on ojas-core and ojas-io. wgpu 30.0.1
+# declares rust-version = "1.87.0", which this floor also covers. Do not lower this
 # field below gusset's rust-version.
-rust-version = "1.97"
+rust-version = "1.100"
 publish = false
-description = "Deterministic, high-performance Rust deep learning engine and framework with modular hardware and compute extensions"
-repository = "https://github.com/bharathvbcr/ojas"
-homepage = "https://ojas.vbcr.dev"
-documentation = "https://ojas.vbcr.dev/reference/"
-readme = "README.md"
-keywords = ["deep-learning", "machine-learning", "neural-network", "tensor", "autograd", "sparse"]
-categories = ["science", "mathematics", "hardware-support"]
 
 # panic = "unwind" is Cargo's default. It is set here so a profile cannot
 # switch the libraries to abort.

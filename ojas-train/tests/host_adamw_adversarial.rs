@@ -114,7 +114,7 @@ struct Case {
 
 fn case(r: &mut Rng) -> Case {
     let n = r.below(6); // includes 0
-    let vec_of = |r: &mut Rng, n: usize| (0..n).map(|_| f32_value(r)).collect::<Vec<_>>();
+    let vec_of = |r: &mut Rng, n: usize| Vec::from_fn(n, |_| f32_value(r));
     // Quiet most of the time so a large share of cases is accepted, and so the scan, not the
     // scalar validation, is what the comparison exercises.
     let quiet = r.unit() < 0.6;

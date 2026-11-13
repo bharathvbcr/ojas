@@ -418,8 +418,8 @@ mod tests {
                 )
             })
             .unwrap();
-            assert_eq!(a, (0..a.len()).map(|i| i as f32).collect::<Vec<_>>());
-            assert_eq!(b, (0..b.len()).map(|i| i as f32).collect::<Vec<_>>());
+            assert_eq!(a, Vec::from_fn(a.len(), |i| i as f32));
+            assert_eq!(b, Vec::from_fn(b.len(), |i| i as f32));
             let pieces_wanted = (len / min_chunk).clamp(1, threads * 2);
             assert_eq!(pieces, ranges(len, pieces_wanted), "threads {threads}");
         }

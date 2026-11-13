@@ -159,7 +159,8 @@ CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=/Users/bharath/qd-campaign/sysroot
 ```
 
 The binaries are under `aarch64-unknown-linux-gnu/release/` in that target dir, and the device
-tests under its `deps/`. A binary's sha256 depends on the checkout path, which it embeds: pin the
+tests under `build/ojas-cuda/<hash>/out/` (Rust 1.100 build-dir layout; before 1.100 they were
+under `deps/`). A binary's sha256 depends on the checkout path, which it embeds: pin the
 sha256 of the file you copy, not one rebuilt elsewhere.
 
 ## Libraries on the box
@@ -268,7 +269,8 @@ Then, **report-only and never a check**: `extra.gdn_published_timing`.
 
 ## Device tests on the box
 
-From the `--no-run` cross-build above, copy each `deps/device_*-<hash>` binary and run it on the
+From the `--no-run` cross-build above, copy each `build/ojas-cuda/<hash>/out/device_*-<hash>` binary (`deps/device_*-<hash>` before Rust
+1.100) and run it on the
 box:
 
     flock /home/ubuntu/queue/gpu.lock timeout 600 env LD_LIBRARY_PATH=<cublas lib>:<nvrtc lib> ./device_k0-<hash> --ignored --test-threads=1 --nocapture

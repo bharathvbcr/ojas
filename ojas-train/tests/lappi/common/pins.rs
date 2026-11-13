@@ -101,7 +101,7 @@ pub fn parse_sha256sums(bytes: &[u8]) -> Result<BTreeMap<PathBuf, Pin>, String> 
     if text.contains('\r') {
         return Err("contains `\\r`; lines are separated by `\\n` alone".into());
     }
-    let body = text.strip_suffix('\n').unwrap_or(text);
+    let body = text.trim_suffix('\n');
     if body.is_empty() {
         return Err("has no lines, so it pins nothing".into());
     }

@@ -146,8 +146,14 @@ go run scripts/benchreport/main.go plots -check  # after adding bench/results
   HTML by hand.
 - Test counts quoted in `README.md` and `docs/status.md` come from
   `docs/data/test-runs.json`. Update the data, not the prose.
-- The MSRV is `rust-version` in `Cargo.toml` (gusset's floor). CI's `msrv`
-  job builds every target with that toolchain.
+- The MSRV is `rust-version` in `Cargo.toml`: 1.100. It was 1.97, gusset's
+  floor; on 2026-11-12 the owner set it to 1.100 for this repository and
+  tessl, and gusset's own floor moved there too. CI's `msrv` job reads the
+  field and builds every target with that toolchain.
+- Rust 1.100 moved Cargo's build-dir layout: test and bench binaries are
+  `target/<profile>/build/<pkg>/<hash>/out/<name>-<hash>` (no `deps/`), build
+  script output is `build/<pkg>/<hash>/run/{stdout,stderr}`. Find binaries with
+  `--message-format=json` or the `Executable ... (path)` lines, never a `deps/` glob.
 
 ## Claims and evidence
 

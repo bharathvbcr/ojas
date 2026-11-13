@@ -464,7 +464,7 @@ What is needed, all verified to work today for ojas (§1.5):
 
 Ship test binaries as `qd-post-f-rules` was shipped [V `post-f-queue:139-161`]:
 1. Build with `cargo test --release --no-run --target aarch64-unknown-linux-gnu -p <crate> --features cuda`.
-2. Copy the `deps/<crate>-<hash>` executables and the fixture directory.
+2. Copy the `build/<crate>/<hash>/out/<crate>-<hash>` executables (Rust 1.100 layout; `deps/<crate>-<hash>` before 1.100) and the fixture directory.
 3. Pin each by sha256 in a run script, which refuses another binary.
 4. On the box: `flock /home/ubuntu/queue/gpu.lock timeout <cap> ./<test-bin> --ignored --test-threads=1`.
    - GPU tests are `#[ignore]` so the Mac run (feature off) stays green.

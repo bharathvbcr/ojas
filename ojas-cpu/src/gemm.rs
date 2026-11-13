@@ -467,7 +467,7 @@ fn gemv_into(
     let x = if a.cs == 1 {
         &a.data[..k]
     } else {
-        gathered = (0..k).map(|p| a.data[p * a.cs]).collect::<Vec<_>>();
+        gathered = Vec::from_fn(k, |p| a.data[p * a.cs]);
         &gathered[..]
     };
     let fast = exec.numerics == Numerics::Fast;

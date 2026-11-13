@@ -1,0 +1,4 @@
+# Hold back crate versions published less than 3 days ago: a freshly published
+# (possibly compromised) release is not resolved until it has aged.
+[registry]
+global-min-publish-age = "3 days"

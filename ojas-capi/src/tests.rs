@@ -1198,11 +1198,30 @@ fn opcode_zero_a_duplicate_opcode_and_the_retired_step_are_refused() {
 }
 
 #[test]
-fn small_results_stay_byte_vectors_before_the_allocator_api() {
+fn small_results_stay_byte_vectors() {
     let out = engine::stage(vec![9, 8, 7]);
     match out {
         gusset::JobOutput::Bytes(bytes) => assert_eq!(bytes, vec![9, 8, 7]),
-        other => panic!("small result left the pre-1.100 path: {other:?}"),
+        other => panic!("small result left the Bytes path: {other:?}"),
+    }
+    let just_under: Vec<u8> = Vec::from_fn(4095, |i| i as u8);
+    match engine::stage(just_under.clone()) {
+        gusset::JobOutput::Bytes(bytes) => assert_eq!(bytes, just_under),
+        other => panic!("4095 bytes left the Bytes path: {other:?}"),
+    }
+}
+
+#[test]
+fn results_of_4096_bytes_or_more_are_built_in_buffer_alloc() {
+    for len in [4096usize, 4097, 65_536] {
+        let payload: Vec<u8> = Vec::from_fn(len, |i| (i % 251) as u8);
+        match engine::stage(payload.clone()) {
+            gusset::JobOutput::Allocated(bytes) => {
+                assert_eq!(bytes.as_slice(), payload.as_slice(), "{len} bytes");
+            }
+            other => panic!("{len} bytes did not take the allocator path: {other:?}"),
+        }
+        assert_eq!(engine::bytes_of(engine::stage(payload.clone())), payload);
     }
 }
 

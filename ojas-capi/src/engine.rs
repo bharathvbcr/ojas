@@ -194,19 +194,16 @@ fn dispatch_bytes(ctx: &JobContext, input: &[u8]) -> Result<Vec<u8>, String> {
     }
 }
 
-/// Results under 4 KiB stay `JobOutput::Bytes`, which is the path that
-/// exists before Rust 1.100. At or above that size, and only when gusset's
-/// own probe set `DEP_GUSSET_ALLOCATOR_API=1`, the bytes are copied into
-/// `BufferAlloc` and returned as `JobOutput::Allocated`.
+/// Results under 4 KiB stay `JobOutput::Bytes`. At or above that size the
+/// bytes are copied into `BufferAlloc` (the stable allocator API, Rust 1.100)
+/// and returned as `JobOutput::Allocated`; if that reservation is refused the
+/// plain `Bytes` result is returned instead.
 pub fn stage(bytes: Vec<u8>) -> JobOutput {
-    #[cfg(gusset_allocator_api)]
-    {
-        if bytes.len() >= 4096 {
-            let mut out: Vec<u8, gusset::BufferAlloc> = Vec::new_in(gusset::BufferAlloc);
-            if out.try_reserve_exact(bytes.len()).is_ok() {
-                out.extend_from_slice(&bytes);
-                return JobOutput::from(out);
-            }
+    if bytes.len() >= 4096 {
+        let mut out: Vec<u8, gusset::BufferAlloc> = Vec::new_in(gusset::BufferAlloc);
+        if out.try_reserve_exact(bytes.len()).is_ok() {
+            out.extend_from_slice(&bytes);
+            return JobOutput::from(out);
         }
     }
     JobOutput::from(bytes)
@@ -216,7 +213,6 @@ pub fn stage(bytes: Vec<u8>) -> JobOutput {
 pub fn bytes_of(out: JobOutput) -> Vec<u8> {
     match out {
         JobOutput::Bytes(bytes) => bytes,
-        #[cfg(gusset_allocator_api)]
         JobOutput::Allocated(bytes) => bytes.to_vec(),
         _ => Vec::new(),
     }

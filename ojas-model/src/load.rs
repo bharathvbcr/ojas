@@ -72,7 +72,7 @@ pub fn load_params(
     // Stored name for each stripped name; a collision is refused.
     let mut stored: BTreeMap<&str, &str> = BTreeMap::new();
     for raw in file.names() {
-        let name = raw.strip_prefix(COMPILED_PREFIX).unwrap_or(raw);
+        let name = raw.trim_prefix(COMPILED_PREFIX);
         if let Some(prev) = stored.insert(name, raw) {
             return Err(refuse(format!(
                 "{prev:?} and {raw:?} name the same parameter"

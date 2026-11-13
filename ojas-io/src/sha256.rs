@@ -485,7 +485,7 @@ mod tests {
 
     impl Read for Trickle {
         fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-            self.interrupt = !self.interrupt;
+            self.interrupt.toggle();
             if self.interrupt {
                 return Err(std::io::Error::from(ErrorKind::Interrupted));
             }

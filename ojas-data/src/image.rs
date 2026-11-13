@@ -670,8 +670,7 @@ impl<'a> ImageBatchSampler<'a> {
         let src = set.image(idx);
         let (h, w) = (set.height, set.width);
         if self.cfg.augment.is_off() {
-            for c in 0..set.channels {
-                let table = &self.lut[c];
+            for (c, table) in self.lut[..set.channels].iter().enumerate() {
                 let plane = c * h * w..(c + 1) * h * w;
                 for (o, &p) in out[plane.clone()].iter_mut().zip(&src[plane]) {
                     *o = table[usize::from(p)];
@@ -683,8 +682,7 @@ impl<'a> ImageBatchSampler<'a> {
         let d = augment_draw(self.cfg.seed, epoch, idx as u64, self.cfg.augment);
         // The cropped image's pixel (y, x) is padded-image pixel (y + dy, x + dx);
         // padded coordinates are source coordinates shifted by `pad`.
-        for c in 0..set.channels {
-            let table = &self.lut[c];
+        for (c, table) in self.lut[..set.channels].iter().enumerate() {
             let zero = table[0];
             let plane = c * h * w;
             for y in 0..h {

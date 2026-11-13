@@ -7,7 +7,7 @@
 <p align="center">
   <a href="https://ojas.vbcr.dev/"><img src="https://img.shields.io/badge/docs-ojas.vbcr.dev-e11d48?style=flat-square" alt="Documentation"></a>
   <a href="https://ojas.vbcr.dev/#labs"><img src="https://img.shields.io/badge/interactive-live_labs-be123c?style=flat-square" alt="Interactive Labs"></a>
-  <img src="https://img.shields.io/badge/rust-1.97%2B-orange?style=flat-square&logo=rust" alt="Rust 1.97+">
+  <img src="https://img.shields.io/badge/rust-1.100%2B-orange?style=flat-square&logo=rust" alt="Rust 1.100+">
   <img src="https://img.shields.io/badge/go-1.26%2B-00ADD8?style=flat-square&logo=go" alt="Go 1.26+">
   <img src="https://img.shields.io/badge/metal-4-999999?style=flat-square&logo=apple" alt="Apple Silicon Metal 4">
   <img src="https://img.shields.io/badge/wgpu-portable_wgsl-blueviolet?style=flat-square" alt="wgpu Portable WGSL">

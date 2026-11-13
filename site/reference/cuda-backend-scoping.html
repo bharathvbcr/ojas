@@ -766,7 +766,7 @@
 <ol>
 <li>Build with <code>cargo test --release --no-run --target aarch64-unknown-linux-gnu -p &lt;crate&gt; --features cuda</code>.
 </li>
-<li>Copy the <code>deps/&lt;crate&gt;-&lt;hash&gt;</code> executables and the fixture directory.
+<li>Copy the <code>build/&lt;crate&gt;/&lt;hash&gt;/out/&lt;crate&gt;-&lt;hash&gt;</code> executables (Rust 1.100 layout; <code>deps/&lt;crate&gt;-&lt;hash&gt;</code> before 1.100) and the fixture directory.
 </li>
 <li>Pin each by sha256 in a run script, which refuses another binary.
 </li>

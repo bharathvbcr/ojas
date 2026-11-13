@@ -713,10 +713,7 @@ fn saved_bytes(p: &mut P, ctx: &CheckpointContext) -> Vec<(String, Vec<u8>)> {
         .iter()
         .map(|f| {
             (
-                f.strip_prefix(&tmp.0)
-                    .unwrap_or(f)
-                    .to_string_lossy()
-                    .into_owned(),
+                f.trim_prefix(&tmp.0).to_string_lossy().into_owned(),
                 std::fs::read(f).unwrap(),
             )
         })

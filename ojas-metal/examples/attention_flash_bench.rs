@@ -294,6 +294,9 @@ mod bench {
             })
             .collect();
         for round in 0..warmups + runs {
+            // `pass` picks which of the two sample vectors an arm's time lands in; the arm
+            // index `i` is only known inside the loop, so there is no slice to iterate here.
+            #[allow(clippy::needless_range_loop)]
             for pass in 0..2 {
                 for step in 0..count {
                     let i = if round % 2 == 0 {

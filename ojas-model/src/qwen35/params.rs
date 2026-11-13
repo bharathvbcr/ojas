@@ -20,7 +20,6 @@
 //! [`fuse_grads`] is the inverse, for comparing gradients with transformers
 //! and for writing them under Hugging Face names.
 
-use std::convert::Infallible;
 use std::path::Path;
 
 use ojas_core::{
@@ -158,7 +157,7 @@ impl<V> Qwen35Params<V> {
         let mut out = Vec::new();
         let Ok(_) = self.try_map(&mut |v| {
             out.push(v);
-            Ok::<(), Infallible>(())
+            Ok::<(), !>(())
         });
         out
     }
@@ -775,7 +774,7 @@ pub struct LoraTarget {
 impl LoraTarget {
     /// The adapter's module name, the tensor name without `.weight`.
     pub fn module(&self) -> &str {
-        self.name.strip_suffix(".weight").unwrap_or(&self.name)
+        self.name.trim_suffix(".weight")
     }
 
     /// The fused `B` `[out, r]` from its parts, in the fused tensor's row

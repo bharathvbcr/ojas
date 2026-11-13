@@ -81,6 +81,11 @@ T4 and T5 from the original plan are not restated here. This pass did not re-aud
 | D5 | Corrected | The old “227” figure is gone from `docs/status.md`, `README.md`, `site/index.html`, and `docs/index.html`. | Counts are the 449 / 4 ignored run above, and 27 Go tests. |
 | D6 | Corrected in `site/index.html` and `docs/index.html` | `Budget::new` returns `Budget`. `CpuBackend::new` takes that value. `Tensor::from_f32` is the constructor. `Tape::new` takes the backend. | The C example no longer includes `ojas.h`. There is no such header in the tree. The host API is the Go package. The C exports are `ojas_engine_init`, `ojas_engine_reset`, `ojas_set_model_root`, and the last-error getters. |
 
+**D4 update (2026-11-12).** The owner set the workspace `rust-version` to `"1.100"` (it was `"1.97"`,
+gusset's floor, and gusset itself is now at 1.100). The row above records the audit pass as written.
+The stale comment in `ojas-simd/src/arch.rs` that said the workspace MSRV was 1.82 is corrected
+in the same change set.
+
 ## Dispatcher
 
 **Verified** in the `ojas-capi` suite (41 passed).

@@ -268,10 +268,12 @@ jobs:
         run: cargo check -p ojas-hip --all-targets
 
   msrv:
-    name: MSRV (rust-version 1.97)
-    # Cargo.toml declares rust-version = "1.97" (gusset's floor). This job is
-    # what holds the workspace to it: a newer language or std feature fails
-    # here instead of on a user's 1.97 toolchain.
+    name: MSRV (the rust-version Cargo.toml declares)
+    # Cargo.toml declares rust-version = "1.100" (owner override, 2026-11-12;
+    # it was 1.97, gusset's floor). The toolchain is read out of the manifest
+    # below, so this job holds the workspace to whatever the field says: a
+    # newer language or std feature fails here instead of on a user's
+    # toolchain at the floor.
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:

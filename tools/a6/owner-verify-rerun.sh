@@ -17,6 +17,8 @@ mkdir -p "$LOGS" "$M/target-a6-main"
     if [ -d "$M/target-a6-main" ]; then
       touch "$M/target-a6-main"
       find "$M/target-a6-main" -maxdepth 3 -name deps -type d -exec touch {} + 2>/dev/null
+      # Rust 1.100 layout: test binaries live in build/<pkg>/<hash>/out, not deps/.
+      find "$M/target-a6-main" -mindepth 5 -maxdepth 5 -path '*/build/*/out' -type d -exec touch {} + 2>/dev/null
     fi
     sleep 300
   done ) &

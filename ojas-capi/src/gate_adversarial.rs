@@ -85,13 +85,7 @@ impl BackendModule for Spy {
 }
 
 fn operands(b: &Budget) -> (Tensor, Tensor, Tensor) {
-    let f = |n: usize, s: f32| {
-        Tensor::from_f32(
-            &(0..n).map(|i| s + i as f32 * 0.01).collect::<Vec<_>>(),
-            &[n],
-            b,
-        )
-    };
+    let f = |n: usize, s: f32| Tensor::from_f32(&Vec::from_fn(n, |i| s + i as f32 * 0.01), &[n], b);
     let x = f(6, 0.1).unwrap().reshape(&[2, 3]).unwrap();
     let w = f(12, 0.2).unwrap().reshape(&[4, 3]).unwrap();
     let g = f(8, 0.3).unwrap().reshape(&[2, 4]).unwrap();

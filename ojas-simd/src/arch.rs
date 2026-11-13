@@ -6,7 +6,7 @@
 //! memory safety.
 //!
 //! The intrinsic blocks also wrap value-only intrinsics. Before Rust 1.87
-//! those were `unsafe fn`, and the workspace MSRV is 1.82.
+//! those were `unsafe fn`, and the workspace MSRV is 1.100.
 
 use crate::gemm::MicroKernel;
 use crate::layout::Problem;
