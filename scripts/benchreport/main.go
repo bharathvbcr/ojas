@@ -365,6 +365,7 @@ type rkey struct{ rt, row string }
 type round struct {
 	keys []rkey // first-insertion order
 	recs map[rkey]record
+	src  map[rkey]string // file:line of the record held in recs
 }
 
 type runData struct {
@@ -392,7 +393,19 @@ func roundOf(path string) (int, error) {
 	return n, nil
 }
 
-func loadRounds(out string) (*runData, error) {
+// statusOf is the record's "status" when it is a string, else "".
+func statusOf(d record) string {
+	s, _ := d["status"].(string)
+	return s
+}
+
+// loadRounds reads every round*/*.jsonl under out. A later record for a key
+// replaces an earlier one, with one exception, the retry policy: an "ok"
+// record and an "error" record for the same key resolve to the ok record in
+// either order, and a line on warn names both sources as file:line. Any other
+// pair (error and error, ok and ok, anything with another status) keeps the
+// later record and says nothing.
+func loadRounds(out string, warn io.Writer) (*runData, error) {
 	rs := &runData{by: map[int]*round{}}
 	for _, path := range globSorted(filepath.Join(out, "round*", "*.jsonl")) {
 		r, err := roundOf(path)
@@ -427,15 +440,28 @@ func loadRounds(out string) (*runData, error) {
 			}
 			rd := rs.by[r]
 			if rd == nil {
-				rd = &round{recs: map[rkey]record{}}
+				rd = &round{recs: map[rkey]record{}, src: map[rkey]string{}}
 				rs.by[r] = rd
 				rs.order = append(rs.order, r)
 			}
 			k := rkey{rt, row}
-			if _, ok := rd.recs[k]; !ok {
+			here := fmt.Sprintf("%s:%d", path, i+1)
+			prev, seen := rd.recs[k]
+			if !seen {
 				rd.keys = append(rd.keys, k)
+			} else if a, b := statusOf(prev), statusOf(d); (a == "ok" && b == "error") || (a == "error" && b == "ok") {
+				okSrc, errSrc := rd.src[k], here
+				if b == "ok" {
+					okSrc, errSrc = here, rd.src[k]
+				}
+				fmt.Fprintf(warn, "aggregate: retried %s/%s in round %d: kept the ok record at %s, ignored the error record at %s\n",
+					rt, row, r, okSrc, errSrc)
+				if a == "ok" {
+					continue
+				}
 			}
 			rd.recs[k] = d
+			rd.src[k] = here
 		}
 	}
 	return rs, nil
@@ -595,8 +621,8 @@ func table(rows []*summary, rt string) []string {
 
 // aggregateRun renders one run directory. incomplete counts the rows that
 // have a problem in some round or no data at all.
-func aggregateRun(out string) (text string, incomplete int, err error) {
-	rs, err := loadRounds(out)
+func aggregateRun(out string, warn io.Writer) (text string, incomplete int, err error) {
+	rs, err := loadRounds(out, warn)
 	if err != nil {
 		return "", 0, err
 	}
@@ -955,10 +981,10 @@ func perRowLoad(out string) ([]string, error) {
 // crossRun: several run directories. Per row, each run's median ratio
 // [min-max] and a verdict over every round of every run. "slower in all N" /
 // "faster in all N" holds only when every per-round ratio is on one side of 1.
-func crossRun(outs []string) (string, int, error) {
+func crossRun(outs []string, warn io.Writer) (string, int, error) {
 	var runs []*runData
 	for _, o := range outs {
-		rs, err := loadRounds(o)
+		rs, err := loadRounds(o, warn)
 		if err != nil {
 			return "", 0, err
 		}
@@ -1059,9 +1085,9 @@ func runAggregate(args []string, stdout, stderr io.Writer) int {
 	var incomplete int
 	var err error
 	if len(args) > 1 {
-		text, incomplete, err = crossRun(args)
+		text, incomplete, err = crossRun(args, stderr)
 	} else {
-		text, incomplete, err = aggregateRun(args[0])
+		text, incomplete, err = aggregateRun(args[0], stderr)
 	}
 	if err != nil {
 		fmt.Fprintln(stderr, "aggregate:", err)
@@ -3184,7 +3210,7 @@ func (p *plotter) jsonlUnpaired(folder, sub string) error {
 
 func (p *plotter) r3() error {
 	d := filepath.Join(p.res, "2026-10-01-r3")
-	text, _, err := aggregateRun(d)
+	text, _, err := aggregateRun(d, p.log)
 	if err != nil {
 		p.skipped = append(p.skipped, [2]string{"2026-10-01-r3", "aggregate failed: " + err.Error()})
 		return nil
