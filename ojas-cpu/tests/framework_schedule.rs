@@ -93,9 +93,38 @@ fn wsd_is_flat_then_linear_and_never_below_the_floor() {
     }
 }
 
+/// ft-9c13f472 D3a: warmup 0 is no warmup (`schedules.py:53-56`), so step 0
+/// already runs the flat phase at 1.0. Golden bits are nanolab's own
+/// `WSDSchedule` with `warmup_steps=0`, `lr=1.0`, total 100, decay 0.2 (the
+/// decay values equal the warmup-10 rows above, which share `decay_start`).
+#[test]
+fn wsd_warmup_zero_runs_flat_then_decays() {
+    let s = WsdSchedule::new(0, 100, 0.2).unwrap();
+    assert_eq!(s.warmup_steps(), 0);
+    for (step, bits) in [
+        (0u64, 0x3ff0000000000000u64),
+        (1, 0x3ff0000000000000),
+        (79, 0x3ff0000000000000),
+        (80, 0x3ff0000000000000),
+        (81, 0x3fee8f5c28f5c28f),
+        (90, 0x3fe199999999999a),
+        (100, 0x3fb999999999999a),
+    ] {
+        assert_eq!(s.multiplier(step).unwrap().to_bits(), bits, "step {step}");
+    }
+    // One total step, no warmup: the single step runs at the peak.
+    assert_eq!(
+        WsdSchedule::new(0, 1, 0.0).unwrap().multiplier(0).unwrap(),
+        1.0
+    );
+}
+
 #[test]
 fn wsd_refuses_bad_configs() {
-    assert_range(WsdSchedule::new(0, 100, 0.2));
+    // ft-9c13f472 D3a: nanolab treats warmup 0 as no warmup
+    // (`schedules.py:53-56`), so it is accepted; see
+    // `wsd_warmup_zero_runs_flat_then_decays` for its values.
+    assert!(WsdSchedule::new(0, 100, 0.2).is_ok());
     assert_range(WsdSchedule::new(10, 0, 0.2));
     for frac in [
         -0.1,

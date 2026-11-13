@@ -19,10 +19,12 @@ const LENGTHS: [usize; 6] = [1, 7, 8, 9, 17, (1 << 17) + 3];
 const STEP: u64 = 7;
 
 /// f32 scalars of one Fast step, formed the way `AdamCoeffs::fast` forms them:
-/// f64 arithmetic in `check_adamw`, then one cast. `low` and `decays` are the
-/// f64 flags, not recomputed from the f32 values.
+/// f64 arithmetic in `check_adamw`, then one cast. `decays` is the f64 flag.
+/// ft-9c13f472 D5: `low` is torch's test on the f32 weight, and `lerp_high` is
+/// `1f - f32(1 - beta1)` (`Lerp.h:24-34`), where this mirror used the f64
+/// weight's branch and `f32(beta1)`. Nothing moves for `beta1 > 0.5`.
 struct FastAdam {
-    beta1: f32,
+    lerp_high: f32,
     beta2: f32,
     one_minus_b1: f32,
     one_minus_b2: f32,
@@ -36,11 +38,11 @@ struct FastAdam {
 
 fn fast_adam(config: AdamWConfig, step: u64) -> FastAdam {
     let (_, bc1, bc2) = check_adamw(config, step).expect("adamw config");
-    let one_minus_b1 = 1.0 - config.beta1;
+    let one_minus_b1 = (1.0 - config.beta1) as f32;
     FastAdam {
-        beta1: config.beta1 as f32,
+        lerp_high: 1.0f32 - one_minus_b1,
         beta2: config.beta2 as f32,
-        one_minus_b1: one_minus_b1 as f32,
+        one_minus_b1,
         one_minus_b2: (1.0 - config.beta2) as f32,
         step_size: (config.lr / bc1) as f32,
         bc2_sqrt: bc2.sqrt() as f32,
@@ -56,7 +58,7 @@ fn fast_elem(c: &FastAdam, p: f32, g: f32, m: f32, v: f32) -> (f32, f32, f32) {
     let m = if c.low {
         m + c.one_minus_b1 * (g - m)
     } else {
-        g - (g - m) * c.beta1
+        g - (g - m) * c.lerp_high
     };
     let v = c.beta2 * v + c.one_minus_b2 * g * g;
     let denom = v.sqrt() / c.bc2_sqrt + c.eps;
@@ -83,8 +85,19 @@ fn fast_ref(c: &FastAdam, p: &[f32], g: &[f32], m: &[f32], v: &[f32]) -> [Vec<f3
     [ps, ms, vs]
 }
 
-fn configs() -> [AdamWConfig; 4] {
+fn configs() -> [AdamWConfig; 6] {
     [
+        // ft-9c13f472 D5: beta1 0.001 is where torch's f32 `1 - weight`
+        // (9.99987e-4) differs from `f32(beta1)` (1.0e-3); 0.5 + 2^-30
+        // is where the f32 and f64 weights take different branches.
+        AdamWConfig {
+            beta1: 0.001,
+            ..AdamWConfig::nanolab(1e-3, 0.0)
+        },
+        AdamWConfig {
+            beta1: 0.5 + 2.0f64.powi(-30),
+            ..AdamWConfig::nanolab(1e-3, 0.1)
+        },
         AdamWConfig::nanolab(1e-3, 0.0),
         AdamWConfig::nanolab(1e-3, 0.1),
         AdamWConfig {

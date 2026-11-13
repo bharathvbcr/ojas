@@ -164,9 +164,17 @@ pub(crate) fn scale_in_place(
 /// `1 - beta^step` and of everything formed from them match.
 #[derive(Clone, Copy)]
 pub(crate) struct AdamCoeffs {
-    beta1: f64,
     beta2: f64,
     one_minus_b1: f64,
+    /// `1 - one_minus_b1` ([`AdamWScalars::lerp_high`]): torch's `lerp`
+    /// coefficient of `g - m` on the high branch, formed from the weight and
+    /// not read from `beta1`.
+    lerp_high: f64,
+    /// The f32 weight's branch and high coefficient, for
+    /// [`Numerics::Fast`] ([`AdamWScalars::lerp_low_f32`],
+    /// [`AdamWScalars::lerp_high_f32`]).
+    lerp_low_f32: bool,
+    lerp_high_f32: f32,
     one_minus_b2: f64,
     step_size: f64,
     bc2_sqrt: f64,
@@ -179,9 +187,11 @@ impl AdamCoeffs {
     pub(crate) fn new(config: AdamWConfig, step_before: u64) -> Result<Self, OjasError> {
         let s = AdamWScalars::new(config, step_before)?;
         Ok(Self {
-            beta1: s.beta1,
             beta2: s.beta2,
             one_minus_b1: s.one_minus_b1,
+            lerp_high: s.lerp_high(),
+            lerp_low_f32: s.lerp_low_f32(),
+            lerp_high_f32: s.lerp_high_f32(),
             one_minus_b2: s.one_minus_b2,
             step_size: s.step_size,
             bc2_sqrt: s.bc2_sqrt,
@@ -192,13 +202,16 @@ impl AdamCoeffs {
     }
 
     /// The new first moment in f64. Torch `lerp(m, g, 1 - beta1)` switches
-    /// formula at weight 0.5; `LOW` is `1 - beta1 < 0.5`.
+    /// formula at weight 0.5; `LOW` is `1 - beta1 < 0.5`. The high branch
+    /// is torch's `g - (g - m) * (1 - w)` with `1 - w` formed from the
+    /// weight (ft-9c13f472 D5), which equals `beta1` only when the
+    /// subtraction is exact.
     #[inline(always)]
     fn moment1<const LOW: bool>(&self, g: f64, m: f64) -> f64 {
         if LOW {
             m + self.one_minus_b1 * (g - m)
         } else {
-            g - (g - m) * self.beta1
+            g - (g - m) * self.lerp_high
         }
     }
 
@@ -246,7 +259,7 @@ impl AdamCoeffs {
     /// [`AdamCoeffs::step`] for one element with the step's flags, or `None`
     /// when it is not finite.
     fn update(&self, p: f32, g: f32, m: f32, v: f32) -> Option<(f32, f32, f32)> {
-        let (np, nm, nv, finite) = match (self.decays, self.low()) {
+        let (np, nm, nv, finite) = match (self.decays, self.low(Numerics::Exact)) {
             (true, true) => self.step::<true, true>(p, g, m, v),
             (true, false) => self.step::<true, false>(p, g, m, v),
             (false, true) => self.step::<false, true>(p, g, m, v),
@@ -255,14 +268,21 @@ impl AdamCoeffs {
         finite.then_some((np, nm, nv))
     }
 
-    fn low(&self) -> bool {
-        self.one_minus_b1 < 0.5
+    /// The branch of `numerics`: the f64 weight's under Exact, the f32
+    /// weight's under Fast, where the weight is the f32 one the kernel
+    /// multiplies by.
+    fn low(&self, numerics: Numerics) -> bool {
+        match numerics {
+            Numerics::Exact => self.one_minus_b1 < 0.5,
+            Numerics::Fast => self.lerp_low_f32,
+        }
     }
 
-    /// The same scalars rounded to f32 once, for [`Numerics::Fast`].
+    /// The same scalars rounded to f32 once, for [`Numerics::Fast`]; the
+    /// high-branch coefficient is `1 - f32(1 - beta1)` in f32.
     fn fast(&self) -> AdamCoeffs32 {
         AdamCoeffs32 {
-            beta1: self.beta1 as f32,
+            lerp_high: self.lerp_high_f32,
             beta2: self.beta2 as f32,
             one_minus_b1: self.one_minus_b1 as f32,
             one_minus_b2: self.one_minus_b2 as f32,
@@ -280,7 +300,7 @@ impl AdamCoeffs {
 /// the step's samples.
 #[derive(Clone, Copy)]
 struct AdamCoeffs32 {
-    beta1: f32,
+    lerp_high: f32,
     beta2: f32,
     one_minus_b1: f32,
     one_minus_b2: f32,
@@ -363,7 +383,7 @@ impl AdamCoeffs32 {
         if LOW {
             m + self.one_minus_b1 * (g - m)
         } else {
-            g - (g - m) * self.beta1
+            g - (g - m) * self.lerp_high
         }
     }
 
@@ -512,7 +532,7 @@ pub(crate) fn adamw_in_place(
             err,
         ));
     }
-    let flags = (coeffs.decays, coeffs.low());
+    let flags = (coeffs.decays, coeffs.low(exec.numerics));
     match exec.numerics {
         Numerics::Exact => adam_passes(op, exec, param, grad, moment1, moment2, &coeffs, flags),
         Numerics::Fast => adam_passes(

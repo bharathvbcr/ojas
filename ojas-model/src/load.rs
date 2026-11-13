@@ -16,6 +16,8 @@
 //! Values are not scanned: a non-finite weight is refused by the first op
 //! that reads it (every backend checks its inputs), and the engine's tests
 //! load such files on purpose to drive the deferred-fault paths.
+//! `Trainer::resume_from` is the one reader that does scan: it refuses a
+//! non-finite weight or moment with `OjasError::NonFinite` (ft-9c13f472 D9).
 
 use std::collections::BTreeMap;
 

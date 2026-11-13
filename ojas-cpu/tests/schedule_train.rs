@@ -62,8 +62,25 @@ fn cosine_multiplier_matches_the_hand_derived_shape() {
 }
 
 #[test]
-fn warmup_zero_and_step_overflow_are_errors() {
-    assert_range(CosineSchedule::new(0, 20).map(|_| ()));
+fn warmup_zero_is_no_warmup_and_step_overflow_is_an_error() {
+    // ft-9c13f472 D3a: nanolab's `_warmup_mult` returns 1.0 for warmup 0
+    // (`schedules.py:53-56`), so this used to be a refusal and is now the
+    // schedule's cosine branch from step 0. Golden bits are nanolab's own
+    // `CosineSchedule` with `warmup_steps=0`, `lr=1.0`, total 20.
+    let none = CosineSchedule::new(0, 20).unwrap();
+    for (step, bits) in [
+        (0u64, 0x3ff0000000000000u64),
+        (1, 0x3fefd29d42af26c3),
+        (10, 0x3fe199999999999a),
+        (19, 0x3fbb04af84206386),
+        (20, 0x3fb999999999999a),
+    ] {
+        assert_eq!(
+            none.multiplier(step).unwrap().to_bits(),
+            bits,
+            "step {step}"
+        );
+    }
     assert_range(CosineSchedule::new(4, 0).map(|_| ()));
     let sched = CosineSchedule::new(4, 20).unwrap();
     assert_range(sched.multiplier(u64::MAX).map(|_| ()));

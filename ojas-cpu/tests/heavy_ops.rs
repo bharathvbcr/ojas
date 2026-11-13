@@ -505,7 +505,9 @@ fn adam_reference(
         if 1.0 - c.beta1 < 0.5 {
             mi += (1.0 - c.beta1) * (gi - mi);
         } else {
-            mi = gi - (gi - mi) * c.beta1;
+            // ft-9c13f472 D5: torch's `1 - weight`, not `beta1` (the same
+            // bits for beta1 >= 0.5, where `1 - beta1` is exact).
+            mi = gi - (gi - mi) * (1.0 - (1.0 - c.beta1));
         }
         vi = c.beta2 * vi + (1.0 - c.beta2) * gi * gi;
         let denom = vi.sqrt() / bc2.sqrt() + c.eps;
@@ -535,9 +537,11 @@ fn adam_reference_fast(
     let step = step_before + 1;
     let bc1 = 1.0 - ojas_core::pow_u64(c.beta1, step);
     let bc2 = 1.0 - ojas_core::pow_u64(c.beta2, step);
-    let beta1 = c.beta1 as f32;
     let beta2 = c.beta2 as f32;
     let one_minus_b1 = (1.0 - c.beta1) as f32;
+    // ft-9c13f472 D5: torch's f32 `1 - weight`, with the branch on the f32
+    // weight, in place of `f32(beta1)` and the f64 weight's branch.
+    let lerp_high = 1.0f32 - one_minus_b1;
     let one_minus_b2 = (1.0 - c.beta2) as f32;
     let step_size = (c.lr / bc1) as f32;
     let bc2_sqrt = bc2.sqrt() as f32;
@@ -547,10 +551,10 @@ fn adam_reference_fast(
     for i in 0..p.len() {
         let gi = g[i];
         let mut pi = p[i];
-        let mi = if 1.0 - c.beta1 < 0.5 {
+        let mi = if one_minus_b1 < 0.5 {
             m[i] + one_minus_b1 * (gi - m[i])
         } else {
-            gi - (gi - m[i]) * beta1
+            gi - (gi - m[i]) * lerp_high
         };
         let vi = beta2 * v2[i] + one_minus_b2 * gi * gi;
         let denom = vi.sqrt() / bc2_sqrt + eps;

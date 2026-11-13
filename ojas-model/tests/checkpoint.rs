@@ -705,6 +705,63 @@ fn a_missing_extra_retyped_or_reshaped_tensor_is_refused() {
     }
 }
 
+/// ft-9c13f472 D3b: `f32::MAX`, the way to clip nothing (`inf` is refused),
+/// prints as `3.4028235e38` in the saved train config and resumes to the
+/// same run.
+#[test]
+fn a_max_grad_clip_round_trips_through_the_checkpoint_config() {
+    let cfg = TrainConfig {
+        grad_clip: f32::MAX,
+        ..config()
+    };
+    let root = TempDir::new();
+    let (tmp, bin) = token_bin(20_000, 256);
+    let mut t = Trainer::new(exact(1 << 30), ModelSpec::tiny(), &host_params(5), bin, cfg).unwrap();
+    t.step().unwrap();
+    t.save(&root.ckpt()).unwrap();
+    let resumed = Trainer::resume_from(exact(1 << 30), &root.ckpt(), reopen(&tmp), cfg).unwrap();
+    assert_eq!(resumed.config().grad_clip.to_bits(), f32::MAX.to_bits());
+    assert_eq!(resumed.run_id(), t.run_id());
+    assert_eq!(snapshot(&resumed), snapshot(&t));
+}
+
+/// ft-9c13f472 D9: a weight or a moment holding NaN or an infinity is
+/// refused with `NonFinite` before any trainer exists, the directory
+/// untouched and nothing charged. Before, such a file resumed and failed
+/// at its first step.
+#[test]
+fn a_non_finite_weight_or_moment_is_refused_on_resume() {
+    for (file, name, value) in [
+        (MODEL_FILE, "tok_emb.weight", f32::NAN),
+        (MODEL_FILE, "norm_f.weight", f32::INFINITY),
+        (OPTIM_FILE, "adam_m.tok_emb.weight", f32::NEG_INFINITY),
+        (OPTIM_FILE, "adam_v.tok_emb.weight", f32::NAN),
+    ] {
+        let root = TempDir::new();
+        let (bin, _) = saved(&root.ckpt(), 5, 3);
+        // Overwrite the last four bytes of the tensor: its length stays.
+        edit(&root.ckpt().join(file), |es, _| {
+            let e = es.iter_mut().find(|e| e.name == name).unwrap();
+            let end = e.data.len();
+            e.data[end - 4..].copy_from_slice(&value.to_le_bytes());
+        });
+        let err = refused(&root.path, &root.ckpt(), &bin, config());
+        assert!(
+            matches!(err, OjasError::NonFinite { .. }),
+            "{file} {name}: {err:?}"
+        );
+    }
+    // A muon momentum, which `saved` also writes.
+    let root = TempDir::new();
+    let (bin, _) = saved(&root.ckpt(), 5, 3);
+    edit(&root.ckpt().join(OPTIM_FILE), |es, _| {
+        let e = es.iter_mut().find(|e| e.name.starts_with("muon.")).unwrap();
+        e.data[..4].copy_from_slice(&f32::NAN.to_le_bytes());
+    });
+    let err = refused(&root.path, &root.ckpt(), &bin, config());
+    assert!(matches!(err, OjasError::NonFinite { .. }), "muon: {err:?}");
+}
+
 #[test]
 fn metadata_that_is_not_exactly_the_documented_set_is_refused() {
     let other_spec = ModelSpec {
