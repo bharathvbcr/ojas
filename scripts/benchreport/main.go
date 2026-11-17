@@ -136,6 +136,60 @@ func prefix(s string, n int) string {
 	return s
 }
 
+// errNoRecords is the one refusal for a summary that read nothing: an empty
+// table that exits 0 would pass for a result. what names the kind of record,
+// where the directory, glob or file that held none.
+func errNoRecords(what, where string) error {
+	return fmt.Errorf("no %s read from %s", what, where)
+}
+
+// jsonlLine is one decoded line: its file, 1-based line number, stripped
+// text and record.
+type jsonlLine struct {
+	path string
+	n    int
+	text string
+	d    record
+}
+
+// walkJSONL is the one JSONL reader. It visits every file matching pattern
+// in sorted order and every non-blank line in it, and calls fn with the
+// decoded record. A line that does not decode, and any error fn returns, stop
+// the walk with an error naming file:line: a malformed line is never skipped.
+// It returns the number of records visited so a caller can refuse an empty
+// input with errNoRecords. file, when not nil, checks each matching file
+// before its lines are read, so a misnamed file is refused whether or not it
+// holds records.
+func walkJSONL(pattern string, file func(path string) error, fn func(l jsonlLine) error) (int, error) {
+	n := 0
+	for _, path := range globSorted(pattern) {
+		if file != nil {
+			if err := file(path); err != nil {
+				return n, err
+			}
+		}
+		lines, err := fileLines(path)
+		if err != nil {
+			return n, err
+		}
+		for i, line := range lines {
+			line = pyStrip(line)
+			if line == "" {
+				continue
+			}
+			d, err := decodeRecord(line)
+			if err == nil {
+				err = fn(jsonlLine{path, i + 1, line, d})
+			}
+			if err != nil {
+				return n, fmt.Errorf("%s:%d: %w", path, i+1, err)
+			}
+			n++
+		}
+	}
+	return n, nil
+}
+
 // readText reads a file as Python's open() in text mode does: "\r\n" and
 // "\r" become "\n".
 func readText(path string) (string, error) {
@@ -405,66 +459,81 @@ func statusOf(d record) string {
 // either order, and a line on warn names both sources as file:line. Any other
 // pair (error and error, ok and ok, anything with another status) keeps the
 // later record and says nothing.
+//
+// It is the one round loader: aggregate, cross-run and sweep-fit all read
+// their rounds here, so the retry rule and the malformed-line refusal
+// (walkJSONL) hold in each. A directory with no records is refused.
 func loadRounds(out string, warn io.Writer) (*runData, error) {
 	rs := &runData{by: map[int]*round{}}
-	for _, path := range globSorted(filepath.Join(out, "round*", "*.jsonl")) {
+	pattern := filepath.Join(out, "round*", "*.jsonl")
+	n, err := walkJSONL(pattern, roundDirOK, func(l jsonlLine) error {
+		path, d := l.path, l.d
 		r, err := roundOf(path)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		lines, err := fileLines(path)
+		rt, err := d.str("runtime")
 		if err != nil {
-			return nil, err
+			return err
 		}
-		for i, line := range lines {
-			line = pyStrip(line)
-			if line == "" {
-				continue
+		row, err := d.str("row")
+		if err != nil {
+			return err
+		}
+		// An info record about a row (`_gen_traffic` for each decode row)
+		// is keyed by that row too, so one per row survives.
+		if d.has("for") {
+			row = row + "@" + d.get("for")
+		}
+		rd := rs.by[r]
+		if rd == nil {
+			rd = &round{recs: map[rkey]record{}, src: map[rkey]string{}}
+			rs.by[r] = rd
+			rs.order = append(rs.order, r)
+		}
+		k := rkey{rt, row}
+		here := fmt.Sprintf("%s:%d", path, l.n)
+		prev, seen := rd.recs[k]
+		if !seen {
+			rd.keys = append(rd.keys, k)
+		} else if a, b := statusOf(prev), statusOf(d); (a == "ok" && b == "error") || (a == "error" && b == "ok") {
+			okSrc, errSrc := rd.src[k], here
+			if b == "ok" {
+				okSrc, errSrc = here, rd.src[k]
 			}
-			d, err := decodeRecord(line)
-			if err != nil {
-				return nil, fmt.Errorf("%s:%d: %v", path, i+1, err)
+			fmt.Fprintf(warn, "retried %s/%s in round %d: kept the ok record at %s, ignored the error record at %s\n",
+				rt, row, r, okSrc, errSrc)
+			if a == "ok" {
+				return nil
 			}
-			rt, err := d.str("runtime")
-			if err != nil {
-				return nil, fmt.Errorf("%s:%d: %v", path, i+1, err)
+		}
+		rd.recs[k] = d
+		rd.src[k] = here
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if n == 0 {
+		return nil, errNoRecords("records", pattern)
+	}
+	// Records that are all `_` rows (info, load, crash markers) hold no
+	// measurement either.
+	for _, rd := range rs.by {
+		for _, k := range rd.keys {
+			if !strings.HasPrefix(k.row, "_") {
+				return rs, nil
 			}
-			row, err := d.str("row")
-			if err != nil {
-				return nil, fmt.Errorf("%s:%d: %v", path, i+1, err)
-			}
-			// An info record about a row (`_gen_traffic` for each decode row)
-			// is keyed by that row too, so one per row survives.
-			if d.has("for") {
-				row = row + "@" + d.get("for")
-			}
-			rd := rs.by[r]
-			if rd == nil {
-				rd = &round{recs: map[rkey]record{}, src: map[rkey]string{}}
-				rs.by[r] = rd
-				rs.order = append(rs.order, r)
-			}
-			k := rkey{rt, row}
-			here := fmt.Sprintf("%s:%d", path, i+1)
-			prev, seen := rd.recs[k]
-			if !seen {
-				rd.keys = append(rd.keys, k)
-			} else if a, b := statusOf(prev), statusOf(d); (a == "ok" && b == "error") || (a == "error" && b == "ok") {
-				okSrc, errSrc := rd.src[k], here
-				if b == "ok" {
-					okSrc, errSrc = here, rd.src[k]
-				}
-				fmt.Fprintf(warn, "aggregate: retried %s/%s in round %d: kept the ok record at %s, ignored the error record at %s\n",
-					rt, row, r, okSrc, errSrc)
-				if a == "ok" {
-					continue
-				}
-			}
-			rd.recs[k] = d
-			rd.src[k] = here
 		}
 	}
-	return rs, nil
+	return nil, errNoRecords("benchmark rows", pattern)
+}
+
+// roundDirOK is the per-file check of the round loaders: the file sits in a
+// round<N> directory.
+func roundDirOK(path string) error {
+	_, err := roundOf(path)
+	return err
 }
 
 func fmtMS(x float64) string {
@@ -485,6 +554,23 @@ func rowNames(rs *runData, rt string) []string {
 			if k.rt == rt && !strings.HasPrefix(k.row, "_") && !seen[k.row] {
 				seen[k.row] = true
 				names = append(names, k.row)
+			}
+		}
+	}
+	return names
+}
+
+// unionRowNames is the rows of every run: the first run's order, then each
+// row a later run adds in the order that run adds it. A row that only a later
+// run has is still reported; the runs that lack it show NO DATA.
+func unionRowNames(runs []*runData, rt string) []string {
+	var names []string
+	seen := map[string]bool{}
+	for _, rs := range runs {
+		for _, n := range rowNames(rs, rt) {
+			if !seen[n] {
+				seen[n] = true
+				names = append(names, n)
 			}
 		}
 	}
@@ -711,24 +797,19 @@ func aggregateRun(out string, warn io.Writer) (text string, incomplete int, err 
 		lines = append(lines, "", "### Machine load around each runtime block", "",
 			"| round | lane | when | time | load avg (1, 5, 15 min) | GPU Device Utilization % |",
 			"| --: | :-- | :-- | :-- | :-- | --: |")
-		ll, err := fileLines(load)
-		if err != nil {
-			return "", 0, err
-		}
-		for i, line := range ll {
-			d, err := decodeRecord(line)
-			if err != nil {
-				return "", 0, fmt.Errorf("%s:%d: %v", load, i+1, err)
-			}
+		if _, err := walkJSONL(load, nil, func(l jsonlLine) error {
 			var cells []string
 			for _, k := range []string{"round", "lane", "when", "time", "load", "gpu_util_pct"} {
-				c, err := d.raw(k)
+				c, err := l.d.raw(k)
 				if err != nil {
-					return "", 0, fmt.Errorf("%s:%d: %v", load, i+1, err)
+					return err
 				}
 				cells = append(cells, c)
 			}
 			lines = append(lines, "| "+strings.Join(cells, " | ")+" |")
+			return nil
+		}); err != nil {
+			return "", 0, err
 		}
 	}
 	dr, err := decodeRates(rs)
@@ -740,9 +821,6 @@ func aggregateRun(out string, warn io.Writer) (text string, incomplete int, err 
 		return "", 0, err
 	}
 	lines = append(append(lines, dr...), pl...)
-	if len(rs.order) == 0 {
-		incomplete++
-	}
 	return strings.Join(lines, "\n") + "\n", incomplete, nil
 }
 
@@ -905,51 +983,21 @@ type gpuSample struct {
 // the ioreg GPU sample, before and after every row) per round and lane.
 func perRowLoad(out string) ([]string, error) {
 	var rows []string
-	for _, path := range globSorted(filepath.Join(out, "round*", "*.jsonl")) {
-		r, err := roundOf(path)
-		if err != nil {
-			return nil, err
+	var loads []float64
+	var gpus []gpuSample
+	cur := ""
+	// flush emits the row for the file just read, if it held load samples.
+	flush := func() error {
+		defer func() { loads, gpus = nil, nil }()
+		if cur == "" || (len(loads) == 0 && len(gpus) == 0) {
+			return nil
 		}
-		base := filepath.Base(path)
+		r, err := roundOf(cur)
+		if err != nil {
+			return err
+		}
+		base := filepath.Base(cur)
 		lane := base[:max(len(base)-6, 0)]
-		var loads []float64
-		var gpus []gpuSample
-		ll, err := fileLines(path)
-		if err != nil {
-			return nil, err
-		}
-		for i, line := range ll {
-			line = pyStrip(line)
-			if line == "" {
-				continue
-			}
-			d, err := decodeRecord(line)
-			if err != nil {
-				return nil, fmt.Errorf("%s:%d: %v", path, i+1, err)
-			}
-			if v, ok := d["row"]; !ok || v != "_load" {
-				continue
-			}
-			l, err := d.str("load")
-			if err != nil {
-				return nil, fmt.Errorf("%s:%d: %v", path, i+1, err)
-			}
-			if fs := strings.FieldsFunc(strings.ReplaceAll(l, ",", " "), pyIsSpace); len(fs) > 0 {
-				if f, err := pyFloat(fs[0]); err == nil {
-					loads = append(loads, f)
-				}
-			}
-			if v, ok := d["gpu_util_pct"]; ok && v != nil {
-				f, err := d.num("gpu_util_pct")
-				if err != nil {
-					return nil, fmt.Errorf("%s:%d: %v", path, i+1, err)
-				}
-				gpus = append(gpus, gpuSample{f, pyStr(v)})
-			}
-		}
-		if len(loads) == 0 && len(gpus) == 0 {
-			continue
-		}
 		lr, gr := "-", "-"
 		if len(loads) > 0 {
 			lr = ff(minOf(loads), 1) + "-" + ff(maxOf(loads), 1)
@@ -969,6 +1017,41 @@ func perRowLoad(out string) ([]string, error) {
 			gr = lo.s + " / " + ff(median(fs), 0) + " / " + hi.s
 		}
 		rows = append(rows, fmt.Sprintf("| %d | %s | %d | %s | %s |", r, lane, len(loads), lr, gr))
+		return nil
+	}
+	if _, err := walkJSONL(filepath.Join(out, "round*", "*.jsonl"), roundDirOK, func(l jsonlLine) error {
+		d := l.d
+		if l.path != cur {
+			if err := flush(); err != nil {
+				return err
+			}
+			cur = l.path
+		}
+		if v, ok := d["row"]; !ok || v != "_load" {
+			return nil
+		}
+		load, err := d.str("load")
+		if err != nil {
+			return err
+		}
+		if fs := strings.FieldsFunc(strings.ReplaceAll(load, ",", " "), pyIsSpace); len(fs) > 0 {
+			if f, err := pyFloat(fs[0]); err == nil {
+				loads = append(loads, f)
+			}
+		}
+		if v, ok := d["gpu_util_pct"]; ok && v != nil {
+			f, err := d.num("gpu_util_pct")
+			if err != nil {
+				return err
+			}
+			gpus = append(gpus, gpuSample{f, pyStr(v)})
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	if err := flush(); err != nil {
+		return nil, err
 	}
 	if len(rows) == 0 {
 		return nil, nil
@@ -991,7 +1074,7 @@ func crossRun(outs []string, warn io.Writer) (string, int, error) {
 		runs = append(runs, rs)
 	}
 	torchHas := map[string]bool{}
-	for _, n := range rowNames(runs[0], torchRT) {
+	for _, n := range unionRowNames(runs, torchRT) {
 		torchHas[n] = true
 	}
 	labels := make([]string, len(outs))
@@ -1014,7 +1097,7 @@ func crossRun(outs []string, warn io.Writer) (string, int, error) {
 		lines = append(lines, "### "+rt+" vs "+torchRT, "",
 			hdr+strings.Join(hs, " | ")+" | all rounds min-max | verdict |",
 			sep+strings.Join(ss, " | ")+" | :-- | :-- |")
-		for _, n := range rowNames(runs[0], rt) {
+		for _, n := range unionRowNames(runs, rt) {
 			trs := []string{n}
 			if torchHas[n+"_bf16"] {
 				trs = append(trs, n+"_bf16")
@@ -3137,42 +3220,44 @@ func (p *plotter) jsonlUnpaired(folder, sub string) error {
 	best := map[rr]float64{}
 	var rts []string
 	seen := map[string]bool{}
-	for _, path := range globSorted(filepath.Join(d, "round*.jsonl")) {
-		lines, err := fileLines(path)
+	pattern := filepath.Join(d, "round*.jsonl")
+	n, err := walkJSONL(pattern, nil, func(l jsonlLine) error {
+		j := l.d
+		if j.get("status") != "ok" || !j.has("min_ms") {
+			return nil
+		}
+		row, err := j.str("row")
 		if err != nil {
 			return err
 		}
-		for _, line := range lines {
-			j, err := decodeRecord(line)
-			if err != nil {
-				continue
-			}
-			if j.get("status") != "ok" || !j.has("min_ms") {
-				continue
-			}
-			row, err := j.str("row")
-			if err != nil {
-				return err
-			}
-			rt, err := j.str("runtime")
-			if err != nil {
-				return err
-			}
-			v, err := j.num("min_ms")
-			if err != nil {
-				return err
-			}
-			k := rr{row, rt}
-			old, ok := best[k]
-			if !ok {
-				old = 1e18
-			}
-			best[k] = math.Min(old, v)
-			if !seen[rt] {
-				seen[rt] = true
-				rts = append(rts, rt)
-			}
+		rt, err := j.str("runtime")
+		if err != nil {
+			return err
 		}
+		v, err := j.num("min_ms")
+		if err != nil {
+			return err
+		}
+		k := rr{row, rt}
+		old, ok := best[k]
+		if !ok {
+			old = 1e18
+		}
+		best[k] = math.Min(old, v)
+		if !seen[rt] {
+			seen[rt] = true
+			rts = append(rts, rt)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return errNoRecords("records", pattern)
+	}
+	if len(best) == 0 {
+		return errNoRecords("benchmark rows", pattern)
 	}
 	rowSet := map[string]bool{}
 	for k := range best {
@@ -3690,12 +3775,16 @@ func benchOps(args []string, w *strings.Builder) (int, error) {
 	var order []odKey
 	seen := map[odKey]bool{}
 	threadSet := map[int]bool{}
+	nrec := 0
 	for _, path := range fs.Args() {
 		lines, err := fileLines(path)
 		if err != nil {
 			return 0, err
 		}
 		for _, line := range lines {
+			if strings.HasPrefix(line, "OJAS_OP ") || strings.HasPrefix(line, "TORCH_OP ") {
+				nrec++
+			}
 			switch {
 			case strings.HasPrefix(line, "OJAS_OP "):
 				d := splitKV(line)
@@ -3736,6 +3825,9 @@ func benchOps(args []string, w *strings.Builder) (int, error) {
 				torch[tvKey{v[0], v[1], v[2]}] = append(torch[tvKey{v[0], v[1], v[2]}], ms)
 			}
 		}
+	}
+	if nrec == 0 {
+		return 0, errNoRecords("OJAS_OP or TORCH_OP lines", strings.Join(fs.Args(), " "))
 	}
 	prow := map[tvKey][]parityLine{}
 	type f64Key struct{ op, dir, out string }
@@ -4001,6 +4093,7 @@ func cpuAB(args []string, w *strings.Builder) (int, error) {
 	type rk struct{ a, b string }
 	// lanes[lane][round][key] = min_ms
 	lanes := map[string]map[int]map[rk]float64{}
+	nrec := 0
 	for _, path := range globSorted(filepath.Join(args[0], "*-*-*.txt")) {
 		m := cpuABFile.FindStringSubmatch(filepath.Base(path))
 		if m == nil {
@@ -4059,7 +4152,11 @@ func cpuAB(args []string, w *strings.Builder) (int, error) {
 				return 0, fmt.Errorf("%s: %v", path, err)
 			}
 			lanes[lane][rnd][key] = ms
+			nrec++
 		}
+	}
+	if nrec == 0 {
+		return 0, errNoRecords("OJAS_OP, OJAS_TAPE or TORCH_OP lines", args[0])
 	}
 	sortedRounds := func(m map[int]map[rk]float64) []int {
 		var rs []int
@@ -4205,6 +4302,9 @@ func cpuABLinux(args []string, w *strings.Builder) (int, error) {
 			}
 		}
 	}
+	if len(best) == 0 {
+		return 0, errNoRecords("OJAS_OP lines", args[0])
+	}
 	var keys []key
 	for k := range best {
 		keys = append(keys, k)
@@ -4280,6 +4380,9 @@ func attnAB(args []string, w *strings.Builder) (int, error) {
 			rows[k] = map[rt]map[string]float64{}
 		}
 		rows[k][rt{r, v[4]}] = fields
+	}
+	if len(rows) == 0 {
+		return 0, errNoRecords("AB lines", args[0])
 	}
 	var keys []key
 	for k := range rows {
@@ -4413,7 +4516,11 @@ func bpeSummary(args []string, w *strings.Builder) (int, error) {
 	var laneOrder []string
 	runs := map[string]map[int]*run{}
 	roundOrder := map[string][]int{}
-	for _, path := range globSorted(filepath.Join(args[0], "r*_*.txt")) {
+	bpeFiles := globSorted(filepath.Join(args[0], "r*_*.txt"))
+	if len(bpeFiles) == 0 {
+		return 0, errNoRecords("r<N>_<lane>.txt files", args[0])
+	}
+	for _, path := range bpeFiles {
 		m := bpeFile.FindStringSubmatch(filepath.Base(path))
 		if m == nil {
 			return 0, fmt.Errorf("AttributeError: %s is not r<N>_<lane>.txt", path)
@@ -4555,52 +4662,67 @@ func decodeAB(args []string, w *strings.Builder) (int, error) {
 	rows := map[lr]map[int]map[string]float64{}
 	problems := 0
 	var probText []string
-	for _, p := range globSorted(filepath.Join(args[0], "round*", "*.jsonl")) {
-		r, err := roundOf(p)
-		if err != nil {
-			return 0, err
-		}
+	pattern := filepath.Join(args[0], "round*", "*.jsonl")
+	laneSide := func(p string) (lane, side string, err error) {
 		base := filepath.Base(p)
 		parts := strings.Split(base[:max(len(base)-6, 0)], "-")
 		if len(parts) != 2 {
-			return 0, fmt.Errorf("ValueError: %s is not <lane>-<side>.jsonl", p)
+			return "", "", fmt.Errorf("ValueError: %s is not <lane>-<side>.jsonl", p)
 		}
-		lane, side := parts[0], parts[1]
-		lines, err := fileLines(p)
+		return parts[0], parts[1], nil
+	}
+	checkFile := func(p string) error {
+		if err := roundDirOK(p); err != nil {
+			return err
+		}
+		_, _, err := laneSide(p)
+		return err
+	}
+	n, err := walkJSONL(pattern, checkFile, func(l jsonlLine) error {
+		d := l.d
+		r, err := roundOf(l.path)
 		if err != nil {
-			return 0, err
+			return err
 		}
-		for i, line := range lines {
-			d, err := decodeRecord(line)
+		lane, side, err := laneSide(l.path)
+		if err != nil {
+			return err
+		}
+		st := d.get("status")
+		if _, isStr := d["status"].(string); !isStr {
+			st = "\x00" // neither ok nor info
+		}
+		if st == "ok" && d.has("median_ms") {
+			row, err := d.str("row")
 			if err != nil {
-				return 0, fmt.Errorf("%s:%d: %v", p, i+1, err)
+				return err
 			}
-			st := d.get("status")
-			if _, isStr := d["status"].(string); !isStr {
-				st = "\x00" // neither ok nor info
+			v, err := d.num(key)
+			if err != nil {
+				return err
 			}
-			if st == "ok" && d.has("median_ms") {
-				row, err := d.str("row")
-				if err != nil {
-					return 0, err
-				}
-				v, err := d.num(key)
-				if err != nil {
-					return 0, fmt.Errorf("%s:%d: %v", p, i+1, err)
-				}
-				k := lr{lane, row}
-				if rows[k] == nil {
-					rows[k] = map[int]map[string]float64{}
-				}
-				if rows[k][r] == nil {
-					rows[k][r] = map[string]float64{}
-				}
-				rows[k][r][side] = v
-			} else if st != "info" && st != "ok" {
-				problems++
-				probText = append(probText, fmt.Sprintf("PROBLEM %s %s %d %s", lane, side, r, pyStrip(line)))
+			k := lr{lane, row}
+			if rows[k] == nil {
+				rows[k] = map[int]map[string]float64{}
 			}
+			if rows[k][r] == nil {
+				rows[k][r] = map[string]float64{}
+			}
+			rows[k][r][side] = v
+		} else if st != "info" && st != "ok" {
+			problems++
+			probText = append(probText, fmt.Sprintf("PROBLEM %s %s %d %s", lane, side, r, l.text))
 		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	if n == 0 {
+		return 0, errNoRecords("records", pattern)
+	}
+	if len(rows) == 0 && len(probText) == 0 {
+		return 0, errNoRecords("benchmark rows", pattern)
 	}
 	for _, t := range probText {
 		pl(w, t)
@@ -4706,41 +4828,30 @@ func sweepFit(args []string, w *strings.Builder) (int, error) {
 	type rr struct{ rt, row string }
 	per := map[rr]map[int]record{}
 	rowSet := map[string]bool{}
-	for _, path := range globSorted(filepath.Join(args[0], "round*", "*.jsonl")) {
-		r, err := roundOf(path)
-		if err != nil {
-			return 0, err
-		}
-		lines, err := fileLines(path)
-		if err != nil {
-			return 0, err
-		}
-		for i, line := range lines {
-			line = pyStrip(line)
-			if line == "" {
+	problems := 0
+	rs, err := loadRounds(args[0], os.Stderr)
+	if err != nil {
+		return 0, err
+	}
+	for _, r := range rs.sorted() {
+		for _, k := range rs.by[r].keys {
+			d := rs.by[r].recs[k]
+			if st, isStr := d["status"].(string); !isStr || (st != "ok" && st != "info") {
+				problems++
+			}
+			// `_` rows and info records about a row (`for`) are not sweep rows.
+			if strings.HasPrefix(k.row, "_") || d.has("for") {
 				continue
 			}
-			d, err := decodeRecord(line)
-			if err != nil {
-				return 0, fmt.Errorf("%s:%d: %v", path, i+1, err)
+			if per[rr{k.rt, k.row}] == nil {
+				per[rr{k.rt, k.row}] = map[int]record{}
 			}
-			row, err := d.str("row")
-			if err != nil {
-				return 0, fmt.Errorf("%s:%d: %v", path, i+1, err)
-			}
-			if strings.HasPrefix(row, "_") {
-				continue
-			}
-			rt, err := d.str("runtime")
-			if err != nil {
-				return 0, fmt.Errorf("%s:%d: %v", path, i+1, err)
-			}
-			if per[rr{rt, row}] == nil {
-				per[rr{rt, row}] = map[int]record{}
-			}
-			per[rr{rt, row}][r] = d
-			rowSet[row] = true
+			per[rr{k.rt, k.row}][r] = d
+			rowSet[k.row] = true
 		}
+	}
+	if len(rowSet) == 0 {
+		return 0, errNoRecords("benchmark rows", args[0])
 	}
 	stats := func(rt, row string) (sweepStat, error) {
 		var bad []string
@@ -4931,5 +5042,5 @@ func sweepFit(args []string, w *strings.Builder) (int, error) {
 			pl(w, fmt.Sprintf("| %d | %s | %s | %s | %s | %s | %s |", b, rt, cb, pb, cx, px, ex))
 		}
 	}
-	return 0, nil
+	return problems, nil
 }

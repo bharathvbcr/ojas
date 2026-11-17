@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -320,10 +321,14 @@ func TestSummariesMatchPythonOracle(t *testing.T) {
 		{"sweep-fit", wantSweepFit, "sweep-fit", []string{p("sweep")}},
 		{"decode-ab", wantDecodeAB, "decode-ab", []string{p("dec"), "min_ms"}},
 	}
+	// The oracle printed the table and always exited 0. Its sweep-fit input has
+	// a torch-mps record with status "failed", which now fails the run (the
+	// text on stdout is still the oracle's).
+	wantCode := map[string]int{"sweep-fit": 1}
 	for _, c := range cases {
 		got, stderr, code := summarize1(t, c.cmd, c.args...)
 		got = strings.ReplaceAll(got, dir, "FX")
-		if code != 0 || got != c.want {
+		if code != wantCode[c.name] || got != c.want {
 			t.Errorf("%s: exit %d (%s); output differs from the Python oracle\n--- got\n%s\n--- want\n%s", c.name, code, stderr, got, c.want)
 		}
 	}
@@ -386,6 +391,276 @@ func TestSummariesFailLoudly(t *testing.T) {
 	out, stderr, code := summarize1(t, "decode-ab", dir)
 	if code != 1 || !strings.Contains(out, `PROBLEM metal before 1 {"row":"gen_x","status":"crash"}`) || !strings.Contains(stderr, "neither ok nor info") {
 		t.Errorf("decode-ab problem record: exit %d\n%s\n%s", code, out, stderr)
+	}
+}
+
+const (
+	okRow  = `{"runtime":"ojas-metal","row":"add","status":"ok","min_ms":1,"median_ms":1}` + "\n"
+	okTorc = `{"runtime":"torch-mps","row":"add","status":"ok","min_ms":2,"median_ms":2}` + "\n"
+	rowMM  = `{"runtime":"ojas-metal","row":"mm","status":"ok","min_ms":3,"median_ms":3}` + "\n"
+	torcMM = `{"runtime":"torch-mps","row":"mm","status":"ok","min_ms":6,"median_ms":6}` + "\n"
+)
+
+// Criterion 1: the rows of a cross-run check are the union over every run, not
+// the first run's rows. A row that only run B has shows NO DATA for run A and
+// makes the check incomplete.
+func TestCrossRunReportsRowOnlyInLaterRun(t *testing.T) {
+	a := writeRun(t, map[string]string{"round1/a.jsonl": okRow + okTorc})
+	b := writeRun(t, map[string]string{"round1/a.jsonl": okRow + okTorc + rowMM + torcMM})
+	var out, errb bytes.Buffer
+	code := runAggregate([]string{a, b}, &out, &errb)
+	if !strings.Contains(out.String(), "| mm | NO DATA | 2.00x [2.00-2.00] |") {
+		t.Errorf("row mm, only in run B, is not reported:\n%s", out.String())
+	}
+	if code != 1 || !strings.Contains(errb.String(), "incomplete") {
+		t.Errorf("exit %d, stderr %q; want 1 and an incomplete-rows message", code, errb.String())
+	}
+}
+
+// The row order is the first run's, then the rows later runs add, in order.
+func TestCrossRunRowOrderIsFirstRunThenAdditions(t *testing.T) {
+	a := writeRun(t, map[string]string{"round1/a.jsonl": rowMM + torcMM})
+	b := writeRun(t, map[string]string{"round1/a.jsonl": okRow + okTorc + rowMM + torcMM})
+	var out, errb bytes.Buffer
+	runAggregate([]string{a, b}, &out, &errb)
+	mm, add := strings.Index(out.String(), "| mm |"), strings.Index(out.String(), "| add |")
+	if mm < 0 || add < 0 || mm > add {
+		t.Errorf("want mm (run A) before add (added by run B):\n%s", out.String())
+	}
+}
+
+// Criterion 1: a run directory with no records is refused, whichever position
+// it is in. An empty first run used to give a header-only table and exit 0.
+func TestCrossRunRefusesEmptyRun(t *testing.T) {
+	full := writeRun(t, map[string]string{"round1/a.jsonl": okRow + okTorc})
+	empty := writeRun(t, map[string]string{"round1/a.jsonl": "\n"})
+	for name, args := range map[string][]string{"first": {empty, full}, "second": {full, empty}, "only": {empty}} {
+		var out, errb bytes.Buffer
+		code := runAggregate(args, &out, &errb)
+		if code != 1 || out.String() != "" || !strings.Contains(errb.String(), "no records read from "+empty) {
+			t.Errorf("%s run empty: exit %d, stdout %q, stderr %q; want 1, nothing on stdout, and the directory named", name, code, out.String(), errb.String())
+		}
+	}
+}
+
+// Criterion 2: every summary refuses an input that holds no records, naming
+// the path, instead of printing a header-only table and exiting 0.
+func TestSummariesRefuseEmptyInput(t *testing.T) {
+	cases := []struct {
+		name  string
+		files map[string]string
+		cmd   string
+		args  func(dir string) []string
+	}{
+		{"bench-ops log without op lines", map[string]string{"r.txt": "noise\n"}, "bench-ops",
+			func(d string) []string { return []string{filepath.Join(d, "r.txt")} }},
+		{"cpu-ab directory without lane files", map[string]string{"notes.txt": "x\n"}, "cpu-ab",
+			func(d string) []string { return []string{d} }},
+		{"cpu-ab lane files without op lines", map[string]string{"ops-1-after.txt": "noise\n"}, "cpu-ab",
+			func(d string) []string { return []string{d} }},
+		{"cpu-ab-linux directory without lane files", map[string]string{"notes.txt": "x\n"}, "cpu-ab-linux",
+			func(d string) []string { return []string{d} }},
+		{"attn-ab file without AB lines", map[string]string{"ab.txt": "noise\n"}, "attn-ab",
+			func(d string) []string { return []string{filepath.Join(d, "ab.txt")} }},
+		{"bpe directory without lane files", map[string]string{"notes.txt": "x\n"}, "bpe",
+			func(d string) []string { return []string{d, "base"} }},
+		{"decode-ab directory without rounds", map[string]string{"notes.txt": "x\n"}, "decode-ab",
+			func(d string) []string { return []string{d} }},
+		{"decode-ab rounds without records", map[string]string{"round1/metal-before.jsonl": "\n"}, "decode-ab",
+			func(d string) []string { return []string{d} }},
+		{"sweep-fit directory without rounds", map[string]string{"notes.txt": "x\n"}, "sweep-fit",
+			func(d string) []string { return []string{d} }},
+	}
+	for _, c := range cases {
+		dir := writeRun(t, c.files)
+		out, stderr, code := summarize1(t, c.cmd, c.args(dir)...)
+		if code != 1 || out != "" || !strings.Contains(stderr, "no ") || !strings.Contains(stderr, dir) {
+			t.Errorf("%s: exit %d, stdout %q, stderr %q; want 1, nothing on stdout, and a refusal naming %s", c.name, code, out, stderr, dir)
+		}
+	}
+}
+
+// Criterion 2: sweep-fit counts the records that are neither ok nor info and
+// fails the run on them; it used to return 0 whatever the records said.
+func TestSweepFitFailsOnProblemRecords(t *testing.T) {
+	good := `{"runtime":"ojas-metal","row":"sweep_silu_n1","status":"ok","min_ms":1,"median_ms":1}` + "\n"
+	bad := `{"runtime":"torch-mps","row":"sweep_silu_n1","status":"failed","detail":"x"}` + "\n"
+	crash := `{"runtime":"ojas-metal","row":"_process","status":"crash","exit":139}` + "\n"
+	for name, body := range map[string]string{"failed record": good + bad, "crash record": good + crash} {
+		dir := writeRun(t, map[string]string{"round1/m.jsonl": body})
+		out, stderr, code := summarize1(t, "sweep-fit", dir)
+		if code != 1 || out == "" || !strings.Contains(stderr, "1 record(s) were neither ok nor info") {
+			t.Errorf("%s: exit %d, stderr %q; want 1 with the table still printed", name, code, stderr)
+		}
+	}
+	dir := writeRun(t, map[string]string{"round1/m.jsonl": good})
+	if _, stderr, code := summarize1(t, "sweep-fit", dir); code != 0 {
+		t.Errorf("clean sweep: exit %d, stderr %q", code, stderr)
+	}
+}
+
+// Criterion 3: the retry rule of loadRounds holds in every reader that goes
+// through it. A failed attempt after (or before) an ok record for the same key
+// resolves to the ok record, so sweep-fit neither shows the error nor fails.
+func TestSweepFitAppliesTheRetryRule(t *testing.T) {
+	ok := `{"runtime":"torch-mps","row":"sweep_silu_n1","status":"ok","min_ms":1,"median_ms":1}` + "\n"
+	er := `{"runtime":"torch-mps","row":"sweep_silu_n1","status":"error","detail":"OSError(28)"}` + "\n"
+	for name, body := range map[string]string{"ok then error": ok + er, "error then ok": er + ok} {
+		dir := writeRun(t, map[string]string{"round1/m.jsonl": body})
+		out, stderr, code := summarize1(t, "sweep-fit", dir)
+		if code != 0 || !strings.Contains(out, "| 1 | missing | missing | 1.000 / 1.000 (0%) |") || strings.Contains(out, "error") {
+			t.Errorf("%s: exit %d, stderr %q; the ok record did not win:\n%s", name, code, stderr, out)
+		}
+	}
+}
+
+// Criterion 3: one malformed-line policy. Every reader of round files fails
+// on a line that is not a JSON object and names file:line; none skips it. The
+// unpaired-rows chart used to `continue` past it.
+func TestMalformedLineNamesFileLineInEveryLoader(t *testing.T) {
+	line := `{"runtime":"ojas-metal","row":"add","status":"ok","min_ms":1,"median_ms":1}` + "\n"
+	files := map[string]string{
+		"round1/metal-before.jsonl": line + "{not json}\n" + line,
+		"round1/metal-after.jsonl":  line,
+	}
+	for _, cmd := range []string{"decode-ab", "sweep-fit"} {
+		dir := writeRun(t, files)
+		out, stderr, code := summarize1(t, cmd, dir)
+		want := filepath.Join(dir, "round1", "metal-before.jsonl") + ":2:"
+		if code != 1 || out != "" || !strings.Contains(stderr, want) {
+			t.Errorf("%s: exit %d, stdout %q, stderr %q; want 1 and %q", cmd, code, out, stderr, want)
+		}
+	}
+	dir := writeRun(t, files)
+	var out, errb bytes.Buffer
+	if code := runAggregate([]string{dir}, &out, &errb); code != 1 || !strings.Contains(errb.String(), filepath.Join(dir, "round1", "metal-before.jsonl")+":2:") {
+		t.Errorf("aggregate: exit %d, stderr %q", code, errb.String())
+	}
+
+	pdir := writeRun(t, map[string]string{"f/s/round1.jsonl": line + "{not json}\n"})
+	p := &plotter{res: pdir, files: map[string]string{}, log: io.Discard}
+	err := p.jsonlUnpaired("f", "s")
+	if want := filepath.Join(pdir, "f", "s", "round1.jsonl") + ":2:"; err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("jsonlUnpaired: error %v; want one naming %s", err, want)
+	}
+	empty := writeRun(t, map[string]string{"f/s/round1.jsonl": "\n"})
+	p = &plotter{res: empty, files: map[string]string{}, log: io.Discard}
+	if err := p.jsonlUnpaired("f", "s"); err == nil || !strings.Contains(err.Error(), "no records read from") {
+		t.Errorf("jsonlUnpaired on an empty folder: error %v; want a refusal", err)
+	}
+}
+
+// Criterion 3: a blank line is not a record, in every loader. decode-ab used
+// to fail on one that ended a file.
+func TestDecodeABSkipsBlankLines(t *testing.T) {
+	dir := writeRun(t, map[string]string{
+		"round1/metal-before.jsonl": `{"row":"gen_prefill_p32","status":"ok","median_ms":2}` + "\n\n",
+		"round1/metal-after.jsonl":  `{"row":"gen_prefill_p32","status":"ok","median_ms":1}` + "\n\n",
+	})
+	out, stderr, code := summarize1(t, "decode-ab", dir)
+	if code != 0 || !strings.Contains(out, "| metal | gen_prefill_p32 | 2.00 | 1.00 |") {
+		t.Errorf("exit %d, stderr %q:\n%s", code, stderr, out)
+	}
+}
+
+// Records that are all `_` rows (info, load, crash markers) hold no benchmark
+// row: every reader refuses them as it refuses an empty input.
+func TestAllUnderscoreRecordsAreRefused(t *testing.T) {
+	load := `{"runtime":"ojas-metal","row":"_load","load":"1.0 2 3","status":"info"}` + "\n"
+	full := writeRun(t, map[string]string{"round1/a.jsonl": okRow + okTorc})
+	under := writeRun(t, map[string]string{"round1/a.jsonl": load})
+	var out, errb bytes.Buffer
+	for name, args := range map[string][]string{"aggregate": {under}, "cross-run first": {under, full}, "cross-run second": {full, under}} {
+		out.Reset()
+		errb.Reset()
+		if code := runAggregate(args, &out, &errb); code != 1 || out.String() != "" || !strings.Contains(errb.String(), "no benchmark rows read from "+under) {
+			t.Errorf("%s: exit %d, stdout %q, stderr %q", name, code, out.String(), errb.String())
+		}
+	}
+	dec := writeRun(t, map[string]string{"round1/metal-before.jsonl": load, "round1/metal-after.jsonl": load})
+	for cmd, dir := range map[string]string{"sweep-fit": under, "decode-ab": dec} {
+		o, stderr, code := summarize1(t, cmd, dir)
+		if code != 1 || o != "" || !strings.Contains(stderr, "no benchmark rows read from") {
+			t.Errorf("%s: exit %d, stdout %q, stderr %q", cmd, code, o, stderr)
+		}
+	}
+	// A sweep-fit input whose only rows are info records about a row.
+	forOnly := writeRun(t, map[string]string{"round1/a.jsonl": `{"runtime":"ojas-metal","row":"sweep_silu_n1","for":"zz","status":"info"}` + "\n"})
+	if o, stderr, code := summarize1(t, "sweep-fit", forOnly); code != 1 || o != "" || !strings.Contains(stderr, "no benchmark rows") {
+		t.Errorf("sweep-fit for-only: exit %d, stdout %q, stderr %q", code, o, stderr)
+	}
+	// Unpaired rows: every record is an error, a `_` row, or lacks min_ms.
+	body := `{"runtime":"a","row":"x","status":"error"}` + "\n" + load + `{"runtime":"a","row":"y","status":"ok"}` + "\n"
+	pdir := writeRun(t, map[string]string{"f/s/round1.jsonl": body})
+	p := &plotter{res: pdir, files: map[string]string{}, log: io.Discard}
+	if err := p.jsonlUnpaired("f", "s"); err == nil || !strings.Contains(err.Error(), "no benchmark rows read from") {
+		t.Errorf("jsonlUnpaired: error %v; want a refusal", err)
+	}
+}
+
+// sweep-fit reads the row from the record: an info record about a row (`for`)
+// is not a sweep row and must not be parsed as one.
+func TestSweepFitIgnoresForRecords(t *testing.T) {
+	body := `{"runtime":"ojas-metal","row":"sweep_silu_n1","for":"zz","status":"ok","min_ms":1,"median_ms":1}` + "\n" +
+		`{"runtime":"ojas-metal","row":"sweep_silu_n1000","status":"ok","min_ms":2,"median_ms":2}` + "\n"
+	dir := writeRun(t, map[string]string{"round1/m.jsonl": body})
+	out, stderr, code := summarize1(t, "sweep-fit", dir)
+	if code != 0 || !strings.Contains(out, "| 1000 | 2.000 / 2.000 (0%) |") {
+		t.Errorf("exit %d, stderr %q:\n%s", code, stderr, out)
+	}
+}
+
+// A misnamed round directory or lane file is refused whether or not it holds
+// records.
+func TestMisnamedFilesAreRefusedWhenEmpty(t *testing.T) {
+	good := map[string]string{"round1/a.jsonl": okRow + okTorc, "roundx/a.jsonl": "\n"}
+	dir := writeRun(t, good)
+	var out, errb bytes.Buffer
+	if code := runAggregate([]string{dir}, &out, &errb); code != 1 || !strings.Contains(errb.String(), `round directory "roundx"`) {
+		t.Errorf("aggregate: exit %d, stderr %q", code, errb.String())
+	}
+	sw := writeRun(t, map[string]string{"round1/a.jsonl": `{"runtime":"ojas-metal","row":"sweep_silu_n1","status":"ok","min_ms":1,"median_ms":1}` + "\n", "roundx/a.jsonl": ""})
+	if o, stderr, code := summarize1(t, "sweep-fit", sw); code != 1 || o != "" || !strings.Contains(stderr, `round directory "roundx"`) {
+		t.Errorf("sweep-fit: exit %d, stdout %q, stderr %q", code, o, stderr)
+	}
+	dec := writeRun(t, map[string]string{
+		"round1/metal-before.jsonl": `{"row":"gen_prefill_p32","status":"ok","median_ms":2}` + "\n",
+		"round1/metal-after.jsonl":  `{"row":"gen_prefill_p32","status":"ok","median_ms":1}` + "\n",
+		"round1/notes.jsonl":        "",
+	})
+	if o, stderr, code := summarize1(t, "decode-ab", dec); code != 1 || o != "" || !strings.Contains(stderr, "is not <lane>-<side>.jsonl") {
+		t.Errorf("decode-ab empty misnamed file: exit %d, stdout %q, stderr %q", code, o, stderr)
+	}
+	decRound := writeRun(t, map[string]string{
+		"round1/metal-before.jsonl": `{"row":"gen_prefill_p32","status":"ok","median_ms":2}` + "\n",
+		"roundx/metal-after.jsonl":  "",
+	})
+	if o, stderr, code := summarize1(t, "decode-ab", decRound); code != 1 || o != "" || !strings.Contains(stderr, `round directory "roundx"`) {
+		t.Errorf("decode-ab empty misnamed round: exit %d, stdout %q, stderr %q", code, o, stderr)
+	}
+}
+
+// The retry note names no subcommand: sweep-fit reads through the same loader.
+func TestRetryNoteHasNoSubcommandPrefix(t *testing.T) {
+	dir := writeRun(t, map[string]string{"round1/torch-mps.jsonl": retryOjas + retryTorch + retryErr})
+	var warn bytes.Buffer
+	if _, err := loadRounds(dir, &warn); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(warn.String(), "retried torch-mps/add in round 1") {
+		t.Errorf("note %q", warn.String())
+	}
+}
+
+// load.jsonl goes through the same reader: a blank line is not a record.
+func TestLoadJSONLSkipsBlankLines(t *testing.T) {
+	dir := writeRun(t, map[string]string{
+		"round1/a.jsonl": okRow + okTorc,
+		"load.jsonl":     `{"round":1,"lane":"metal","when":"start","time":"08:00","load":"1.0","gpu_util_pct":12}` + "\n\n",
+	})
+	var out, errb bytes.Buffer
+	if code := runAggregate([]string{dir}, &out, &errb); code != 0 || !strings.Contains(out.String(), "| 1 | metal | start | 08:00 | 1.0 | 12 |") {
+		t.Errorf("exit %d, stderr %q:\n%s", code, errb.String(), out.String())
 	}
 }
 
