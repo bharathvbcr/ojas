@@ -150,9 +150,9 @@ var (
 	// out three waits in a row is lost instead (ErrDeviceLost): the limit is
 	// tessl's CONSECUTIVE_EVENT_WAIT_TIMEOUTS (tessl/src/runtime.rs), which a
 	// completed wait resets.
-	ErrTimeout = errors.New("ojas: device wait timed out")
-	ErrBusy       = errors.New("ojas: busy")
-	ErrNonFinite  = errors.New("ojas: non-finite")
+	ErrTimeout   = errors.New("ojas: device wait timed out")
+	ErrBusy      = errors.New("ojas: busy")
+	ErrNonFinite = errors.New("ojas: non-finite")
 	// ErrPoisoned is the model's state, not the gusset handle's
 	// (gusset.ErrPoisoned). Every later TrainStep, SaveCheckpoint and
 	// GenerateIDs on the id refuses with it; Resume from a checkpoint.
