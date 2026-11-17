@@ -14,7 +14,7 @@
 
 use std::time::Instant;
 
-use ojas_core::{Backend, BackendCore, Budget, Tensor};
+use ojas_core::{Backend, Budget, Tensor};
 use ojas_cpu::CpuBackend;
 
 const T: usize = 2048;
@@ -107,6 +107,7 @@ fn frozen_linear_backward_cpu() {
 #[test]
 #[ignore = "benchmark; run with --release -- --ignored --nocapture --test-threads=1"]
 fn frozen_linear_backward_metal() {
+    use ojas_core::BackendCore;
     let m = ojas_metal::MetalBackend::new(Budget::new(24 << 30)).unwrap();
     rows("metal", &m, |t| m.upload(t).unwrap());
 }

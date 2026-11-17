@@ -10,6 +10,8 @@
 
 #![cfg(target_os = "macos")]
 
+mod common;
+
 use ojas_autograd::{Tape, Var};
 use ojas_core::{
     mrope_text_tables, Backend, BackendCore, Budget, MropeSection, Numerics, OjasError, Tensor,
@@ -109,14 +111,7 @@ fn run<Bk: Backend>(be: Bk, up: impl Fn(&Tensor) -> Tensor, checkpoint: bool) ->
 }
 
 fn metal() -> Option<MetalBackend> {
-    match MetalBackend::new(Budget::new(8 << 30)) {
-        Ok(m) => Some(m),
-        Err(e) if std::env::var_os("OJAS_ALLOW_NO_GPU").is_some() => {
-            eprintln!("no Metal device: {e:?}");
-            None
-        }
-        Err(e) => panic!("no Metal device (set OJAS_ALLOW_NO_GPU=1 to skip): {e:?}"),
-    }
+    common::metal_or_skip(Budget::new(8 << 30))
 }
 
 const NAMES: [&str; 11] = [

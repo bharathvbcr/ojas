@@ -25,6 +25,7 @@
 //!
 //! A missing file fails the test loudly; it is never skipped.
 
+mod common;
 mod qwen35_common;
 
 use std::path::PathBuf;
@@ -1546,15 +1547,11 @@ fn a_zero_sequence_then_a_real_one_sums_to_the_real_one() {
     assert!(grads_of(&mut q).iter().flatten().all(|x| *x == 0.0));
 }
 
+/// `None` when there is no Metal device and `OJAS_ALLOW_NO_GPU` is set.
 #[cfg(target_os = "macos")]
-fn metal() -> ojas_metal::MetalBackend {
-    ojas_metal::MetalBackend::new(ojas_core::Budget::new(2 << 30))
-        .unwrap_or_else(|e| panic!("no Metal device: {e:?}"))
-}
-
-#[cfg(target_os = "macos")]
-fn metal_provider() -> TapeStepProvider<ojas_metal::MetalBackend> {
+fn metal_provider() -> Option<TapeStepProvider<ojas_metal::MetalBackend>> {
     use ojas_metal::MetalBackend;
+    let backend = common::metal_or_skip(ojas_core::Budget::new(2 << 30))?;
     let hooks = DeviceHooks {
         freeze: Some(Box::new(|m: &MetalBackend, t: &Tensor| m.freeze_checked(t))),
         rebind: Some(Box::new(|m: &MetalBackend, b: ojas_core::Budget| {
@@ -1562,10 +1559,10 @@ fn metal_provider() -> TapeStepProvider<ojas_metal::MetalBackend> {
         })),
     };
     let mut p =
-        TapeStepProvider::open_lora(metal(), hooks, open_config(16), lora_init(true)).unwrap();
+        TapeStepProvider::open_lora(backend, hooks, open_config(16), lora_init(true)).unwrap();
     p.preflight(&tiny_calibration(), 16, &[16], 1 << 30, 0)
         .unwrap();
-    p
+    Some(p)
 }
 
 /// Device readbacks the budget has counted so far.
@@ -1577,7 +1574,9 @@ fn readbacks(p: &TapeStepProvider<ojas_metal::MetalBackend>) -> u64 {
 #[cfg(target_os = "macos")]
 #[test]
 fn on_metal_the_norm_and_the_update_read_each_gradient_once() {
-    let mut p = metal_provider();
+    let Some(mut p) = metal_provider() else {
+        return;
+    };
     let n = p.leaf_count() as u64;
     let (lr_scale, wd) = per_entry(n_trainable_any(&p));
     p.accumulate(&job(10, 1, 1.0, false).view(), BankMode::Overwrite, None)
@@ -1598,7 +1597,9 @@ fn on_metal_the_norm_and_the_update_read_each_gradient_once() {
     );
 
     // Without a norm the update reads each gradient once, not zero times.
-    let mut q = metal_provider();
+    let Some(mut q) = metal_provider() else {
+        return;
+    };
     q.accumulate(&job(10, 1, 1.0, false).view(), BankMode::Overwrite, None)
         .unwrap();
     let start = readbacks(&q);
