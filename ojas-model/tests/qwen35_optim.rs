@@ -4,7 +4,7 @@
 //! the CPU half shows the per-tensor loop is not all or nothing, which is
 //! why the two passes exist.
 
-use ojas_core::{AdamWConfig, BackendCore, BackendModule, Budget, DType, Numerics, Tensor};
+use ojas_core::{AdamWConfig, BackendModule, Budget, DType, Numerics, Tensor};
 use ojas_cpu::CpuBackend;
 use ojas_model::qwen35::optim::{adamw_all_or_nothing, AdamWEntry, OptimError, GRAD_ABS_LIMIT};
 
@@ -273,6 +273,7 @@ fn per_tensor_stepping_alone_is_not_all_or_nothing() {
 #[cfg(target_os = "macos")]
 mod metal {
     use super::*;
+    use ojas_core::BackendCore;
     use ojas_metal::MetalBackend;
 
     fn metal() -> Option<MetalBackend> {

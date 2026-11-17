@@ -18,7 +18,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use ojas_core::{AdamWConfig, Backend, BackendCore, Budget, Numerics, Tensor};
+use ojas_core::{AdamWConfig, Backend, Budget, Numerics, Tensor};
 use ojas_cpu::CpuBackend;
 use ojas_io::SafeTensors;
 
@@ -480,6 +480,7 @@ fn a_missing_fixture_fails_loudly() {
 #[cfg(target_os = "macos")]
 mod metal {
     use super::*;
+    use ojas_core::BackendCore;
     use ojas_metal::MetalBackend;
 
     fn backend() -> Option<MetalBackend> {

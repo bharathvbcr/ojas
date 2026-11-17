@@ -20,7 +20,7 @@ mod qwen35_common;
 use std::time::Instant;
 
 use ojas_autograd::Tape;
-use ojas_core::{Backend, BackendCore, Tensor};
+use ojas_core::{Backend, Tensor};
 use ojas_io::SafeTensors;
 use ojas_model::qwen35::{bind, forward_loss, load_hf, Qwen35Tables};
 use ojas_model::{ActivationCheckpoint, DEFAULT_CE_CHUNK};
@@ -110,6 +110,7 @@ fn forward_loss_cpu() {
 #[test]
 #[ignore = "benchmark; run with --release -- --ignored --nocapture --test-threads=1"]
 fn forward_loss_metal() {
+    use ojas_core::BackendCore;
     let Ok(m) = ojas_metal::MetalBackend::new(ojas_core::Budget::new(8 << 30)) else {
         println!("BENCH metal unavailable");
         return;
