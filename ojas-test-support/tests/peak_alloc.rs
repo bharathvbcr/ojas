@@ -10,10 +10,10 @@ static ALLOC: PeakAlloc = PeakAlloc::new();
 const MIB: usize = 1 << 20;
 
 #[test]
-fn the_peak_tracks_live_bytes_and_realloc_counts_the_net_change() {
+fn the_peak_tracks_live_bytes_and_a_moved_realloc_counts_both_blocks() {
     let base = ALLOC.live();
     let (buf, grew) = ALLOC.measure(|| vec![1u8; 4 * MIB]);
-    assert!(grew >= 4 * MIB && grew < 4 * MIB + 64 * 1024, "grew {grew}");
+    assert!((4 * MIB..4 * MIB + 64 * 1024).contains(&grew), "grew {grew}");
     assert!(ALLOC.live() >= base + 4 * MIB);
     drop(buf);
     assert!(
@@ -43,7 +43,7 @@ fn the_peak_tracks_live_bytes_and_realloc_counts_the_net_change() {
             );
         } else {
             assert!(
-                peak >= cap - old && peak < cap,
+                (cap - old..cap).contains(&peak),
                 "an in-place realloc charges only the growth: {old} -> {cap}, peak {peak}"
             );
         }
