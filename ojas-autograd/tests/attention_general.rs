@@ -6,6 +6,7 @@
 use ojas_autograd::{central_diff, gradients_match, Tape, Var};
 use ojas_core::{Backend, Budget, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
+use ojas_test_support::vals::vals_f64 as vals;
 
 const H: f64 = 1e-3;
 const ATOL: f64 = 2e-3;
@@ -18,19 +19,6 @@ fn cpu(numerics: Numerics) -> CpuBackend {
 fn f32t(budget: &Budget, data: &[f64], shape: &[usize]) -> Tensor {
     let f: Vec<f32> = data.iter().map(|&v| v as f32).collect();
     Tensor::from_f32(&f, shape, budget).unwrap()
-}
-
-/// Deterministic values in `[-amp, amp)`.
-fn vals(seed: u64, n: usize, amp: f64) -> Vec<f64> {
-    let mut s = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
-    (0..n)
-        .map(|_| {
-            s ^= s << 13;
-            s ^= s >> 7;
-            s ^= s << 17;
-            ((s >> 40) as f64 / (1u64 << 24) as f64 * 2.0 - 1.0) * amp
-        })
-        .collect()
 }
 
 #[derive(Clone, Copy)]

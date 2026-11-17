@@ -7,18 +7,7 @@
 use ojas_autograd::Tape;
 use ojas_core::{Budget, Numerics, Tensor};
 use ojas_cpu::CpuBackend;
-
-fn vals(seed: u64, n: usize, amp: f32) -> Vec<f32> {
-    let mut s = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
-    (0..n)
-        .map(|_| {
-            s ^= s << 13;
-            s ^= s >> 7;
-            s ^= s << 17;
-            ((s >> 40) as f32 / (1u64 << 24) as f32 * 2.0 - 1.0) * amp
-        })
-        .collect()
-}
+use ojas_test_support::vals::vals;
 
 #[test]
 fn a_batch_row_with_no_keys_has_zero_output_and_zero_gradients_on_the_tape() {

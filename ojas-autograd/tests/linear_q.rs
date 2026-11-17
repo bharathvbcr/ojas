@@ -19,6 +19,7 @@ use ojas_core::{
     BackendModule, Budget, OjasError, PlacedAffine, Tensor,
 };
 use ojas_cpu::CpuBackend;
+use ojas_test_support::vals::vals_range as vals;
 
 const ROWS: usize = 6;
 const D0: usize = 128;
@@ -26,19 +27,6 @@ const D1: usize = 192;
 
 fn cpu() -> CpuBackend {
     CpuBackend::new(Budget::new(1 << 28))
-}
-
-/// Deterministic values in `[lo, hi)`.
-fn vals(seed: u64, n: usize, lo: f32, hi: f32) -> Vec<f32> {
-    let mut s = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
-    (0..n)
-        .map(|_| {
-            s ^= s << 13;
-            s ^= s >> 7;
-            s ^= s << 17;
-            lo + (hi - lo) * ((s >> 40) as f32 / (1u64 << 24) as f32)
-        })
-        .collect()
 }
 
 fn bits(t: &Tensor) -> Vec<u32> {

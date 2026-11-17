@@ -567,6 +567,7 @@ dependencies = [
  "ojas-cpu",
  "ojas-kernels",
  "ojas-metal",
+ "ojas-test-support",
  "ojas-wgpu",
 ]
 
@@ -598,6 +599,9 @@ dependencies = [
 [[package]]
 name = "ojas-core"
 version = "0.1.0"
+dependencies = [
+ "ojas-test-support",
+]
 
 [[package]]
 name = "ojas-cpu"
@@ -605,6 +609,7 @@ version = "0.1.0"
 dependencies = [
  "ojas-core",
  "ojas-simd",
+ "ojas-test-support",
 ]
 
 [[package]]
@@ -626,6 +631,7 @@ dependencies = [
  "ojas-core",
  "ojas-io",
  "ojas-kernels",
+ "ojas-test-support",
 ]
 
 [[package]]
@@ -688,6 +694,7 @@ dependencies = [
  "ojas-data",
  "ojas-device",
  "ojas-oracle",
+ "ojas-test-support",
  "tessl",
 ]
 
@@ -703,6 +710,7 @@ dependencies = [
  "ojas-io",
  "ojas-metal",
  "ojas-oracle",
+ "ojas-test-support",
  "ojas-train",
  "ojas-wgpu",
 ]
@@ -734,6 +742,13 @@ dependencies = [
 [[package]]
 name = "ojas-simd"
 version = "0.1.0"
+dependencies = [
+ "ojas-test-support",
+]
+
+[[package]]
+name = "ojas-test-support"
+version = "0.1.0"
 
 [[package]]
 name = "ojas-train"
@@ -752,6 +767,7 @@ dependencies = [
  "ojas-device",
  "ojas-kernels",
  "ojas-oracle",
+ "ojas-test-support",
  "pollster",
  "wgpu",
 ]

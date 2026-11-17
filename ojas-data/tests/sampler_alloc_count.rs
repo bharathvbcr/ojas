@@ -5,46 +5,11 @@
 //! buffer inside the read, so the count grew with `B`.
 
 use ojas_data::{BatchSampler, SamplerConfig, TokenBin};
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
+use ojas_test_support::{thread_allocs as allocs, ThreadAllocCount};
 use std::path::PathBuf;
 
-thread_local! {
-    static ALLOCS: Cell<usize> = const { Cell::new(0) };
-}
-
-/// Counts allocations per thread.
-struct Counting;
-
-// SAFETY: every method forwards to `System` unchanged and only bumps a
-// thread-local counter.
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
-        unsafe { System.alloc_zeroed(layout) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(ptr, layout) }
-    }
-
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-}
-
 #[global_allocator]
-static ALLOC: Counting = Counting;
-
-fn allocs() -> usize {
-    ALLOCS.with(Cell::get)
-}
+static ALLOC: ThreadAllocCount = ThreadAllocCount;
 
 struct Tmp(PathBuf);
 

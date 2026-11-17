@@ -12,3 +12,6 @@ description = "Fast-tier f32 GEMM: NEON and AVX2+FMA micro-kernels, portable mul
 accelerate = []
 
 [dependencies]
+
+[dev-dependencies]
+ojas-test-support = { path = "../ojas-test-support" }

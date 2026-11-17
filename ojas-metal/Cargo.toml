@@ -25,6 +25,7 @@ tessl = { path = "../../tessl", optional = true }
 ojas-cpu = { path = "../ojas-cpu" }
 ojas-data = { path = "../ojas-data" }
 ojas-oracle = { path = "../ojas-oracle" }
+ojas-test-support = { path = "../ojas-test-support" }
 
 [[example]]
 name = "metal_bench"

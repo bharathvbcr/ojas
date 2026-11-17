@@ -8,3 +8,6 @@ publish.workspace = true
 description = "Frozen ojas API: tensors, errors, backend trait, checkpoint schema."
 
 [dependencies]
+
+[dev-dependencies]
+ojas-test-support = { path = "../ojas-test-support" }

@@ -20,6 +20,7 @@ use ojas_autograd::{Tape, Var};
 use ojas_core::{Backend, BackendCore, BackendId, Budget, Numerics, Tensor};
 use ojas_cpu::CpuBackend;
 use ojas_metal::MetalBackend;
+use ojas_test_support::vals::vals_unit as vals;
 
 const ALLOW_NO_GPU: &str = "OJAS_ALLOW_NO_GPU";
 /// Metal against the CPU `Exact` tape, relative to each gradient's own peak.
@@ -39,18 +40,6 @@ fn open() -> Option<MetalBackend> {
              {ALLOW_NO_GPU}=1 to skip it explicitly on a machine without one"
         ),
     }
-}
-
-fn vals(seed: u64, n: usize) -> Vec<f32> {
-    let mut s = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
-    (0..n)
-        .map(|_| {
-            s ^= s << 13;
-            s ^= s >> 7;
-            s ^= s << 17;
-            -1.0 + 2.0 * ((s >> 40) as f32 / (1u64 << 24) as f32)
-        })
-        .collect()
 }
 
 fn host(seed: u64, shape: &[usize], near_one: bool) -> Tensor {

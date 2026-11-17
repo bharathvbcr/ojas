@@ -17,67 +17,15 @@
 
 mod common;
 
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use common::SplitMix64;
 use ojas_core::{BackendModule, Budget, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
-
-struct Counting;
-
-static LIVE: AtomicUsize = AtomicUsize::new(0);
-static PEAK: AtomicUsize = AtomicUsize::new(0);
-
-fn grow(bytes: usize) {
-    let now = LIVE.fetch_add(bytes, Ordering::SeqCst) + bytes;
-    PEAK.fetch_max(now, Ordering::SeqCst);
-}
-
-fn shrink(bytes: usize) {
-    LIVE.fetch_sub(bytes, Ordering::SeqCst);
-}
-
-// SAFETY: every method forwards to `System` with the caller's arguments
-// unchanged and only updates two counters on success.
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let p = unsafe { System.alloc(layout) };
-        if !p.is_null() {
-            grow(layout.size());
-        }
-        p
-    }
-
-    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        let p = unsafe { System.alloc_zeroed(layout) };
-        if !p.is_null() {
-            grow(layout.size());
-        }
-        p
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(ptr, layout) };
-        shrink(layout.size());
-    }
-
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        let p = unsafe { System.realloc(ptr, layout, new_size) };
-        if !p.is_null() {
-            if new_size >= layout.size() {
-                grow(new_size - layout.size());
-            } else {
-                shrink(layout.size() - new_size);
-            }
-        }
-        p
-    }
-}
+use ojas_test_support::PeakAlloc;
 
 #[global_allocator]
-static ALLOC: Counting = Counting;
+static ALLOC: PeakAlloc = PeakAlloc::new();
 
 /// Heap measurements need the whole process to themselves.
 static SERIAL: Mutex<()> = Mutex::new(());
@@ -121,12 +69,7 @@ fn charged_peak(be: &CpuBackend, op: Op<'_>) -> u64 {
 
 /// Heap high-water growth while `op` runs, outputs included.
 fn heap_peak(be: &CpuBackend, op: Op<'_>) -> usize {
-    let base = LIVE.load(Ordering::SeqCst);
-    PEAK.store(base, Ordering::SeqCst);
-    let out = op(be).unwrap();
-    let peak = PEAK.load(Ordering::SeqCst) - base;
-    drop(out);
-    peak
+    ALLOC.measure(|| op(be).unwrap()).1
 }
 
 struct Measured {

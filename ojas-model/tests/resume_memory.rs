@@ -7,66 +7,15 @@
 
 mod common;
 
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 use common::{token_bin, TempDir};
 use ojas_core::{Budget, Numerics};
 use ojas_cpu::{CosineSchedule, CpuBackend, LrSchedule};
 use ojas_data::TokenBin;
 use ojas_model::{init_params, ModelSpec, TrainConfig, Trainer};
-
-/// The system allocator, counting live bytes and their peak.
-struct Counting;
-
-static LIVE: AtomicUsize = AtomicUsize::new(0);
-static PEAK: AtomicUsize = AtomicUsize::new(0);
-
-fn grew(by: usize) {
-    let now = LIVE.fetch_add(by, Ordering::SeqCst) + by;
-    PEAK.fetch_max(now, Ordering::SeqCst);
-}
-
-// SAFETY: every call forwards to `System` with the caller's arguments; the
-// counters do not affect what is allocated.
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        // SAFETY: forwarded unchanged.
-        let p = unsafe { System.alloc(layout) };
-        if !p.is_null() {
-            grew(layout.size());
-        }
-        p
-    }
-
-    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        // SAFETY: forwarded unchanged.
-        let p = unsafe { System.alloc_zeroed(layout) };
-        if !p.is_null() {
-            grew(layout.size());
-        }
-        p
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // SAFETY: forwarded unchanged.
-        unsafe { System.dealloc(ptr, layout) };
-        LIVE.fetch_sub(layout.size(), Ordering::SeqCst);
-    }
-
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        // SAFETY: forwarded unchanged.
-        let p = unsafe { System.realloc(ptr, layout, new_size) };
-        if !p.is_null() {
-            LIVE.fetch_sub(layout.size(), Ordering::SeqCst);
-            grew(new_size);
-        }
-        p
-    }
-}
+use ojas_test_support::PeakAlloc;
 
 #[global_allocator]
-static ALLOC: Counting = Counting;
+static ALLOC: PeakAlloc = PeakAlloc::new();
 
 fn exact() -> CpuBackend {
     CpuBackend::new(Budget::new(1 << 30)).with_numerics(Numerics::Exact)
@@ -102,11 +51,11 @@ fn resume_peaks_below_one_extra_embedding() {
     let backend = exact();
     let bin = TokenBin::open_headerless(&tmp.path).unwrap();
     let cfg = config();
-    let base = LIVE.load(Ordering::SeqCst);
-    PEAK.store(base, Ordering::SeqCst);
+    let base = ALLOC.live();
+    ALLOC.reset_peak();
     let resumed = Trainer::resume_from(backend, &dir.ckpt(), bin, cfg).unwrap();
-    let peak = PEAK.load(Ordering::SeqCst) - base;
-    let kept = LIVE.load(Ordering::SeqCst) - base;
+    let peak = ALLOC.peak() - base;
+    let kept = ALLOC.live() - base;
     let transient = peak - kept;
     eprintln!(
         "resume: kept {kept} bytes, peak {peak}, transient {transient}, embedding {embedding}"

@@ -17,24 +17,12 @@ use ojas_core::{
     BackendModule, Budget, Conv2dParams, ConvTranspose2dParams, Numerics, Tensor,
 };
 use ojas_cpu::CpuBackend;
+use ojas_test_support::vals::vals_range_f64 as vals;
 
 fn cpu(threads: usize, numerics: Numerics) -> CpuBackend {
     CpuBackend::with_threads(Budget::new(1 << 28), threads)
         .unwrap()
         .with_numerics(numerics)
-}
-
-/// Deterministic values in `[lo, hi)`.
-fn vals(seed: u64, n: usize, lo: f64, hi: f64) -> Vec<f64> {
-    let mut s = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
-    (0..n)
-        .map(|_| {
-            s ^= s << 13;
-            s ^= s >> 7;
-            s ^= s << 17;
-            lo + (hi - lo) * ((s >> 11) as f64 / (1u64 << 53) as f64)
-        })
-        .collect()
 }
 
 /// Random values already rounded to f32, so the reference sees exactly what

@@ -4,36 +4,11 @@
 //! is encoded into the mapping a bounded piece at a time. A counting global
 //! allocator in this test binary measures the host heap's peak.
 
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 use ojas_core::{BackendCore, Budget, Tensor};
-
-struct Counting;
-
-static LIVE: AtomicUsize = AtomicUsize::new(0);
-static PEAK: AtomicUsize = AtomicUsize::new(0);
-
-// SAFETY: every call forwards to the system allocator unchanged; the
-// counters are bookkeeping only.
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let p = unsafe { System.alloc(layout) };
-        if !p.is_null() {
-            let now = LIVE.fetch_add(layout.size(), Ordering::Relaxed) + layout.size();
-            PEAK.fetch_max(now, Ordering::Relaxed);
-        }
-        p
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(ptr, layout) };
-        LIVE.fetch_sub(layout.size(), Ordering::Relaxed);
-    }
-}
+use ojas_test_support::PeakAlloc;
 
 #[global_allocator]
-static GLOBAL: Counting = Counting;
+static ALLOC: PeakAlloc = PeakAlloc::new();
 
 #[test]
 fn a_large_upload_makes_no_second_host_copy() {
@@ -43,11 +18,11 @@ fn a_large_upload_makes_no_second_host_copy() {
     // Warm the device path (pipelines, pools) on a small upload first.
     drop(backend.upload(&Tensor::from_f32(&[1.0; 64], &[64], &Budget::new(1 << 20)).unwrap()));
     backend.sync().unwrap();
-    let base = LIVE.load(Ordering::Relaxed);
-    PEAK.store(base, Ordering::Relaxed);
-    let dev = backend.upload(&host).unwrap();
-    backend.sync().unwrap();
-    let grew = PEAK.load(Ordering::Relaxed) - base;
+    let (dev, grew) = ALLOC.measure(|| {
+        let dev = backend.upload(&host).unwrap();
+        backend.sync().unwrap();
+        dev
+    });
     assert!(
         grew < 8 << 20,
         "the upload peaked {grew} bytes over the heap it started with (a copy is {} bytes)",

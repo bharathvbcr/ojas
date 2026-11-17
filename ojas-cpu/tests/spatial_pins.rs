@@ -7,6 +7,7 @@ mod common;
 
 use ojas_core::{BackendModule, Budget, Conv2dParams, ConvTranspose2dParams, Numerics, Tensor};
 use ojas_cpu::CpuBackend;
+use ojas_test_support::vals::vals_range_f64;
 
 fn cpu() -> CpuBackend {
     CpuBackend::with_threads(Budget::new(1 << 28), 1)
@@ -28,14 +29,9 @@ fn near(name: &str, got: &[f32], want: &[f64], tol: f64) {
 
 /// Deterministic f32-representable values.
 fn vals(seed: u64, n: usize) -> Vec<f64> {
-    let mut s = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
-    (0..n)
-        .map(|_| {
-            s ^= s << 13;
-            s ^= s >> 7;
-            s ^= s << 17;
-            f64::from((((s >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0) as f32)
-        })
+    vals_range_f64(seed, n, -1.0, 1.0)
+        .into_iter()
+        .map(|x| f64::from(x as f32))
         .collect()
 }
 
