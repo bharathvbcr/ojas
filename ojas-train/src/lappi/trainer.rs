@@ -1420,8 +1420,10 @@ where
     }
     let mut micro_batches = 0u64;
     let mut counts = BatchCounts::default();
-    // The epoch-end checkpoint the epoch now running started from; removed once it has a successor.
-    let mut crossed: Option<PathBuf> = None;
+    // The epoch-end checkpoint an epoch crosses from is its `train_with_table` call's resume
+    // point, so that call's first checkpoint removes it (`previous_resume_point`); this loop
+    // removes nothing itself. A second removal here failed every run of more than one epoch with
+    // NotFound once that call took over.
     loop {
         let EpochSource { batches, count } = source(epoch)?;
         if let Some(s) = &state
@@ -1429,12 +1431,10 @@ where
             && epoch + 1 < cfg.epochs
         {
             // Cut exactly at an epoch's end: nothing of this epoch is left to train.
-            let dir = s.dir.clone();
             state = state
                 .take()
                 .map(|s| s.advance_to_epoch(epoch + 1, count))
                 .transpose()?;
-            crossed = Some(dir);
             epoch += 1;
             continue;
         }
@@ -1459,13 +1459,6 @@ where
         result.micro_batches = micro_batches;
         result.counts = counts;
         result.wall_clock_s = run_clock.elapsed_s()?;
-        if let (Some(old), Some(new), Some(policy)) =
-            (&crossed, &result.final_checkpoint, &cfg.checkpoint)
-            && old != new
-            && old.parent() == Some(policy.dir.as_path())
-        {
-            fs::remove_dir_all(old).map_err(|e| io(old, e))?;
-        }
         if epoch + 1 == cfg.epochs || result.termination != Termination::DataExhausted {
             if result.termination == Termination::StepsExhausted && epoch + 1 < cfg.epochs {
                 return Err(TrainError::Refused(format!(
@@ -1488,7 +1481,6 @@ where
             )));
         };
         state = Some(ResumeState::read(&ckpt)?.advance_to_epoch(epoch + 1, count)?);
-        crossed = Some(ckpt);
         epoch += 1;
     }
 }
