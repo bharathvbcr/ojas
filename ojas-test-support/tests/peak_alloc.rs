@@ -13,7 +13,10 @@ const MIB: usize = 1 << 20;
 fn the_peak_tracks_live_bytes_and_a_moved_realloc_counts_both_blocks() {
     let base = ALLOC.live();
     let (buf, grew) = ALLOC.measure(|| vec![1u8; 4 * MIB]);
-    assert!((4 * MIB..4 * MIB + 64 * 1024).contains(&grew), "grew {grew}");
+    assert!(
+        (4 * MIB..4 * MIB + 64 * 1024).contains(&grew),
+        "grew {grew}"
+    );
     assert!(ALLOC.live() >= base + 4 * MIB);
     drop(buf);
     assert!(

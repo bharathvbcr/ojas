@@ -691,7 +691,11 @@ fn a_run_of_three_epochs_finishes_and_leaves_one_resume_point() {
     let dir = root.join("run");
     let last = run_epochs(dir.clone(), 3, None).unwrap_or_else(|e| panic!("train_epochs: {e}"));
     assert_eq!(last, dir.join("ckpt-00000006"));
-    assert_eq!(names(&dir), ["ckpt-00000006"], "superseded resume points remain");
+    assert_eq!(
+        names(&dir),
+        ["ckpt-00000006"],
+        "superseded resume points remain"
+    );
     ResumeState::read(&last).unwrap();
     std::fs::remove_dir_all(root).ok();
 }
@@ -721,7 +725,11 @@ fn a_resume_cut_at_an_epoch_end_finishes_and_leaves_one_resume_point() {
     let last =
         run_epochs(dir.clone(), 2, Some(state)).unwrap_or_else(|e| panic!("train_epochs: {e}"));
     assert_eq!(last, dir.join("ckpt-00000004"));
-    assert_eq!(names(&dir), ["ckpt-00000004"], "superseded resume points remain");
+    assert_eq!(
+        names(&dir),
+        ["ckpt-00000004"],
+        "superseded resume points remain"
+    );
     ResumeState::read(&last).unwrap();
     std::fs::remove_dir_all(root).ok();
 }
