@@ -5,6 +5,7 @@
 //! A short file or a length that runs past the end is an error.
 
 use crate::error::IoError;
+use crate::open::open_regular_file;
 use crate::posread::ReadAt;
 use crate::replace::replace_with;
 use ojas_core::{read_prefix, CheckpointV1, DType, DataCursor, NamedBlob, OptimizerCheckpoint};
@@ -48,9 +49,12 @@ fn exceeds_checkpoint_cap(n: u64, cap: u64) -> bool {
     n > cap
 }
 
+/// The open is [`open_regular_file`]'s: a FIFO or device is refused without
+/// blocking (a plain `File::open` of a FIFO waits for a writer), and every
+/// failure names `path`.
 pub fn read_checkpoint(path: &Path) -> Result<CheckpointV1, IoError> {
     let what = path.display();
-    let file = File::open(path).map_err(|e| IoError::io(format!("{what}: {e}"), e))?;
+    let (file, _) = open_regular_file(path)?;
     read_checkpoint_from(file).map_err(|e| IoError::wrap(format!("{what}: {}", e.detail()), e))
 }
 

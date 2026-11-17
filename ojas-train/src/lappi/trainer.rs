@@ -29,13 +29,15 @@
 //! checkpoint that resumes the exact trajectory (the consumed digest of the skipped prefix must
 //! match), and the three termination reasons.
 
+use std::collections::BTreeSet;
 use std::fmt;
 use std::fs;
-use std::io::Write as _;
-use std::path::{Path, PathBuf};
+use std::io::{Read as _, Write as _};
+use std::path::{Component, Path, PathBuf};
 
-use ojas_io::json::{JsonValue as Value, parse_json};
-use ojas_io::sha256::{Sha256, sha256};
+use ojas_io::json::{DEFAULT_MAX_INPUT_BYTES, JsonValue as Value, parse_json};
+use ojas_io::sha256::{Sha256, handle_sha256_hex, sha256};
+use ojas_io::{IoError, open_nofollow, read_regular_text};
 
 use super::adamw::{EntryState, Moments, adamw_entry_check};
 use super::pyjson::{CANONICAL, PyJsonError, dumps, float_fromhex, float_hex, obj};
@@ -56,6 +58,23 @@ pub const MAX_GRAD_ACCUM: u32 = 4096;
 /// AdamW step count (`host_steps`). A v1 checkpoint has no counts and is refused: resuming it
 /// would have to guess them.
 pub const CHECKPOINT_FORMAT: &str = "qd-train-checkpoint-v2";
+
+/// Largest `trainer.json` a resume reads: the byte limit of the JSON parser that then reads it,
+/// so a body the parser would refuse is refused before it is allocated.
+pub const MAX_TRAINER_JSON_BYTES: u64 = DEFAULT_MAX_INPUT_BYTES as u64;
+
+/// Largest `host.f32` a resume reads (4 GiB: the host parameters and both moments of a head,
+/// not a model). The file must also be exactly the size its `host_entries` shapes imply.
+pub const MAX_HOST_STATE_BYTES: u64 = 1 << 32;
+
+/// Largest single provider file a checkpoint hashes (256 GiB). It is hashed in bounded chunks,
+/// never held, so this bounds time, not memory.
+pub const MAX_PROVIDER_FILE_BYTES: u64 = 1 << 38;
+
+/// Most files, and deepest nesting, found under a checkpoint's `provider/` directory. A provider
+/// writes a handful of files (the adapter provider writes two, one level down).
+const MAX_PROVIDER_FILES: usize = 4096;
+const MAX_PROVIDER_DEPTH: usize = 8;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TrainError {
@@ -124,6 +143,205 @@ impl From<PyJsonError> for TrainError {
 
 fn io(path: &Path, e: impl std::fmt::Display) -> TrainError {
     TrainError::Io(format!("{}: {e}", path.display()))
+}
+
+/// An ojas-io failure, which already names its path. What the file system said stays
+/// [`TrainError::Io`]; what ojas-io itself refused (not a regular file, a symbolic link, over a
+/// cap, not UTF-8) is [`TrainError::Refused`].
+fn from_io(e: IoError) -> TrainError {
+    if e.is_refusal() || e.io_kind().is_none() {
+        TrainError::Refused(e.detail().to_owned())
+    } else {
+        TrainError::Io(e.detail().to_owned())
+    }
+}
+
+/// Open the regular file at `path` without following a symbolic link, refusing one longer than
+/// `cap` bytes. `what` names the cap in the refusal. The one open every checkpoint-internal
+/// file other than `trainer.json` goes through.
+fn open_capped(path: &Path, cap: u64, what: &str) -> Result<(fs::File, u64), TrainError> {
+    let file = open_nofollow(path).map_err(from_io)?;
+    let len = file.metadata().map_err(|e| io(path, e))?.len();
+    if len > cap {
+        return Err(TrainError::Refused(format!(
+            "{}: {len} bytes, above the {cap}-byte {what}",
+            path.display()
+        )));
+    }
+    Ok((file, len))
+}
+
+/// The sha256 of the regular file at `path`, hashed in bounded chunks from one handle.
+fn file_digest(path: &Path, cap: u64, what: &str) -> Result<String, TrainError> {
+    let (file, _) = open_capped(path, cap, what)?;
+    handle_sha256_hex(&file).map_err(|e| match from_io(e) {
+        TrainError::Io(d) => TrainError::Io(format!("{}: {d}", path.display())),
+        TrainError::Refused(d) => TrainError::Refused(format!("{}: {d}", path.display())),
+        other => other,
+    })
+}
+
+/// A `provider_files` key is a plain relative name: one or more normal components, UTF-8, no
+/// NUL, written with `/`. This is exactly what the checkpoint writer records (the path of a file
+/// the provider wrote, under the provider directory), so the one function builds the key on
+/// write and judges it on read; anything else (`/dev/zero`, `..`, `a/./b`, `a//b`, `a/`, the
+/// empty string) is a key the writer never produces and is refused.
+fn provider_key(rel: &Path) -> Result<String, TrainError> {
+    let mut key = String::new();
+    for part in rel.components() {
+        let Component::Normal(name) = part else {
+            return Err(TrainError::Refused(format!(
+                "provider file {rel:?} is not a plain relative name"
+            )));
+        };
+        let name = name.to_str().ok_or_else(|| {
+            TrainError::Refused(format!("provider file {rel:?} is not valid UTF-8"))
+        })?;
+        if !key.is_empty() {
+            key.push('/');
+        }
+        key.push_str(name);
+    }
+    if key.is_empty() {
+        return Err(TrainError::Refused(
+            "a provider file with an empty name".into(),
+        ));
+    }
+    Ok(key)
+}
+
+/// A recorded key, accepted only if it is already in [`provider_key`]'s form.
+fn recorded_provider_key(raw: &str) -> Result<String, TrainError> {
+    let refused = || {
+        TrainError::Refused(format!(
+            "provider_files key {raw:?} is not a plain relative name"
+        ))
+    };
+    if raw.contains('\0') {
+        return Err(refused());
+    }
+    match provider_key(Path::new(raw)) {
+        Ok(key) if key == raw => Ok(key),
+        _ => Err(refused()),
+    }
+}
+
+/// Every regular file under `dir`, as [`provider_key`] names them. A symbolic link, a FIFO, a
+/// device or a socket is refused without being opened; nesting and file count are bounded.
+fn provider_tree(dir: &Path) -> Result<BTreeSet<String>, TrainError> {
+    fn walk(
+        dir: &Path,
+        rel: &mut Vec<String>,
+        out: &mut BTreeSet<String>,
+    ) -> Result<(), TrainError> {
+        if rel.len() >= MAX_PROVIDER_DEPTH {
+            return Err(TrainError::Refused(format!(
+                "{}: provider files nested deeper than {MAX_PROVIDER_DEPTH}",
+                dir.display()
+            )));
+        }
+        for entry in fs::read_dir(dir).map_err(|e| io(dir, e))? {
+            let entry = entry.map_err(|e| io(dir, e))?;
+            let path = entry.path();
+            let name = entry.file_name().into_string().map_err(|n| {
+                TrainError::Refused(format!("{}: {n:?} is not valid UTF-8", dir.display()))
+            })?;
+            let kind = entry.file_type().map_err(|e| io(&path, e))?;
+            if kind.is_symlink() {
+                return Err(TrainError::Refused(format!(
+                    "{}: a provider file may not be a symbolic link",
+                    path.display()
+                )));
+            } else if kind.is_dir() {
+                rel.push(name);
+                walk(&path, rel, out)?;
+                rel.pop();
+            } else if kind.is_file() {
+                if out.len() >= MAX_PROVIDER_FILES {
+                    return Err(TrainError::Refused(format!(
+                        "{}: more than {MAX_PROVIDER_FILES} provider files",
+                        dir.display()
+                    )));
+                }
+                let key = rel
+                    .iter()
+                    .map(String::as_str)
+                    .chain(std::iter::once(name.as_str()))
+                    .collect::<Vec<_>>()
+                    .join("/");
+                out.insert(key);
+            } else {
+                return Err(TrainError::Refused(format!(
+                    "{}: not a regular file or directory",
+                    path.display()
+                )));
+            }
+        }
+        Ok(())
+    }
+    // The walk refuses links below `dir`; `dir` itself must not be one either, or the whole
+    // tree would be read from wherever it points.
+    let top = fs::symlink_metadata(dir).map_err(|e| io(dir, e))?;
+    if !top.file_type().is_dir() {
+        return Err(TrainError::Refused(format!(
+            "{}: the provider directory is not a plain directory",
+            dir.display()
+        )));
+    }
+    let mut out = BTreeSet::new();
+    walk(dir, &mut Vec::new(), &mut out)?;
+    Ok(out)
+}
+
+/// The bytes of `host.f32`: opened without following a link, exactly `expected` bytes long
+/// (judged from the handle's length before anything is allocated, and at most
+/// [`MAX_HOST_STATE_BYTES`]), read once from that handle, and refused if it changed length
+/// while it was read.
+fn read_host_state(path: &Path, expected: u64) -> Result<Vec<u8>, TrainError> {
+    let (mut file, len) = open_capped(path, MAX_HOST_STATE_BYTES, "host state byte cap")?;
+    if len != expected {
+        return Err(TrainError::Refused(format!(
+            "{} is {len} bytes, {} than its entries ({expected} bytes)",
+            path.display(),
+            if len < expected { "shorter" } else { "longer" }
+        )));
+    }
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(usize::try_from(len).map_err(|_| {
+            TrainError::Refused(format!("{}: {len} bytes do not fit memory", path.display()))
+        })?)
+        .map_err(|e| io(path, e))?;
+    (&mut file)
+        .take(len.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|e| io(path, e))?;
+    if bytes.len() as u64 != len {
+        return Err(TrainError::Refused(format!(
+            "{} changed length while it was read ({len} bytes, then {})",
+            path.display(),
+            bytes.len()
+        )));
+    }
+    Ok(bytes)
+}
+
+/// The recorded provider files are exactly the files in the provider directory. The provider
+/// loads from that directory, so a file there that the checkpoint did not hash would be loaded
+/// unchecked, and a hashed file that is gone would be loaded from nothing.
+fn check_provider_set(provider_dir: &Path, keys: &BTreeSet<String>) -> Result<(), TrainError> {
+    let found = provider_tree(provider_dir)?;
+    let unlisted: Vec<&String> = found.difference(keys).collect();
+    let missing: Vec<&String> = keys.difference(&found).collect();
+    if unlisted.is_empty() && missing.is_empty() {
+        return Ok(());
+    }
+    Err(TrainError::Refused(format!(
+        "{}: the files here are not the files provider_files lists; unlisted {unlisted:?} \
+         (not covered by the checkpoint's digests: delete them, e.g. a Finder .DS_Store), \
+         listed but absent {missing:?}",
+        provider_dir.display()
+    )))
 }
 
 /// A batch the loop can account for: its index in the epoch's order, and the bytes that say
@@ -1009,7 +1227,11 @@ where
                     provider,
                     objective,
                     &host_state,
-                    last_checkpoint.as_deref(),
+                    previous_resume_point(
+                        last_checkpoint.as_deref(),
+                        resumed_from.as_deref(),
+                        &policy.dir,
+                    ),
                 )?);
             }
         }
@@ -1065,7 +1287,11 @@ where
                 provider,
                 objective,
                 &host_state,
-                last_checkpoint.as_deref(),
+                previous_resume_point(
+                    last_checkpoint.as_deref(),
+                    resumed_from.as_deref(),
+                    &policy.dir,
+                ),
             )?);
         }
     }
@@ -1329,6 +1555,26 @@ fn checkpoint_name(step: u64) -> String {
     format!("ckpt-{step:08}")
 }
 
+/// The checkpoint the next write replaces: the one this call wrote last, or, before it has
+/// written any, the one it resumed from. One resume point stays in the policy directory, so a
+/// resumed run removes the checkpoint it started from once its own is durable. The resumed-from
+/// directory is removed only when it is a `ckpt-<digits>` entry directly in `policy_dir`; a
+/// checkpoint resumed from anywhere else (an archive, a copy) is never this call's to delete.
+fn previous_resume_point<'a>(
+    last_written: Option<&'a Path>,
+    resumed_from: Option<&'a Path>,
+    policy_dir: &Path,
+) -> Option<&'a Path> {
+    let ours = |p: &&Path| {
+        p.parent() == Some(policy_dir)
+            && p.file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|n| n.strip_prefix("ckpt-"))
+                .is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()))
+    };
+    last_written.or(resumed_from.filter(ours))
+}
+
 fn hex_list(xs: &[f64]) -> Result<Value, PyJsonError> {
     Ok(Value::Array(
         xs.iter()
@@ -1386,20 +1632,26 @@ fn write_checkpoint<P: StepProvider, O: Objective>(
         },
     )?;
     let mut provider_files = Vec::new();
+    let mut provider_keys = BTreeSet::new();
     for path in &written {
-        let bytes = fs::read(path).map_err(|e| io(path, e))?;
-        let rel = path
-            .strip_prefix(&provider_dir)
-            .map_err(|_| {
-                TrainError::Refused(format!(
-                    "{} was written outside the provider directory",
-                    path.display()
-                ))
-            })?
-            .to_string_lossy()
-            .into_owned();
-        provider_files.push((rel, Value::from(hex(&sha256(&bytes)))));
+        let rel = path.strip_prefix(&provider_dir).map_err(|_| {
+            TrainError::Refused(format!(
+                "{} was written outside the provider directory",
+                path.display()
+            ))
+        })?;
+        let key = provider_key(rel)?;
+        if !provider_keys.insert(key.clone()) {
+            return Err(TrainError::Refused(format!(
+                "the provider listed {key:?} twice"
+            )));
+        }
+        let digest = file_digest(path, MAX_PROVIDER_FILE_BYTES, "provider file cap")?;
+        provider_files.push((key, Value::from(digest)));
     }
+    // A checkpoint whose provider directory holds more or less than it lists could not be
+    // resumed (the reader refuses it), so it is not written.
+    check_provider_set(&provider_dir, &provider_keys)?;
 
     // Host values and moments: raw little-endian f32, value then m then v per entry. Each
     // entry's own AdamW step count goes in trainer.json beside its name.
@@ -1615,7 +1867,8 @@ impl ResumeState {
     /// Read `ckpt_dir` (one `ckpt-<step>` directory), checking every recorded digest.
     pub fn read(ckpt_dir: &Path) -> Result<Self, TrainError> {
         let body_path = ckpt_dir.join("trainer.json");
-        let text = fs::read_to_string(&body_path).map_err(|e| io(&body_path, e))?;
+        let text = read_regular_text(&body_path, MAX_TRAINER_JSON_BYTES, "trainer.json byte cap")
+            .map_err(from_io)?;
         let v = parse_json(&text).map_err(|e| io(&body_path, e))?;
         let p = body_path.as_path();
         if field(&v, "format", p)?.as_str().ok() != Some(CHECKPOINT_FORMAT) {
@@ -1664,10 +1917,26 @@ impl ResumeState {
             channel_log.push((name.clone(), xs));
         }
         let provider_dir = ckpt_dir.join("provider");
-        for (rel, digest) in as_object(field(&v, "provider_files", p)?, "provider_files")? {
-            let path = provider_dir.join(rel);
-            let bytes = fs::read(&path).map_err(|e| io(&path, e))?;
-            if Some(hex(&sha256(&bytes)).as_str()) != digest.as_str().ok() {
+        // Every key is a plain relative name the writer could have produced, the listed set is
+        // exactly the files in `provider/` (the provider loads from that directory), and each
+        // file is hashed from one capped, no-follow handle in bounded chunks.
+        let mut provider_keys = BTreeSet::new();
+        let mut recorded = Vec::new();
+        for (raw, digest) in as_object(field(&v, "provider_files", p)?, "provider_files")? {
+            let key = recorded_provider_key(raw)?;
+            if !provider_keys.insert(key.clone()) {
+                return Err(TrainError::Refused(format!(
+                    "{}: provider_files lists {key:?} twice",
+                    p.display()
+                )));
+            }
+            recorded.push((key, digest));
+        }
+        check_provider_set(&provider_dir, &provider_keys)?;
+        for (key, digest) in recorded {
+            let path = provider_dir.join(&key);
+            let got = file_digest(&path, MAX_PROVIDER_FILE_BYTES, "provider file cap")?;
+            if Some(got.as_str()) != digest.as_str().ok() {
                 return Err(TrainError::Refused(format!(
                     "{} does not match its recorded sha256",
                     path.display()
@@ -1693,7 +1962,25 @@ impl ResumeState {
             host_entries.push(ParamSpec::new(name, &shape));
         }
         let host_path = ckpt_dir.join("host.f32");
-        let host_bytes = fs::read(&host_path).map_err(|e| io(&host_path, e))?;
+        // Value, first moment and second moment of every entry, as f32: the size the shapes
+        // imply, in checked arithmetic, is judged against the file before a byte is read.
+        let mut host_floats = 0u64;
+        for e in &host_entries {
+            let n = u64::try_from(e.numel()?).ok();
+            host_floats = n
+                .and_then(|n| n.checked_mul(3))
+                .and_then(|n| host_floats.checked_add(n))
+                .ok_or_else(|| {
+                    TrainError::Refused(format!(
+                        "{}: the host entries' sizes overflow",
+                        p.display()
+                    ))
+                })?;
+        }
+        let host_expected = host_floats.checked_mul(4).ok_or_else(|| {
+            TrainError::Refused(format!("{}: the host entries' sizes overflow", p.display()))
+        })?;
+        let host_bytes = read_host_state(&host_path, host_expected)?;
         if Some(hex(&sha256(&host_bytes)).as_str()) != field(&v, "host_sha256", p)?.as_str().ok() {
             return Err(TrainError::Refused(format!(
                 "{} does not match its recorded sha256",

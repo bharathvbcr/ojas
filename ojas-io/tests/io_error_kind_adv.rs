@@ -401,16 +401,14 @@ fn display_text_matches_the_pre_change_format_strings() {
         read_regular_text(&m, 8, "cap").unwrap_err().to_string(),
         format!("{path}: {raw}")
     );
-    // replace.rs temps_of: `{dir}: cannot scan temp files before replace: {e}`
+    // replace.rs ParentLock::acquire (replace_with takes the parent lock before its sweep, so a
+    // missing parent is reported there, ft-2ac45473 c5): `{what}: parent {parent}: {e}`
     let out = d.0.join("nope").join("o.safetensors");
     let dir = d.0.join("nope");
-    let raw_dir = std::fs::read_dir(&dir).map(drop).unwrap_err();
+    let raw_dir = std::fs::canonicalize(&dir).map(drop).unwrap_err();
     assert_eq!(
         write_safetensors(&out, &[], &[]).unwrap_err().to_string(),
-        format!(
-            "{}: cannot scan temp files before replace: {raw_dir}",
-            dir.display()
-        )
+        format!("{}: parent {}: {raw_dir}", out.display(), dir.display())
     );
     // replace.rs Site::lock: `{what}: parent {parent}: {e}`
     let tgt = d.0.join("nope").join("t");

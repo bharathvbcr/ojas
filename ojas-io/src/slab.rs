@@ -190,7 +190,7 @@ impl OwnedSlab {
             .checked_add(align - 1)
             .ok_or_else(|| IoError::new("slab size overflows"))?;
         let buf =
-            Scratch::<u8>::try_alloc(total, budget).map_err(|e| IoError::new(e.to_string()))?;
+            Scratch::<u8>::try_alloc(total, budget).map_err(|e| IoError::core(e.to_string(), e))?;
         let lead = buf.as_slice().as_ptr().align_offset(align);
         if lead >= align {
             return Err(IoError::new(format!(
