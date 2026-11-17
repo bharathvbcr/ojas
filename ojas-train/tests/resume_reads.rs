@@ -30,9 +30,9 @@ use ojas_train::lappi::run_control::{ConsumedPrefix, MonotonicClock, WallClockCa
 use ojas_train::lappi::schedule::LrSchedule;
 use ojas_train::lappi::step::ParamSpec;
 use ojas_train::lappi::trainer::{
-    BatchCounts, CheckpointPolicy, ConsumedBatch, Hooks, HostParams, MAX_TRAINER_JSON_BYTES,
-    MicroBatchPlan, MicroLoss, Objective, ResumeState, SequenceWork, TrainConfig, TrainError,
-    train,
+    BatchCounts, CheckpointPolicy, ConsumedBatch, EpochSource, Hooks, HostParams,
+    MAX_TRAINER_JSON_BYTES, MicroBatchPlan, MicroLoss, Objective, ResumeState, SequenceWork,
+    TrainConfig, TrainError, train, train_epochs,
 };
 
 // ---------------------------------------------------------------- the run that writes a checkpoint
@@ -643,6 +643,85 @@ fn a_checkpoint_resumed_from_elsewhere_is_never_removed() {
         archive.join("trainer.json").is_file(),
         "the archive was removed"
     );
+    ResumeState::read(&last).unwrap();
+    std::fs::remove_dir_all(root).ok();
+}
+
+/// `epochs` epochs of two batches each, one optimizer step per batch, a checkpoint every two
+/// steps: every epoch ends on a checkpoint.
+fn epochs_cfg(dir: PathBuf, epochs: u64) -> TrainConfig {
+    let mut c = cfg(dir);
+    c.schedule = LrSchedule::new(1e-2, 2 * epochs, 1, 1e-3).unwrap();
+    c.optimizer.lr = c.schedule.peak_lr();
+    c.epochs = epochs;
+    c
+}
+
+fn run_epochs(
+    dir: PathBuf,
+    epochs: u64,
+    resume: Option<ResumeState>,
+) -> Result<PathBuf, TrainError> {
+    let mut provider = ToyProvider::new(8, 4, 2, 42).unwrap();
+    train_epochs(
+        &mut provider,
+        &mut Obj::new(Vec::new()),
+        |_epoch| {
+            Ok(EpochSource {
+                batches: (0..2).map(|n| Ok::<_, TrainError>(Batch(n))),
+                count: 2,
+            })
+        },
+        &epochs_cfg(dir, epochs),
+        &MonotonicClock::new(),
+        resume,
+        &mut Hooks::default(),
+    )
+    .map(|r| r.final_checkpoint.expect("a checkpoint"))
+}
+
+/// Bug (found in review of 51/io): once a resumed `train` call removed the checkpoint it resumed
+/// from, `train_epochs` still removed the epoch-end checkpoint the next epoch crossed from, a
+/// second time, and failed with NotFound at the end of epoch 1. Every run of more than one epoch
+/// (which must have a checkpoint policy) failed. Expected: the run finishes and one resume point,
+/// the last epoch's, is left.
+#[test]
+fn a_run_of_three_epochs_finishes_and_leaves_one_resume_point() {
+    let root = scratch("epochs");
+    let dir = root.join("run");
+    let last = run_epochs(dir.clone(), 3, None).unwrap_or_else(|e| panic!("train_epochs: {e}"));
+    assert_eq!(last, dir.join("ckpt-00000006"));
+    assert_eq!(names(&dir), ["ckpt-00000006"], "superseded resume points remain");
+    ResumeState::read(&last).unwrap();
+    std::fs::remove_dir_all(root).ok();
+}
+
+/// The same double removal on the other crossing path: a resume from a checkpoint cut exactly at
+/// an epoch's end moves straight on to the next epoch, whose first checkpoint removes the one it
+/// crossed from.
+#[test]
+fn a_resume_cut_at_an_epoch_end_finishes_and_leaves_one_resume_point() {
+    let root = scratch("epochcut");
+    let dir = root.join("run");
+    let mut provider = ToyProvider::new(8, 4, 2, 42).unwrap();
+    let cut = train(
+        &mut provider,
+        &mut Obj::new(Vec::new()),
+        (0..2).map(|n| Ok::<_, TrainError>(Batch(n))),
+        &epochs_cfg(dir.clone(), 2),
+        &MonotonicClock::new(),
+        None,
+        &mut Hooks::default(),
+    )
+    .unwrap_or_else(|e| panic!("train: {e}"))
+    .final_checkpoint
+    .expect("a checkpoint");
+    assert_eq!(names(&dir), ["ckpt-00000002"]);
+    let state = ResumeState::read(&cut).unwrap();
+    let last =
+        run_epochs(dir.clone(), 2, Some(state)).unwrap_or_else(|e| panic!("train_epochs: {e}"));
+    assert_eq!(last, dir.join("ckpt-00000004"));
+    assert_eq!(names(&dir), ["ckpt-00000004"], "superseded resume points remain");
     ResumeState::read(&last).unwrap();
     std::fs::remove_dir_all(root).ok();
 }
