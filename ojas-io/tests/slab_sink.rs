@@ -667,3 +667,36 @@ fn an_owned_slab_loads_the_fixtures_bit_equal_and_gives_the_charge_back() {
         assert_eq!(budget.peak_bytes(), need as u64 + 63);
     });
 }
+
+/// ft-2ac45473 c6: a refused budget charge is typed. The `OjasError` rides on the `IoError`
+/// ([`ojas_io::IoError::ojas_error`]) and is its `source`, so a caller branches on
+/// `CapacityExceeded` without parsing text; the message is unchanged.
+///
+/// Pre-fix (b7ecc97) `OwnedSlab::new` flattened the error with `IoError::new(e.to_string())`:
+/// `ojas_error()` did not exist and `source()` was `None`.
+#[test]
+fn an_owned_slab_budget_refusal_carries_the_ojas_error() {
+    use ojas_core::OjasError;
+    use std::error::Error;
+
+    let tight = Budget::new(1062);
+    let err = OwnedSlab::new(&tight, 1000, 64).unwrap_err();
+    match err.ojas_error() {
+        Some(OjasError::CapacityExceeded {
+            requested,
+            cap,
+            live,
+        }) => assert_eq!((*requested, *cap, *live), (1063, 1062, 0)),
+        other => panic!("expected CapacityExceeded, got {other:?}"),
+    }
+    assert!(err.source().is_some(), "{err:?}");
+    assert_eq!(err.io_kind(), None);
+    assert!(err.detail().contains("capacity exceeded"), "{err}");
+
+    // An alignment refusal is the crate's own and carries no core error.
+    let bad = OwnedSlab::new(&tight, 8, 3).unwrap_err();
+    assert!(
+        bad.ojas_error().is_none() && bad.source().is_none(),
+        "{bad:?}"
+    );
+}

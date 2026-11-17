@@ -1,3 +1,4 @@
+use ojas_core::OjasError;
 use std::fmt;
 
 /// Recoverable IO or format failure. Library paths return this instead of panicking.
@@ -7,13 +8,16 @@ use std::fmt;
 /// [`std::error::Error::source`] returns it, so a caller can branch on
 /// `NotFound` or `PermissionDenied` without parsing [`fmt::Display`] text or
 /// re-probing the path. A failure the crate itself raises (a refusal, a
-/// format error, a cap) has no source and `io_kind()` is `None`. Not `Clone`,
-/// because `std::io::Error` is not.
+/// format error, a cap) has no source and `io_kind()` is `None`. A refused
+/// [`ojas_core::Budget`] charge keeps its [`OjasError`] ([`Self::ojas_error`]),
+/// which is then the source, so a caller can branch on `CapacityExceeded`
+/// without parsing text. Not `Clone`, because `std::io::Error` is not.
 #[derive(Debug)]
 pub struct IoError {
     detail: String,
     refusal: bool,
     source: Option<std::io::Error>,
+    core: Option<OjasError>,
 }
 
 impl IoError {
@@ -24,7 +28,26 @@ impl IoError {
             detail: detail.into(),
             refusal: false,
             source: None,
+            core: None,
         }
+    }
+
+    /// A failure of the workspace core (a refused [`ojas_core::Budget`] charge):
+    /// `err` is kept whole and is the [`std::error::Error::source`]. Not a
+    /// refusal in [`Self::is_refusal`]'s sense, and `io_kind()` is `None`.
+    pub(crate) fn core(detail: impl Into<String>, err: OjasError) -> Self {
+        Self {
+            detail: detail.into(),
+            refusal: false,
+            source: None,
+            core: Some(err),
+        }
+    }
+
+    /// The [`OjasError`] behind this failure, when a budget charge or another
+    /// core call refused it; `None` for every other failure.
+    pub fn ojas_error(&self) -> Option<&OjasError> {
+        self.core.as_ref()
     }
 
     /// A file-system failure: `detail` is the full message (the caller formats
@@ -35,6 +58,7 @@ impl IoError {
             detail: detail.into(),
             refusal: false,
             source: Some(err),
+            core: None,
         }
     }
 
@@ -46,6 +70,7 @@ impl IoError {
             detail: detail.into(),
             refusal: false,
             source: inner.source,
+            core: inner.core,
         }
     }
 
@@ -62,6 +87,7 @@ impl IoError {
             detail: detail.into(),
             refusal: true,
             source: None,
+            core: None,
         }
     }
 
@@ -85,9 +111,11 @@ impl fmt::Display for IoError {
 
 impl std::error::Error for IoError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.source
-            .as_ref()
-            .map(|e| e as &(dyn std::error::Error + 'static))
+        match (&self.source, &self.core) {
+            (Some(e), _) => Some(e),
+            (None, Some(e)) => Some(e),
+            (None, None) => None,
+        }
     }
 }
 

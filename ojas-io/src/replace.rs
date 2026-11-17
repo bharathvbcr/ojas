@@ -4,7 +4,10 @@
 //! synced and then renamed over the target, and the parent directory is synced.
 //! A reader that already holds the target keeps the old bytes, and a failed or
 //! interrupted write never leaves a partial target behind. Replacing a symlink
-//! replaces the link itself.
+//! replaces the link itself. The whole replace, including the sweep of leftover
+//! temp files, runs under the parent directory's exclusive `flock` (the one the
+//! directory replace takes), so a sweep never removes another writer's live
+//! temp file.
 //!
 //! **Platforms.** On unix a replace is: file fsync (`F_FULLFSYNC` on Apple),
 //! rename, parent-directory fsync. On every other platform there is no
@@ -37,6 +40,9 @@ where
     let what = path.display();
     refuse_off_unix(path, "replace_with")?;
     let (dir, name) = split(path)?;
+    // The sweep removes `.{name}.{pid}.{seq}.tmp` files, so it must not run beside another
+    // writer's live temp file: the same parent lock the directory replace takes.
+    let _lock = ParentLock::acquire(path, dir)?;
     sweep_orphan_temps(dir, name)?;
     let tmp = dir.join(temp_name(name, SEQ.fetch_add(1, Ordering::Relaxed), "tmp"));
     let staged = (|| -> Result<(), IoError> {
@@ -390,6 +396,42 @@ struct ParentLock {
     _file: Option<File>,
 }
 
+impl ParentLock {
+    /// Take the exclusive `flock` on `parent`, the directory `target` lives in:
+    /// the one lock every replace of a name in that directory runs under, file
+    /// ([`replace_with`]) or directory ([`Site::lock`]). Blocks with no timeout.
+    /// A second replace in the same parent on the same thread is refused rather
+    /// than deadlocked. `target` is only named in errors.
+    fn acquire(target: &Path, parent: &Path) -> Result<Self, IoError> {
+        let what = target.display();
+        let key = fs::canonicalize(parent)
+            .map_err(|e| IoError::io(format!("{what}: parent {}: {e}", parent.display()), e))?;
+        let me = std::thread::current().id();
+        let mut lock = {
+            let mut held = HELD.lock().unwrap_or_else(PoisonError::into_inner);
+            if held.iter().any(|(k, t)| *k == key && *t == me) {
+                return Err(IoError::new(format!(
+                    "{what}: a replace in {} is already running on this thread; \
+                     a nested one would deadlock",
+                    parent.display()
+                )));
+            }
+            held.push((key.clone(), me));
+            ParentLock { key, _file: None }
+        };
+        let file = File::open(parent)
+            .map_err(|e| IoError::io(format!("{what}: parent {}: {e}", parent.display()), e))?;
+        file.lock().map_err(|e| {
+            IoError::io(
+                format!("{what}: cannot lock parent {}: {e}", parent.display()),
+                e,
+            )
+        })?;
+        lock._file = Some(file);
+        Ok(lock)
+    }
+}
+
 impl Drop for ParentLock {
     fn drop(&mut self) {
         let me = std::thread::current().id();
@@ -418,30 +460,7 @@ impl<'a> Site<'a> {
                 parent.display()
             )));
         }
-        let key = fs::canonicalize(parent)
-            .map_err(|e| IoError::io(format!("{what}: parent {}: {e}", parent.display()), e))?;
-        let me = std::thread::current().id();
-        let mut lock = {
-            let mut held = HELD.lock().unwrap_or_else(PoisonError::into_inner);
-            if held.iter().any(|(k, t)| *k == key && *t == me) {
-                return Err(IoError::new(format!(
-                    "{what}: a replace in {} is already running on this thread; \
-                     a nested one would deadlock",
-                    parent.display()
-                )));
-            }
-            held.push((key.clone(), me));
-            ParentLock { key, _file: None }
-        };
-        let file = File::open(parent)
-            .map_err(|e| IoError::io(format!("{what}: parent {}: {e}", parent.display()), e))?;
-        file.lock().map_err(|e| {
-            IoError::io(
-                format!("{what}: cannot lock parent {}: {e}", parent.display()),
-                e,
-            )
-        })?;
-        lock._file = Some(file);
+        let lock = ParentLock::acquire(target, parent)?;
         let exists = match fs::symlink_metadata(target) {
             Ok(m) if m.file_type().is_symlink() => {
                 return Err(IoError::new(format!("{what}: is a symbolic link")));
