@@ -6,8 +6,6 @@
 
 mod qwen35_common;
 
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use ojas_core::{Budget, DType, Numerics, Tensor, LE_READ_CHUNK_BYTES};
@@ -15,41 +13,11 @@ use ojas_cpu::CpuBackend;
 use ojas_io::SafeTensors;
 use ojas_model::lora::{LoraConfig, LoraLinear};
 use ojas_model::qwen35::load_hf;
+use ojas_test_support::PeakAlloc;
 use qwen35_common::{dir, spec, PREFIX};
 
-struct Counting;
-
-static LIVE: AtomicUsize = AtomicUsize::new(0);
-static PEAK: AtomicUsize = AtomicUsize::new(0);
-
-// SAFETY: every call forwards to `System` with the caller's arguments, so the
-// `GlobalAlloc` contract is `System`'s. The counters are plain atomics.
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let p = unsafe { System.alloc(layout) };
-        if !p.is_null() {
-            let now = LIVE.fetch_add(layout.size(), Ordering::Relaxed) + layout.size();
-            PEAK.fetch_max(now, Ordering::Relaxed);
-        }
-        p
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(ptr, layout) };
-        LIVE.fetch_sub(layout.size(), Ordering::Relaxed);
-    }
-}
-
 #[global_allocator]
-static GLOBAL: Counting = Counting;
-
-/// Heap above the starting point that `f` reached at its peak.
-fn heap_peak<T>(f: impl FnOnce() -> T) -> (T, usize) {
-    let base = LIVE.load(Ordering::Relaxed);
-    PEAK.store(base, Ordering::Relaxed);
-    let out = f();
-    (out, PEAK.load(Ordering::Relaxed) - base)
-}
+static ALLOC: PeakAlloc = PeakAlloc::new();
 
 const SLACK: usize = 128 << 10;
 
@@ -60,7 +28,7 @@ fn load_hf_peak() {
     let model = SafeTensors::open(&dir().join("model.safetensors")).unwrap();
     for (linears, table) in [(DType::F32, DType::F32), (DType::Bf16, DType::Bf16)] {
         let budget = Budget::new(1 << 30);
-        let (params, heap) = heap_peak(|| load_hf(&s, &model, PREFIX, linears, table, &budget));
+        let (params, heap) = ALLOC.measure(|| load_hf(&s, &model, PREFIX, linears, table, &budget));
         let params = params.unwrap();
         let charged = budget.live_bytes().unwrap() as usize;
         let largest_part = params
@@ -100,7 +68,7 @@ fn merge_peak() {
     let mut lin = LoraLinear::new(LoraConfig::new(rank, 8.0, 0.0).unwrap(), w, a, b).unwrap();
     let before = budget.live_bytes().unwrap();
     budget.reset_peak();
-    let (merged, heap) = heap_peak(|| lin.merge(&backend));
+    let (merged, heap) = ALLOC.measure(|| lin.merge(&backend));
     merged.unwrap();
     let charged = (budget.peak_bytes() - before) as usize;
     let weight = out * inn * 4;

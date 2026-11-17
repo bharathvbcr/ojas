@@ -12,3 +12,6 @@ ojas-core = { path = "../ojas-core" }
 ojas-kernels = { path = "../ojas-kernels" }
 # `tokenizer.json` is read for its pre-tokenizer (`check_gpt2_pre_tokenizer`).
 ojas-io = { path = "../ojas-io" }
+
+[dev-dependencies]
+ojas-test-support = { path = "../ojas-test-support" }

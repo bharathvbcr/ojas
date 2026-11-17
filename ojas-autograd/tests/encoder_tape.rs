@@ -12,6 +12,7 @@
 //! - A node used twice (through two broadcast shapes) sums its gradients; a
 //!   record the backend refuses pushes nothing.
 
+use ojas_test_support::vals::vals_unit as vals;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use ojas_autograd::{central_diff, gradients_match, Tape, Var};
@@ -31,19 +32,6 @@ fn cpu() -> CpuBackend {
     CpuBackend::with_threads(Budget::new(1 << 24), 2)
         .unwrap()
         .with_numerics(Numerics::Exact)
-}
-
-/// Deterministic values in `[-1, 1)`.
-fn vals(seed: u64, n: usize) -> Vec<f32> {
-    let mut s = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
-    (0..n)
-        .map(|_| {
-            s ^= s << 13;
-            s ^= s >> 7;
-            s ^= s << 17;
-            -1.0 + 2.0 * ((s >> 40) as f32 / (1u64 << 24) as f32)
-        })
-        .collect()
 }
 
 fn tensor(be: &CpuBackend, seed: u64, shape: &[usize]) -> Tensor {

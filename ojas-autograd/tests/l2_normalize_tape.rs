@@ -18,6 +18,7 @@
 use ojas_autograd::{central_diff, gradients_match, Tape, Var};
 use ojas_core::{Backend, BackendFloat, Budget, Numerics, OjasError, Tensor};
 use ojas_cpu::CpuBackend;
+use ojas_test_support::vals::vals;
 
 const ROWS: usize = 5;
 const DIM: usize = 4;
@@ -42,19 +43,6 @@ fn cpu() -> CpuBackend {
     CpuBackend::with_threads(Budget::new(1 << 24), 2)
         .unwrap()
         .with_numerics(Numerics::Exact)
-}
-
-/// Deterministic values in `[-amp, amp)`.
-fn vals(seed: u64, n: usize, amp: f32) -> Vec<f32> {
-    let mut s = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
-    (0..n)
-        .map(|_| {
-            s ^= s << 13;
-            s ^= s >> 7;
-            s ^= s << 17;
-            (-1.0 + 2.0 * ((s >> 40) as f32 / (1u64 << 24) as f32)) * amp
-        })
-        .collect()
 }
 
 fn bits(t: &Tensor) -> Vec<u32> {

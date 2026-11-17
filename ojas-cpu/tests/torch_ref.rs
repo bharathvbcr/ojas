@@ -11,6 +11,7 @@
 
 use ojas_core::{AdamWConfig, BackendModule, Budget, DType, Tensor, RMS_NORM_EPS};
 use ojas_cpu::{scaled_lr, CosineSchedule, CpuBackend};
+use ojas_test_support::SplitMix64;
 
 #[path = "torch_ref/data.rs"]
 mod data;
@@ -299,27 +300,6 @@ fn rope_cache(time: usize, dim: usize) -> (Vec<f32>, Vec<f32>) {
     (cos, sin)
 }
 
-struct SplitMix64(u64);
-
-impl SplitMix64 {
-    fn next_u64(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        z ^ (z >> 31)
-    }
-
-    fn unit(&mut self) -> f32 {
-        let mantissa = (self.next_u64() >> 40) as f32 / (1u64 << 24) as f32;
-        2.0 * mantissa - 1.0
-    }
-
-    fn normal(&mut self, n: usize, scale: f32) -> Vec<f32> {
-        (0..n).map(|_| scale * self.unit()).collect()
-    }
-}
-
 #[test]
 fn one_step_wall_time() {
     let cpu = bench_cpu(64 << 20);
@@ -344,16 +324,16 @@ fn one_step_wall_time() {
 
     let (b, t, d, vocab) = (2usize, 32usize, 64usize, 128usize);
     let mut rng = SplitMix64(1);
-    let x = rng.normal(b * t * d, 0.02);
+    let x = rng.vec(b * t * d, 0.02);
     let norm = rng
-        .normal(d, 0.02)
+        .vec(d, 0.02)
         .into_iter()
         .map(|v| 1.0 + v)
         .collect::<Vec<_>>();
-    let wq = rng.normal(d * d, 0.02);
-    let wk = rng.normal(d * d, 0.02);
-    let wv = rng.normal(d * d, 0.02);
-    let wo = rng.normal(vocab * d, 0.02);
+    let wq = rng.vec(d * d, 0.02);
+    let wk = rng.vec(d * d, 0.02);
+    let wv = rng.vec(d * d, 0.02);
+    let wo = rng.vec(vocab * d, 0.02);
     let (cos, sin) = rope_cache(t, d);
     let targets = (0..b * t)
         .map(|_| (rng.next_u64() % (vocab as u64)) as u32)

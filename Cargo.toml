@@ -21,6 +21,7 @@ members = [
     "ojas-model",
     "ojas-train",
     "ojas-cluster",
+    "ojas-test-support",
 ]
 
 [workspace.package]

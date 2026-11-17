@@ -13,6 +13,7 @@ ojas-cpu = { path = "../ojas-cpu" }
 ojas-kernels = { path = "../ojas-kernels" }
 
 [dev-dependencies]
+ojas-test-support = { path = "../ojas-test-support" }
 ojas-wgpu = { path = "../ojas-wgpu" }
 
 # The G6 seeded-backward gate on a real Metal device (`tests/metal_tape.rs`).

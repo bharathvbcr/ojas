@@ -20,6 +20,7 @@ ojas-train = { path = "../ojas-train" }
 
 [dev-dependencies]
 ojas-oracle = { path = "../ojas-oracle" }
+ojas-test-support = { path = "../ojas-test-support" }
 ojas-wgpu = { path = "../ojas-wgpu" }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]

@@ -6,31 +6,9 @@
 use ojas_simd::Backend;
 
 /// splitmix64; deterministic for a given seed.
-pub struct Rng(u64);
-
-impl Rng {
-    pub fn new(seed: u64) -> Rng {
-        Rng(seed)
-    }
-    pub fn next_u64(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-    /// Uniform in `0..n`.
-    pub fn below(&mut self, n: usize) -> usize {
-        (self.next_u64() % n as u64) as usize
-    }
-    /// Uniform in `[-1, 1)`.
-    pub fn unit(&mut self) -> f32 {
-        ((self.next_u64() >> 40) as f32 / (1u64 << 24) as f32) * 2.0 - 1.0
-    }
-    pub fn coin(&mut self) -> bool {
-        self.next_u64() & 1 == 1
-    }
-}
+// Shared by `mod common;`; binaries that never name it must not warn.
+#[allow(unused_imports)]
+pub use ojas_test_support::SplitMix64 as Rng;
 
 /// How an operand is laid out in its buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
