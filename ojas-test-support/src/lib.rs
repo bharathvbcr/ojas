@@ -4,10 +4,10 @@
 //! names no ojas type, so any crate's tests can depend on it without a cycle.
 //! A helper that needs an ojas type does not belong here.
 //!
-//! - [`alloc`]: counting global allocators. A test binary still declares its
-//!   own `#[global_allocator] static`, since the allocator is per binary.
-//! - [`rng`]: splitmix64.
-//! - [`vals`]: seeded `Vec` generators (one xorshift64 stream per call).
+//! - [`alloc`] holds counting global allocators. A test binary still declares
+//!   its own `#[global_allocator] static`, since the allocator is per binary.
+//! - [`rng`] holds splitmix64.
+//! - [`vals`] holds seeded `Vec` generators (one xorshift64 stream per call).
 
 #![deny(unsafe_code)]
 
