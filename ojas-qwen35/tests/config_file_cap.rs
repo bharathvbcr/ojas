@@ -5,6 +5,10 @@
 //! `config.json` was allocated whole before anything could refuse it. Every
 //! test here uses a temp file the test creates and removes; the over-cap case
 //! is one byte over.
+//!
+//! The crate root is `cfg(target_os = "macos")`, so this file follows it.
+
+#![cfg(target_os = "macos")]
 
 use ojas_qwen35::{Qwen35Error, Qwen35TextConfig};
 use std::alloc::{GlobalAlloc, Layout, System};

@@ -10,6 +10,7 @@
 //! 4. a refusal at the first, middle and last leaf with `grad_scale != 1`.
 //! 5. the Metal readback counts (macOS only).
 
+mod common;
 mod qwen35_common;
 
 use std::path::PathBuf;
@@ -903,15 +904,15 @@ mod on_metal {
 
     type M = TapeStepProvider<MetalBackend>;
 
-    fn provider() -> M {
+    /// `None` when there is no Metal device and `OJAS_ALLOW_NO_GPU` is set.
+    fn provider() -> Option<M> {
         let hooks = DeviceHooks {
             freeze: Some(Box::new(|m: &MetalBackend, t: &Tensor| m.freeze_checked(t))),
             rebind: Some(Box::new(|m: &MetalBackend, b: ojas_core::Budget| {
                 m.with_budget(b)
             })),
         };
-        let backend = MetalBackend::new(ojas_core::Budget::new(2 << 30))
-            .unwrap_or_else(|e| panic!("no Metal device: {e:?}"));
+        let backend = crate::common::metal_or_skip(ojas_core::Budget::new(2 << 30))?;
         let mut p =
             TapeStepProvider::open_lora(backend, hooks, open_config(16), lora_init(true)).unwrap();
         let calibration = Calibration::from_points(
@@ -930,7 +931,7 @@ mod on_metal {
         )
         .unwrap();
         p.preflight(&calibration, 16, &[16], 1 << 30, 0).unwrap();
-        p
+        Some(p)
     }
 
     fn rb(p: &M) -> u64 {
@@ -949,7 +950,9 @@ mod on_metal {
 
     #[test]
     fn the_readback_count_follows_the_data_not_the_calls() {
-        let mut p = provider();
+        let Some(mut p) = provider() else {
+            return;
+        };
         let n = p.leaf_count() as u64;
 
         // No norm: the update reads each gradient once.

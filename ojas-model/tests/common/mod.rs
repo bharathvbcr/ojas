@@ -31,6 +31,44 @@ use ojas_cpu::CpuBackend;
 use ojas_data::TokenBin;
 use ojas_model::{MomentsRef, Trainer};
 
+// ------------------------------------------------------------ device opening
+
+/// Whether `OJAS_ALLOW_NO_GPU` is set (to anything, including empty). CI's
+/// hosted macOS runner has no Metal device and sets it.
+pub fn allow_no_gpu() -> bool {
+    std::env::var_os("OJAS_ALLOW_NO_GPU").is_some()
+}
+
+/// The one rule for a test that needs a device: an opened device is used; a
+/// device that did not open skips the test when `allow_no_gpu`, and fails it
+/// loudly otherwise. A skip prints one `SKIP:` line so it is visible in the
+/// log; it is never silent.
+pub fn open_or_skip<T, E: std::fmt::Debug>(
+    what: &str,
+    opened: Result<T, E>,
+    allow_no_gpu: bool,
+) -> Option<T> {
+    match opened {
+        Ok(v) => Some(v),
+        Err(e) if allow_no_gpu => {
+            eprintln!("SKIP: {what} did not open (OJAS_ALLOW_NO_GPU set): {e:?}");
+            None
+        }
+        Err(e) => panic!("{what} did not open (set OJAS_ALLOW_NO_GPU=1 to skip): {e:?}"),
+    }
+}
+
+/// A Metal backend with `budget`, or `None` when there is no device and
+/// `OJAS_ALLOW_NO_GPU` is set.
+#[cfg(target_os = "macos")]
+pub fn metal_or_skip(budget: Budget) -> Option<ojas_metal::MetalBackend> {
+    open_or_skip(
+        "Metal device",
+        ojas_metal::MetalBackend::new(budget),
+        allow_no_gpu(),
+    )
+}
+
 // ---------------------------------------------------------------- Resident
 
 #[derive(Debug)]
